@@ -1,0 +1,26 @@
+name: media-video-faces
+description: Find the faces a video shows, when each is on screen, and crop each one
+
+# The video half of `media-faces`, with the same guard: `facesAt` says the detector ran, which
+# a `regions/` directory never did. `detect-faces` samples the whole video, so this is the long
+# face work and yields to the photos' (100): a person waits on a photo's face showing up, not on
+# every face of an hour of home video.
+trigger:
+  on: media.metadata.extracted
+  match:
+    mimetype: video/*
+  skipIfAttr: facesAt
+
+steps:
+  detect-faces:
+    command: detect-faces $NODE_PATH
+    description: InsightFace on frames sampled through the video, a face region per person seen with its crop
+    pool: media
+    kind: faces
+    priority: 50
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 10

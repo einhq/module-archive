@@ -96,6 +96,7 @@ Deno.test({
           'media-transcode',
           'media-fingerprint',
           'media-faces',
+          'media-video-faces',
           'media-face-transfer',
           'media-face-assign',
           'media-transcribe',

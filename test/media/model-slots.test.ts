@@ -10,6 +10,7 @@ const moduleRoot = new URL('../../', import.meta.url);
 /** Every pipeline whose step calls a model in EMS, and the kind it queues under. */
 const MODEL_STEPS = [
   { file: 'media-faces.yaml', step: 'detect-faces', kind: 'faces' },
+  { file: 'media-video-faces.yaml', step: 'detect-faces', kind: 'faces' },
   { file: 'media-embed-picture.yaml', step: 'embed-picture', kind: 'embed-picture' },
   { file: 'media-embed-text.yaml', step: 'embed-text', kind: 'embed-text' },
   { file: 'media-transcribe.yaml', step: 'transcribe-file', kind: 'transcribe' },

@@ -1,8 +1,10 @@
 /**
- * The boxes on an image: `media-region` nodes under `<image>/regions/`, in one place.
+ * The boxes on an image or a video: `media-region` nodes under `<file>/regions/`, in one place.
  *
  * Every box on a picture is a region — a detection, a box somebody drew in the lightbox, a tag
- * imported from the legacy archive. A region that shows a usable face has the face's vector as a child
+ * imported from the legacy archive. A video's regions are its faces, one for each person
+ * `detect-faces` told apart: the box is where the face was seen most clearly, at `atSeconds`,
+ * and `appearances` say when it is on screen. A region that shows a usable face has the face's vector as a child
  * named `embedding`; that child is what makes it a face, and nothing else does. Recognition searches embeddings and maps each hit back to its region
  * with one batched parent lookup; the person fields (`personId`, `personSource`, …) live on the
  * region. No id is stored in either direction, so the two cannot drift apart.
@@ -54,6 +56,10 @@ export type RegionAttrs = {
   /** Head pose in degrees, `@archive/media/face-pose`; absent when the detection carried none. */
   pose?: { pitch: number; yaw: number; roll: number } | null;
   confidence?: number;
+  /** On a video: the second `faceBox`, `landmarks` and the crop are of. */
+  atSeconds?: number;
+  /** On a video: when the face is on screen, `[start, end]` in seconds, in time order. */
+  appearances?: [number, number][];
   detectedAt?: string;
   detectedBy?: string;
   legacyDetector?: string;

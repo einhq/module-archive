@@ -596,7 +596,9 @@ const readPeople = async (
   }
 
   try {
-    const regions = await vfs.children<{ personId?: string; faceBox?: FaceBox; transferredTo?: string }>(access, regionsPathOf(path));
+    const regions = await vfs.children<
+      { personId?: string; faceBox?: FaceBox; transferredTo?: string; atSeconds?: number; appearances?: [number, number][] }
+    >(access, regionsPathOf(path));
     // Which boxes are faces and which are tags, in one lookup for the whole photo.
     const embeddings = await faceEmbeddingsOfRegions(vfs, access, regions.map((region) => region.node.id));
     for (const face of regions) {
@@ -607,20 +609,24 @@ const readPeople = async (
       const facePath = `${regionsPathOf(path)}/${face.name}`;
       const hasFace = embeddings.has(face.node.id);
       const personId = face.node.attrs.personId;
+      // A video's face: the moment its box is of, and when it is on screen.
+      const { atSeconds, appearances } = face.node.attrs;
+      const seen = Array.isArray(appearances) ? { appearances } : {};
+      const when = { ...(typeof atSeconds === 'number' ? { atSeconds } : {}), ...seen };
       if (!personId) {
-        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace });
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, ...when });
         continue;
       }
       const entries = await vfs.resolveId(access, personId).catch(() => []);
       const target = entries[0]?.vfsAbsPath;
       if (!target) {
-        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId });
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId, ...when });
         continue;
       }
 
       const result = await toPersonTag(vfs, access, target, 'face', takenAt);
       if (!result) {
-        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId, personPath: target });
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId, personPath: target, ...when });
         continue;
       }
       if (activeFaceBox) {
@@ -633,6 +639,7 @@ const readPeople = async (
           personPath: target,
           personName: result.tag.name,
           unnamed: result.unnamed,
+          ...when,
         });
       }
       if (result.unnamed) {
@@ -643,10 +650,17 @@ const readPeople = async (
           personPath: target,
           personName: result.tag.name,
           ...(activeFaceBox ? { faceBox: activeFaceBox } : {}),
+          ...seen,
         });
         continue;
       }
-      if (!byPath.has(target)) byPath.set(target, activeFaceBox ? { ...result.tag, faceBox: activeFaceBox } : result.tag);
+      const known = byPath.get(target);
+      if (!known) {
+        byPath.set(target, { ...result.tag, ...(activeFaceBox ? { faceBox: activeFaceBox } : {}), ...seen });
+      } else if (seen.appearances) {
+        // Tagged and seen, or seen as two faces of a video: on screen whenever any face is.
+        known.appearances = [...(known.appearances ?? []), ...seen.appearances].sort((a, b) => a[0] - b[0]);
+      }
     }
   } catch {
     // no regions directory

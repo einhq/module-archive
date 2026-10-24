@@ -132,8 +132,10 @@ const MAJORITY = 0.5;
 const GUESTS_SHARE = 0.3;
 /** A person in at most this share of the library's faces, outside the household, is a guest. */
 const GUEST_FACE_SHARE = 0.005;
-/** A group is provisional while more than this share of its images wait for face detection. */
+/** A group is provisional while more than this share of its photos and videos wait for face detection. */
 const PROVISIONAL_SHARE = 0.1;
+/** What face detection runs on, and a group waits for. */
+const DETECTED = /^(image|video)\//;
 const GENERATED_BY = 'staging organize';
 const MEDIA = /^(image|video|audio)\//;
 /** A capture time the timeline places: an ISO instant, which also sorts as text. */
@@ -295,7 +297,7 @@ export const readMedia = async (vfs: Vfs, access: Access, rows: FileRow[], base:
     const day = typeof attrs.takenAt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(attrs.takenAt) ? attrs.takenAt.slice(0, 10) : undefined;
     if (signal?.positionId) positionOf.set(row.id, signal.positionId);
     if (signal?.location) locationOf.set(row.id, signal.location);
-    const image = (attrs.mimetype ?? '').startsWith('image/');
+    const seen = DETECTED.test(attrs.mimetype ?? '');
     return {
       id: row.id,
       path: row.path,
@@ -315,7 +317,7 @@ export const readMedia = async (vfs: Vfs, access: Access, rows: FileRow[], base:
       ...(signal?.point ? { lat: signal.point.lat, lng: signal.point.lng } : {}),
       ...(signal && signal.persons.length > 0 ? { persons: signal.persons } : {}),
       ...(signal?.localFolder ? { localFolder: signal.localFolder } : {}),
-      ready: !image || attrs.facesAt !== undefined,
+      ready: !seen || attrs.facesAt !== undefined,
     };
   });
   const positions = await batched([...new Set(positionOf.values())], (page) => vfs.getNodesByIds<Geocode>(access, page));
@@ -687,8 +689,8 @@ const coverOf = (group: PlannedGroup): { path: string; rule: 'face' | 'earliest'
 /** The meta a planned group is written with, but for `generatedAt`. */
 const metaOf = (group: PlannedGroup, name: string, location: string | undefined, cover: 'face' | 'earliest'): Omit<AutoAlbumMeta, 'generatedAt'> => {
   const dated = group.items.filter((item) => item.precision !== 'none').toSorted(compareItems);
-  const images = group.items.filter((item) => item.mimetype.startsWith('image/'));
-  const waiting = images.filter((item) => item.ready === false).length;
+  const pictures = group.items.filter((item) => DETECTED.test(item.mimetype));
+  const waiting = pictures.filter((item) => item.ready === false).length;
   const cluster = group.cluster;
   const meta: Omit<AutoAlbumMeta, 'generatedAt'> = {
     kind: group.kind,
@@ -703,7 +705,7 @@ const metaOf = (group: PlannedGroup, name: string, location: string | undefined,
     ...(cluster ? { scores: cluster.scores } : {}),
     generatedName: name,
     generatedBy: GENERATED_BY,
-    provisional: images.length > 0 && waiting > PROVISIONAL_SHARE * images.length,
+    provisional: pictures.length > 0 && waiting > PROVISIONAL_SHARE * pictures.length,
     ...(dated.length > 0 ? { days: new Set(dated.map(dayOf)).size } : {}),
     ...(cluster?.away !== undefined ? { away: cluster.away } : {}),
     ...(cluster?.parts && cluster.parts.length > 1

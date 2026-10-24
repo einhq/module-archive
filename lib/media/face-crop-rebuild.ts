@@ -1,16 +1,17 @@
 /**
- * Writing a face crop from its source image and the stored box — the VFS half of
- * @archive/media/face-crop, which is only what the crop *is*.
+ * Writing a face crop from its source and the stored box — the VFS half of
+ * @archive/media/face-crop, which is only what the crop *is*. The source is an image, or the
+ * frame of a video its region was seen in.
  *
- * A face crop is a rendition like any other: `<image>/regions/<region>/image.avif`, carrying the
- * source image's id. It is written by the detector rather than by the derivative ladder, so the
+ * A face crop is a rendition like any other: `<file>/regions/<region>/image.avif`, carrying the
+ * source's id. It is written by the detector rather than by the derivative ladder, so the
  * write lives here, where the detector, `generate-derivatives` and every other caller reach the
  * same crop from the same attrs — and an interrupted write is retried by a `regenerate` sweep.
  */
 
 import type { Command } from '@ein/client';
 import { shq } from '@ein/client';
-import { MAX_RENDITION_TARGETS, renditions } from '@ems/client';
+import { MAX_RENDITION_TARGETS, poster, renditions } from '@ems/client';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME, faceCropTarget } from '@archive/media/face-crop';
 import { REGION_TYPE, regionsPathOf } from '@archive/media/regions';
 import { type FracBox, normalizeAngle, normalizeMirror } from '@archive/media/orientation';
@@ -28,13 +29,31 @@ const isFaceBox = (value: unknown): value is FracBox => {
   return ['x', 'y', 'width', 'height'].every((key) => typeof box[key] === 'number' && Number.isFinite(box[key]));
 };
 
-/** One crop to cut: where it goes, and the stored box it is of. */
-export type FaceCropRequest = { output: string; box: FracBox };
+/**
+ * One crop to cut: where it goes, and the stored box it is of. On a video `at` is the second
+ * the box was seen at (the region's `atSeconds`); without one the crop comes from the frame
+ * EMS takes for a poster.
+ */
+export type FaceCropRequest = { output: string; box: FracBox; at?: number };
+
+const isVideo = (source: FaceSourceAttrs): boolean => (source.mimetype ?? '').startsWith('video/');
+
+/** A video's crops by the frame they are cut from, in the order first asked for. */
+const byFrame = (crops: ReadonlyArray<FaceCropRequest>): FaceCropRequest[][] => {
+  const frames = new Map<number | undefined, FaceCropRequest[]>();
+  for (const crop of crops) {
+    const same = frames.get(crop.at);
+    if (same) same.push(crop);
+    else frames.set(crop.at, [crop]);
+  }
+  return [...frames.values()];
+};
 
 /**
  * Cut every crop of one image and record their bytes. Returns a message on failure, null on
  * success — for all of them at once, since they are one EMS call and one decode, so at most
- * `MAX_RENDITION_TARGETS` of them.
+ * `MAX_RENDITION_TARGETS` of them. A video's crops are one `video.poster` call per frame they
+ * are cut from.
  *
  * One call rather than one per face, because each call decodes the whole source. The stored
  * boxes are fractions of the display frame and dimension-free; EMS turns them into pixels
@@ -53,14 +72,22 @@ export const writeFaceCrops = async (
   source: FaceSourceAttrs,
 ): Promise<string | null> => {
   if (crops.length === 0) return null;
-  let written;
+  const frame = {
+    angle: normalizeAngle(source.angle),
+    mirror: normalizeMirror(source.mirror),
+    ...(source.mimetype ? { mimetype: source.mimetype } : {}),
+  };
+  const written = [];
   try {
-    written = await renditions(cmd, input, {
-      angle: normalizeAngle(source.angle),
-      mirror: normalizeMirror(source.mirror),
-      ...(source.mimetype ? { mimetype: source.mimetype } : {}),
-      targets: crops.map((crop) => faceCropTarget(crop.output, crop.box)),
-    });
+    if (isVideo(source)) {
+      for (const group of byFrame(crops)) {
+        const at = group[0].at;
+        const cut = await poster(cmd, input, { ...frame, ...(at !== undefined ? { at } : {}), targets: group.map((crop) => faceCropTarget(crop.output, crop.box)) });
+        written.push(...cut.targets);
+      }
+    } else {
+      written.push(...(await renditions(cmd, input, { ...frame, targets: crops.map((crop) => faceCropTarget(crop.output, crop.box)) })).targets);
+    }
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -73,7 +100,7 @@ export const writeFaceCrops = async (
   // The encoded size, as EMS reports it, so a grid of crops can lay itself out before a single
   // one has decoded instead of reflowing as they arrive. After the sync, which writes attrs of
   // its own.
-  for (const rendition of written.targets) {
+  for (const rendition of written) {
     if (!(rendition.width > 0 && rendition.height > 0)) continue;
     await cmd.sys.vfs.update(cmd.access, rendition.path, { attrs: { width: rendition.width, height: rendition.height } });
   }
@@ -127,7 +154,7 @@ export const rebuildFaceCrops = async (
   const facesPath = regionsPathOf(source);
   let faces;
   try {
-    faces = await vfs.children<{ faceBox?: unknown }>(access, facesPath);
+    faces = await vfs.children<{ faceBox?: unknown; atSeconds?: unknown }>(access, facesPath);
   } catch {
     return result; // nothing has been detected here
   }
@@ -171,7 +198,8 @@ export const rebuildFaceCrops = async (
     }
 
     await log?.(`Generating ${cropPath}...`);
-    wanted.push({ output: cropPath, box: face.node.attrs.faceBox });
+    const at = face.node.attrs.atSeconds;
+    wanted.push({ output: cropPath, box: face.node.attrs.faceBox, ...(typeof at === 'number' && Number.isFinite(at) ? { at } : {}) });
   }
 
   // As many crops per decode as EMS takes in one call. The crops of a call succeed or fail

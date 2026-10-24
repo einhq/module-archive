@@ -411,7 +411,9 @@ export function MediaLightbox() {
   const { person: reviewPerson, refetch: refetchReviewPerson } = useUnknownPerson(reviewPersonId ?? undefined);
   const { people: namedPeople } = usePeople(PEOPLE_ROOT, reviewPersonId !== null || personFacePath !== null);
 
-  const faces = useMemo(() => toFaceMarks(faceDetails?.faces ?? []), [faceDetails]);
+  // Boxes are drawn over photos only: a video's face box holds for the one moment it was seen
+  // at, so its faces are listed in the sidebar with when they are on screen instead.
+  const faces = useMemo(() => media?.type === 'photo' ? toFaceMarks(faceDetails?.faces ?? []) : [], [faceDetails, media?.type]);
   const personFace = faceDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
   // The text in a photo, which the "more" menu lays over it, and opens for writing, in a dialog
   // beside the picture, to whoever may write the photo. Shown, it stays on from picture to
@@ -1506,14 +1508,16 @@ export function MediaLightbox() {
   // file name in the details does.
   const viewMenuItems = (iconSize: number) => (
     <>
-      <Menu.Item
-        leftSection={<TablerIcon name='user-square-rounded' size={iconSize} color={showFaces && faces.length > 0 ? 'var(--mrx-accent)' : undefined} />}
-        rightSection={isMobile ? undefined : <Kbd size='xs'>f</Kbd>}
-        disabled={faces.length === 0}
-        onClick={toggleFacesVisible}
-      >
-        {faces.length === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
-      </Menu.Item>
+      {media?.type === 'photo' && (
+        <Menu.Item
+          leftSection={<TablerIcon name='user-square-rounded' size={iconSize} color={showFaces && faces.length > 0 ? 'var(--mrx-accent)' : undefined} />}
+          rightSection={isMobile ? undefined : <Kbd size='xs'>f</Kbd>}
+          disabled={faces.length === 0}
+          onClick={toggleFacesVisible}
+        >
+          {faces.length === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
+        </Menu.Item>
+      )}
       {pictureText && (
         <Menu.Item
           leftSection={<TablerIcon name='text-scan-2' size={iconSize} color={showText ? 'var(--mrx-accent)' : undefined} />}

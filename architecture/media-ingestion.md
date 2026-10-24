@@ -43,6 +43,7 @@ waits for rather than by a shared DAG:
    | `media-transcode`      | `metadata.extracted` (video/audio) or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
    | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                         | pool `fingerprint` (1 cpu, priority 30)                                                            |
    | `media-faces`          | `metadata.extracted` (image)                                                    | pool `faces` (1 model slot, priority 100)                                                          |
+   | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                           |
    | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                |
    | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                      |
    | `media-face-transfer`  | `faces.completed` (image)                                                       | pool `face-transfer` (1 cpu)                                                                       |
@@ -199,7 +200,9 @@ waits for rather than by a shared DAG:
    for those faces indefinitely). It is now the `face` target of the `preview` class, so
    `regenerate --size face` is the repair pass and `-f` re-cuts. Rebuilding needs no detection —
    the box is stored on the region and a crop is reproducible from it forever — and both
-   authors of `regions/` are covered, `face-*` and `manual-*` alike. `--prune` never
+   authors of `regions/` are covered, `face-*` and `manual-*` alike. A video region's crop is
+   cut from the frame at its `atSeconds` (`video.poster` with the box as `crop`, one call per
+   frame). `--prune` never
    reaches it: prune only walks `thumbnails/`. The rebuild itself is
    [@archive/media/face-crop-rebuild](../lib/media/face-crop-rebuild.ts), shared with
    `detect-faces` and `regenerate-face-crops` so the four spellings this used to have cannot
@@ -1240,7 +1243,16 @@ the archive bridge treats `metadata/exif` existence as the boundary between `med
 storyboard sheet) and `metadata/` directories and the
 `position` node, an image may carry `regions/`: every box on it is a `media-region` node there
 (`@archive/media/regions`). `face-N` is a detection; `manual-N` is a box a human drew in the lightbox or
-the legacy import carried. A region that shows a usable face has the face's 512-d vector as a
+the legacy import carried. A **video** carries `regions/` too, one `face-N` for each person
+`detect-faces` tells apart in it (ein/core#410): EMS samples a frame a second (`faces.detect_video`,
+sparser past half an hour), follows each face from frame to frame and groups the sightings of one
+file by vector, never joining two faces seen in the same frame. The region's box, landmarks and
+pose are its clearest sighting, at `atSeconds`; `appearances` are when it is on screen; its vector
+is the mean of its best sightings, compared with photos' faces like any other. The gate below
+judges that clearest sighting, and assignment rules a person out of a video face only for a face
+of the same video on screen at the same time — one person the grouping left as two faces is two
+faces of one person, not two people. The lightbox draws no boxes over a video; its sidebar plays
+from where a person is seen. A region that shows a usable face has the face's 512-d vector as a
 child named `embedding` (`embeddingType: face`), the way `metadata/description` has one — that
 child is what makes a region a **face**, and a region without one is a **tag**: a box and a
 person, which recognition never searches or votes with. The box, landmarks, pose, detector and
@@ -1262,7 +1274,7 @@ the prefixes are load-bearing: `detect-faces -f`
 drops `face-*`, leaves `manual-*` alone, and reopens any tag whose `transferredTo` named a region
 (or, from before regions, its embedding) it just deleted, and "has detection run here?" is the
 `facesAt` attr on the **file**, not the existence of `regions/` — a directory the importer also
-writes, and one an image with nobody in it never gets. Which old boxes are named is decided by the
+writes, and one a photo or video with nobody in it never gets. Which old boxes are named is decided by the
 legacy `tags/<faceId> -> /people/<slug>` links and not by the box's detector
 (`resolveFaceTags` in `@importer/legacy`): a machine-drawn box a human named carries exactly as
 much identity as a hand-drawn one. Also `people/<slug>` softlinks
@@ -1542,6 +1554,8 @@ embedding. The model only reads what it was trained on, so EMS feeds it as LR-AS
 does — the lower face cropped square from the smoothed track, MFCCs of 16-bit samples; fed a
 whole-head crop and float samples it scored a woman talking to the camera at 0.1. A face recognition knows — found among the archive's faces, its person read from the
 region the hit belongs to (`@archive/media/speaker-faces`) — becomes the voice's `asdPersonId`.
+The faces the video shows are found apart from this, by `media-video-faces`: lip-sync looks only
+at a few seconds of each voice, and only to tie a voice to a face.
 
 `assign-speakers` and `cluster-voices` mirror `assign-faces` and `cluster-faces` and share their
 voting core. A voice is decided as a whole, on far more voice than any turn carries, and the

@@ -2,12 +2,12 @@
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
-import { detectFaces as detectFacesOp, stepExitCode } from '@ems/client';
+import { type Box, detectFaces as detectFacesOp, detectVideoFaces, stepExitCode } from '@ems/client';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
 import { type FaceCropRequest, writeFaceCrops } from '@archive/media/face-crop-rebuild';
 import { storedPose } from '@archive/media/face-pose';
 import { qualityLimitsFrom, type QualityReason, recognizable } from '@archive/media/face-quality';
-import { clampBox, normalizeAngle, normalizeMirror, roundBox } from '@archive/media/orientation';
+import { clampBox, displayDims, normalizeAngle, normalizeMirror, roundBox } from '@archive/media/orientation';
 import {
   DETECTED_PREFIX,
   FACE_DETECTOR,
@@ -22,6 +22,28 @@ import {
 import { reportUnwritable } from '@archive/media/writable';
 
 const log = (...args: unknown[]) => console.log('[detect-faces]', ...args);
+
+/**
+ * Detections below this confidence are left out of a video before EMS follows its faces. Lower
+ * than the gate, which applies to each face's clearest look: a blurred moment of a face is
+ * still what joins its sharp ones into one face.
+ */
+const VIDEO_TRACK_MIN_CONFIDENCE = 0.5;
+
+/** One face found, from a photo or a video, in the display frame `frame` names. */
+type Found = {
+  index: number;
+  box: Box;
+  confidence: number;
+  embedding: number[];
+  landmarks?: number[][];
+  pose?: unknown;
+  /** On a video: the second the box is of, and when the face is on screen. */
+  at?: number;
+  appearances?: [number, number][];
+};
+
+type Detection = { frame: { width: number; height: number }; faces: Found[] };
 
 const detectFaces = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -63,11 +85,11 @@ const detectFaces = async (cmd: Command): CmdReturn => {
 
   if (await reportUnwritable(cmd, inputPath, nodeInfo)) return 1;
 
-  // Check if it's an image
   const fileAttrs = nodeInfo.attrs;
   const mimetype = typeof fileAttrs.mimetype === 'string' ? fileAttrs.mimetype : '';
-  if (!mimetype.startsWith('image/')) {
-    await cmd.writeError(`detect-faces: ${inputPath}: not an image (is ${mimetype})\n`);
+  const video = mimetype.startsWith('video/');
+  if (!video && !mimetype.startsWith('image/')) {
+    await cmd.writeError(`detect-faces: ${inputPath}: not an image or a video (is ${mimetype})\n`);
     return 1;
   }
 
@@ -101,155 +123,173 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   // ImageMagick need not see the same raster (a RAW's 1920x1280 embedded preview against its
   // 6000x4000 sensor image; the first face out of a .RAF was once a window frame): no
   // dimensions travel, so none can be the wrong raster's.
-  const image = { path: inputPath, angle, mirror };
-  return await (async () => {
-    const source = image.path;
-    let detection;
-    try {
-      detection = await detectFacesOp(cmd, source, image.angle, image.mirror);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await cmd.writeError(`detect-faces: face detection failed: ${message}\n`);
-      return stepExitCode(error);
+  //
+  // A video is sampled through, and each face it shows comes back once: where it was seen most
+  // clearly, and when it is on screen. Its crop is cut from that frame.
+  let detection: Detection;
+  try {
+    if (video) {
+      const width = Number(fileAttrs.width), height = Number(fileAttrs.height);
+      const dims = width > 0 && height > 0 ? displayDims(width, height, angle) : undefined;
+      const result = await detectVideoFaces(cmd, inputPath, angle, mirror, {
+        // Below the gate's size nothing can pass it, so EMS need not follow it.
+        ...(dims ? { minSize: limits.minSize / Math.min(dims.width, dims.height) } : {}),
+        minConfidence: Math.min(VIDEO_TRACK_MIN_CONFIDENCE, limits.minConfidence),
+      });
+      log('video sampled', { interval: result.interval, samples: result.samples, faces: result.faces.length });
+      detection = {
+        frame: result.frame,
+        faces: result.faces.map((face, index) => ({ ...face, index, at: face.t, appearances: face.appearances })),
+      };
+    } else {
+      detection = await detectFacesOp(cmd, inputPath, angle, mirror);
     }
-    // Detection ran on the display frame; EMS reports every box and landmark as fractions of
-    // it, which is exactly what is stored. Only a usable face is kept (@media/face-quality): a
-    // weak detection that went on to vote in recognition pulled strangers toward its person.
-    // One the gate drops is gone — a person in it is tagged by hand.
-    const dims = detection.frame.width > 0 && detection.frame.height > 0 ? detection.frame : undefined;
-    const rejected: Partial<Record<QualityReason, number>> = {};
-    const faces = detection.faces.filter((face) => {
-      const quality = recognizable({ confidence: face.confidence, faceBox: face.box, landmarks: face.landmarks }, dims, limits);
-      if (!quality.ok) rejected[quality.reason] = (rejected[quality.reason] ?? 0) + 1;
-      return quality.ok;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`detect-faces: face detection failed: ${message}\n`);
+    return stepExitCode(error);
+  }
+
+  // Detection ran on the display frame; EMS reports every box and landmark as fractions of
+  // it, which is exactly what is stored. Only a usable face is kept (@media/face-quality): a
+  // weak detection that went on to vote in recognition pulled strangers toward its person.
+  // One the gate drops is gone — a person in it is tagged by hand. A video's face is judged by
+  // its clearest look, the one that is stored.
+  const dims = detection.frame.width > 0 && detection.frame.height > 0 ? detection.frame : undefined;
+  const rejected: Partial<Record<QualityReason, number>> = {};
+  const faces = detection.faces.filter((face) => {
+    const quality = recognizable({ confidence: face.confidence, faceBox: face.box, landmarks: face.landmarks }, dims, limits);
+    if (!quality.ok) rejected[quality.reason] = (rejected[quality.reason] ?? 0) + 1;
+    return quality.ok;
+  });
+
+  log('faces detected', { total: detection.faces.length, kept: faces.length, rejected, angle, mirror, limits });
+
+  const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+  // Mark the file itself, in both exit paths. Without this "has detection run
+  // on this file?" is unanswerable: a picture with nobody in it creates no
+  // `regions/` directory and no face nodes, so it is indistinguishable from one
+  // the crawl has not reached — and anything that needs to know whether the
+  // people signal is complete (the staging organizer) would have to guess.
+  const markDetected = (count: number) => cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { facesAt: detectedAt, faceCount: count } });
+
+  if (faces.length === 0) {
+    await markDetected(0);
+    if (cmd.json) {
+      await cmd.writeLn('{"count":0,"faces":[]}');
+    } else {
+      await cmd.writeLn(`No usable faces detected (${detection.faces.length} below the quality limits)`);
+    }
+    return 0;
+  }
+
+  const regionsPath = regionsPathOf(inputPath);
+  await cmd.sys.vfs.ensure(cmd.access, 'directory', inputPath, REGIONS_DIR);
+
+  const createdFaces: string[] = [];
+  const crops: FaceCropRequest[] = [];
+
+  for (const face of faces) {
+    const regionName = `${DETECTED_PREFIX}${face.index}`;
+    const regionPath = `${regionsPath}/${regionName}`;
+    const faceBox = clampBox(face.box);
+    if (!faceBox) {
+      await cmd.writeError(`detect-faces: ${regionPath}: degenerate box, skipping\n`);
+      continue;
+    }
+
+    // The region first, with everything about the box; then the embedding under it. The
+    // embedding's arrival is the `media.face.detected` fact, and assignment reads the region.
+    log('creating face region', { regionPath, embeddingLength: face.embedding.length });
+    try {
+      await cmd.sys.vfs.create(cmd.access, REGION_TYPE, regionsPath, regionName, {
+        attrs: {
+          fileId: nodeId,
+          faceBox: roundBox(faceBox),
+          // Landmarks are fractions of the same frame; kept alongside the box.
+          landmarks: face.landmarks ?? null,
+          // Which way the head is turned, when this EMS reports it (@media/face-pose).
+          pose: storedPose(face.pose),
+          confidence: face.confidence,
+          ...(face.at !== undefined ? { atSeconds: face.at, appearances: face.appearances ?? [] } : {}),
+          detectedAt,
+          detectedBy: FACE_DETECTOR,
+        },
+      });
+      await cmd.sys.vfs.create(cmd.access, 'embedding', regionPath, FACE_EMBEDDING_NAME, {
+        attrs: { embeddingType: FACE_EMBEDDING_TYPE, capacity: 512 },
+      });
+      // Written through the VFS rather than the shell, which would truncate it.
+      const handle = await cmd.sys.vfs.open(cmd.access, faceEmbeddingPathOf(regionPath), { mode: 'w' });
+      try {
+        await handle.write(new TextEncoder().encode(JSON.stringify(face.embedding)));
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      await cmd.writeError(`detect-faces: failed to create ${regionPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      continue;
+    }
+
+    log('face region created', { regionPath });
+
+    const cropPath = `${regionPath}/${FACE_CROP_NAME}`;
+    // Set sourceId (the media node) so the crop is treated as a rendition:
+    // media-index's trigger skips it — otherwise the crop (an image file
+    // node) re-triggers the pipeline and detect-faces recurses on its own
+    // output indefinitely — and it routes to the volatile storage tier.
+    await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_CROP_NAME, {
+      attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: nodeId },
     });
 
-    log('faces detected', { total: detection.faces.length, kept: faces.length, rejected, angle: image.angle, mirror: image.mirror, limits });
+    crops.push({ output: cropPath, box: faceBox, ...(face.at !== undefined ? { at: face.at } : {}) });
+    createdFaces.push(regionPath);
+  }
 
-    const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  // Every crop of a photo from one decode, a video's from one decode per frame, once every face
+  // node holds its box. A failure is reported and the faces kept: the crop nodes are left behind
+  // empty on purpose — that is what `generate-derivatives --size face` looks for, and rebuilding
+  // them needs only the boxes this run has already stored. Failing the whole detection over the
+  // crops would throw away the vectors too, which are the expensive half and the half that came
+  // out fine.
+  log('cropping faces', { count: crops.length });
+  const cropFailure = await writeFaceCrops(cmd, inputPath, crops, { mimetype, angle, mirror });
+  if (cropFailure) await cmd.writeError(`detect-faces: face crops: ${cropFailure}\n`);
+  log('faces cropped', { count: crops.length, cropped: !cropFailure });
+  if (verbose && !cropFailure) { for (const crop of crops) await cmd.writeLn(`  Created face crop: ${crop.output}`); }
 
-    // Mark the file itself, in both exit paths. Without this "has detection run
-    // on this image?" is unanswerable: a photo with nobody in it creates no
-    // `regions/` directory and no face nodes, so it is indistinguishable from one
-    // the crawl has not reached — and anything that needs to know whether the
-    // people signal is complete (the staging organizer) would have to guess.
-    const markDetected = (count: number) => cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { facesAt: detectedAt, faceCount: count } });
+  log('all faces processed', { created: createdFaces.length });
 
-    if (faces.length === 0) {
-      await markDetected(0);
-      if (cmd.json) {
-        await cmd.writeLn('{"count":0,"faces":[]}');
-      } else {
-        await cmd.writeLn(`No usable faces detected (${detection.faces.length} below the quality limits)`);
-      }
-      return 0;
+  // The other exit path. Marking only the no-faces case left every file that
+  // *does* have people looking permanently un-detected, which is both what
+  // the staging organizer reads and what this pipeline's own `skipIfAttr` guard
+  // now rests on — without it the file re-detects on every re-emission.
+  await markDetected(createdFaces.length);
+
+  // Assignment is a separate pipeline, triggered per face by the bridge. It is
+  // pure database work (a kNN over every known face) and used to run here, on
+  // the GPU worker's single permit — holding the card idle for the duration.
+
+  // Output results
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ count: createdFaces.length, faces: createdFaces }));
+  } else {
+    await cmd.writeLn(`Created ${createdFaces.length} face region${createdFaces.length === 1 ? '' : 's'}`);
+    for (const f of createdFaces) {
+      await cmd.writeLn(`  ${f}`);
     }
+  }
 
-    const regionsPath = regionsPathOf(inputPath);
-    await cmd.sys.vfs.ensure(cmd.access, 'directory', inputPath, REGIONS_DIR);
-
-    const createdFaces: string[] = [];
-    const crops: FaceCropRequest[] = [];
-
-    for (const face of faces) {
-      const regionName = `${DETECTED_PREFIX}${face.index}`;
-      const regionPath = `${regionsPath}/${regionName}`;
-      const faceBox = clampBox(face.box);
-      if (!faceBox) {
-        await cmd.writeError(`detect-faces: ${regionPath}: degenerate box, skipping\n`);
-        continue;
-      }
-
-      // The region first, with everything about the box; then the embedding under it. The
-      // embedding's arrival is the `media.face.detected` fact, and assignment reads the region.
-      log('creating face region', { regionPath, embeddingLength: face.embedding.length });
-      try {
-        await cmd.sys.vfs.create(cmd.access, REGION_TYPE, regionsPath, regionName, {
-          attrs: {
-            fileId: nodeId,
-            faceBox: roundBox(faceBox),
-            // Landmarks are fractions of the same frame; kept alongside the box.
-            landmarks: face.landmarks ?? null,
-            // Which way the head is turned, when this EMS reports it (@media/face-pose).
-            pose: storedPose(face.pose),
-            confidence: face.confidence,
-            detectedAt,
-            detectedBy: FACE_DETECTOR,
-          },
-        });
-        await cmd.sys.vfs.create(cmd.access, 'embedding', regionPath, FACE_EMBEDDING_NAME, {
-          attrs: { embeddingType: FACE_EMBEDDING_TYPE, capacity: 512 },
-        });
-        // Written through the VFS rather than the shell, which would truncate it.
-        const handle = await cmd.sys.vfs.open(cmd.access, faceEmbeddingPathOf(regionPath), { mode: 'w' });
-        try {
-          await handle.write(new TextEncoder().encode(JSON.stringify(face.embedding)));
-        } finally {
-          await handle.close();
-        }
-      } catch (error) {
-        await cmd.writeError(`detect-faces: failed to create ${regionPath}: ${error instanceof Error ? error.message : String(error)}\n`);
-        continue;
-      }
-
-      log('face region created', { regionPath });
-
-      const cropPath = `${regionPath}/${FACE_CROP_NAME}`;
-      // Set sourceId (the media node) so the crop is treated as a rendition:
-      // media-index's trigger skips it — otherwise the crop (an image file
-      // node) re-triggers the pipeline and detect-faces recurses on its own
-      // output indefinitely — and it routes to the volatile storage tier.
-      await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_CROP_NAME, {
-        attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: nodeId },
-      });
-
-      crops.push({ output: cropPath, box: faceBox });
-      createdFaces.push(regionPath);
-    }
-
-    // Every crop from one decode, once every face node holds its box. A failure is reported
-    // and the faces kept: the crop nodes are left behind empty on purpose — that is what
-    // `generate-derivatives --size face` looks for, and rebuilding them needs only the boxes
-    // this run has already stored. Failing the whole detection over the crops would throw away
-    // the vectors too, which are the expensive half and the half that came out fine.
-    log('cropping faces', { count: crops.length });
-    const cropFailure = await writeFaceCrops(cmd, source, crops, { mimetype, angle: image.angle, mirror: image.mirror });
-    if (cropFailure) await cmd.writeError(`detect-faces: face crops: ${cropFailure}\n`);
-    log('faces cropped', { count: crops.length, cropped: !cropFailure });
-    if (verbose && !cropFailure) { for (const crop of crops) await cmd.writeLn(`  Created face crop: ${crop.output}`); }
-
-    log('all faces processed', { created: createdFaces.length });
-
-    // The other exit path. Marking only the no-faces case left every image that
-    // *does* have people looking permanently un-detected, which is both what
-    // the staging organizer reads and what this pipeline's own `skipIfAttr` guard
-    // now rests on — without it the file re-detects on every re-emission.
-    await markDetected(createdFaces.length);
-
-    // Assignment is a separate pipeline, triggered per face by the bridge. It is
-    // pure database work (a kNN over every known face) and used to run here, on
-    // the GPU worker's single permit — holding the card idle for the duration.
-
-    // Output results
-    if (cmd.json) {
-      await cmd.writeLn(JSON.stringify({ count: createdFaces.length, faces: createdFaces }));
-    } else {
-      await cmd.writeLn(`Created ${createdFaces.length} face region${createdFaces.length === 1 ? '' : 's'}`);
-      for (const f of createdFaces) {
-        await cmd.writeLn(`  ${f}`);
-      }
-    }
-
-    return 0;
-  })();
+  return 0;
 };
 
 detectFaces.spec = {
   name: 'detect-faces',
   effect: 'write' as const,
-  description: 'Detect faces in an image and keep the usable ones as face regions',
+  description: 'Detect faces in an image or a video and keep the usable ones as face regions',
   args: [
-    { name: 'input', type: 'path' as const, description: 'VFS path to image file' },
+    { name: 'input', type: 'path' as const, description: 'VFS path to an image or video file' },
   ],
   flags: [
     { name: 'c', type: 'string' as const, description: 'Minimum confidence (default: CFG_FACE_MIN_CONFIDENCE, 0.7)' },
@@ -258,8 +298,9 @@ detectFaces.spec = {
   ],
   examples: [
     'detect-faces /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+    'detect-faces /archive/albums/Exempelalbum_2019/files/MVI_0012.MP4',
   ],
-  returns: 'each face found, with its box and the crop written under the file.',
+  returns: 'each face found, with its box and the crop written under the file; on a video, one per person told apart, with when it is on screen.',
 };
 
 export default detectFaces;

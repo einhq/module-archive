@@ -133,6 +133,23 @@ Deno.test({
       assertEquals(a === b, false, 'the two faces got different people');
     });
 
+    await t.step('in a video, only faces on screen together are surely two people', async () => {
+      await makeImage('/img/v.mp4', { width: 1920, height: 1080 });
+      await vfs.update(ADMIN_ACCESS, '/img/v.mp4', { attrs: { mimetype: 'video/mp4' } });
+      const seen = (path: string, appearances: [number, number][]) => vfs.update(ADMIN_ACCESS, path, { attrs: { appearances, atSeconds: appearances[0][0] } });
+      // Anna at the start and again twenty seconds later, two faces the detector did not join,
+      // and a look-alike beside her at the start.
+      await seen(await addFace('/img/v.mp4', 'face-0', near(ANNA, 5), { confidence: 0.95 }), [[0, 5]]);
+      await seen(await addFace('/img/v.mp4', 'face-1', near(ANNA, 6), { confidence: 0.9 }), [[20, 25]]);
+      await seen(await addFace('/img/v.mp4', 'face-2', near(ANNA, 7), { confidence: 0.8 }), [[2, 4]]);
+
+      await client.execJson<Summary>('assign-faces /img/v.mp4');
+      assertEquals((await attrsOf('/img/v.mp4/regions/face-0')).personId, annaId);
+      assertEquals((await attrsOf('/img/v.mp4/regions/face-1')).personId, annaId);
+      const beside = (await attrsOf('/img/v.mp4/regions/face-2')).personId;
+      assertEquals(typeof beside === 'string' && beside !== annaId, true, 'the face beside her is somebody else');
+    });
+
     await t.step('re-running is a no-op', async () => {
       const before = (await unknownPeople()).length;
       const res = await client.execJson<Summary>('assign-faces /img/1.jpg');

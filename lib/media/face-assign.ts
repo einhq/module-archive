@@ -123,6 +123,13 @@ const readVector = async (vfs: Vfs, access: Access, path: string): Promise<Uint8
 };
 
 /**
+ * Whether two of a video's faces are on screen at once. Only then are they surely two people:
+ * one person seen at two moments the detector could not join is two faces of the same video.
+ */
+const together = (a: RegionAttrs['appearances'], b: RegionAttrs['appearances']): boolean =>
+  Array.isArray(a) && Array.isArray(b) && a.some(([start, end]) => b.some(([otherStart, otherEnd]) => start < otherEnd && otherStart < end));
+
+/**
  * Big and confident enough to be worth treating as a new identity.
  *
  * `faceBox` is a fraction of the display frame, so the size gate needs that frame's dimensions
@@ -174,11 +181,21 @@ export const assignFacesForFile = async (
     // no dimensions — the gate below is skipped rather than guessed
   }
 
-  // Persons already on this image: a person cannot be two faces in one photo.
-  const takenPersonIds = new Set<string>();
-  for (const c of children) {
-    if (occ(c.node.attrs.personId)) takenPersonIds.add(c.node.attrs.personId);
-  }
+  // Persons already on this file: a person cannot be two faces in one photo, nor two faces on
+  // screen together in a video. Kept current as this run assigns.
+  const personOf = new Map(children.map((c) => [c.node.id, c.node.attrs.personId]));
+  const takenFor = (region: (typeof children)[number]): Set<string> => {
+    const mine = region.node.attrs.appearances;
+    const taken = new Set<string>();
+    for (const other of children) {
+      if (other.node.id === region.node.id) continue;
+      const personId = personOf.get(other.node.id);
+      if (!occ(personId)) continue;
+      if (Array.isArray(mine) && !together(mine, other.node.attrs.appearances)) continue;
+      taken.add(personId);
+    }
+    return taken;
+  };
 
   const candidates = children
     .filter((c) => {
@@ -203,6 +220,7 @@ export const assignFacesForFile = async (
     }
 
     const result = await withLock(async (): Promise<AssignResult> => {
+      const takenPersonIds = takenFor(child);
       const vector = await readVector(vfs, access, faceEmbeddingPathOf(facePath));
       if (!vector) {
         return { facePath, faceId, personId: null, created: false, confidence: 0, reason: 'skipped-no-vector' };
@@ -213,8 +231,8 @@ export const assignFacesForFile = async (
       const regionIds = [...new Set(regionOf.values())];
       const neighbours = regionIds.length > 0 ? await vfs.getNodesByIds<FaceAttrs>(access, regionIds) : new Map();
 
-      // Only neighbours that already belong to someone can vote, and only from
-      // other images — two faces in one photo are different people.
+      // Only neighbours that already belong to someone can vote, and only from other files:
+      // two faces in one photo are different people, and a video's other faces are no evidence.
       const labeled = new Map<string, string>();
       const edges: FaceEdge[] = [];
       for (const m of matches) {
@@ -250,7 +268,7 @@ export const assignFacesForFile = async (
             },
           });
         }
-        takenPersonIds.add(winner.personId);
+        personOf.set(faceId, winner.personId);
         return { facePath, faceId, personId: winner.personId, created: false, confidence: winner.confidence, reason: 'attached' };
       }
 
@@ -276,7 +294,7 @@ export const assignFacesForFile = async (
           personAssignedAt: nowIso(),
         },
       });
-      takenPersonIds.add(person.id);
+      personOf.set(faceId, person.id);
       return { facePath, faceId, personId: person.id, created: true, confidence: 0, reason: 'created' };
     });
 

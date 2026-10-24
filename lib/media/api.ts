@@ -31,6 +31,8 @@ export type PersonTag = NodeRef & {
   source: 'tag' | 'face' | 'voice';
   /** Only for `source: 'face'` — a boxless legacy tag has none. */
   faceBox?: FaceBox;
+  /** On a video whose faces show the person: when they are on screen, `[start, end]` in seconds. */
+  appearances?: [number, number][];
 };
 
 export type MediaPosition = {
@@ -126,13 +128,20 @@ export type UnknownFace = {
   personPath: string;
   personName: string;
   faceBox?: FaceBox;
+  /** On a video: when the face is on screen, `[start, end]` in seconds. */
+  appearances?: [number, number][];
 };
 
-/** One editable box on the photo — a region; multiple entries may belong to the same person. */
+/**
+ * One editable box on the photo — a region; multiple entries may belong to the same person. On a
+ * video the box holds at `atSeconds` only, and `appearances` say when the face is on screen.
+ */
 export type MediaFace = {
   faceId: string;
   facePath: string;
   faceBox: FaceBox;
+  atSeconds?: number;
+  appearances?: [number, number][];
   /** A detected face with a vector; false for a tag — a box a human drew, an import carried, or a face too poor to vote. */
   hasFace: boolean;
   personId?: string;

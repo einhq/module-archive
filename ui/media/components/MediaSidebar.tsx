@@ -25,6 +25,7 @@ import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChan
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
+import { SeenAt } from './SeenAt.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
@@ -650,6 +651,7 @@ export function MediaSidebar(
                     {person.age === 0 && person.ageMonths !== undefined ? `${person.ageMonths} months` : `${person.age} years`}
                   </Badge>
                 )}
+                <SeenAt appearances={person.appearances} name={person.name} />
               </Group>
             ))}
 
@@ -678,6 +680,7 @@ export function MediaSidebar(
                 >
                   {face.personName}
                 </Anchor>
+                <SeenAt appearances={face.appearances} name={face.personName} />
               </Group>
             ))}
           </IconRow>

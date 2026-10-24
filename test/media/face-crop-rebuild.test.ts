@@ -136,3 +136,48 @@ Deno.test('more faces than one call takes are cut in calls EMS accepts', async (
     await stub.close();
   }
 });
+
+Deno.test('a video crop is cut from the frame its face was seen in, one call a frame', async () => {
+  const stub = startStubEms({
+    ops: {
+      'video.poster': (body) => ({
+        result: { frame: { width: 1920, height: 1080 }, t: body.at, targets: (body.targets as unknown[]).map(() => ({ path: '', width: 200, height: 220, bytes: 1 })) },
+      }),
+    },
+  });
+  const synced: string[] = [];
+  const updated: Record<string, unknown> = {};
+  try {
+    const failure = await writeFaceCrops(fakeCommand(stub.url, synced, updated), '/albums/a/MVI_1.MP4', [
+      { output: '/albums/a/MVI_1.MP4/regions/face-0/image.avif', box: BOX, at: 12.5 },
+      { output: '/albums/a/MVI_1.MP4/regions/face-1/image.avif', box: BOX, at: 40 },
+      { output: '/albums/a/MVI_1.MP4/regions/face-2/image.avif', box: { x: 0.6, y: 0.2, width: 0.1, height: 0.2 }, at: 12.5 },
+    ], { mimetype: 'video/mp4', angle: 90 });
+    assertEquals(failure, null);
+    assertEquals(stub.requests.map((r) => [r.op, r.body.at, (r.body.targets as unknown[]).length]), [['video.poster', 12.5, 2], ['video.poster', 40, 1]]);
+    assertEquals(stub.requests[0].body.file, { path: '/host/albums/a/MVI_1.MP4', angle: 90, mirror: false, mimetype: 'video/mp4' });
+    assertEquals(synced.length, 3);
+    assertEquals(updated['/albums/a/MVI_1.MP4/regions/face-1/image.avif'], { width: 200, height: 220 });
+  } finally {
+    await stub.close();
+  }
+});
+
+Deno.test('a rebuilt video crop is cut at the second its region records', async () => {
+  const stub = startStubEms({
+    ops: { 'video.poster': (body) => ({ result: { frame: { width: 1920, height: 1080 }, t: body.at, targets: [{ path: '', width: 100, height: 120, bytes: 1 }] } }) },
+  });
+  const synced: string[] = [];
+  const cmd = fakeCommand(stub.url, synced);
+  Object.assign(cmd.sys.vfs, {
+    children: () => Promise.resolve([{ name: 'face-0', node: { type: REGION_TYPE, attrs: { faceBox: BOX, atSeconds: 7.25 } } }]),
+    get: () => Promise.resolve({ attrs: { size: 0 } }),
+  });
+  try {
+    const result = await rebuildFaceCrops(cmd, { source: '/albums/a/MVI_1.MP4', sourceId: 'id', attrs: { mimetype: 'video/mp4' } });
+    assertEquals(result.written, ['/albums/a/MVI_1.MP4/regions/face-0/image.avif']);
+    assertEquals(stub.requests[0].body.at, 7.25);
+  } finally {
+    await stub.close();
+  }
+});
