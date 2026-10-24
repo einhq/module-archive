@@ -1,0 +1,121 @@
+# Derivative sizes. The keys here name the size classes that generate-derivatives'
+# TARGETS table selects from, and the width/height pair becomes the filename
+# (<width>x<height>.<ext>) — so renaming or resizing a size means regenerating and
+# updating src/builtin/ui/src/client/lib/derivatives.ts to match.
+#
+# Images are AVIF. `quality` is libheif's AVIF scale, not WebP's: 60 lands within
+# 0.006 SSIM of the old webp-85 output at roughly half the bytes. The calibration
+# table is with `CROP_QUALITY` in modules/archive/lib/media/face-crop.ts; the encoder itself
+# is EMS's (`image.renditions`).
+#
+# The sizes exist so the UI can hand the browser a srcset and let it pick per
+# viewport: grid for the justified media grid, small for phones, medium for
+# laptops, large for desktop and retina. `contain` never crops; `cover` fills the
+# box exactly and is only right for the square thumbnail, which now has just two
+# consumers left — the 48px map marker and the album/occasion cover card.
+#
+# `grid` is the justified grid's size: it must be `contain`, since the whole point
+# of that layout is that a tile is the picture's own shape. 512 rather than 320 so
+# a ~200px row still has pixels to spare on a 2x display.
+#
+# width/height is a bounding box: `contain` fits inside it and never upscales, so a
+# source smaller than a box is stored at its own size in the first box it fits, and
+# generate-derivatives leaves out the boxes above it — they would be copies. The UI
+# knows the same rule (`availableBoxes` in src/builtin/ui/src/client/lib/derivatives.ts)
+# and asks only for the sizes a file has. `cover` does upscale — it owes its consumers
+# an exact square, and is always made.
+image:
+  thumb:
+    width: 320
+    height: 320
+    mode: cover
+    quality: 55
+  grid:
+    width: 512
+    height: 512
+    mode: contain
+    quality: 58
+  small:
+    width: 800
+    height: 800
+    mode: contain
+    quality: 60
+  medium:
+    width: 1600
+    height: 1600
+    mode: contain
+    quality: 60
+  large:
+    width: 2560
+    height: 2560
+    mode: contain
+    quality: 60
+
+# Video is AV1 in MP4. Two renditions, and they are not a ladder: HTML <video> has no
+# srcset equivalent, so picking between sizes by viewport would need media-query <source>
+# tags for little gain. They are two different jobs — `1080p` is what the lightbox plays,
+# `preview` is what a grid tile plays under the pointer. width/height is a bounding box —
+# EMS's `video.transcode` fits inside it and never upscales, so a 4:3 or portrait source keeps
+# its aspect ratio and a 720p source stays 720p.
+#
+# A video also gets the `image` sizes above as poster frames (thumb/grid/small/medium via
+# EMS's `video.poster`), so a video tile has the same srcset a photo tile does.
+#
+# crf is SVT-AV1's scale (0-63). NVENC's -cq is nominally the same range but is not
+# calibrated to it; EMS applies its NVENC cq offset for that.
+video:
+  # A silent clip for hover-play in the media grid — the tile equivalent of an animated
+  # thumbnail. Small on purpose: the grid asks for it as the pointer sweeps a row, and on
+  # a phone as you scroll, so it is budgeted in hundreds of KB rather than megabytes.
+  #
+  # `start` skips the black leader and lands exactly where the poster frame was taken
+  # (generate-derivatives asks for the frame one second in), so the still a tile shows
+  # at rest and the first frame of the clip are the same picture and the swap is
+  # invisible. `seconds` caps it; the UI loops rather than playing on.
+  #
+  # Nothing in the filename says "20 seconds, silent" — the name is the box, as it is for
+  # every other size. `480x480.mp4` vs `1920x1080.mp4` is the whole distinction.
+  preview:
+    width: 480
+    height: 480
+    crf: 36
+    preset: 10
+    start: 1
+    seconds: 20
+    mute: true
+  1080p:
+    width: 1920
+    height: 1080
+    crf: 32
+    preset: 8
+    audio-bitrate: 128k
+
+# The storyboard: frames of the `1080p` rendition at an even interval, tiled into one AVIF sheet
+# (EMS's `video.storyboard`), for the frame the lightbox player's timeline shows under the pointer.
+# Made from the rendition rather than the source: it is upright and the timeline the player plays.
+# `tile` is a tile's longer side; a tile is the picture's display shape. The interval is the
+# longer of `min-interval` seconds and the length over `max-tiles`, so a video of any length is one
+# sheet — a three-minute film a frame a second, a two-hour tape one every half minute. 240 tiles of
+# 160 in 12 columns is at most 1920x3200. The sheet is named `storyboard-<tile>.avif`, so changing
+# the tile size makes a new sheet and the old one goes.
+storyboard:
+  tile: 160
+  columns: 12
+  max-tiles: 240
+  min-interval: 1
+  quality: 55
+
+# Audio is AAC in MP4 (the `ipod` muxer, so the ftyp brand says audio). Two derivative
+# families come off one source: this transcode, and a rendered waveform picture that uses
+# the `image` sizes above (thumb/grid/small/medium) via EMS's `audio.waveform`.
+#
+# bitrate and sample-rate are **ceilings**, not targets — EMS's `audio.transcode` caps them at
+# the source's own and drops to mono for a mono source, because a rendition cannot add
+# information the original never had. So `128k-44100.m4a` names the target box, not the
+# file's actual bitrate, exactly as a portrait's `512x512.avif` is really 341x512.
+# Renaming a value here means regenerating and updating
+# src/builtin/ui/src/client/lib/derivatives.ts to match.
+audio:
+  standard:
+    bitrate: 128k
+    sample-rate: 44100

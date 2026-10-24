@@ -1,0 +1,155 @@
+#!ts
+/**
+ * subcluster-faces — re-cluster one person's own faces, so a wrongly fused
+ * identity can be taken apart.
+ *
+ * `cluster-faces` groups by single-link connected components, which is cheap
+ * enough to run over a whole corpus and wrong in one specific way: a single weak
+ * edge fuses two people, and nothing later can separate them. Inside one person
+ * the set is small — thousands, not millions — so this can afford average
+ * linkage, which does not chain.
+ *
+ * Read-only. It reports a dendrogram and nothing else; `person-detach` is what
+ * acts on the answer. That split is deliberate: the caller (a reviewer dragging
+ * a threshold) re-cuts the same dendrogram many times before deciding once, and
+ * a cut costs nothing.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { faceEmbeddingsOf, type FaceView, faceView, type PersonNodeAttrs, personPathOf, regionsOf } from '@archive/people/person';
+import { buildDendrogram, cutAtSimilarity, cutIntoK, groupsFrom, normalize, suggestCut } from '@archive/media/face-subcluster';
+import type { Merge, SubclusterResult } from '@archive/media/api';
+
+const FACE_TYPE = 'face';
+
+const subclusterFaces = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['threshold', 'k'],
+    boolean: ['verbose'],
+    alias: { t: 'threshold', v: 'verbose' },
+  });
+
+  const [personArg] = flags._ as string[];
+  if (!personArg) {
+    await cmd.writeError('subcluster-faces: usage: subcluster-faces <person>\n');
+    return 1;
+  }
+  const personPath = personPathOf(personArg, cmd.cwd);
+
+  const bad: string[] = [];
+  const num = (name: string, value: string | undefined, fallback: number): number => {
+    if (value === undefined) return fallback;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+    bad.push(name);
+    return fallback;
+  };
+
+  // No default threshold: see suggestCut for why a fixed one cannot work.
+  const threshold = flags.threshold === undefined ? undefined : num('threshold', flags.threshold, 0);
+  const k = flags.k === undefined ? undefined : num('k', flags.k, 0);
+
+  if (bad.length > 0) {
+    await cmd.writeError(`subcluster-faces: ${bad.map((name) => `--${name}`).join(', ')} must be a number\n`);
+    return 1;
+  }
+
+  try {
+    const vfs = cmd.sys.vfs;
+    const access = cmd.access;
+
+    const node = await vfs.get<PersonNodeAttrs>(access, personPath, { follow: false });
+    if (node.type !== 'person') throw new Error(`${personPath}: not a person node (is ${node.type})`);
+
+    const rows = await regionsOf(vfs, access, node.id);
+
+    // One lookup for which regions are faces and one query for every vector. The alternative
+    // is an open/read round trip per face, which at nine hundred faces is nine hundred.
+    const embeddings = await faceEmbeddingsOf(vfs, access, rows.map((row) => row.id));
+    const vectors = await vfs.getVectors(access, FACE_TYPE, [...embeddings.values()]);
+
+    // Tags are box-only: a human drew them, or the face was too poor to keep a vector, and there
+    // is no embedding to cluster on. Reported, not silently dropped.
+    const usable: { view: FaceView; vector: Float32Array }[] = [];
+    let withoutVector = 0;
+    for (const row of rows) {
+      const embeddingId = embeddings.get(row.id);
+      const raw = embeddingId ? vectors.get(embeddingId) : undefined;
+      if (!raw) {
+        withoutVector++;
+        continue;
+      }
+      usable.push({ view: faceView(row, true), vector: normalize(JSON.parse(new TextDecoder().decode(raw)) as number[]) });
+    }
+
+    // Stable order so a re-run of the same person gives the same indices.
+    usable.sort((a, b) => b.view.confidence - a.view.confidence || a.view.facePath.localeCompare(b.view.facePath));
+
+    const dendrogram = buildDendrogram(usable.map((f) => f.vector));
+    const suggested = suggestCut(dendrogram);
+    const cutAt = threshold ?? suggested.threshold;
+    const labels = k === undefined ? cutAtSimilarity(dendrogram, cutAt) : cutIntoK(dendrogram, k);
+    const groups = groupsFrom(labels);
+
+    const result = {
+      person: {
+        id: node.id,
+        path: personPath,
+        name: (node.attrs as PersonNodeAttrs).name ?? personPath.split('/').pop() ?? '',
+        unnamed: !!(node.attrs as PersonNodeAttrs).unnamed,
+      },
+      total: usable.length,
+      withoutVector,
+      threshold: k === undefined ? cutAt : null,
+      k: k ?? null,
+      // Where the shape of the dendrogram says to cut, so a caller offering its
+      // own control can start there instead of guessing.
+      suggested,
+      faces: usable.map((f) => f.view),
+      // Compact tuples, not objects: n-1 of them, and the browser gets all of it.
+      merges: dendrogram.merges.map((m): Merge => [m.a, m.b, Number(m.sim.toFixed(5)), m.size]),
+      groups,
+    };
+
+    if (cmd.json) {
+      await cmd.writeJSON(result satisfies SubclusterResult);
+      return 0;
+    }
+
+    await cmd.writeLn(
+      `${result.person.name}: ${usable.length} face${usable.length === 1 ? '' : 's'}` +
+        (withoutVector > 0 ? ` (${withoutVector} without a vector, skipped)` : '') +
+        ` -> ${groups.length} group${groups.length === 1 ? '' : 's'}` +
+        (k === undefined ? ` at similarity ${cutAt.toFixed(4)}${threshold === undefined ? ' (suggested)' : ''}` : ` cut into ${k}`),
+    );
+    for (const [index, group] of groups.entries()) {
+      await cmd.writeLn(`  group ${index + 1}: ${group.length} face${group.length === 1 ? '' : 's'}`);
+      if (!flags.verbose) continue;
+      for (const member of group) await cmd.writeLn(`    ${usable[member].view.filePath ?? usable[member].view.facePath}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`subcluster-faces: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+subclusterFaces.spec = {
+  name: 'subcluster-faces',
+  effect: 'read' as const,
+  description: "Re-cluster one person's faces with average linkage, to find two people fused into one",
+  args: [
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+  ],
+  flags: [
+    { name: 'threshold', type: 'string' as const, description: 'min average similarity to keep faces together (default: the largest gap in the dendrogram)' },
+    { name: 'k', type: 'string' as const, description: 'cut into exactly this many groups instead of by threshold' },
+    { name: 'verbose', type: 'bool' as const, description: 'list the photos in each group' },
+  ],
+  examples: [
+    'subcluster-faces /archive/people/Anna_Exempel',
+  ],
+  returns: "the sub-clusters the person's faces fall into, which is how two people fused into one show up.",
+};
+
+export default subclusterFaces;

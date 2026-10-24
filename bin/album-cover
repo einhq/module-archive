@@ -1,0 +1,202 @@
+#!ts
+/**
+ * album-cover — give an album without a cover one of its own pictures.
+ *
+ * A cover is the `coverPhoto` softlink child (`modules/archive/types/media/album.ts`).
+ * The importer sets one for albums that had a cover in the old system, and
+ * `album set <path> cover <file>` or the grid's "Set as cover" set one by hand;
+ * everything else — an upload into a fresh album, a staging suggestion — reaches
+ * the grid with no cover and the card shows whichever file listed
+ * first. This writes the link so every album has one, and the grid, the search
+ * card and the timeline all agree on which picture stands for the album.
+ *
+ * The pick is a **random** visible member, not the first: the first file of an
+ * album is the first frame of the first morning, and a corpus of covers chosen
+ * that way is a corpus of car parks and airports. Images are preferred over
+ * videos and recordings, which only have a cover once transcoded.
+ *
+ * An explicit cover is never replaced. A cover whose target no longer resolves
+ * is — the UI would fall through to the first file anyway, and a link to
+ * nothing is not a choice anyone made.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, type Command, parseArgs, setCover } from '@ein/client';
+import { COVER_LINK_NAME, NODE_TYPE_ALBUM } from '@archive/media/types';
+import { albumMembers, visibleMembers } from '@archive/media/album-members';
+import { AUTO_ORIGIN } from '@archive/staging/auto-album';
+
+/** How many album nodes one `--all` page pulls. */
+const SCAN_PAGE = 200;
+
+type AlbumCoverResult = {
+  path: string;
+  cover: string;
+};
+
+/** The media the current cover link points at, or undefined when there is no usable cover. */
+const currentCover = async (cmd: Command, albumPath: string): Promise<string | undefined> => {
+  const linkPath = `${albumPath}/${COVER_LINK_NAME}`;
+  let target: string | undefined;
+  try {
+    const link = await cmd.sys.vfs.get(cmd.access, linkPath, { readlink: true });
+    target = link.props.softlink;
+  } catch {
+    return undefined;
+  }
+  if (!target) return undefined;
+  try {
+    const node = await cmd.sys.vfs.get(cmd.access, target);
+    return node.type === 'file' ? target : undefined;
+  } catch {
+    // Dangling: the media was moved or never imported.
+    return undefined;
+  }
+};
+
+/** Rank of a mimetype as a cover: the picture wins, a video's poster is next, a waveform last. */
+const coverRank = (mimetype: string): number => mimetype.startsWith('image/') ? 0 : mimetype.startsWith('video/') ? 1 : 2;
+
+/**
+ * A random member from the best-ranked kind the album holds.
+ *
+ * Drawn from the visible members — a stack's front rather than one of the
+ * near-duplicates folded under it — so the cover is a picture that can be found
+ * in the grid.
+ */
+const pickCover = async (cmd: Command, albumPath: string, random: () => number = Math.random): Promise<string | undefined> => {
+  const shown = visibleMembers((await albumMembers(cmd, albumPath)).members);
+  if (shown.length === 0) return undefined;
+  const ranked = shown.map((member) => ({ path: member.path, rank: coverRank(typeof member.node.attrs.mimetype === 'string' ? member.node.attrs.mimetype : '') }));
+  const best = Math.min(...ranked.map((entry) => entry.rank));
+  const pool = ranked.filter((entry) => entry.rank === best);
+  return pool[Math.floor(random() * pool.length)].path;
+};
+
+/**
+ * Give one album a cover if it has none. Returns the chosen target, or undefined
+ * when the album already had a cover or has nothing to choose from.
+ */
+const writeAlbumCover = async (cmd: Command, path: string, random?: () => number): Promise<AlbumCoverResult | undefined> => {
+  const node = await cmd.sys.vfs.get(cmd.access, path);
+  if (node.type !== NODE_TYPE_ALBUM) return undefined;
+  if (await currentCover(cmd, path)) return undefined;
+
+  const cover = await pickCover(cmd, path, random);
+  if (!cover) return undefined;
+
+  // Owned like the album, not like the sweep that ran: the link is part of
+  // the album, and a cover the album's owner cannot replace would be a bug.
+  await setCover(cmd.sys.vfs, cmd.access, path, cover, { uid: node.props.uid, gid: node.props.gid });
+  return { path, cover };
+};
+
+/**
+ * Every album node but the staging suggestions, paged by id (the default order when `orderBy` is
+ * omitted). The organizer picks a suggestion's cover as it writes the suggestion.
+ */
+async function* allAlbums(cmd: Command): AsyncGenerator<string> {
+  let after: { value: string | null; id: string } | undefined;
+
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: [NODE_TYPE_ALBUM],
+      where: [{ ref: 'origin', op: 'ne', value: AUTO_ORIGIN }],
+      after,
+      limit: SCAN_PAGE,
+    });
+    if (rows.length === 0) return;
+
+    for (const row of rows) yield row.absPath;
+
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+}
+
+const albumCover = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'stale', 'verbose'],
+    string: ['limit'],
+    alias: { v: 'verbose', l: 'limit' },
+  });
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if (paths.length === 0 && !flags.all) {
+    await cmd.writeError('album-cover: give one or more album paths, or --all\n');
+    return 1;
+  }
+
+  const limit = flags.limit !== undefined ? Number(flags.limit) : Infinity;
+  if (Number.isNaN(limit) || limit <= 0) {
+    await cmd.writeError(`album-cover: invalid --limit '${flags.limit}'\n`);
+    return 1;
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  let skipped = 0;
+  const albums: AlbumCoverResult[] = [];
+
+  // `--stale` is accepted for symmetry with `album-span`: an album with a cover
+  // is skipped either way, and the test costs one link read rather than a listing.
+  const handle = async (path: string): Promise<void> => {
+    scanned++;
+    const result = await writeAlbumCover(cmd, path);
+    if (!result) {
+      skipped++;
+      return;
+    }
+    updated++;
+    albums.push(result);
+    if (flags.verbose && !cmd.json) await cmd.writeLn(`${path}  ${result.cover}`);
+  };
+
+  try {
+    if (flags.all) {
+      for await (const path of allAlbums(cmd)) {
+        if (scanned >= limit) break;
+        await handle(path);
+      }
+    } else {
+      for (const path of paths) {
+        if (scanned >= limit) break;
+        await handle(path);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`album-cover: ${message}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ scanned, updated, skipped, albums });
+    return 0;
+  }
+
+  await cmd.writeLn(`album-cover: ${scanned} scanned / ${updated} updated / ${skipped} skipped`);
+  return 0;
+};
+
+albumCover.spec = {
+  name: 'album-cover',
+  effect: 'write' as const,
+  description: 'Give an album without a cover a random one of its own pictures (coverPhoto softlink)',
+  args: [
+    { name: 'album', type: 'path' as const, description: 'album path (repeatable)' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'every album in the tree but the staging suggestions' },
+    { name: 'stale', type: 'bool' as const, description: 'only albums that have no cover yet (the default; accepted for symmetry with album-span)' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many albums' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each album as it is written' },
+  ],
+  examples: [
+    'album-cover /archive/albums/Exempelalbum_2019',
+    'album-cover --all --stale --limit 50',
+  ],
+  returns: 'nothing; a coverPhoto softlink is written for each album that had none.',
+};
+
+export default albumCover;

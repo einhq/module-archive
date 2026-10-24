@@ -1,0 +1,125 @@
+#!ts
+/**
+ * person-merge — fold one or more people into another; the destination survives.
+ *
+ * The correction for recognition splitting someone across two identities, or
+ * for a cluster that turns out to be a person already in the archive. Faces are
+ * re-pointed by id and marked personSource=manual, so no later automatic pass
+ * undoes the decision.
+ *
+ * The last argument is the destination and every earlier one is a source, so
+ * `person-merge a b` still means what it always did. Several sources are merged
+ * one at a time, which is safe because faces move by node id: A -> C then
+ * B -> C cannot interfere. A source that fails does not abandon the rest — the
+ * batch reports which ones landed and exits non-zero.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { mergePersons, type MergeReport, personPathOf } from '@archive/people/person';
+
+const personMerge = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['dry-run', 'force', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const positional = flags._ as string[];
+  if (positional.length < 2) {
+    await cmd.writeError('person-merge: usage: person-merge <src...> <dst>\n');
+    return 1;
+  }
+  const dstArg = positional[positional.length - 1];
+  const srcArgs = positional.slice(0, -1);
+
+  // Bare ids resolve against /people/unknown, which is where merges start.
+  const toPath = (arg: string) => personPathOf(arg, cmd.cwd);
+  const dst = toPath(dstArg);
+
+  const merged: MergeReport[] = [];
+  const failed: { src: string; error: string }[] = [];
+
+  for (const srcArg of srcArgs) {
+    const src = toPath(srcArg);
+    try {
+      merged.push(
+        await mergePersons(cmd.sys.vfs, cmd.access, src, dst, {
+          dryRun: !!flags['dry-run'],
+          force: !!flags.force,
+        }),
+      );
+    } catch (error) {
+      failed.push({ src, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  const sum = (pick: (r: MergeReport) => number) => merged.reduce((total, r) => total + pick(r), 0);
+  const totals = {
+    faces: sum((r) => r.faces),
+    events: sum((r) => r.events),
+    relations: sum((r) => r.relations),
+    links: sum((r) => r.links),
+    conflicts: sum((r) => r.conflicts),
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON({
+      ok: failed.length === 0,
+      dst,
+      merged,
+      failed,
+      ...totals,
+      dryRun: !!flags['dry-run'],
+    });
+    return failed.length === 0 ? 0 : 1;
+  }
+
+  for (const report of merged) {
+    await cmd.writeLn(
+      `${report.src} -> ${report.dst}: ${report.faces} face${report.faces === 1 ? '' : 's'}, ` +
+        `${report.voices} voice${report.voices === 1 ? '' : 's'}, ` +
+        `${report.events} event${report.events === 1 ? '' : 's'}, ${report.relations} relation${report.relations === 1 ? '' : 's'}, ` +
+        `${report.links} link${report.links === 1 ? '' : 's'}` +
+        (report.dryRun ? ' (dry run)' : ', source removed'),
+    );
+    if (report.conflicts > 0) {
+      await cmd.writeLn(`  ${report.conflicts} image(s) now show the surviving person twice — review them`);
+    }
+    if (report.skippedChildren.length > 0) {
+      await cmd.writeLn(`  dropped with the source: ${report.skippedChildren.join(', ')}`);
+    }
+  }
+  if (merged.length > 1) {
+    await cmd.writeLn(
+      `${merged.length} merged into ${dst}: ${totals.faces} faces, ${totals.events} events, ${totals.relations} relations, ${totals.links} links`,
+    );
+  }
+  for (const failure of failed) {
+    await cmd.writeError(`person-merge: ${failure.src}: ${failure.error}\n`);
+  }
+  return failed.length === 0 ? 0 : 1;
+};
+
+personMerge.spec = {
+  name: 'person-merge',
+  effect: 'write' as const,
+  description: 'Merge people into another (faces, events, relations and links to them move; the sources are removed)',
+  args: [
+    { name: 'src...', type: 'path' as const, description: 'people to merge away' },
+    { name: 'dst', type: 'path' as const, description: 'person to keep' },
+  ],
+  flags: [
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would move without changing anything' },
+    { name: 'force', type: 'bool' as const, description: 'merge even if a source has children this cannot move' },
+    { name: 'verbose', type: 'bool' as const, description: 'print detail' },
+  ],
+  examples: [
+    'person-merge /archive/people/unnamed-1 /archive/people/Anna_Exempel',
+  ],
+  returns: 'what moved; with --dry-run, what would move.',
+};
+
+export default personMerge;

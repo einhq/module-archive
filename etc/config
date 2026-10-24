@@ -1,0 +1,5 @@
+# Archive's own choice of settings, linked as /etc/config.d/archive by mod setup and sourced
+# before /etc/config, so a value the administrator sets there wins over these.
+
+# Read what is typed into the search box as filters: people, locations, years, kinds.
+export CFG_SEARCH_PARSER='archive-parse'

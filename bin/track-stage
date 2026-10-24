@@ -1,0 +1,133 @@
+#!ts
+/**
+ * track-stage — a GPX file dropped in staging becomes its device's route.
+ *
+ *   track-stage <gpx-file> [--device <device>]
+ *
+ * The device is the one the file names: its `creator`, or a `<name>` in it,
+ * matching a registered device's name, make and model, or serial number
+ * (`devicesForGpx`). With exactly one such device the fixes are appended to its
+ * track (made if missing) and the file is removed: the route is kept, not the
+ * file. With none or several the file is kept, marked `trackDevicePending`, for
+ * someone to say which device it was — `--device` is that answer; one staged in
+ * a category waits in its staging area's `routes/`.
+ *
+ * Re-staging the same file adds nothing: a fix is keyed by its timestamp.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, dirname, resolve } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
+import { listDevices } from '@archive/device/device';
+import type { TrackStageResult } from '@archive/location/api';
+import { devicesForGpx, ensureTrack, openTrack, parseGpx } from '@archive/location/track';
+import { initStaging } from '@archive/staging/init';
+import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
+
+/**
+ * Where a GPX file waits for its device: `routes/` of the staging area it is staged in, under its
+ * own name or the first free `name-2.gpx`, … there; `path` itself when it is not staged under
+ * `files/`. Moves it there, making `routes/` if it is missing.
+ */
+const waitInRoutes = async (cmd: Command, path: string): Promise<string> => {
+  const place = parseStagedPath(path);
+  if (place?.area !== 'files') return path;
+  await initStaging(cmd.sys.vfs, cmd.access, place.user, { layoutOnly: true });
+  const { routesPath } = stagingRoots(place.user);
+  const used = new Set((await cmd.sys.vfs.children(cmd.access, routesPath)).map((entry) => entry.name));
+  const name = basename(path);
+  const dot = name.lastIndexOf('.');
+  let free = name;
+  for (let n = 2; used.has(free); n++) free = dot > 0 ? `${name.slice(0, dot)}-${n}${name.slice(dot)}` : `${name}-${n}`;
+  await cmd.sys.vfs.rename(cmd.access, dirname(path), name, routesPath, free, { failIfExists: true });
+  return `${routesPath}/${free}`;
+};
+
+const trackStage = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['device'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('track-stage: usage: track-stage <gpx-file> [--device <device>]\n');
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const gpxPath = resolve(cmd.cwd, target);
+
+  try {
+    const handle = await vfs.open(access, gpxPath, { mode: 'r' });
+    let xml: string;
+    try {
+      xml = new TextDecoder().decode(await toArrayBuffer(handle.readable));
+    } finally {
+      await handle.close();
+    }
+
+    const gpx = parseGpx(xml);
+    if (gpx.points.length === 0) {
+      await cmd.writeError(`track-stage: ${gpxPath}: no track points found\n`);
+      return 1;
+    }
+
+    let device = flags.device as string | undefined;
+    if (device === undefined) {
+      const candidates = devicesForGpx(await listDevices(cmd), gpx);
+      if (candidates.length !== 1) {
+        await vfs.update(access, gpxPath, { attrs: { trackDevicePending: true, ...(gpx.creator ? { gpxCreator: gpx.creator } : {}) } });
+        const waiting = await waitInRoutes(cmd, gpxPath);
+        const reason = candidates.length === 0 ? 'no registered device matches it' : `${candidates.length} devices match it`;
+        if (cmd.json) {
+          await cmd.writeJSON({ status: 'pending', path: waiting, reason, candidates: candidates.map((candidate) => candidate.path) } satisfies TrackStageResult);
+        } else {
+          await cmd.writeLn(`${waiting}: waiting for a device, ${reason}${gpx.creator ? ` (creator "${gpx.creator}")` : ''}`);
+        }
+        return 0;
+      }
+      device = candidates[0].path;
+    }
+
+    const trackPath = await ensureTrack(cmd, device);
+    const { handle: track } = await openTrack(cmd, trackPath, 'a');
+    let imported: number;
+    try {
+      imported = await track.appendPoints(gpx.points);
+    } finally {
+      await track.close();
+    }
+
+    await vfs.unlink(access, gpxPath, dirname(gpxPath), { recursive: true });
+
+    if (cmd.json) {
+      await cmd.writeJSON({ status: 'imported', track: trackPath, imported, skipped: gpx.points.length - imported } satisfies TrackStageResult);
+    } else {
+      await cmd.writeLn(`Imported ${imported} points into ${trackPath}`);
+    }
+  } catch (error) {
+    await cmd.writeError(`track-stage: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  return 0;
+};
+
+trackStage.spec = {
+  name: 'track-stage',
+  effect: 'write' as const,
+  description:
+    "Import a staged GPX file into the track of the device it names, and remove the file; mark it pending when no single device matches, and keep it in its staging area's routes/",
+  args: [
+    { name: 'gpx', type: 'path' as const, description: 'VFS path to the GPX file' },
+  ],
+  flags: [
+    { name: 'device', type: 'path' as const, description: 'the device (slug or path) it came from, instead of the one it names' },
+  ],
+  examples: ['track-stage /home/anna/staging/files/inbox/upload-2026-10-16/hike.gpx', 'track-stage /home/anna/staging/routes/hike.gpx --device garmin-etrex'],
+  returns: 'imported, with the track and the number of new fixes; or pending, with why.',
+};
+
+export default trackStage;

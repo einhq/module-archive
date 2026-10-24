@@ -1,0 +1,50 @@
+name: media-album
+description: Recompute an album's photo stacks, denormalised time span, missing cover and matching profile when its members change
+
+# Subject is the album node. The fact behind it is derived by archive-bridge from
+# membership events on the album (a member attached or detached), and from the
+# per-member facts an attachment precedes — the capture time arriving with the
+# metadata, the fingerprint the stacks read, a retime — one album fact per
+# album holding the member.
+#
+# Every step no-ops when nothing changed (the stack manifest stores an input
+# signature; `album-span` compares against the stored span; `album-cover` reads
+# one link and stops when it resolves; `album-profile` compares the signature of
+# what it reads and passes over anything but a library album), so a fact that
+# changes nothing costs a few listings.
+trigger:
+  on: media.album.members-changed
+
+steps:
+  stacks:
+    command: album-stack refresh $NODE_PATH
+    description: Reconcile consecutive near-duplicate photos into stacks
+  span:
+    command: album-span $NODE_PATH
+    description: Write timeStart / timeEnd / mediaCount onto the album node
+    dependsOn: [stacks]
+  cover:
+    command: album-cover $NODE_PATH
+    description: Give an album that has no cover a random one of its visible pictures
+    # After the stacks so the pick is a stack's front, not a member folded under it.
+    dependsOn: [stacks]
+  profile:
+    command: album-profile $NODE_PATH
+    description: Keep the profile staging matches suggested groups against, for a library album
+    dependsOn: [stacks]
+
+options:
+  # A crawl into one album announces it once per file. The pool collapses those
+  # into one job; the hold lets the burst arrive before the job is claimed, and
+  # a fact landing while a run is live folds into one further run instead of
+  # being dropped as self-inflicted. The stack and span steps write nothing that
+  # re-emits the album fact (the album's attrs, and softlinks under a member's
+  # `stack/` directory). The cover and profile steps do, once each: `child-attached`
+  # on the album does not say which child, so the `coverPhoto` link and the
+  # `.profile` node they create are one more fact each, folded into one further
+  # run in which every step is a no-op. That happens once in an album's life —
+  # the cover is never replaced, and a profile is rewritten in place.
+  coalesce: rerun
+  debounceMs: 5000
+  maxAttempts: 2
+  priority: 5

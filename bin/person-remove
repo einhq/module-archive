@@ -1,0 +1,52 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir, removeRelationPair } from '@archive/people/genealogy';
+
+const personRemove = async (cmd: Command): CmdReturn => {
+  const [aArg, bArg] = cmd.args.filter((a) => !a.startsWith('-'));
+  if (!aArg || !bArg) {
+    await cmd.writeError('person-remove: usage: person remove <a> <b>\n');
+    return 1;
+  }
+  const a = resolve(cmd.cwd, aArg);
+  const b = resolve(cmd.cwd, bArg);
+
+  try {
+    for (const dir of [PARENTS_DIR, CHILDREN_DIR, PARTNERS_DIR]) {
+      const entry = (await readRelationDir(cmd.sys.vfs, cmd.access, a, dir)).find((e) => e.target === b);
+      if (entry) {
+        await removeRelationPair(cmd.sys.vfs, cmd.access, entry.linkPath);
+        if (cmd.json) {
+          await cmd.writeJSON({ ok: true, a, b, relation: dir });
+        } else {
+          await cmd.writeLn(`Removed ${dir} relation ${basename(a)} <-> ${basename(b)}`);
+        }
+        return 0;
+      }
+    }
+    await cmd.writeError(`person-remove: no relation between ${basename(a)} and ${basename(b)}\n`);
+    return 1;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-remove: ${message}\n`);
+    return 1;
+  }
+};
+
+personRemove.spec = {
+  name: 'person-remove',
+  effect: 'write' as const,
+  description: 'Remove a relationship between two persons (both sides)',
+  args: [
+    { name: 'a', type: 'path' as const, description: 'first person' },
+    { name: 'b', type: 'path' as const, description: 'second person' },
+  ],
+  flags: [],
+  examples: [
+    'person-remove /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+  ],
+  returns: 'nothing; the relation is removed from both sides.',
+};
+
+export default personRemove;

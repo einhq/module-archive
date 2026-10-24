@@ -1,0 +1,93 @@
+#!ts
+/**
+ * person-discard — say an unidentified person is not a person at all, and remove them.
+ *
+ * For the clusters recognition builds out of a hand, a patterned cushion or the same slice of
+ * watermelon in eight photos. Every region and voice the person holds loses its identity and is
+ * locked, as a bare `person-detach` does face by face, so the next recognition pass does not
+ * rebuild the cluster; then the emptied person is removed. It takes the whole person rather than
+ * their faces, so a cluster of thousands is discarded without listing them.
+ *
+ * Only unnamed people: a named person is a human's decision, and their faces leave one by one
+ * through `person-detach`. A person whose regions or voices could not all be unlocked is kept, so
+ * nothing is left pointing at a person that is gone.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { dirname } from '@std/path';
+import { isUnnamed, NOT_A_PERSON, type PersonNodeAttrs, personPathOf, regionsOf, voicesOf } from '@archive/people/person';
+import type { DiscardResult } from '@archive/people/api';
+
+const personDiscard = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['dry-run'],
+    alias: { n: 'dry-run' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const args = flags._ as string[];
+  if (args.length === 0) {
+    await cmd.writeError('person-discard: usage: person-discard <person...> [--dry-run]\n');
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const dryRun = !!flags['dry-run'];
+  const discarded: DiscardResult['discarded'] = [];
+  const failed: DiscardResult['failed'] = [];
+
+  for (const arg of args) {
+    const path = personPathOf(arg, cmd.cwd);
+    try {
+      const node = await vfs.get<PersonNodeAttrs>(access, path, { follow: false });
+      if (node.type !== 'person') throw new Error(`not a person (is ${node.type})`);
+      if (!isUnnamed(node.attrs)) throw new Error('has a name; take their faces off with person-detach instead');
+
+      const held = [...await regionsOf(vfs, access, node.id), ...await voicesOf(vfs, access, node.id)];
+      const regions = held.filter((entry) => entry.node.type !== 'embedding').length;
+      if (!dryRun) {
+        for (const entry of held) await vfs.update(access, entry.absPath, { follow: false, attrs: NOT_A_PERSON });
+        await vfs.unlink(access, path, dirname(path), { recursive: true });
+      }
+      discarded.push({ path, regions, voices: held.length - regions });
+    } catch (error) {
+      failed.push({ person: path, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  const ok = failed.length === 0;
+  if (cmd.json) {
+    await cmd.writeJSON({ ok, discarded, failed, dryRun } satisfies DiscardResult);
+    return ok ? 0 : 1;
+  }
+
+  for (const { path, regions, voices } of discarded) {
+    const held = [`${regions} ${regions === 1 ? 'region' : 'regions'}`, ...(voices > 0 ? [`${voices} ${voices === 1 ? 'voice' : 'voices'}`] : [])];
+    await cmd.writeLn(`${dryRun ? '[dry] ' : ''}discarded ${path}: ${held.join(' and ')} unassigned and locked`);
+  }
+  for (const failure of failed) await cmd.writeError(`person-discard: ${failure.person}: ${failure.error}\n`);
+  return ok ? 0 : 1;
+};
+
+personDiscard.spec = {
+  name: 'person-discard',
+  effect: 'write' as const,
+  description: 'Say unidentified people are not a person at all: unassign and lock everything they hold, and remove them',
+  args: [
+    { name: 'person...', type: 'path' as const, description: 'unnamed people, by path or bare unknown id' },
+  ],
+  flags: [
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would go without changing anything' },
+  ],
+  examples: [
+    'person-discard /archive/people/unknown/01J0EXAMPLE',
+    'person-discard --dry-run 01J0EXAMPLE 01J0EXAMPLF',
+  ],
+  returns: 'the people removed, with how many regions and voices each let go, and the ones refused.',
+};
+
+export default personDiscard;

@@ -1,0 +1,199 @@
+#!ts
+/**
+ * device-cover — give a device its newest picture as its cover.
+ *
+ * A cover is the `coverPhoto` softlink child the device's card and header draw. Without one they
+ * draw an identicon, although every device that took a picture has one that could stand for it.
+ * This links the newest image linked to the device (`devicePath`, by `takenAtUtc`); a device whose
+ * images all lack a capture time gets one of them. A device with no image at all — a camcorder —
+ * gets its newest video that has thumbnails, whose poster frame the card draws; a video without
+ * them yet would show as a broken picture. Recordings are passed over: a waveform stands for
+ * nothing.
+ *
+ * A link this writes carries `autoCover: true`, and such a link is picked again on every run, so
+ * the cover follows the newest picture as more are linked. A link without it — "Set as cover",
+ * the importer — is a choice somebody made, and is never replaced while its target resolves.
+ * A link to nothing is replaced either way.
+ *
+ * `--media` takes media files instead and covers the device each one is linked to (`devicePath`),
+ * so a video's poster frame can be offered to its device once it exists. A file linked to no
+ * device is passed over.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, type Command, COVER_LINK_NAME, parseArgs, setCover } from '@ein/client';
+import { NODE_TYPE_DEVICE } from '@archive/device/types';
+import type { DeviceCoverResult, DeviceCoverSweep } from '@archive/device/api';
+
+/** Marks a cover link as picked here rather than chosen by somebody. */
+const AUTO_COVER_ATTR = 'autoCover';
+
+/** The directory a media file's still renditions — a video's poster frame among them — live in. */
+const THUMBNAILS_DIR = 'thumbnails';
+
+/** How many device nodes one `--all` page pulls. */
+const SCAN_PAGE = 200;
+
+/** The current cover: where it points, whether that resolves to a file, and whether it was picked here. */
+const currentCover = async (cmd: Command, devicePath: string): Promise<{ target?: string; usable: boolean; auto: boolean }> => {
+  let target: string | undefined;
+  let auto = false;
+  try {
+    const link = await cmd.sys.vfs.get<Record<string, unknown>>(cmd.access, `${devicePath}/${COVER_LINK_NAME}`, { readlink: true });
+    target = link.props.softlink;
+    auto = link.attrs[AUTO_COVER_ATTR] === true;
+  } catch {
+    return { usable: false, auto };
+  }
+  if (!target) return { usable: false, auto };
+  try {
+    return { target, usable: (await cmd.sys.vfs.get(cmd.access, target)).type === 'file', auto };
+  } catch {
+    return { target, usable: false, auto };
+  }
+};
+
+/** How many videos one page of the thumbnail search pulls. */
+const VIDEO_PAGE = 20;
+
+/** The device's media of one kind: dated ones first, newest first, then undated ones. */
+async function* deviceMedia(cmd: Command, devicePath: string, mimePrefix: string, limit: number): AsyncGenerator<string> {
+  const where = [
+    { ref: 'devicePath', op: 'eq' as const, value: devicePath },
+    { ref: 'mimetype', op: 'prefix' as const, value: mimePrefix },
+  ];
+  const passes = [
+    { where, orderBy: { ref: 'takenAtUtc', dir: 'desc' as const } },
+    { where: [...where, { ref: 'takenAtUtc', op: 'missing' as const }] },
+  ];
+  for (const pass of passes) {
+    let after: { value: string | null; id: string } | undefined;
+    while (true) {
+      const rows = await cmd.sys.vfs.query(cmd.access, { types: ['file'], ...pass, after, limit });
+      for (const row of rows) yield row.absPath;
+      if (rows.length < limit) break;
+      const last = rows[rows.length - 1];
+      after = { value: last.sortValue, id: last.id };
+    }
+  }
+}
+
+/** Whether the media crawl has made `path` its still renditions. */
+const hasThumbnails = async (cmd: Command, path: string): Promise<boolean> => {
+  try {
+    return await cmd.sys.vfs.exists(cmd.access, `${path}/${THUMBNAILS_DIR}`);
+  } catch {
+    return false;
+  }
+};
+
+/** The device's newest image, or else its newest video that has thumbnails. */
+const newestPicture = async (cmd: Command, devicePath: string): Promise<string | undefined> => {
+  for await (const image of deviceMedia(cmd, devicePath, 'image/', 1)) return image;
+  for await (const video of deviceMedia(cmd, devicePath, 'video/', VIDEO_PAGE)) {
+    if (await hasThumbnails(cmd, video)) return video;
+  }
+  return undefined;
+};
+
+/** Cover one device. Returns what was written, or undefined when the cover stays as it is. */
+const writeDeviceCover = async (cmd: Command, path: string): Promise<DeviceCoverResult | undefined> => {
+  const node = await cmd.sys.vfs.get(cmd.access, path);
+  if (node.type !== NODE_TYPE_DEVICE) throw new Error(`${path}: not a device (${node.type})`);
+
+  const current = await currentCover(cmd, path);
+  if (current.usable && !current.auto) return undefined;
+
+  const cover = await newestPicture(cmd, path);
+  if (!cover || (current.usable && cover === current.target)) return undefined;
+
+  // Owned like the device, not like the pipeline that ran: whoever may edit the device may
+  // replace its cover.
+  await setCover(cmd.sys.vfs, cmd.access, path, cover, { uid: node.props.uid, gid: node.props.gid, attrs: { [AUTO_COVER_ATTR]: true } });
+  return { path, cover, ...(current.target ? { replaced: current.target } : {}) };
+};
+
+/** The devices `files` are linked to, each once; a file with no device, or a gone one, gives none. */
+async function* devicesOf(cmd: Command, files: string[]): AsyncGenerator<string> {
+  const seen = new Set<string>();
+  for (const file of files) {
+    const devicePath = (await cmd.sys.vfs.get(cmd.access, file)).attrs.devicePath;
+    if (typeof devicePath !== 'string' || seen.has(devicePath)) continue;
+    seen.add(devicePath);
+    try {
+      if ((await cmd.sys.vfs.get(cmd.access, devicePath)).type !== NODE_TYPE_DEVICE) continue;
+    } catch {
+      continue;
+    }
+    yield devicePath;
+  }
+}
+
+/** Every device node, paged by id. */
+async function* allDevices(cmd: Command): AsyncGenerator<string> {
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { types: [NODE_TYPE_DEVICE], after, limit: SCAN_PAGE });
+    if (rows.length === 0) return;
+    for (const row of rows) yield row.absPath;
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+}
+
+const deviceCover = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { boolean: ['all', 'media', 'verbose'], alias: { v: 'verbose' } });
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if ((paths.length > 0) === Boolean(flags.all)) {
+    await cmd.writeError('device-cover: give one or more device paths, or --all\n');
+    return 1;
+  }
+  const targets = flags.all ? allDevices(cmd) : flags.media ? devicesOf(cmd, paths) : paths;
+
+  let scanned = 0;
+  const devices: DeviceCoverResult[] = [];
+
+  try {
+    for await (const path of targets) {
+      scanned++;
+      const result = await writeDeviceCover(cmd, path);
+      if (!result) continue;
+      devices.push(result);
+      if (flags.verbose && !cmd.json) await cmd.writeLn(`${path}  ${result.cover}`);
+    }
+  } catch (error) {
+    await cmd.writeError(`device-cover: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ scanned, updated: devices.length, devices } satisfies DeviceCoverSweep);
+    return 0;
+  }
+
+  await cmd.writeLn(`device-cover: ${scanned} scanned / ${devices.length} updated`);
+  return 0;
+};
+
+deviceCover.spec = {
+  name: 'device-cover',
+  effect: 'write' as const,
+  description: 'Give a device without a cover of its own its newest picture, or its newest video with thumbnails (coverPhoto softlink)',
+  args: [
+    { name: 'device', type: 'path' as const, description: 'device path, or with --media a media file (repeatable)' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'every device' },
+    { name: 'media', type: 'bool' as const, description: 'the paths are media files: cover the device each is linked to' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each device as its cover is written' },
+  ],
+  examples: [
+    'device-cover /archive/devices/Canon_EOS_5D',
+    'device-cover --all',
+    'device-cover --media /archive/albums/Exempelalbum_2019/files/clip.mp4',
+  ],
+  returns: 'nothing; a coverPhoto softlink to its newest picture (or video) is written for each device without a cover somebody chose.',
+};
+
+export default deviceCover;

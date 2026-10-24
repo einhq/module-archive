@@ -1,0 +1,113 @@
+#!ts
+/**
+ * person-update — change what a person's profile says: names, dates, gender, allergies,
+ * description and contact details.
+ *
+ * The profile editor used to write these with raw `attrs`, which put the person schema — which
+ * fields exist, what a date looks like, what a gender may be — in a page. The rules live here now,
+ * and a field given empty is cleared.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { validDate } from '@archive/people/genealogy';
+import { PERSON_GENDERS, type PersonContact } from '@archive/people/types';
+
+const TEXT_FIELDS = ['name', 'fullname', 'birthname', 'allergies', 'description'] as const;
+const DATE_FIELDS = ['born', 'died'] as const;
+
+const personUpdate = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: [...TEXT_FIELDS, ...DATE_FIELDS, 'gender', 'contact'],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('person-update: usage: person-update <person> [--name …] [--born YYYY[-MM[-DD]]] …\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+
+  /** What to write: a value sets the field, `null` clears it. */
+  const attrs: Record<string, unknown> = {};
+  const fail = async (message: string) => {
+    await cmd.writeError(`person-update: ${message}\n`);
+    return 1;
+  };
+
+  for (const field of TEXT_FIELDS) {
+    if (flags[field] === undefined) continue;
+    const value = String(flags[field]).trim();
+    if (field === 'name' && !value) return await fail('a person needs a name; --name cannot be empty');
+    attrs[field] = value || null;
+  }
+  for (const field of DATE_FIELDS) {
+    if (flags[field] === undefined) continue;
+    const value = String(flags[field]).trim();
+    if (value && !validDate(value)) return await fail(`--${field} '${value}' is not a date (YYYY[-MM[-DD]])`);
+    attrs[field] = value || null;
+  }
+  if (flags.gender !== undefined) {
+    const value = String(flags.gender).trim();
+    if (value && !(PERSON_GENDERS as readonly string[]).includes(value)) return await fail(`--gender must be one of ${PERSON_GENDERS.join(', ')}`);
+    attrs.gender = value || null;
+  }
+  if (flags.contact !== undefined) {
+    const raw = String(flags.contact).trim();
+    let contacts: PersonContact[] = [];
+    if (raw) {
+      try {
+        contacts = JSON.parse(raw);
+      } catch {
+        return await fail('--contact must be a JSON list of { "type", "data" }');
+      }
+      const valid = Array.isArray(contacts) && contacts.every((c) => typeof c?.type === 'string' && c.type.trim() && typeof c?.data === 'string' && c.data.trim());
+      if (!valid) return await fail('--contact: each contact needs both a type and details');
+    }
+    attrs.contact = contacts.length ? contacts.map((c) => ({ type: c.type.trim(), data: c.data.trim() })) : null;
+  }
+  if (Object.keys(attrs).length === 0) return await fail('nothing to change; give at least one field');
+
+  try {
+    const node = await cmd.sys.vfs.get(cmd.access, path);
+    if (node.type !== 'person') return await fail(`${path}: not a person (is ${node.type})`);
+    await cmd.sys.vfs.update(cmd.access, path, { attrs });
+  } catch (error) {
+    return await fail(error instanceof Error ? error.message : String(error));
+  }
+
+  if (cmd.json) await cmd.writeJSON({ ok: true });
+  else await cmd.writeLn(`${path}: ${Object.keys(attrs).join(', ')} updated`);
+  return 0;
+};
+
+personUpdate.spec = {
+  name: 'person-update',
+  effect: 'write' as const,
+  description: "Change a person's profile: names, birth and death dates, gender, allergies, description, contact details. An empty value clears the field",
+  args: [
+    { name: 'person', type: 'path' as const, description: 'the person' },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'the name shown everywhere (cannot be empty)' },
+    { name: 'fullname', type: 'string' as const, description: 'full name' },
+    { name: 'birthname', type: 'string' as const, description: 'name at birth' },
+    { name: 'born', type: 'string' as const, description: 'birth date, YYYY[-MM[-DD]]' },
+    { name: 'died', type: 'string' as const, description: 'death date, YYYY[-MM[-DD]]' },
+    { name: 'gender', type: 'string' as const, description: 'male, female, other or unknown' },
+    { name: 'allergies', type: 'string' as const, description: 'allergy notes' },
+    { name: 'description', type: 'string' as const, description: 'a few words about the person' },
+    { name: 'contact', type: 'string' as const, description: 'contact details as a JSON list of { "type", "data" }' },
+  ],
+  examples: [
+    "person-update /archive/people/Anna_Andersson --born=1970-01-01 --died=''",
+    'person-update /archive/people/Anna_Andersson --contact \'[{"type":"email","data":"anna@example.com"}]\'',
+  ],
+  returns: 'nothing; the fields given are written, empty ones cleared.',
+};
+
+export default personUpdate;

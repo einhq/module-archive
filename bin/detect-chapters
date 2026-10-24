@@ -1,0 +1,164 @@
+#!ts
+/**
+ * detect-chapters — a video's cuts, as the chapters its player marks on the timeline.
+ *
+ * EMS finds them (`video.shots`: TransNetV2 over every frame, and its rules) in the rendition the
+ * player plays, which is upright and on the player's own clock, so this runs after the transcode
+ * and waits for one. The result is `metadata/chapters` (`@archive/media/chapters`): the chapters
+ * as WebVTT, and on the node the cuts with their scores, what found them and with which rules.
+ *
+ * A video with no cut still gets its node, with no boundaries: "looked, found none" is what stops a
+ * phone clip being looked at again. `detectedAt` marks the node done. A file EMS cannot decode, or
+ * will not within its CPU budget, gets the node with the reason and no `detectedAt`, and the step
+ * ends well: failing it would have the pipeline run again, and a turned video's run encodes it
+ * first. Chapters found before stand through a forced run that fails. Any other failure, such as
+ * a rendition or weights EMS cannot find, fails the step.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, shq, STEP_EXIT_TEMPORARY } from '@ein/client';
+import { EmsError, stepExitCode, videoShots } from '@ems/client';
+import type { DetectChaptersAnswer } from '@archive/media/api';
+import { type ChapterBoundary, chaptersToVtt } from '@archive/media/chapters';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { playbackRendition, readSizes } from '@archive/media/sizes';
+import { reportUnwritable } from '@archive/media/writable';
+
+/** EMS's codes that are the file's own fault, when permanent: no run can get past the same file. */
+const FILE_FAULTS = new Set(['undecodable', 'unsupported', 'refused']);
+
+/** Write the node's body through the VFS, creating it first when it is not there. */
+const writeChapters = async (cmd: Command, path: string, body: string): Promise<boolean> => {
+  if (!await cmd.sys.vfs.exists(cmd.access, path)) {
+    if ((await cmd.execute(`mknode -t file --as "mimetype=text/vtt" --tier db ${shq(path)}`)).code !== 0) return false;
+  }
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
+  try {
+    await handle.write(new TextEncoder().encode(body));
+  } finally {
+    await handle.close();
+  }
+  return true;
+};
+
+const detectChapters = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  if (!inputPath) {
+    await cmd.writeError('detect-chapters: missing file path\n');
+    return 1;
+  }
+
+  const node = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  if (!node) {
+    await cmd.writeError(`detect-chapters: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (node.type !== 'file') {
+    await cmd.writeError(`detect-chapters: ${inputPath}: not a file node (is ${node.type})\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, inputPath, node)) return 1;
+
+  const answer = async (result: DetectChaptersAnswer, line: string): Promise<number> => {
+    if (cmd.json) await cmd.writeJSON(result satisfies DetectChaptersAnswer);
+    else await cmd.writeLn(line);
+    return 0;
+  };
+
+  const mimetype = typeof node.attrs.mimetype === 'string' ? node.attrs.mimetype : '';
+  if (!mimetype.startsWith('video/')) return await answer({ path: inputPath, skipped: 'not-video' }, `${inputPath}: not a video`);
+  const undecodable = node.attrs[UNDECODABLE_ATTR];
+  if (!force && typeof undecodable === 'string' && undecodable) {
+    return await answer({ path: inputPath, skipped: 'undecodable' }, `${inputPath}: cannot be decoded (${undecodable})`);
+  }
+
+  const chaptersPath = `${inputPath}/metadata/chapters`;
+  const existing = (await cmd.sys.vfs.get(cmd.access, chaptersPath).catch(() => undefined))?.attrs as Record<string, unknown> | undefined;
+  if (!force && typeof existing?.detectedAt === 'string') {
+    const boundaries = (existing.boundaries as ChapterBoundary[] | undefined) ?? [];
+    return await answer({ path: inputPath, skipped: 'detected', boundaries }, `${inputPath}: ${boundaries.length + 1} chapter(s), found before (use -f to look again)`);
+  }
+
+  const rendition = playbackRendition(await readSizes(cmd));
+  const renditionPath = rendition ? `${inputPath}/thumbnails/${rendition}` : '';
+  const made = renditionPath ? await cmd.sys.vfs.get(cmd.access, renditionPath).catch(() => undefined) : undefined;
+  if (!(Number(made?.attrs.size ?? 0) > 0)) {
+    return await answer({ path: inputPath, skipped: 'no-rendition' }, `${inputPath}: no rendition to look in yet`);
+  }
+
+  let shots;
+  try {
+    if (verbose) await cmd.writeLn(`Looking for cuts in ${renditionPath}...`);
+    shots = await videoShots(cmd, renditionPath);
+  } catch (error) {
+    // An EMS from before the op has no route for it; the chapters wait for one that has.
+    if (error instanceof EmsError && error.code === 'http_404') {
+      return await answer({ path: inputPath, skipped: 'ems-lacks-op' }, `${inputPath}: this EMS finds no cuts`);
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`detect-chapters: ${inputPath}: ${reason}\n`);
+    if (!(error instanceof EmsError && error.permanent && FILE_FAULTS.has(error.code))) {
+      return stepExitCode(error) === STEP_EXIT_TEMPORARY ? STEP_EXIT_TEMPORARY : 1;
+    }
+    if (typeof existing?.detectedAt === 'string') {
+      return await answer({ path: inputPath, skipped: 'unreadable' }, `${inputPath}: ${reason}; the chapters found before stand`);
+    }
+    await cmd.execute(`mkdir -p ${shq(`${inputPath}/metadata`)}`);
+    if (await writeChapters(cmd, chaptersPath, 'WEBVTT\n')) {
+      await cmd.sys.vfs.update(cmd.access, chaptersPath, { attrs: { mimetype: 'text/vtt', unreadable: reason, detectedAt: null } });
+    }
+    return await answer({ path: inputPath, skipped: 'unreadable' }, `${inputPath}: ${reason}`);
+  }
+
+  const boundaries = shots.cuts as ChapterBoundary[];
+  await cmd.execute(`mkdir -p ${shq(`${inputPath}/metadata`)}`);
+  if (!await writeChapters(cmd, chaptersPath, chaptersToVtt(boundaries, shots.duration))) {
+    await cmd.writeError(`detect-chapters: failed to create ${chaptersPath}\n`);
+    return 1;
+  }
+  await cmd.sys.vfs.update(cmd.access, chaptersPath, {
+    attrs: {
+      mimetype: 'text/vtt',
+      detectedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+      detectedBy: shots.producer,
+      detectedWith: shots.params,
+      duration: shots.duration,
+      boundaries,
+      chapterCount: boundaries.length + 1,
+      unreadable: null,
+    },
+  });
+  return await answer(
+    { path: inputPath, boundaries, detectedBy: shots.producer },
+    `${inputPath}: ${boundaries.length + 1} chapter(s)${boundaries.length ? ` from ${boundaries.map((b) => b.t.toFixed(2)).join(', ')} s` : ''}`,
+  );
+};
+
+detectChapters.spec = {
+  name: 'detect-chapters',
+  effect: 'write' as const,
+  description: "Find a video's cuts and write them as its chapters (metadata/chapters)",
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to a video file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Look again even if the chapters are found' },
+  ],
+  examples: [
+    'detect-chapters /archive/albums/Exempelalbum_1978/files/sommarfilm.avi',
+  ],
+  returns: 'nothing; the chapters are written as WebVTT under the file, with the cuts on the node.',
+};
+
+export default detectChapters;

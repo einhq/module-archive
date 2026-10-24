@@ -1,0 +1,30 @@
+#!ts
+/**
+ * subject-person — the media a person is in: tagged with a box (a face or a drawn region) or without one (`@archive/subjects`).
+ *
+ * Its name is what makes it the person's: `search --subject person:<ref>` runs `subject-<kind>`, and
+ * orders, intersects, pages and counts what it answers; `search --group-by person` asks it `--of` a set of
+ * media, and counts the people in them.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { runSubjectCommand } from '@archive/subjects';
+
+const subjectPersonCommand = (cmd: Command): CmdReturn => runSubjectCommand(cmd, 'person');
+
+subjectPersonCommand.spec = {
+  name: 'subject-person',
+  effect: 'read' as const,
+  description: 'What `search --subject person:<ref>` asks: the media a person is in: tagged with a box (a face or a drawn region) or without one',
+  args: [
+    { name: 'ref', type: 'string' as const, description: 'person slug or path (repeatable)', repeatable: true },
+  ],
+  flags: [
+    { name: 'of', type: 'path' as const, description: 'a JSON array of media ids: answer with the people in each, named or not, for `search --group-by person`' },
+  ],
+  examples: ['JSON_OUTPUT=1 subject-person anna-exempel', 'JSON_OUTPUT=1 subject-person --of /tmp/ids.json'],
+  returns:
+    'per ref, the path of the person and its media as node ids, truncated past 20000, or why the ref names no person; with --of, the people in them once each and per media id the ones it has.',
+};
+
+export default subjectPersonCommand;

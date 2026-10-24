@@ -1,0 +1,84 @@
+#!ts
+/**
+ * dayinhistory — media taken on one calendar day, in the years the archive has any. The walk is
+ * `onThisDay` in [lib](../lib/media/on-this-day.ts): one indexed day range per year, newest first,
+ * stopping once `--years` of them have had something.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { onThisDay } from '@archive/media/on-this-day';
+import type { DayInHistory } from '@archive/media/api';
+
+const DEFAULT_YEARS = 8;
+const DEFAULT_PER_YEAR = 4;
+
+const count = (raw: string | undefined, fallback: number): number | undefined => {
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return raw.trim() !== '' && Number.isInteger(value) && value >= 0 ? value : undefined;
+};
+
+/** Today on the server's clock, as `MM-DD`. */
+const todayMonthDay = (): string => {
+  const now = new Date();
+  return `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+const dayinhistory = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['years', 'per-year'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const monthDay = (flags._[0] as string | undefined) ?? todayMonthDay();
+  // 2000 was a leap year, so 02-29 is a day to ask about and 02-30 is not.
+  if (!/^\d{2}-\d{2}$/.test(monthDay) || new Date(`2000-${monthDay}T00:00:00Z`).toISOString().slice(5, 10) !== monthDay) {
+    await cmd.writeError(`dayinhistory: expected the day as MM-DD, got '${monthDay}'\n`);
+    return 1;
+  }
+
+  const years = count(flags.years, DEFAULT_YEARS);
+  const perYear = count(flags['per-year'], DEFAULT_PER_YEAR);
+  if (years === undefined || perYear === undefined) {
+    await cmd.writeError(`dayinhistory: --${years === undefined ? 'years' : 'per-year'} must be a non-negative whole number\n`);
+    return 1;
+  }
+
+  const day = await onThisDay(cmd, { monthDay, years, perYear });
+
+  if (cmd.json) {
+    await cmd.writeJSON(day satisfies DayInHistory);
+    return 0;
+  }
+
+  if (day.years.length === 0) {
+    await cmd.writeLn(`No media taken on ${monthDay}`);
+    return 0;
+  }
+  for (const { year, items } of day.years) {
+    await cmd.writeLn(`${year}:`);
+    for (const item of items) await cmd.writeLn(`  ${item.takenAt ?? item.takenAtUtc}  ${item.path}`);
+  }
+  return 0;
+};
+
+dayinhistory.spec = {
+  name: 'dayinhistory',
+  effect: 'read' as const,
+  description: 'List media taken on a given day (MM-DD, default today) in past years',
+  args: [
+    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today)' },
+  ],
+  flags: [
+    { name: 'years', type: 'number' as const, description: `years with media to collect, newest first (default ${DEFAULT_YEARS})` },
+    { name: 'per-year', type: 'number' as const, description: `media kept per year, earliest first (default ${DEFAULT_PER_YEAR})` },
+  ],
+  examples: [
+    'dayinhistory',
+    'dayinhistory 06-21 --years 20 --per-year 1',
+  ],
+  returns: 'monthDay, and the years that have media taken on that day, newest first, each with its first media.',
+};
+
+export default dayinhistory;

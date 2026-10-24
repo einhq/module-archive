@@ -1,0 +1,172 @@
+/* The memory rings: one round cover a year, ringed in the mark's blue, violet and pink. */
+.mrx-memory-rings {
+  display: flex;
+  gap: var(--mantine-spacing-md);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  padding: 2px 2px var(--mantine-spacing-xs);
+}
+
+.mrx-memory-ring {
+  flex: none;
+  width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+  scroll-snap-align: start;
+}
+
+.mrx-memory-ring-art {
+  display: block;
+  width: 76px;
+  height: 76px;
+  padding: 3px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #339af0, #da77f2 50%, #f06595);
+  transition: transform var(--mrx-dur-base) var(--mrx-ease);
+}
+
+.mrx-memory-ring-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 3px solid var(--mrx-surface-base);
+  background: var(--mrx-media-bg);
+}
+
+.mrx-memory-ring:hover .mrx-memory-ring-art,
+.mrx-memory-ring:focus-visible .mrx-memory-ring-art {
+  transform: scale(1.05);
+}
+
+/* The story: one picture at a time on black, a bar per picture across the top. */
+.mrx-story {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #000;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.mrx-story-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  /* Twice the slow token: a cross-fade between pictures wants longer than a control does. */
+  transition: opacity calc(var(--mrx-dur-slow) * 2) ease-in-out;
+}
+
+/* A picture still on the way: hidden over the one before, and still, so its pan starts when it shows. */
+.mrx-story-image:not([data-loaded]) {
+  opacity: 0;
+  animation-play-state: paused;
+}
+
+/* The one before, fading out as the new one fades in. */
+.mrx-story-image[data-leaving] {
+  opacity: 0;
+}
+
+.mrx-story[data-paused] .mrx-story-image {
+  animation-play-state: paused;
+}
+
+.mrx-story-loader {
+  position: absolute;
+}
+
+.mrx-story-tap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.mrx-story-tap-back {
+  left: 0;
+  width: 33%;
+}
+
+.mrx-story-tap-on {
+  right: 0;
+  width: 67%;
+}
+
+.mrx-story-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: calc(env(safe-area-inset-top, 0px) + 12px) 16px 32px;
+  background: linear-gradient(to bottom, rgb(0 0 0 / 0.55), transparent);
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
+  pointer-events: none;
+}
+
+.mrx-story-top button {
+  pointer-events: auto;
+}
+
+.mrx-story-progress {
+  display: flex;
+  gap: 4px;
+}
+
+.mrx-story-progress > span {
+  flex: 1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.3);
+}
+
+.mrx-story-progress i {
+  display: block;
+  height: 100%;
+  background: #fff;
+  transform-origin: left;
+  transform: scaleX(0);
+}
+
+.mrx-story-progress i[data-state='done'] {
+  transform: scaleX(1);
+}
+
+.mrx-story-progress i[data-state='now'] {
+  animation: mrx-story-fill linear forwards;
+}
+
+.mrx-story[data-paused] .mrx-story-progress i[data-state='now'],
+.mrx-story[data-waiting] .mrx-story-progress i[data-state='now'] {
+  animation-play-state: paused;
+}
+
+@keyframes mrx-story-fill {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mrx-story-image {
+    animation: none;
+  }
+}

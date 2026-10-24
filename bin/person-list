@@ -1,0 +1,89 @@
+#!ts
+/**
+ * person-list — the named people, each with how often the archive shows or hears them.
+ *
+ * One listing of `/people` and the aggregates of `holdingsByPerson`, so the answer costs the
+ * same for a handful of people as for thousands. `--sort count` puts the most pictured first;
+ * `--sort name` (the default) is alphabetical, with placeholder names (`? Surname`, someone known
+ * only from a family record) after everyone with a real first name.
+ */
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { PersonListEntry } from '@archive/people/api';
+import { holdingsByPerson, type PersonAttrs } from '@archive/people/person';
+
+const string = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
+
+/** A name that stands in for an unknown first name. */
+const placeholder = (name: string): boolean => name.startsWith('?');
+
+const byName = (a: PersonListEntry, b: PersonListEntry): number => Number(placeholder(a.name)) - Number(placeholder(b.name)) || a.name.localeCompare(b.name);
+
+const personList = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['sort', 'limit', 'min'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const sort = flags.sort ?? 'name';
+  if (sort !== 'name' && sort !== 'count') {
+    await cmd.writeError(`person-list: --sort must be name or count, not '${sort}'\n`);
+    return 1;
+  }
+  const limit = flags.limit === undefined ? undefined : Number(flags.limit);
+  const min = flags.min === undefined ? 0 : Number(flags.min);
+  if ((limit !== undefined && !(Number.isInteger(limit) && limit >= 0)) || !(Number.isInteger(min) && min >= 0)) {
+    await cmd.writeError('person-list: --limit and --min take a whole number\n');
+    return 1;
+  }
+
+  try {
+    const [children, holdings] = await Promise.all([
+      cmd.sys.vfs.children<PersonAttrs>(cmd.access, PEOPLE_ROOT),
+      holdingsByPerson(cmd, { listed: true }),
+    ]);
+
+    const people = children
+      .filter((entry) => entry.node.type === 'person')
+      .map((entry): PersonListEntry => {
+        const attrs = entry.node.attrs;
+        return {
+          id: entry.name,
+          path: `${PEOPLE_ROOT}/${entry.name}`,
+          name: string(attrs.name) ?? entry.name,
+          fullname: string(attrs.fullname),
+          born: string(attrs.born),
+          died: string(attrs.died),
+          holdings: holdings.get(entry.node.id) ?? 0,
+        };
+      })
+      .filter((person) => person.holdings >= min)
+      .toSorted(sort === 'count' ? (a, b) => b.holdings - a.holdings || byName(a, b) : byName);
+
+    const answer = limit === undefined ? people : people.slice(0, limit);
+
+    if (cmd.json) {
+      await cmd.writeJSON(answer satisfies PersonListEntry[]);
+    } else {
+      for (const person of answer) await cmd.writeLn(`${String(person.holdings).padStart(6)} ${person.name}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`person-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+personList.spec = {
+  name: 'person-list',
+  effect: 'read' as const,
+  description: 'List the named people, with how many faces and voice turns each has',
+  flags: [
+    { name: 'sort', type: 'string' as const, description: 'name (default; placeholder names last) or count (most pictured first)' },
+    { name: 'limit', type: 'number' as const, description: 'at most this many people' },
+    { name: 'min', type: 'number' as const, description: 'only people with at least this many faces and voice turns' },
+  ],
+  returns: 'the named people with their face and voice counts, as JSON (PersonListEntry[]).',
+};
+
+export default personList;

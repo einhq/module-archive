@@ -1,0 +1,27 @@
+# Embed a file's stored texts again — extracted text, transcript, hand-written
+# description — when `media-scan` finds one without a vector from the text embedder EMS runs now.
+# A text is embedded where it is written, so this is the repair after a text-embedder change or a
+# write whose embed failed; it never reads or transcribes again.
+#
+# The fact is the guard: `media-reembed` skips whatever already has a current vector, so a
+# repeated fact costs a few reads. Its own kind beside embed-picture: one batch of text vectors is
+# a fraction of a second of EMS, and a backfill of them must not wait behind a transcript backlog.
+name: media-embed-text
+description: Embed a file's stored texts with the current text embedder
+
+triggers:
+  - on: media.text-embedding.stale
+    priority: 20
+
+steps:
+  embed-text:
+    command: media-reembed $NODE_PATH
+    description: Text vectors for search, from the stored text
+    pool: media
+    kind: embed-text
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 20

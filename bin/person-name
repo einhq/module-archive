@@ -1,0 +1,87 @@
+#!ts
+/**
+ * person-name — put a name to a face-recognition person and move them into
+ * /people, where the rest of the app can find them.
+ *
+ * The node id is preserved by the move, so every face already recognized as
+ * this person keeps pointing at them.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { PERSON_GENDERS } from '@archive/people/types';
+import { type NameFields, namePerson, type PersonGender, UNKNOWN_ROOT } from '@archive/people/person';
+
+const GENDERS: readonly string[] = PERSON_GENDERS;
+
+const personName = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['name', 'slug', 'fullname', 'birthname', 'gender', 'born', 'died'],
+    alias: { n: 'name', s: 'slug', f: 'fullname', g: 'gender', b: 'born', d: 'died' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('person-name: usage: person-name <person> --name "Full Name"\n');
+    return 1;
+  }
+  if (!flags.name) {
+    await cmd.writeError('person-name: missing --name\n');
+    return 1;
+  }
+  if (flags.gender && !GENDERS.includes(flags.gender)) {
+    await cmd.writeError(`person-name: --gender must be one of ${GENDERS.join(', ')}\n`);
+    return 1;
+  }
+
+  // A bare id is accepted so the UI can pass what person-unknown gave it.
+  const path = target.includes('/') ? resolve(cmd.cwd, target) : `${UNKNOWN_ROOT}/${target}`;
+
+  const fields: NameFields = { name: flags.name };
+  if (flags.fullname) fields.fullname = flags.fullname;
+  if (flags.birthname) fields.birthname = flags.birthname;
+  if (flags.gender) fields.gender = flags.gender as PersonGender;
+  if (flags.born) fields.born = flags.born;
+  if (flags.died) fields.died = flags.died;
+
+  try {
+    const named = await namePerson(cmd.sys.vfs, cmd.access, path, fields, flags.slug);
+    if (cmd.json) {
+      await cmd.writeJSON({ ok: true, id: named.id, path: named.path, slug: named.slug, name: fields.name });
+    } else {
+      await cmd.writeLn(`${fields.name} -> ${named.path}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`person-name: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+personName.spec = {
+  name: 'person-name',
+  effect: 'write' as const,
+  description: 'Name an unidentified person and move them into /people',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'path (or bare id) of an unnamed person' },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'display name (required)' },
+    { name: 'slug', type: 'string' as const, description: 'path segment (default: derived from the name)' },
+    { name: 'fullname', type: 'string' as const, description: 'full name' },
+    { name: 'birthname', type: 'string' as const, description: 'name at birth' },
+    { name: 'gender', type: 'string' as const, description: 'male, female, other, unknown' },
+    { name: 'born', type: 'string' as const, description: 'birth date (YYYY[-MM[-DD]])' },
+    { name: 'died', type: 'string' as const, description: 'death date (YYYY[-MM[-DD]])' },
+  ],
+  examples: [
+    "person-name --name 'Anna Exempel' --born 1970-01-01 /archive/people/unnamed-1",
+  ],
+  returns: 'the named person and their new path under /archive/people.',
+};
+
+export default personName;

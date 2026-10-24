@@ -1,0 +1,24 @@
+name: media-duplicates
+description: Decide again the duplicate findings of a staged file, or of the staged copies of a library file
+
+# `media.duplicates.stale` names a file whose findings may be wrong: one moved into a staging inbox
+# from elsewhere, or into the library from outside it; or a directory moved in whole, whose files
+# the step takes one by one. Every findings write goes through `@archive/staging/duplicates`; a
+# staged file's arrival is checked by `exif-extract` itself, and a file's fingerprints landing by
+# `compute-fingerprint`, so neither needs a fact.
+trigger:
+  on: media.duplicates.stale
+
+steps:
+  record:
+    command: duplicates --record $NODE_PATH
+    description: Decide the exact copies among the file's byte twins in each staging inbox
+    pool: media
+    kind: dedupe
+    priority: 20
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 2
+  priority: 0

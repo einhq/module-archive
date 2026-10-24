@@ -1,0 +1,1179 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, isAdmin, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { USERS_PATH } from '@ein/paths';
+import { resolve } from '@std/path';
+import type {
+  DuplicateCounts,
+  DuplicateKind,
+  DuplicatePage,
+  DuplicateRefreshResult,
+  DuplicateRepairResult,
+  DuplicateResolveResult,
+  DuplicateSeparateResult,
+  DuplicateWhere,
+} from '@archive/media/api';
+import type {
+  MatchConfidence,
+  OrganizeResult,
+  StagingAcceptResult,
+  StagingCategoryAnswer,
+  StagingCheckAnswer,
+  StagingDetectAnswer,
+  StagingDiscardResult,
+  StagingEditResult,
+  StagingInitAnswer,
+  StagingJournalAction,
+  StagingJournalPage,
+  StagingLaterResult,
+  StagingMatchResult,
+  StagingMoveResult,
+  StagingOrganizeReport,
+  StagingPromoteResult,
+  StagingQueued,
+  StagingQueueReport,
+  StagingRetimeAnswer,
+  StagingStatus,
+  StagingTimeRules,
+  StagingUndoResult,
+} from '@archive/staging/api';
+import { CATEGORY_KINDS, editCategory, GROUP_STRATEGIES, readCategories, SIGNIFICANCE_PRESETS, STAGING_LANES, STAGING_SIDECARS } from '@archive/staging/category';
+import { emptyRetime, retimeScope } from '@archive/staging/retime';
+import { stagingCheck } from '@archive/staging/check';
+import { ACCEPT_MAX, ACCEPT_PLAN_MAX, acceptGroups, discardTargets, LATER_MAX, laterGroups, moveStaged, promoteGroups } from '@archive/staging/decide';
+import { initStaging } from '@archive/staging/init';
+import { JOURNAL_PAGE_MAX, listJournal, UNDO_MAX, undoJournalEntries } from '@archive/staging/journal';
+import { deleteGroup, mergeGroups, pinGroup, REGROUP_MAX, regroupInto, regroupNew, renameGroup, splitGroup } from '@archive/staging/edits';
+import { organizeCategory, queueRun, readOwner, recordFailure } from '@archive/staging/organizer';
+import { categoryAlbumsPath, categoryPath, DEFAULT_CATEGORY, isStagingGroup, parseStagedPath, stagedPlace, stagingRoots } from '@archive/staging/paths';
+import { groupsChangedSince, matchDue, matchGroups, profileIndex } from '@archive/staging/match';
+import { rejectAlbum } from '@archive/staging/reject';
+import { categoryStatuses, stagingStatus } from '@archive/staging/status';
+import { DETECT_MAX, detectFolders } from '@archive/staging/detect';
+import { inboxOf, refreshScope, repairInbox, separate } from '@archive/staging/duplicates';
+import { nodesAt } from '@archive/staging/nodes-at';
+import {
+  countDuplicates,
+  DUPLICATE_PAGE,
+  DUPLICATE_PAGE_MAX,
+  duplicateScope,
+  FILE_SETS_MAX,
+  GROUP_SETS_MAX,
+  groupScope,
+  isGroupPath,
+  isSetKey,
+  readDuplicatePage,
+  readFileSets,
+  readGroupSets,
+} from '@archive/staging/duplicate-read';
+import { DEDUPE_FILES_MAX, DEDUPE_SETS_MAX, dedupeApply, dedupeGroupScope, dedupeKeys, dedupeScope } from '@archive/staging/dedupe';
+
+/** The subcommands a dry run is for: each then says what it would do and does none of it. */
+const DRY_RUNS = ['init', 'organize', 'promote', 'discard', 'accept', 'dedupe', 'duplicates', 'retime'];
+
+/** Files a `duplicates --refresh` announces per call unless `--limit` says otherwise. */
+const REFRESH_LIMIT = 5_000;
+
+const JOURNAL_ACTIONS: StagingJournalAction[] = ['promote', 'file', 'discard', 'dedupe', 'edit', 'reject'];
+
+const currentUsername = (cmd: Command): string => cmd.env.USER || cmd.env.HOME?.split('/').filter(Boolean).pop() || 'admin';
+
+const canActAs = (cmd: Command, user: string): boolean => isAdmin(cmd.access) || user === currentUsername(cmd);
+
+const allUsers = async (cmd: Command): Promise<string[]> => {
+  if (!isAdmin(cmd.access)) throw new Error('--all requires administrator access');
+  const accounts = await cmd.sys.vfs.children(cmd.access, USERS_PATH);
+  return accounts.filter((entry) => entry.node.type === 'user').map((entry) => entry.name);
+};
+
+const selectedUsers = async (cmd: Command, flags: Record<string, unknown>): Promise<string[]> => {
+  if (flags.all) return await allUsers(cmd);
+  const user = String(flags.user ?? currentUsername(cmd));
+  if (!canActAs(cmd, user)) throw new Error(`cannot access staging for '${user}'`);
+  return [user];
+};
+
+/**
+ * A suggested group named by its path, or by its slug in the default category of `--user` (the
+ * caller by default), and checked to be one the caller may act on.
+ */
+const groupPath = (cmd: Command, flags: Record<string, unknown>, raw: string, verb: string): string => {
+  const user = String(flags.user ?? currentUsername(cmd));
+  const path = raw.includes('/') ? resolve(cmd.cwd, raw) : `${categoryAlbumsPath(user, DEFAULT_CATEGORY)}/${raw}`;
+  const owner = isStagingGroup(path) ? parseStagedPath(path)?.user : undefined;
+  if (!owner || !canActAs(cmd, owner)) throw new Error(`cannot ${verb} this staging album: ${path}`);
+  return path;
+};
+
+/** Every suggested group of every category of `user`'s, by path, with its attrs: one paged listing of each category's groups. */
+const groupsOf = async (cmd: Command, user: string): Promise<{ path: string; attrs: Record<string, unknown> }[]> => {
+  const out: { path: string; attrs: Record<string, unknown> }[] = [];
+  for (const category of await readCategories(cmd.sys.vfs, cmd.access, user)) {
+    const albumsPath = categoryAlbumsPath(user, category.name);
+    let after: string | undefined;
+    while (true) {
+      const page = await cmd.sys.vfs.children(cmd.access, albumsPath, { page: { limit: 1000, after }, types: ['album'] }).catch(() => []);
+      out.push(...page.filter((entry) => !entry.name.startsWith('.')).map((entry) => ({ path: `${albumsPath}/${entry.name}`, attrs: entry.node.attrs })));
+      if (page.length < 1000) break;
+      after = page[page.length - 1].name;
+    }
+  }
+  return out;
+};
+
+/** A suggested group as `groupPath` takes it, or a staged file or folder by its path, checked to be one the caller may act on. */
+const groupOrStaged = (cmd: Command, flags: Record<string, unknown>, raw: string, verb: string): string => {
+  const path = resolve(cmd.cwd, raw);
+  if (!raw.includes('/') || isStagingGroup(path)) return groupPath(cmd, flags, raw, verb);
+  const owner = stagedPlace(path)?.user;
+  if (!owner || !canActAs(cmd, owner)) throw new Error(`cannot ${verb} this: ${path}`);
+  return path;
+};
+
+/** A staged file named by path, checked to be one the caller may act on. */
+const stagedFile = (cmd: Command, raw: string, verb: string): string => {
+  const path = resolve(cmd.cwd, raw);
+  const owner = stagedPlace(path)?.user;
+  if (!owner || !canActAs(cmd, owner)) throw new Error(`cannot ${verb} this: ${path}`);
+  return path;
+};
+
+/** An organizer run that failed before it could count anything. */
+const failedRun = (user: string, category: string, dryRun: boolean, error: unknown): OrganizeResult => ({
+  user,
+  category,
+  mode: 'full',
+  dryRun,
+  error: error instanceof Error ? error.message : String(error),
+  records: 0,
+  windows: 0,
+  items: 0,
+  pending: 0,
+  covered: 0,
+  created: 0,
+  updated: 0,
+  unchanged: 0,
+  removed: 0,
+  pinned: 0,
+  byKind: {},
+  bareDates: 0,
+  watermark: null,
+  matched: 0,
+  durationMs: 0,
+  groups: [],
+});
+
+/** The words for what an edit verb did. */
+const editLine = (result: StagingEditResult): string =>
+  result.journal === null
+    ? `Nothing changed: ${result.changed.length} group(s) changed since`
+    : `${result.groupsCreated.length} group(s) made, ${result.groupsChanged.length} changed, ${result.groupsRemoved.length} removed (journal ${result.journal})`;
+
+/** The values of a repeatable flag, in order. */
+const listFlag = (value: unknown): string[] => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter((each) => each !== '');
+
+/** Member keys, one per `--expect` or several split at commas: `--expect a --expect b` or `--expect a,b`. */
+const keysFlag = (value: unknown): string[] => listFlag(value).flatMap((each) => each.split(',')).filter((each) => each !== '');
+
+/** A folder of `user`'s staged files named by path, or a category by its name. */
+const scopePath = (cmd: Command, user: string, raw: string): string => raw.includes('/') ? resolve(cmd.cwd, raw) : categoryPath(user, raw);
+
+/** The words for what a retime did, or would do. */
+const retimeLine = (answer: StagingRetimeAnswer): string => {
+  const sources = Object.entries(answer.bySource).map(([source, n]) => `${n} by ${source}`).join(', ');
+  return `${answer.path}: ${answer.scanned} media read, ${answer.policyChanged} restamped, ${answer.retimed} dated again` +
+    (sources ? ` (${sources})` : '') + (answer.cleared > 0 ? `, ${answer.cleared} left undated` : '') + (answer.dryRun ? ' (dry run, nothing written)' : '');
+};
+
+/**
+ * What `staging retime` dates again: the categories of `user` named by `raw` (a category's name,
+ * or a path at or under `files/`), each with its time rules, and the path the answer names. No
+ * `raw` is every category.
+ */
+const retimeScopes = async (cmd: Command, user: string, raw: string | undefined): Promise<{ path: string; scopes: { path: string; rules: StagingTimeRules }[] }> => {
+  const path = raw === undefined ? stagingRoots(user).filesPath : scopePath(cmd, user, raw);
+  const parsed = parseStagedPath(path);
+  if (parsed?.area !== 'files') throw new Error(`not a category, nor a folder or file of one: ${path}`);
+  if (!canActAs(cmd, parsed.user)) throw new Error(`cannot retime this: ${path}`);
+  const categories = await readCategories(cmd.sys.vfs, cmd.access, parsed.user);
+  if (parsed.category === undefined) return { path, scopes: categories.map((category) => ({ path: category.path, rules: category.settings.time })) };
+  const category = categories.find((each) => each.name === parsed.category);
+  if (!category) throw new Error(`no category ${parsed.category} in ${stagingRoots(parsed.user).filesPath}`);
+  return { path, scopes: [{ path, rules: category.settings.time }] };
+};
+
+const WHERES: DuplicateWhere[] = ['library', 'inbox'];
+
+/** `--where`: findings of what lies in the library, or in the inbox; both when absent. */
+const whereFlag = (value: unknown): DuplicateWhere | undefined => {
+  if (value === undefined) return undefined;
+  if (!(WHERES as unknown[]).includes(value)) throw new Error(`--where is ${WHERES.join(' or ')}`);
+  return value as DuplicateWhere;
+};
+
+/** `--exact` or `--near`: one kind of finding, or both when neither is given. */
+const kindFlag = (flags: Record<string, unknown>): DuplicateKind | undefined => {
+  if (flags.exact && flags.near) throw new Error('--exact and --near go one at a time');
+  return flags.exact ? 'exact' : flags.near ? 'near' : undefined;
+};
+
+/** A page of duplicate sets as text: one line per set. */
+const writeSets = async (cmd: Command, page: DuplicatePage): Promise<void> => {
+  for (const set of page.sets) {
+    const keep = [...set.existing, ...set.staged].find((member) => member.id === set.keep);
+    await cmd.writeLn(
+      `${set.key}  ${set.where}${set.score !== undefined ? `  ${set.score.toFixed(3)}` : ''}  keep ${keep?.path ?? set.keep}; ${set.discard.length} to drop` +
+        (set.carries.length > 0 ? `; gains ${set.carries.join(', ')}` : '') + (set.flags.length > 0 ? `; ${set.flags.join(', ')}` : '') +
+        (set.blocked ? `; ${set.blocked}` : ''),
+    );
+  }
+  if (page.cursor) await cmd.writeLn(`more after --cursor ${page.cursor}`);
+};
+
+const SHARES = ['private', 'default'] as const;
+const CONFIDENCES: MatchConfidence[] = ['high', 'medium'];
+
+const staging = async (cmd: Command): CmdReturn => {
+  const subcommand = cmd.args[0];
+  if (!subcommand) {
+    await cmd.writeError(
+      'usage: staging <init|status|check|detect|category|retime|organize|promote|discard|accept|later|undo|journal|move|split|regroup|merge|delete|rename|pin|reject|match|dedupe|duplicates|separate> [options]\n',
+    );
+    return 1;
+  }
+
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args.slice(1), {
+    string: [
+      'user',
+      'to',
+      'name',
+      'into',
+      'share',
+      'confidence',
+      'action',
+      'limit',
+      'cursor',
+      'loose-batch',
+      'kind',
+      'label',
+      'destination',
+      'except',
+      'expect',
+      'where',
+      'keep',
+      'at',
+      'strategy',
+      'significance',
+      'digitized',
+      'filename-dates',
+      'lane',
+      'sidecars',
+      'since',
+    ],
+    collect: ['except', 'expect'],
+    boolean: [
+      'all',
+      'apply',
+      'counts',
+      'off',
+      'dry-run',
+      'layout-only',
+      'create',
+      'remove',
+      'no-destination',
+      'refresh',
+      'repair',
+      'force',
+      'full',
+      'new',
+      'queue',
+      'if-pending',
+      'stale',
+      'exact',
+      'near',
+    ],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  // A dry run makes the whole line a read (the spec's `dryRun`), so no other subcommand may take one.
+  if (flags['dry-run'] && !DRY_RUNS.includes(subcommand)) {
+    await cmd.writeError(`staging ${subcommand}: --dry-run is only for ${DRY_RUNS.join(', ')}\n`);
+    return 1;
+  }
+  if (flags.all && subcommand !== 'init' && subcommand !== 'organize' && subcommand !== 'match' && !(subcommand === 'duplicates' && flags.repair)) {
+    await cmd.writeError(`staging ${subcommand}: --all is only for init, organize, match and duplicates --repair; name one user with --user\n`);
+    return 1;
+  }
+
+  try {
+    if (subcommand === 'init') {
+      const users = await selectedUsers(cmd, flags);
+      const dryRun = Boolean(flags['dry-run']);
+      const answer: StagingInitAnswer = { ok: true, dryRun, users: [] };
+      for (const user of users) {
+        const result = await initStaging(cmd.sys.vfs, cmd.access, user, {
+          looseBatch: flags['loose-batch'] as string | undefined,
+          dryRun,
+          layoutOnly: Boolean(flags['layout-only']),
+        });
+        answer.users.push(result);
+        if (result.failed.length > 0) answer.ok = false;
+      }
+      if (cmd.json) await cmd.writeJSON(answer satisfies StagingInitAnswer);
+      else {
+        for (const result of answer.users) {
+          await cmd.writeLn(
+            `${result.user}: ${result.created.length} created, ${result.repaired.length} repaired, ${result.adopted.length} adopted, ` +
+              `${result.moved} moved${result.movedTo ? ` to ${result.movedTo}` : ''}, ${result.groups} groups, ${result.routes} routes, ` +
+              `${result.relinked} relinked${dryRun ? ' (dry run, nothing written)' : ''}`,
+          );
+        }
+      }
+      for (const result of answer.users) {
+        for (const failure of result.failed) await cmd.writeError(`staging init: ${failure.path}: ${failure.error}\n`);
+      }
+      return answer.ok ? 0 : 1;
+    }
+
+    if (subcommand === 'status') {
+      const [user] = await selectedUsers(cmd, flags);
+      const status = await stagingStatus(cmd.sys.vfs, cmd.access, user);
+      if (cmd.json) await cmd.writeJSON(status satisfies StagingStatus);
+      else if (!status.initialized) await cmd.writeLn(`${user}: not initialized; run staging init`);
+      else {
+        for (const category of status.categories) {
+          const { files, other, indexing, undated } = category.counts;
+          await cmd.writeLn(`${category.name}: ${files} media, ${other} other, ${indexing} indexing, ${undated} undated`);
+        }
+        if (status.routesWaiting > 0) await cmd.writeLn(`${status.routesWaiting} route(s) waiting for a device`);
+      }
+      return 0;
+    }
+
+    if (subcommand === 'detect') {
+      const [user] = await selectedUsers(cmd, flags);
+      const paths = (flags._ as unknown[]).map((raw) => resolve(cmd.cwd, String(raw)));
+      for (const path of paths) {
+        const owner = parseStagedPath(path)?.user;
+        if (owner && !canActAs(cmd, owner)) throw new Error(`cannot detect this: ${path}`);
+      }
+      const answer = await detectFolders(cmd.sys.vfs, cmd.access, user, paths);
+      if (cmd.json) await cmd.writeJSON(answer satisfies StagingDetectAnswer);
+      else {
+        for (const detection of answer.detections) {
+          const to = detection.category ? `; category ${detection.category.name}` : '';
+          const dismissed = detection.dismissed ? '; dismissed' : '';
+          await cmd.writeLn(`${detection.path}: ${detection.kind} (${detection.confidence}${to}${dismissed})`);
+          for (const line of detection.evidence) await cmd.writeLn(`  ${line}`);
+        }
+        if (answer.detections.length === 0) await cmd.writeLn('No newly arrived folders');
+        if (answer.more) await cmd.writeLn('More folders arrived than were looked at; name them to look at them');
+      }
+      return 0;
+    }
+
+    if (subcommand === 'check') {
+      const [user] = await selectedUsers(cmd, flags);
+      const answer = await stagingCheck(cmd.sys.vfs, cmd.access, user);
+      if (cmd.json) await cmd.writeJSON(answer satisfies StagingCheckAnswer);
+      else {
+        for (const problem of answer.problems) await cmd.writeLn(`${problem.code}: ${problem.path}: ${problem.detail}`);
+        await cmd.writeLn(`${answer.problems.length} problem(s); ${answer.checkedLinks} link(s) checked${answer.truncated ? ', more not checked' : ''}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === 'category') {
+      const [user] = await selectedUsers(cmd, flags);
+      const name = flags._[0] as string | undefined;
+      if (!name) throw new Error('staging category needs the category name');
+      const edit = await editCategory(cmd, user, String(name), {
+        create: Boolean(flags.create),
+        remove: Boolean(flags.remove),
+        kind: flags.kind as string | undefined,
+        label: flags.label as string | undefined,
+        destination: flags.destination as string | undefined,
+        noDestination: Boolean(flags['no-destination']),
+        strategy: flags.strategy as string | undefined,
+        significance: flags.significance as string | undefined,
+        digitized: flags.digitized as string | undefined,
+        filenameDates: flags['filename-dates'] as string | undefined,
+        lane: flags.lane as string | undefined,
+        sidecars: flags.sidecars as string | undefined,
+      });
+      // New time rules apply to the files already there, which are dated again now; new grouping
+      // settings to its groups, which the organizer plans again on a run asked for now.
+      let retime: StagingRetimeAnswer | null = null;
+      if (edit.entry && edit.changed.includes('time')) {
+        retime = emptyRetime(user, edit.entry.path, false);
+        await retimeScope(cmd, edit.entry.path, edit.entry.settings.time, retime);
+      }
+      if (edit.entry && edit.changed.includes('group')) await queueRun(cmd, user, edit.entry, false);
+      const answer: StagingCategoryAnswer = {
+        ok: true,
+        created: edit.created,
+        removed: edit.removed,
+        changed: edit.changed,
+        retime,
+        category: edit.entry ? (await categoryStatuses(cmd.sys.vfs, cmd.access, user, [edit.entry]))[0] : null,
+      };
+      if (cmd.json) await cmd.writeJSON(answer satisfies StagingCategoryAnswer);
+      else if (answer.removed) await cmd.writeLn(`Removed ${categoryPath(user, String(name))}`);
+      else if (answer.category) {
+        const { category } = answer;
+        await cmd.writeLn(
+          `${category.name}: ${category.label} (${category.kind})${category.destination ? `, into ${category.destination.path}` : ''}` +
+            `${category.settings.lane === 'bulk' ? ', bulk lane' : ''}; ${category.counts.files} media` +
+            (answer.created ? ', created' : answer.changed.length > 0 ? `, changed ${answer.changed.join(', ')}` : ''),
+        );
+        if (answer.retime) await cmd.writeLn(retimeLine(answer.retime));
+      }
+      for (const failure of answer.retime?.failed ?? []) await cmd.writeError(`staging category: ${failure.path}: ${failure.error}\n`);
+      return answer.retime?.ok === false ? 1 : 0;
+    }
+
+    // Dating staged files again by their category's time rules: every category of the user, one, or
+    // a folder or file of one. The pipeline runs it for what the bridge saw moved between categories.
+    if (subcommand === 'retime') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length > 1) throw new Error('staging retime takes one category, folder or file');
+      const [user] = raws.length === 1 && raws[0].includes('/') ? [parseStagedPath(resolve(cmd.cwd, raws[0]))?.user ?? ''] : await selectedUsers(cmd, flags);
+      const { path, scopes } = await retimeScopes(cmd, user, raws[0]);
+      const answer = emptyRetime(user, path, Boolean(flags['dry-run']));
+      const clocks = new Map();
+      for (const scope of scopes) await retimeScope(cmd, scope.path, scope.rules, answer, clocks);
+      if (cmd.json) await cmd.writeJSON(answer satisfies StagingRetimeAnswer);
+      else await cmd.writeLn(retimeLine(answer));
+      for (const failure of answer.failed) await cmd.writeError(`staging retime: ${failure.path}: ${failure.error}\n`);
+      return answer.ok ? 0 : 1;
+    }
+
+    // Every category of each user on its own: one that fails is reported, and the others are still
+    // organized. A category named by path names its user, as the pipeline's step does.
+    if (subcommand === 'organize') {
+      const dryRun = Boolean(flags['dry-run']);
+      const queue = Boolean(flags.queue);
+      if (flags['if-pending'] && !queue) throw new Error('--if-pending is only for --queue');
+      if (queue && (dryRun || flags.full)) throw new Error('--queue takes neither --dry-run nor --full');
+      if (flags['if-pending'] && !isAdmin(cmd.access)) throw new Error('--if-pending requires administrator access');
+      const named = (flags._ as unknown[]).map(String).map((raw) => {
+        if (!raw.includes('/')) return { name: raw };
+        const parsed = parseStagedPath(resolve(cmd.cwd, raw));
+        if (parsed?.area !== 'files' || parsed.category === undefined || parsed.rest !== '') throw new Error(`not a category: ${raw}`);
+        return { name: parsed.category, user: parsed.user };
+      });
+      const byPath = [...new Set(named.flatMap((each) => each.user ?? []))];
+      const users = byPath.length > 0 && !flags.all && flags.user === undefined ? byPath : await selectedUsers(cmd, flags);
+      for (const user of users) if (!canActAs(cmd, user)) throw new Error(`cannot access staging for '${user}'`);
+      const wantedBy = (user: string) => named.filter((each) => each.user === undefined || each.user === user).map((each) => each.name);
+      const categoriesOf = async (user: string) => {
+        const wanted = wantedBy(user);
+        const categories = (await readCategories(cmd.sys.vfs, cmd.access, user)).filter((category) => wanted.length === 0 || wanted.includes(category.name));
+        if (categories.length === 0 && wanted.length > 0 && !flags.all) throw new Error(`no category ${wanted.join(', ')}`);
+        return categories;
+      };
+
+      if (queue) {
+        const results: StagingQueued[] = [];
+        let failures = 0;
+        for (const user of users) {
+          try {
+            for (const category of await categoriesOf(user)) {
+              try {
+                results.push(await queueRun(cmd, user, category, Boolean(flags['if-pending'])));
+              } catch (error) {
+                failures++;
+                await cmd.writeError(`staging organize: ${user}/${category.name}: ${error instanceof Error ? error.message : String(error)}\n`);
+              }
+            }
+          } catch (error) {
+            failures++;
+            await cmd.writeError(`staging organize: ${user}: ${error instanceof Error ? error.message : String(error)}\n`);
+          }
+        }
+        if (cmd.json) await cmd.writeJSON({ results } satisfies StagingQueueReport);
+        else {
+          for (const result of results) {
+            await cmd.writeLn(
+              `${result.user}/${result.category}: ${result.queued ? `run asked for at ${result.requestedAt}${result.why ? ` (${result.why})` : ''}` : 'nothing waits'}`,
+            );
+          }
+        }
+        return failures > 0 ? 1 : 0;
+      }
+
+      const results: OrganizeResult[] = [];
+      for (const user of users) {
+        let categories;
+        try {
+          categories = await categoriesOf(user);
+          if (categories.length === 0) continue;
+        } catch (error) {
+          results.push(failedRun(user, wantedBy(user).join(','), dryRun, error));
+          continue;
+        }
+        let owner;
+        try {
+          owner = await readOwner(cmd.sys.vfs, cmd.access, user, stagingRoots(user).homePath);
+        } catch (error) {
+          for (const category of categories) results.push(failedRun(user, category.name, dryRun, error));
+          continue;
+        }
+        for (const category of categories) {
+          try {
+            results.push(await organizeCategory(cmd, owner, category, { dryRun, full: Boolean(flags.full) }));
+          } catch (error) {
+            results.push(failedRun(user, category.name, dryRun, error));
+            if (!dryRun) await recordFailure(cmd, owner, category, results[results.length - 1].error!).catch(() => undefined);
+          }
+        }
+      }
+      if (cmd.json) await cmd.writeJSON({ results } satisfies StagingOrganizeReport);
+      else {
+        for (const result of results) {
+          if (result.error !== undefined) continue;
+          if (result.skipped) {
+            await cmd.writeLn(`${result.user}/${result.category}: deferred, as many files changed since the last run moments ago`);
+            continue;
+          }
+          const kinds = Object.entries(result.byKind).map(([kind, n]) => `${n} ${kind}`).join(', ');
+          await cmd.writeLn(
+            `${result.user}/${result.category}: ${result.mode === 'full' ? `full (${result.why})` : `incremental, ${result.records} change(s) read`}: ` +
+              `${result.covered} of ${result.items} media planned; ${kinds || 'no groups'}; ` +
+              `${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged, ${result.removed} removed, ${result.pinned} pinned` +
+              `${result.pending > 0 ? `; ${result.pending} still indexing` : ''}${dryRun ? ' (dry run, nothing written)' : ''} in ${result.durationMs} ms`,
+          );
+        }
+      }
+      const failed = results.filter((result) => result.error !== undefined);
+      for (const result of failed) await cmd.writeError(`staging organize: ${result.user}/${result.category}: ${result.error}\n`);
+      return failed.length > 0 ? 1 : 0;
+    }
+
+    if (subcommand === 'promote') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length === 0) throw new Error('staging promote needs at least one group, by path or slug');
+      const share = flags.share as string | undefined;
+      if (share !== undefined && !(SHARES as readonly string[]).includes(share)) throw new Error(`--share is ${SHARES.join(' or ')}`);
+      const result = await promoteGroups(cmd, raws.map((raw) => groupPath(cmd, flags, raw, 'promote')), {
+        into: flags.into as string | undefined,
+        name: flags.name as string | undefined,
+        to: flags.to as string | undefined,
+        share: share as typeof SHARES[number] | undefined,
+        except: listFlag(flags.except),
+        expect: keysFlag(flags.expect),
+        dryRun: Boolean(flags['dry-run']),
+      });
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingPromoteResult);
+      else if (result.album) {
+        await cmd.writeLn(
+          `${result.dryRun ? 'Would file' : 'Filed'} ${result.moved} file(s) from ${result.groups.length} group(s) into ${result.album.path}` +
+            (result.changed.length > 0 ? `; ${result.changed.length} group(s) changed and were left as they are` : ''),
+        );
+      } else await cmd.writeLn(`Nothing filed: ${result.changed.length} group(s) changed since`);
+      for (const failure of result.failed) await cmd.writeError(`staging promote: ${failure.path}: ${failure.error}\n`);
+      return result.failed.length > 0 ? 1 : 0;
+    }
+
+    if (subcommand === 'discard') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length === 0) throw new Error('staging discard needs at least one group, file or folder');
+      const result = await discardTargets(cmd, raws.map((raw) => groupOrStaged(cmd, flags, raw, 'discard')), {
+        except: listFlag(flags.except),
+        expect: keysFlag(flags.expect),
+        dryRun: Boolean(flags['dry-run']),
+      });
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingDiscardResult);
+      else {
+        await cmd.writeLn(
+          `${result.dryRun ? 'Would discard' : 'Discarded'} ${result.files} file(s)${result.batches.length > 0 ? ` into trash batch ${result.batches.join(', ')}` : ''}` +
+            (result.changed.length > 0 ? `; ${result.changed.length} group(s) changed and were left as they are` : ''),
+        );
+      }
+      for (const failure of result.failed) await cmd.writeError(`staging discard: ${failure.path}: ${failure.error}\n`);
+      return result.failed.length > 0 ? 1 : 0;
+    }
+
+    if (subcommand === 'accept') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length === 0) throw new Error('staging accept needs at least one group');
+      const confidence = (flags.confidence as string | undefined) ?? 'medium';
+      if (!(CONFIDENCES as string[]).includes(confidence)) throw new Error(`--confidence is ${CONFIDENCES.join(' or ')}`);
+      const result = await acceptGroups(cmd, raws.map((raw) => groupPath(cmd, flags, raw, 'accept')), {
+        confidence: confidence as MatchConfidence,
+        expect: keysFlag(flags.expect),
+        dryRun: Boolean(flags['dry-run']),
+      });
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingAcceptResult);
+      else {
+        for (const { group, proposal, files } of result.plan) {
+          const where = proposal.action === 'existing' ? `into ${proposal.album.path}` : proposal.action === 'new' ? `into a new album “${proposal.title}”` : 'nowhere';
+          await cmd.writeLn(`${group}: ${files} file(s) ${where}${proposal.action === 'none' ? '' : ` (${proposal.confidence})`}`);
+        }
+        for (const skip of result.skipped) await cmd.writeLn(`${skip.group}: left as it is, ${skip.reason}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === 'later') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length === 0) throw new Error('staging later needs at least one group');
+      const result = await laterGroups(cmd, raws.map((raw) => groupPath(cmd, flags, raw, 'put aside')), Boolean(flags.off));
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingLaterResult);
+      else await cmd.writeLn(`${result.later ? 'Put aside' : 'Brought back'} ${result.groups.length} group(s)`);
+      return 0;
+    }
+
+    if (subcommand === 'undo') {
+      const [user] = await selectedUsers(cmd, flags);
+      const ids = (flags._ as unknown[]).map(String);
+      if (ids.length === 0) throw new Error('staging undo needs at least one journal entry');
+      const result = await undoJournalEntries(cmd, user, ids);
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingUndoResult);
+      else {
+        await cmd.writeLn(`Undid ${result.undone.length} decision(s): ${result.restoredFiles} file(s) back, ${result.restoredGroups.length} group(s) restored`);
+      }
+      for (const failure of result.failed) {
+        await cmd.writeError(`staging undo: ${failure.id}: ${failure.reason}${failure.files ? ` (${failure.files.slice(0, 3).join(', ')})` : ''}\n`);
+      }
+      return result.undone.length === 0 && result.failed.length > 0 ? 1 : 0;
+    }
+
+    if (subcommand === 'journal') {
+      const [user] = await selectedUsers(cmd, flags);
+      const action = flags.action as string | undefined;
+      if (action !== undefined && !(JOURNAL_ACTIONS as string[]).includes(action)) throw new Error(`--action is one of ${JOURNAL_ACTIONS.join(', ')}`);
+      const limit = flags.limit === undefined ? 50 : Number(flags.limit);
+      if (!Number.isInteger(limit) || limit < 1 || limit > JOURNAL_PAGE_MAX) throw new Error(`--limit is a whole number from 1 to ${JOURNAL_PAGE_MAX}`);
+      const category = flags._[0] as string | undefined;
+      const page = await listJournal(cmd.sys.vfs, cmd.access, user, {
+        ...(category !== undefined ? { category: String(category) } : {}),
+        ...(action !== undefined ? { action: action as StagingJournalAction } : {}),
+        limit,
+        ...(flags.cursor ? { cursor: String(flags.cursor) } : {}),
+      });
+      if (cmd.json) await cmd.writeJSON(page satisfies StagingJournalPage);
+      else {
+        for (const entry of page.entries) {
+          await cmd.writeLn(`${entry.id}  ${entry.at}  ${entry.category}  ${entry.summary}${entry.undoneAt ? `  (undone ${entry.undoneAt})` : ''}`);
+        }
+        await cmd.writeLn(`${page.totals.filed} filed, ${page.totals.discarded} discarded${page.cursor ? `; more after --cursor ${page.cursor}` : ''}`);
+      }
+      return 0;
+    }
+
+    if (subcommand === 'move') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length < 2) throw new Error('staging move needs what to move and the folder to move it into');
+      const dir = resolve(cmd.cwd, raws[raws.length - 1]);
+      const owner = parseStagedPath(dir)?.user;
+      if (!owner || !canActAs(cmd, owner)) throw new Error(`cannot move into ${dir}`);
+      const result = await moveStaged(cmd, raws.slice(0, -1).map((raw) => resolve(cmd.cwd, raw)), dir);
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingMoveResult);
+      else await cmd.writeLn(`Moved ${result.moved} into ${dir}${result.left > 0 ? `; ${result.left} group(s) of their old category let them go` : ''}`);
+      for (const failure of result.failed) await cmd.writeError(`staging move: ${failure.path}: ${failure.error}\n`);
+      return result.failed.length > 0 ? 1 : 0;
+    }
+
+    // The grouping verbs: each changes the groups now and is journaled; split, regroup, merge and
+    // delete also leave a constraint the organizer keeps applying until the entry is undone.
+    if (['split', 'regroup', 'merge', 'delete', 'rename', 'pin'].includes(subcommand)) {
+      const raws = (flags._ as unknown[]).map(String);
+      const expect = keysFlag(flags.expect);
+      let result: StagingEditResult;
+      if (subcommand === 'split') {
+        if (raws.length !== 1 || !flags.at) throw new Error('staging split needs one group and --at <file>, the first file of the new group');
+        result = await splitGroup(cmd, groupPath(cmd, flags, raws[0], 'split'), stagedFile(cmd, String(flags.at), 'split at'), {
+          name: flags.name as string | undefined,
+          expect,
+        });
+      } else if (subcommand === 'regroup') {
+        if (flags.new) {
+          if (expect.length > 0) throw new Error('--expect is for a group; --new makes one');
+          result = await regroupNew(cmd, raws.map((raw) => stagedFile(cmd, raw, 'regroup')), { name: flags.name as string | undefined });
+        } else {
+          if (raws.length < 2) throw new Error('staging regroup needs a group and the files to move into it, or --new and the files');
+          result = await regroupInto(cmd, groupPath(cmd, flags, raws[0], 'regroup into'), raws.slice(1).map((raw) => stagedFile(cmd, raw, 'regroup')), { expect });
+        }
+      } else if (subcommand === 'merge') {
+        if (raws.length < 2) throw new Error('staging merge needs the group to keep and at least one group to merge into it');
+        const [keep, ...others] = raws.map((raw) => groupPath(cmd, flags, raw, 'merge'));
+        result = await mergeGroups(cmd, keep, others, { name: flags.name as string | undefined, expect });
+      } else if (subcommand === 'delete') {
+        if (raws.length !== 1) throw new Error('staging delete needs one group, by path or slug');
+        result = await deleteGroup(cmd, groupPath(cmd, flags, raws[0], 'delete'), { expect });
+      } else if (subcommand === 'rename') {
+        if (raws.length !== 2) throw new Error('staging rename needs a group and the new name');
+        result = await renameGroup(cmd, groupPath(cmd, flags, raws[0], 'rename'), raws[1]);
+      } else {
+        if (raws.length !== 1) throw new Error('staging pin needs one group, by path or slug');
+        result = await pinGroup(cmd, groupPath(cmd, flags, raws[0], 'pin'), Boolean(flags.off));
+      }
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingEditResult);
+      else await cmd.writeLn(editLine(result));
+      return 0;
+    }
+
+    // "Not this album": journaled, honoured by matching until undone; the group is matched again.
+    if (subcommand === 'reject') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length !== 2) throw new Error('staging reject needs a group and the library album it does not go into');
+      const result = await rejectAlbum(cmd, groupPath(cmd, flags, raws[0], 'reject an album for'), resolve(cmd.cwd, raws[1]));
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingEditResult);
+      else await cmd.writeLn(`Rejected ${resolve(cmd.cwd, raws[1])} for ${raws[0]} (journal ${result.journal})`);
+      return 0;
+    }
+
+    // Where the groups go: the groups named, or every group of the user's (every user's with --all)
+    // — only those due a match (--stale), or those around the days of the albums whose profile
+    // changed since a time (--since) — matched against the library's album profiles now, and their
+    // matches written on them.
+    if (subcommand === 'match') {
+      const raws = (flags._ as unknown[]).map(String);
+      if (raws.length > 0 && (flags.all || flags.stale || flags.since !== undefined)) throw new Error('staging match takes groups, or --all, --stale or --since, not both');
+      if (flags.since !== undefined && !Number.isFinite(Date.parse(String(flags.since)))) throw new Error('--since is a time, such as 2026-10-18T10:00:00Z');
+      const paths = raws.length > 0 ? raws.map((raw) => groupPath(cmd, flags, raw, 'match')) : [];
+      if (raws.length === 0) {
+        const index = flags.stale ? await profileIndex(cmd.sys.vfs, cmd.access) : undefined;
+        for (const user of await selectedUsers(cmd, flags)) {
+          if (flags.since !== undefined) {
+            const since = new Date(String(flags.since)).toISOString();
+            for (const category of await readCategories(cmd.sys.vfs, cmd.access, user)) paths.push(...await groupsChangedSince(cmd, user, category.name, since));
+          } else paths.push(...(await groupsOf(cmd, user)).filter((group) => !index || matchDue(group.attrs, index)).map((group) => group.path));
+        }
+      }
+      const result = await matchGroups(cmd, paths);
+      if (cmd.json) await cmd.writeJSON(result satisfies StagingMatchResult);
+      else {
+        await cmd.writeLn(`Matched ${result.matched} group(s) in ${result.durationMs} ms${result.skipped.length > 0 ? `; ${result.skipped.length} left alone` : ''}`);
+        for (const skip of result.skipped) await cmd.writeLn(`${skip.path}: ${skip.reason}`);
+      }
+      return 0;
+    }
+
+    // Resolving duplicate sets: those named by key, or with --apply every set of the scope that
+    // resolves unasked, a bounded call at a time. The copies go to the caller's own trash.
+    if (subcommand === 'dedupe') {
+      const [user] = await selectedUsers(cmd, flags);
+      if (user !== currentUsername(cmd)) throw new Error(`staging dedupe moves copies to your own trash: run it as ${user}`);
+      const raws = (flags._ as unknown[]).map(String);
+      const keys = raws.filter(isSetKey);
+      const places = raws.filter((raw) => !isSetKey(raw));
+      if (places.length > 1) throw new Error('staging dedupe takes one category, folder or suggested group');
+      const place = places.length === 0 ? categoryPath(user, DEFAULT_CATEGORY) : scopePath(cmd, user, places[0]);
+      const scope = isGroupPath(user, place) ? await dedupeGroupScope(cmd, user, place) : dedupeScope(user, place);
+      const where = whereFlag(flags.where);
+      const kind = kindFlag(flags);
+      const dryRun = Boolean(flags['dry-run']);
+      let result: DuplicateResolveResult;
+      if (flags.apply) {
+        if (keys.length > 0 || flags.keep !== undefined) throw new Error('--apply resolves every set of the scope; name sets without it');
+        result = await dedupeApply(cmd, scope, {
+          ...(kind ? { kind } : {}),
+          ...(where ? { where } : {}),
+          ...(flags.limit !== undefined ? { limit: Number(flags.limit) } : {}),
+          ...(flags.cursor ? { cursor: String(flags.cursor) } : {}),
+          dryRun,
+        });
+      } else {
+        if (keys.length === 0) throw new Error('staging dedupe needs the sets to resolve (exact:<id> or near:<id>), or --apply');
+        if (where || kind || flags.limit !== undefined || flags.cursor) throw new Error('--exact, --near, --where, --limit and --cursor are for --apply');
+        result = await dedupeKeys(cmd, scope, keys, { ...(flags.keep !== undefined ? { keep: String(flags.keep) } : {}), dryRun });
+      }
+      if (cmd.json) await cmd.writeJSON(result satisfies DuplicateResolveResult);
+      else {
+        await cmd.writeLn(
+          `${result.dryRun ? 'Would resolve' : 'Resolved'} ${result.resolved} set(s), ${result.discarded} file(s) ` +
+            `${result.dryRun ? 'to discard' : `discarded${result.journal ? ` (journal ${result.journal})` : ''}`}` +
+            (result.skipped.length > 0 ? `; ${result.skipped.length} left alone` : '') +
+            (result.remaining !== null ? `; ${result.remaining} left` : '') +
+            (result.more ? `; more after --cursor ${result.cursor}` : ''),
+        );
+        for (const skip of result.skipped) await cmd.writeLn(`${skip.key}: left alone, ${skip.reason}`);
+      }
+      return 0;
+    }
+
+    // The duplicate findings of staged media, kept by `@archive/staging/duplicates`: read as sets
+    // a page at a time, counted (`--counts`), announced again where they do not hold
+    // (`--refresh`), or checked against where their files are now (`--repair`).
+    if (subcommand === 'duplicates') {
+      const modes = [flags.refresh, flags.repair, flags.counts].filter(Boolean).length;
+      if (modes > 1) throw new Error('--refresh, --repair and --counts go one at a time');
+      if (flags['dry-run'] && !flags.refresh) throw new Error('--dry-run is only for --refresh');
+      if (flags.repair) {
+        const users = await selectedUsers(cmd, flags);
+        const answer: DuplicateRepairResult = { ok: true, users: users.length, examined: 0, cleared: 0, trashed: 0, recomputed: 0 };
+        for (const user of users) {
+          const repair = await repairInbox(cmd, user);
+          answer.examined += repair.examined;
+          answer.cleared += repair.cleared;
+          answer.trashed += repair.trashed;
+          answer.recomputed += repair.recomputed;
+        }
+        if (cmd.json) await cmd.writeJSON(answer satisfies DuplicateRepairResult);
+        else {
+          await cmd.writeLn(
+            `${answer.examined} finding(s) of ${answer.users} user(s): ${answer.cleared} cleared, ${answer.trashed} trashed, ${answer.recomputed} checksum(s) decided again`,
+          );
+        }
+        return 0;
+      }
+      const [user] = await selectedUsers(cmd, flags);
+      const named = (flags._ as unknown[]).map((raw) => scopePath(cmd, user, String(raw)));
+      // Staged files, named one by one, are read for the sets they belong to.
+      const found = await nodesAt(cmd.sys.vfs, cmd.access, named);
+      if (named.length > 1 || (named.length === 1 && found.get(named[0])?.type === 'file')) {
+        if (modes > 0 || flags.where || kindFlag(flags) || flags.limit !== undefined || flags.cursor) {
+          throw new Error(`staged files are read whole, at most ${FILE_SETS_MAX}: name a category or a folder for anything else`);
+        }
+        if (named.length > FILE_SETS_MAX) throw new Error(`at most ${FILE_SETS_MAX} files at once`);
+        const ids = named.map((path) => {
+          const node = found.get(path);
+          if (node?.type !== 'file' || inboxOf(path) !== user) throw new Error(`not a staged file of ${user}'s: ${path}`);
+          return node.id;
+        });
+        const page = await readFileSets(cmd, user, ids);
+        if (cmd.json) await cmd.writeJSON(page satisfies DuplicatePage);
+        else await writeSets(cmd, page);
+        return 0;
+      }
+      const place = named[0] ?? stagingRoots(user).filesPath;
+      // A suggested group is read whole: every set of its members.
+      if (isGroupPath(user, place)) {
+        if (modes > 0 || flags.where || kindFlag(flags) || flags.limit !== undefined || flags.cursor) {
+          throw new Error(`a suggested group is read whole, at most ${GROUP_SETS_MAX} sets: name a category or a folder for anything else`);
+        }
+        const page = await readGroupSets(cmd, await groupScope(cmd, user, place));
+        if (cmd.json) await cmd.writeJSON(page satisfies DuplicatePage);
+        else await writeSets(cmd, page);
+        return 0;
+      }
+      const scope = duplicateScope(user, place);
+      if (flags.refresh) {
+        const limit = flags.limit === undefined ? REFRESH_LIMIT : Number(flags.limit);
+        if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit is a whole number of at least 1');
+        const answer = await refreshScope(cmd, user, scope.path, {
+          force: Boolean(flags.force),
+          limit,
+          ...(flags.cursor ? { cursor: String(flags.cursor) } : {}),
+          dryRun: Boolean(flags['dry-run']),
+        });
+        if (cmd.json) await cmd.writeJSON(answer satisfies DuplicateRefreshResult);
+        else {
+          await cmd.writeLn(
+            `${answer.examined} media file(s) examined, ${answer.withPrints} with fingerprints, ${answer.emitted} ${answer.dryRun ? 'to announce' : 'announced'}` +
+              (answer.complete ? '' : `; more after --cursor ${answer.cursor}`),
+          );
+        }
+        return 0;
+      }
+      if (flags.counts) {
+        const counts = await countDuplicates(cmd, scope);
+        if (cmd.json) await cmd.writeJSON(counts satisfies DuplicateCounts);
+        else {
+          await cmd.writeLn(
+            `${counts.exact.library} copies of library photos, ${counts.exact.inbox} copies within the inbox, ` +
+              `${counts.near.library} look-alikes of library photos, ${counts.near.inbox} look-alikes within the inbox, in ${counts.scope}`,
+          );
+        }
+        return 0;
+      }
+      const where = whereFlag(flags.where);
+      const kind = kindFlag(flags);
+      const page = await readDuplicatePage(cmd, scope, {
+        ...(kind ? { kind } : {}),
+        ...(where ? { where } : {}),
+        ...(flags.limit !== undefined ? { limit: Number(flags.limit) } : {}),
+        ...(flags.cursor ? { cursor: String(flags.cursor) } : {}),
+      });
+      if (cmd.json) await cmd.writeJSON(page satisfies DuplicatePage);
+      else await writeSets(cmd, page);
+      return 0;
+    }
+
+    // A person's word that files are not duplicates of one another, kept on the staged ones.
+    if (subcommand === 'separate') {
+      const [file, ...others] = (flags._ as unknown[]).map((raw) => resolve(cmd.cwd, String(raw)));
+      if (file === undefined || others.length === 0) throw new Error('staging separate needs a file, then the files it is no duplicate of');
+      for (const path of [file, ...others]) {
+        const owner = parseStagedPath(path)?.user;
+        if (owner && !canActAs(cmd, owner)) throw new Error(`not your staging: ${path}`);
+      }
+      const answer = await separate(cmd, file, others, Boolean(flags.off));
+      if (cmd.json) await cmd.writeJSON(answer satisfies DuplicateSeparateResult);
+      else await cmd.writeLn(`${answer.pairs} pair(s) ${answer.undone ? 'no longer kept apart' : 'kept apart: not duplicates'}`);
+      return 0;
+    }
+
+    await cmd.writeError(`staging: unknown subcommand '${subcommand}'\n`);
+    return 1;
+  } catch (error) {
+    await cmd.writeError(`staging ${subcommand}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+staging.spec = {
+  name: 'staging',
+  effect: 'read' as const,
+  description:
+    "Manage a user's private staging area: its categories and which one a newly arrived folder looks like it belongs in, their suggested groups and the organizer that makes them, the edits that change them, and the decisions that file them into the library or discard them, each journaled and undoable",
+  args: [
+    {
+      name: 'subcommand',
+      writes: [
+        'init',
+        'retime',
+        'organize',
+        'promote',
+        'discard',
+        'accept',
+        'later',
+        'undo',
+        'move',
+        'split',
+        'regroup',
+        'merge',
+        'delete',
+        'rename',
+        'pin',
+        'reject',
+        'match',
+        'dedupe',
+        'separate',
+      ],
+      type: 'choice' as const,
+      choices: [
+        'init',
+        'status',
+        'check',
+        'detect',
+        'category',
+        'retime',
+        'organize',
+        'promote',
+        'discard',
+        'accept',
+        'later',
+        'undo',
+        'journal',
+        'move',
+        'split',
+        'regroup',
+        'merge',
+        'delete',
+        'rename',
+        'pin',
+        'reject',
+        'match',
+        'dedupe',
+        'duplicates',
+        'separate',
+      ],
+    },
+    {
+      name: 'path',
+      type: 'path' as const,
+      variadic: true,
+      description:
+        `a category's name, or suggested groups by path or slug in the default category of --user, as required; detect takes at most ${DETECT_MAX} folders, of staging or not (by default the folders newly arrived in the default category); organize takes the categories to organize (every one by default); retime takes a category, or a folder or file of one (every category by default); discard also takes staged files and folders; accept takes at most ${ACCEPT_MAX} groups (${ACCEPT_PLAN_MAX} with --dry-run), later ${LATER_MAX}; undo takes at most ${UNDO_MAX} journal entries; move takes what to move, then the folder; regroup takes the group, then the staged files to move into it (at most ${REGROUP_MAX}), or with --new the files alone; merge takes the group to keep, then the groups to fold into it; rename takes the new name after it; reject takes the group, then the library album it does not go into; match takes groups (every group of the user's by default); duplicates takes a category, a folder of staged files (all of them by default), a suggested group, or staged files (at most ${FILE_SETS_MAX}) for the sets they belong to; dedupe takes the sets to resolve (exact:<id> or near:<id>), with a category, a folder in one or a suggested group to drop their files from (the default category by default); separate takes a staged file, then the files it is no duplicate of`,
+    },
+  ],
+  flags: [
+    { name: 'user', type: 'string' as const, description: 'act on this user (defaults to the current user)' },
+    { name: 'all', type: 'bool' as const, description: 'init, organize, match, duplicates --repair: act on every user (administrator only)' },
+    {
+      name: 'stale',
+      type: 'bool' as const,
+      description: 'match: only the groups due a match: none for their members as they are, by another model, or older than a candidate profile',
+    },
+    { name: 'since', type: 'string' as const, description: 'match: only the groups around the days of the library albums whose profile changed after this time' },
+    { name: 'full', type: 'bool' as const, description: 'organize: plan the whole category again, not only what changed since the last run' },
+    {
+      name: 'queue',
+      type: 'bool' as const,
+      description: "organize: ask for a run rather than run one; the organizer's pipeline runs it within minutes. A user may ask for their own categories",
+    },
+    {
+      name: 'if-pending',
+      type: 'bool' as const,
+      description:
+        'organize --queue: only for a category something waits for: changes since its last run, edits, a first run, or a week since its last full build (administrator only)',
+    },
+    { name: 'at', type: 'path' as const, description: 'split: the first file of the new group' },
+    { name: 'new', type: 'bool' as const, description: 'regroup: the files make a new group of their own' },
+    { name: 'to', type: 'string' as const, description: 'promote: the directory a new album is made in (default /archive/albums)' },
+    {
+      name: 'name',
+      type: 'string' as const,
+      description:
+        "promote: the new album's title, its path made from it (default the first group's name); split, regroup --new: the new group's name; merge: the kept group's new name",
+    },
+    { name: 'into', type: 'path' as const, description: 'promote: file into this library album instead of a new one' },
+    { name: 'share', type: 'string' as const, description: "promote: 'private' makes the new album yours alone; 'default' shares it as your new albums are" },
+    { name: 'except', type: 'path' as const, description: 'promote, discard: leave this member in its group, which is then pinned (repeatable)' },
+    {
+      name: 'expect',
+      type: 'string' as const,
+      description: 'promote, discard, accept, split, regroup, merge, delete: the member key each group must still have, in group order (repeatable)',
+    },
+    { name: 'confidence', type: 'string' as const, description: `accept: the least sure proposal to apply (${CONFIDENCES.join(', ')}; default medium)` },
+    { name: 'action', type: 'string' as const, description: `journal: only decisions of this kind (${JOURNAL_ACTIONS.join(', ')})` },
+    {
+      name: 'limit',
+      type: 'string' as const,
+      description:
+        `journal: entries per page (default 50, at most ${JOURNAL_PAGE_MAX}); duplicates: sets per page (default ${DUPLICATE_PAGE}, at most ${DUPLICATE_PAGE_MAX}); duplicates --refresh: files announced per call (default ${REFRESH_LIMIT}); dedupe --apply: copies dropped per call`,
+    },
+    { name: 'cursor', type: 'string' as const, description: "journal, duplicates, duplicates --refresh, dedupe --apply: go on after this one's cursor" },
+    {
+      name: 'refresh',
+      writes: true,
+      type: 'bool' as const,
+      description:
+        "duplicates: announce each staged media file whose duplicate finding is missing, from another inbox or for other bytes, for media-duplicates to record; takes a folder of the user's staging files (default all of them)",
+    },
+    { name: 'force', type: 'bool' as const, description: 'duplicates --refresh: announce every staged media file' },
+    {
+      name: 'repair',
+      writes: true,
+      type: 'bool' as const,
+      description: "duplicates: check each duplicate finding against where its file is now, and fix it (with --all, every user's)",
+    },
+    { name: 'counts', type: 'bool' as const, description: 'duplicates: how many staged copies the scope holds, by where their originals lie' },
+    {
+      name: 'where',
+      type: 'string' as const,
+      description: `duplicates, dedupe --apply: only copies or look-alikes of library photos (library), or of files within the inbox (inbox); both, in that order, by default`,
+    },
+    { name: 'keep', type: 'string' as const, description: 'dedupe: keep this staged file (its id) of the one set named, instead of the one the rules keep' },
+    {
+      name: 'apply',
+      writes: true,
+      type: 'bool' as const,
+      description:
+        `dedupe: resolve every set of the scope that resolves unasked, at most ${DEDUPE_SETS_MAX} sets and --limit copies (default and most ${DEDUPE_FILES_MAX}) a call`,
+    },
+    {
+      name: 'off',
+      type: 'bool' as const,
+      description: 'pin: unpin, so the organizer manages the group again; later: bring back into its lane; separate: no longer keep the files apart',
+    },
+    { name: 'exact', type: 'bool' as const, description: 'duplicates, dedupe --apply: only byte copies' },
+    { name: 'near', type: 'bool' as const, description: 'duplicates, dedupe --apply: only look-alikes: the same picture in other bytes' },
+    { name: 'loose-batch', type: 'string' as const, description: "init: the default category's folder that loose entries of files/ move into (default unsorted)" },
+    { name: 'layout-only', type: 'bool' as const, description: 'init: make the directories and categories only; move nothing' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: `${DRY_RUNS.join(', ')} --refresh: say what would be done, and do none of it` },
+    { name: 'create', writes: true, type: 'bool' as const, description: 'category: make it, with its directory of groups' },
+    { name: 'remove', writes: true, type: 'bool' as const, description: 'category: remove it, which only an empty one other than the default can be' },
+    {
+      name: 'kind',
+      writes: true,
+      type: 'string' as const,
+      description: `category: what it holds, which resets its other settings to the kind's (${CATEGORY_KINDS.join(', ')})`,
+    },
+    { name: 'label', writes: true, type: 'string' as const, description: 'category: what a page calls it' },
+    { name: 'destination', writes: true, type: 'path' as const, description: 'category: the library album its files are filed into by default' },
+    { name: 'no-destination', writes: true, type: 'bool' as const, description: 'category: no default album' },
+    {
+      name: 'strategy',
+      writes: true,
+      type: 'string' as const,
+      description: `category: how its files are grouped (${GROUP_STRATEGIES.join(', ')}): by time and place, by folder and file-name run, or into monthly lanes`,
+    },
+    {
+      name: 'significance',
+      writes: true,
+      type: 'string' as const,
+      description: `category: how readily a day becomes a group of its own rather than part of an Everyday lane (${SIGNIFICANCE_PRESETS.join(', ')})`,
+    },
+    {
+      name: 'digitized',
+      writes: true,
+      type: 'string' as const,
+      description:
+        'category: on, its files are digitized copies (scans), and no clock recorded while digitizing them (device, GPS, file name) dates them; off, they do. Its files are dated again',
+    },
+    {
+      name: 'filename-dates',
+      writes: true,
+      type: 'string' as const,
+      description:
+        "category: on, a date its files' names spell (IMG_20190601_123456.jpg) dates them when nothing better does; off, names are not dates. Its files are dated again",
+    },
+    {
+      name: 'lane',
+      writes: true,
+      type: 'string' as const,
+      description: `category: the lane the work on its files runs in (${
+        STAGING_LANES.join(', ')
+      }); bulk runs below all other work, for an import of thousands, and applies to work announced from then on`,
+    },
+    {
+      name: 'sidecars',
+      writes: true,
+      type: 'string' as const,
+      description: `category: whether the Google Photos Takeout JSON and XMP sidecars arriving there are paired with their files (${
+        STAGING_SIDECARS.join(', ')
+      }), from then on`,
+    },
+  ],
+  examples: [
+    'staging init --all --loose-batch legacy-import --dry-run',
+    'staging status --user anna',
+    'staging check',
+    'staging detect',
+    'staging detect /home/anna/staging/files/inbox/upload-2026-10-18/Takeout',
+    'staging category scans --create --kind scans --label "Box 3"',
+    'staging category scans --destination /archive/albums/family-prints',
+    'staging category inbox --significance more',
+    'staging category box-3 --digitized on',
+    'staging category takeout --lane bulk',
+    'staging category whatsapp --sidecars ignore',
+    'staging retime /home/anna/staging/files/inbox --dry-run',
+    'staging retime scans --user anna',
+    'staging organize --all',
+    'staging organize inbox --user anna --full --dry-run',
+    'staging organize inbox --queue',
+    'staging organize --all --queue --if-pending',
+    'staging split 2019-06-14 --at /home/anna/staging/files/inbox/upload-2019-06-20/IMG_0412.jpg',
+    'staging regroup 2019-06-14 /home/anna/staging/files/inbox/upload-2019-06-20/IMG_0415.jpg',
+    "staging regroup --new --name 'Lake swim' /home/anna/staging/files/inbox/upload-2019-06-20/IMG_0420.jpg /home/anna/staging/files/inbox/upload-2019-06-20/IMG_0421.jpg",
+    'staging merge 2019-06-14 2019-06-15',
+    'staging delete 2019-07-02',
+    "staging rename 2019-06-14 'Lake weekend'",
+    'staging reject 2019-06-14 /archive/albums/summer-2019',
+    'staging match 2019-06-14 2019-06-15',
+    'staging match --all',
+    'staging match --all --stale',
+    'staging match --since 2026-10-18T10:00:00Z',
+    "staging promote 2019-06-14 --name 'Lake weekend' --expect 0f3a9c2b4d5e6f70",
+    'staging promote 2019-06-16 --into /archive/albums/lake-trip-2019',
+    "staging promote 2019-06-20 --name 'Cottage notes' --share private",
+    'staging discard 2019-06-21',
+    'staging discard /home/anna/staging/files/inbox/upload-2026-10-01/blurry',
+    'staging accept 2019-06-14 2019-06-16 --dry-run',
+    'staging later 2019-07-02',
+    'staging journal inbox --limit 50',
+    'staging undo 01JA2B3C4D5E6F7G8H9J0K1M2N',
+    'staging move /home/anna/staging/files/inbox/box-3 /home/anna/staging/files/scans',
+    'staging duplicates inbox --where library --limit 30',
+    'staging duplicates --counts',
+    'staging dedupe inbox exact:01JA2B3C4D5E6F7G8H9J0K1M2N',
+    'staging dedupe inbox --apply --where library',
+    'staging duplicates --refresh --user anna --dry-run',
+    'staging duplicates --repair --all',
+    'staging duplicates inbox --near --where library',
+    'staging duplicates /home/anna/staging/albums/inbox/2019-06-14',
+    'staging duplicates /home/anna/staging/files/inbox/upload/IMG_0001.jpg /home/anna/staging/files/inbox/upload/IMG_0002.jpg',
+    'staging dedupe inbox near:01JA2B3C4D5E6F7G8H9J0K1M2N --keep 01JA2B3C4D5E6F7G8H9J0K1M2P',
+    'staging dedupe inbox --apply --near --where library',
+    'staging separate /home/anna/staging/files/inbox/IMG_0001.jpg /home/anna/staging/files/inbox/IMG_0002.jpg',
+  ],
+  returns:
+    'promote: StagingPromoteResult; discard: StagingDiscardResult; accept: StagingAcceptResult; later: StagingLaterResult; undo: StagingUndoResult; journal: StagingJournalPage; move: StagingMoveResult; split, regroup, merge, delete, rename, pin, reject: StagingEditResult; match: StagingMatchResult; organize: StagingOrganizeReport, with --queue StagingQueueReport; init: StagingInitAnswer; retime: StagingRetimeAnswer; status: StagingStatus; check: StagingCheckAnswer; detect: StagingDetectAnswer; category: StagingCategoryAnswer; duplicates: DuplicatePage; duplicates --counts: DuplicateCounts; dedupe: DuplicateResolveResult; separate: DuplicateSeparateResult; duplicates --refresh: DuplicateRefreshResult; duplicates --repair: DuplicateRepairResult',
+};
+
+export default staging;

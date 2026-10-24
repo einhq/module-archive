@@ -1,0 +1,124 @@
+#!ts
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { nameScore } from '@archive/media/name-quality';
+
+const searchPeople = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    await cmd.writeLn(JSON.stringify({ kinds: ['person'] }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = PEOPLE_ROOT;
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') {
+      limit = parseInt(cmd.args[++i] || '10', 10);
+    } else if (arg === '--root') {
+      root = cmd.args[++i] || PEOPLE_ROOT;
+    } else {
+      queryParts.push(arg);
+    }
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+
+  if (!query) {
+    await cmd.writeError('search-people: missing search query\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+  const queryWords = [...new Set(queryLower.split(/\s+/).filter(Boolean))];
+  // Every hit is in the `name` channel: a person is found by what they are called.
+  const results: SearchProviderHit[] = [];
+
+  try {
+    const entries = await cmd.sys.vfs.children(cmd.access, root);
+
+    for (const entry of entries) {
+      if (entry.node.type !== 'person') continue;
+
+      const attrs = entry.node.attrs as { name?: string; fullname?: string; birthname?: string; description?: string };
+      const nameLower = (attrs.name || entry.name).toLowerCase();
+      const fullnameLower = (attrs.fullname || '').toLowerCase();
+      const birthnameLower = (attrs.birthname || '').toLowerCase();
+      const nameFields = [nameLower, fullnameLower, birthnameLower];
+
+      let score = Math.max(...nameFields.map((field) => nameScore(queryLower, field)));
+      if (score === 0 && queryWords.every((word) => nameFields.some((field) => field.includes(word)))) {
+        // Word order and intervening names should not matter: "Andersson An" is
+        // still a partial match for "Anna B Andersson". All words must belong
+        // to this one person; matches from different people are never combined.
+        const matchedLength = queryWords.reduce((length, word) => length + word.length, 0);
+        const longestName = Math.max(...nameFields.map((field) => field.length), 1);
+        score = Math.min(0.79, Math.max(0.5, matchedLength / longestName));
+      }
+
+      if (score > 0) {
+        results.push({
+          path: `${root}/${entry.name}`,
+          type: 'person',
+          name: attrs.name || entry.name,
+          channel: 'name',
+          score,
+          id: entry.node.id,
+          ...(attrs.description ? { description: attrs.description } : {}),
+        });
+      }
+    }
+  } catch {
+    // root path doesn't exist
+  }
+
+  results.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const limited = results.slice(0, limit);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ results: limited, ...(results.length > limit ? { truncated: true } : {}) } satisfies SearchProviderResponse);
+  } else {
+    if (limited.length === 0) {
+      await cmd.writeLn('No matches found.');
+    } else {
+      for (const r of limited) {
+        const scoreStr = (r.score * 100).toFixed(1);
+        await cmd.writeLn(`${scoreStr}% ${r.path}`);
+        if (r.description) {
+          await cmd.writeLn(`     ${r.description}`);
+        }
+      }
+    }
+  }
+
+  return 0;
+};
+
+searchPeople.spec = {
+  name: 'search-people',
+  effect: 'read' as const,
+  description: 'Search people by partial name; every query word must match the same person',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results (default 10)' },
+    { name: 'root', type: 'string' as const, description: 'People root directory (default: /people)' },
+  ],
+  examples: [
+    "search-people 'Anna Exempel'",
+    'search-people -l 5 Anna',
+  ],
+  returns: 'matching people, best first, each with a name, a slug and a score.',
+};
+
+export default searchPeople;

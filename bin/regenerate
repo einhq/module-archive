@@ -1,0 +1,86 @@
+#!bash
+
+arg --desc "Regenerate web derivatives for media files under a path"
+arg --effect write
+arg '<target>' path "VFS path to file or directory"
+arg -f --force "Force regenerate even if derivatives exist"
+arg --prune "Delete renditions that are no longer part of the target set"
+arg -s --size string "Generate only these size classes, comma-separated (e.g. small,medium)"
+arg --mime string "Only files whose mimetype matches this glob (e.g. 'video/*')"
+arg -v --verbose "Verbose output"
+arg --example "regenerate /archive/albums/Exempelalbum_2019"
+arg --example "regenerate --force --size thumbnail /archive/albums"
+arg --returns "how many files had their derivatives regenerated."
+arg --export
+
+TARGET=${TARGET:-.}
+TARGET=$(abspath "$TARGET")
+
+FLAGS=()
+[ -n "$FORCE" ] && FLAGS+=(-f)
+[ -n "$PRUNE" ] && FLAGS+=(--prune)
+[ -n "$SIZE" ] && FLAGS+=(--size "$SIZE")
+[ -n "$VERBOSE" ] && FLAGS+=(-v)
+
+TYPE=$(JSON_OUTPUT=1 info "$TARGET" | jq -r '.type')
+
+COUNT=0
+FAILED=0
+
+if [ "$TYPE" = "file" ]; then
+  # Single file: handle directly so filenames with spaces survive.
+  [ -n "$VERBOSE" ] && echo "Processing $TARGET"
+  if generate-derivatives "$TARGET" "${FLAGS[@]}"; then
+    COUNT=1
+  else
+    FAILED=1
+  fi
+else
+  # Directory: split find's output on newlines only, so a filename containing
+  # spaces stays one element. JSON_OUTPUT=0 because find emits one JSON array
+  # instead of lines when the calling shell is in JSON mode.
+  IFS=$'\n'
+  FILES=($(JSON_OUTPUT=0 find "$TARGET" -type f))
+  unset IFS
+
+  for FILE in "${FILES[@]}"; do
+    ATTRS=$(JSON_OUTPUT=1 attrs "$FILE")
+    MIMETYPE=$(echo "$ATTRS" | jq -r '.mimetype')
+    SOURCE_ID=$(echo "$ATTRS" | jq -r '.sourceId')
+
+    case "$MIMETYPE" in
+      image/*|video/*|audio/*) ;;
+      *) continue ;;
+    esac
+
+    # A size class that only one media type has (say the video poster set) otherwise costs an
+    # attrs read and a generate-derivatives exec on every photo in the corpus to do nothing.
+    if [ -n "$MIME" ]; then
+      case "$MIMETYPE" in
+        $MIME) ;;
+        *) continue ;;
+      esac
+    fi
+
+    # Skip renditions (they carry a sourceId pointing at their original).
+    if [ "$SOURCE_ID" != "null" ] && [ -n "$SOURCE_ID" ]; then
+      continue
+    fi
+
+    [ -n "$VERBOSE" ] && echo "Processing $FILE"
+
+    if generate-derivatives "$FILE" "${FLAGS[@]}"; then
+      COUNT=$((COUNT + 1))
+    else
+      FAILED=$((FAILED + 1))
+    fi
+  done
+fi
+
+echo "Regenerated derivatives for $COUNT file(s), $FAILED failed"
+
+if [ "$FAILED" -gt 0 ]; then
+  exit 1
+fi
+
+exit 0

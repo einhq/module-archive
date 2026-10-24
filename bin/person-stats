@@ -1,0 +1,80 @@
+#!ts
+/**
+ * person-stats — births, engagements, marriages and deaths by calendar month, across every year:
+ * the statistics page's life-event charts.
+ *
+ * Three bounded aggregates (born, died, the dated engagement and marriage events), each grouped by
+ * the `YYYY-MM` prefix of its date and folded into twelve months. A date known only to the year
+ * counts in the total and in no month (`withoutMonth`), so a chart never invents a January.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { LIFE_EVENT_KINDS, type LifeEventKind, type LifeEventStats } from '@archive/people/api';
+
+const MONTHS = 12;
+
+type Bucket = { key: (string | null)[]; count: number };
+type MonthCounts = { months: number[]; total: number; withoutMonth: number };
+
+/** Fold `YYYY-MM` aggregate keys across years, keeping partial dates apart. */
+const monthCounts = (buckets: Bucket[], keyIndex = 0): MonthCounts => {
+  const months = Array<number>(MONTHS).fill(0);
+  let total = 0;
+  let withoutMonth = 0;
+  for (const bucket of buckets) {
+    total += bucket.count;
+    const match = /^(?:\d{4})-(0[1-9]|1[0-2])$/.exec(bucket.key[keyIndex] ?? '');
+    if (match) months[Number(match[1]) - 1] += bucket.count;
+    else withoutMonth += bucket.count;
+  }
+  return { months, total, withoutMonth };
+};
+
+const personStats = async (cmd: Command): CmdReturn => {
+  const dated = (ref: string) => cmd.sys.vfs.aggregate(cmd.access, { types: ['person'], group: [{ ref, prefixLength: 7 }] });
+  const [birthRows, deathRows, partnershipRows] = await Promise.all([
+    dated('born'),
+    dated('died'),
+    cmd.sys.vfs.aggregate(cmd.access, {
+      types: ['file'],
+      where: [{ ref: 'eventType', op: 'in', value: ['engagement', 'marriage'] }],
+      group: [{ ref: 'eventType' }, { ref: 'date', prefixLength: 7 }],
+    }),
+  ]);
+
+  const counts: Record<LifeEventKind, MonthCounts> = {
+    births: monthCounts(birthRows),
+    deaths: monthCounts(deathRows),
+    engagements: monthCounts(partnershipRows.filter((row) => row.key[0] === 'engagement'), 1),
+    marriages: monthCounts(partnershipRows.filter((row) => row.key[0] === 'marriage'), 1),
+  };
+  const byKind = (pick: (counts: MonthCounts) => number) => Object.fromEntries(LIFE_EVENT_KINDS.map((kind) => [kind, pick(counts[kind])])) as Record<LifeEventKind, number>;
+
+  const stats = {
+    months: Array.from({ length: MONTHS }, (_, index) => ({ month: index + 1, ...byKind((c) => c.months[index]) })),
+    totals: byKind((c) => c.total),
+    withoutMonth: byKind((c) => c.withoutMonth),
+  } satisfies LifeEventStats;
+
+  if (cmd.json) {
+    await cmd.writeJSON(stats);
+    return 0;
+  }
+  for (const kind of LIFE_EVENT_KINDS) {
+    const partial = stats.withoutMonth[kind];
+    await cmd.writeLn(`${kind.padEnd(12)} ${stats.totals[kind].toLocaleString()}${partial ? ` (${partial.toLocaleString()} without month)` : ''}`);
+  }
+  return 0;
+};
+
+personStats.spec = {
+  name: 'person-stats',
+  effect: 'read' as const,
+  description: 'Count births, engagements, marriages and deaths by calendar month across all years',
+  args: [],
+  flags: [],
+  examples: ['person-stats'],
+  returns: 'months (twelve rows of counts per kind), totals, and withoutMonth for dates known only to the year.',
+};
+
+export default personStats;

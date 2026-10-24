@@ -1,0 +1,26 @@
+# The archive's commands the assistant offers its model as tools, one a line. Each is described by
+# its own --help; one that writes becomes a proposal the user runs.
+search
+labels
+search-people
+search-album
+person-info
+person-how-related
+person-children
+person-relatives
+# Not person-family-tree: that one draws a text tree for a terminal and has no JSON form; this is
+# the same family as nodes and edges by path, which the model can read.
+person-graph
+person-timeline
+location-timeline
+device-timeline
+media-details
+events
+news
+location-region
+dayinhistory
+latest
+person-set-parent
+person-set-partner
+person-add-event
+file-set-description

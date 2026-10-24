@@ -1,0 +1,184 @@
+#!ts
+/**
+ * Link a file to the device that produced it, from the EXIF already extracted.
+ *
+ * Split out of exif-extract because it answers a different question: exif is a
+ * property of the file and never changes, while the device registry grows over
+ * time. Registering a camera later should re-link its photos without re-running
+ * exiftool over all of them — `pipeline rerun media-device <path>` does that.
+ *
+ * `--device <device>` skips the matching and links the given files to that device, for files
+ * whose exif names no device at all.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { resolve } from '@std/path';
+import { NODE_TYPE_DEVICE } from '@archive/device/device';
+import type { ResolvedTime } from '@archive/media/capture-resolve';
+import { applyFileTime } from '@archive/media/resolve-time';
+
+type DeviceInfo = { make?: string; model?: string };
+
+/**
+ * Write the link and re-resolve the file's time against it. The link changes what the capture
+ * time resolves to in ways the indexing pass could not know: the device carries the timezone its
+ * clock was set to and how it keeps a video's `CreateDate`, and a digitizer's device date is when
+ * it scanned the file rather than when the photograph was taken.
+ *
+ * `metadata/exif.when` is retained either way, which is what lets linking to an ordinary device —
+ * or clearing the digitizer flag and relinking — restore the derived date without ever running
+ * exiftool again.
+ */
+const linkFile = async (cmd: Command, filePath: string, devicePath: string): Promise<ResolvedTime | null> => {
+  await cmd.sys.vfs.update(cmd.access, filePath, { attrs: { devicePath } });
+  const resolved = await applyFileTime(cmd, filePath);
+  // ln handles VFS softlink creation; there is no direct method for it
+  await cmd.execute(`ln -sf ${shq(devicePath)} ${shq(`${filePath}/device`)}`);
+  return resolved;
+};
+
+/** The file may be the device's newest picture, and so its cover. */
+const coverDevice = async (cmd: Command, devicePath: string): Promise<void> => {
+  const covered = await cmd.execute(`device-cover ${shq(devicePath)}`);
+  if (covered.code !== 0) await cmd.writeError(covered.stderr);
+};
+
+/**
+ * `--device`: link the named files, and the files directly in the named directories, to a device
+ * chosen by hand. For files whose exif names no device — a phone that writes no make or model —
+ * which matching can never link.
+ */
+const linkByHand = async (cmd: Command, devicePath: string, inputs: string[], verbose: boolean): CmdReturn => {
+  try {
+    const device = await cmd.sys.vfs.get(cmd.access, devicePath);
+    if (device.type !== NODE_TYPE_DEVICE) {
+      await cmd.writeError(`device-link: ${devicePath}: not a device (${device.type})\n`);
+      return 1;
+    }
+  } catch {
+    await cmd.writeError(`device-link: ${devicePath}: not found\n`);
+    return 1;
+  }
+
+  const files: string[] = [];
+  for (const input of inputs) {
+    let node;
+    try {
+      node = await cmd.sys.vfs.get(cmd.access, input);
+    } catch {
+      await cmd.writeError(`device-link: ${input}: not found\n`);
+      return 1;
+    }
+    if (node.type === 'directory') {
+      for (const child of await cmd.sys.vfs.children(cmd.access, input)) {
+        if (child.node.type === 'file') files.push(`${input}/${child.name}`);
+      }
+    } else {
+      files.push(input);
+    }
+  }
+
+  for (const file of files) {
+    const resolved = await linkFile(cmd, file, devicePath);
+    if (verbose) await cmd.writeLn(`${file}: ${resolved ? `${resolved.takenAt} (${resolved.takenAtSource})` : 'no capture time'}`);
+  }
+  if (files.length > 0) await coverDevice(cmd, devicePath);
+
+  if (cmd.json) await cmd.writeJSON({ ok: true, devicePath, linked: files.length });
+  else if (!verbose) await cmd.writeLn(`Linked ${files.length} file${files.length === 1 ? '' : 's'} to ${devicePath}`);
+  return 0;
+};
+
+const deviceLink = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose'],
+    string: ['device'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputs = flags._.map((arg) => resolve(cmd.cwd, String(arg)));
+  const verbose = Boolean(flags.verbose);
+
+  if (inputs.length === 0) {
+    await cmd.writeError('device-link: missing file path\n');
+    return 1;
+  }
+
+  if (flags.device) return await linkByHand(cmd, resolve(cmd.cwd, String(flags.device)), inputs, verbose);
+
+  if (inputs.length > 1) {
+    await cmd.writeError('device-link: one file at a time, unless --device names the device\n');
+    return 1;
+  }
+  const inputPath = inputs[0];
+
+  let exifAttrs: Record<string, unknown>;
+  try {
+    const exif = await cmd.sys.vfs.get(cmd.access, `${inputPath}/metadata/exif`);
+    exifAttrs = exif.attrs as Record<string, unknown>;
+  } catch {
+    await cmd.writeError(`device-link: ${inputPath}: no exif metadata\n`);
+    return 1;
+  }
+
+  const deviceinfo = (exifAttrs.deviceinfo ?? {}) as DeviceInfo;
+  const serial = typeof exifAttrs.deviceSerialNumber === 'string' ? exifAttrs.deviceSerialNumber : undefined;
+  const make = deviceinfo.make;
+  const model = deviceinfo.model;
+
+  if (!serial && !(make && model)) {
+    if (verbose) await cmd.writeLn('No device information in exif');
+    if (cmd.json) await cmd.writeJSON({ ok: true, matched: false });
+    return 0;
+  }
+
+  const matchFlags: string[] = [];
+  if (serial) matchFlags.push(`--serial ${shq(serial)}`);
+  if (make) matchFlags.push(`--make ${shq(make)}`);
+  if (model) matchFlags.push(`--model ${shq(model)}`);
+
+  const matchResult = await cmd.execute(`JSON_OUTPUT=1 device-match ${matchFlags.join(' ')}`);
+
+  if (matchResult.code !== 0) {
+    if (verbose) await cmd.writeLn('No matching device found');
+    if (cmd.json) await cmd.writeJSON({ ok: true, matched: false });
+    return 0;
+  }
+
+  const match = JSON.parse(matchResult.stdout) as { path: string; matchType: string };
+  const devicePath: string = match.path;
+
+  const resolved = await linkFile(cmd, inputPath, devicePath);
+  await coverDevice(cmd, devicePath);
+
+  if (verbose) {
+    await cmd.writeLn(`Matched device: ${devicePath} (${match.matchType})`);
+    await cmd.writeLn(resolved ? `Capture time ${resolved.takenAt} (${resolved.takenAtSource})` : 'No capture time after linking');
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, matched: true, devicePath, matchType: match.matchType });
+  }
+
+  return 0;
+};
+
+deviceLink.spec = {
+  name: 'device-link',
+  effect: 'write' as const,
+  description: 'Link a file to its capture device using extracted exif, or to a device named by hand',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to media file; with --device, files or directories (repeatable)' },
+  ],
+  flags: [
+    { name: 'device', type: 'path' as const, description: 'link to this device instead of matching the exif (directories link the files directly in them)' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+};
+
+export default deviceLink;

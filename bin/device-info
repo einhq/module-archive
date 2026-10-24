@@ -1,0 +1,144 @@
+#!ts
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
+import { shq } from '@ein/client';
+import { OWNERS_DIR, readDevice } from '@archive/device/device';
+
+type OwnerInfo = {
+  name: string;
+  path: string;
+  /** Ownership span, when the relation carries one. */
+  from?: string;
+  to?: string;
+};
+
+type DeviceInfo = {
+  path: string;
+  name: string;
+  make?: string;
+  model?: string;
+  serialNumber?: string;
+  timezone?: string;
+  digitizer?: boolean;
+  quicktimeUtc?: boolean;
+  description?: string;
+  owners: OwnerInfo[];
+};
+
+type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
+
+/**
+ * The device's owners, from one listing of `owners/`.
+ *
+ * `ls -l` carries the softlink target in `node.props.softlink` and the relation
+ * dates in `node.attrs`, so the only remaining round trip is the single
+ * `ls -l` of the people root that turns slugs into display names. The previous version
+ * parsed bare `ls` output as objects — it always saw an array of strings, so
+ * `entry.name` was undefined and no device ever reported an owner.
+ */
+const readOwners = async (cmd: Command, devicePath: string): Promise<OwnerInfo[]> => {
+  const listed = await cmd.execute(`JSON_OUTPUT=1 ls -l ${shq(`${devicePath}/${OWNERS_DIR}`)}`);
+  if (listed.code !== 0) return [];
+
+  let links: NodeChildEntry[];
+  try {
+    links = JSON.parse(listed.stdout) as NodeChildEntry[];
+  } catch {
+    return [];
+  }
+
+  const softlinks = links.filter((link) => link.node.type === 'softlink' && link.node.props.softlink);
+  if (softlinks.length === 0) return [];
+
+  const names = new Map<string, string>();
+  const people = await cmd.execute(`JSON_OUTPUT=1 ls -l ${PEOPLE_ROOT}`);
+  if (people.code === 0) {
+    try {
+      for (const person of JSON.parse(people.stdout) as NodeChildEntry[]) {
+        const name = (person.node.attrs as Record<string, unknown>).name;
+        if (typeof name === 'string') names.set(person.name, name);
+      }
+    } catch {
+      // Names are a nicety; the slug is still an answer.
+    }
+  }
+
+  return softlinks.map((link): OwnerInfo => {
+    const relation = (link.node.attrs as OwnerLinkAttrs).relation;
+    return {
+      name: names.get(link.name) ?? link.name,
+      path: link.node.props.softlink!,
+      ...(relation?.from ? { from: relation.from } : {}),
+      ...(relation?.to ? { to: relation.to } : {}),
+    };
+  });
+};
+
+const deviceInfo = async (cmd: Command): CmdReturn => {
+  const targetPath = cmd.args[0];
+
+  if (!targetPath) {
+    await cmd.writeError('device-info: missing device path\n');
+    return 1;
+  }
+
+  let attrs;
+  try {
+    attrs = await readDevice(cmd, targetPath);
+  } catch (error) {
+    await cmd.writeError(`device-info: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const owners = await readOwners(cmd, targetPath);
+
+  const info: DeviceInfo = {
+    path: targetPath,
+    name: attrs.name,
+    ...(attrs.make ? { make: attrs.make } : {}),
+    ...(attrs.model ? { model: attrs.model } : {}),
+    ...(attrs.serialNumber ? { serialNumber: attrs.serialNumber } : {}),
+    ...(attrs.timezone ? { timezone: attrs.timezone } : {}),
+    ...(attrs.digitizer ? { digitizer: true } : {}),
+    ...(attrs.quicktimeUtc ? { quicktimeUtc: true } : {}),
+    ...(attrs.description ? { description: attrs.description as string } : {}),
+    owners,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(info);
+    return 0;
+  }
+
+  await cmd.writeLn(`Name: ${info.name}`);
+  if (info.make) await cmd.writeLn(`Make: ${info.make}`);
+  if (info.model) await cmd.writeLn(`Model: ${info.model}`);
+  if (info.serialNumber) await cmd.writeLn(`Serial: ${info.serialNumber}`);
+  if (info.timezone) await cmd.writeLn(`Timezone: ${info.timezone}`);
+  if (info.digitizer) await cmd.writeLn('Digitizer: yes');
+  if (info.quicktimeUtc) await cmd.writeLn('Video times: UTC');
+  if (info.description) await cmd.writeLn(`Description: ${info.description}`);
+
+  if (owners.length > 0) {
+    await cmd.writeLn('');
+    await cmd.writeLn('Owners:');
+    for (const owner of owners) {
+      const span = owner.from || owner.to ? ` ${owner.from ?? '…'} – ${owner.to ?? ''}` : '';
+      await cmd.writeLn(`  ${owner.name} (${owner.path})${span}`);
+    }
+  }
+
+  return 0;
+};
+
+deviceInfo.spec = {
+  name: 'device-info',
+  effect: 'read' as const,
+  description: 'Show device details and owners',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to device node' },
+  ],
+  flags: [],
+};
+
+export default deviceInfo;

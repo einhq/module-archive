@@ -1,0 +1,57 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { DEVICES_ROOT, listDevices, matchDevice } from '@archive/device/device';
+
+const deviceMatch = async (cmd: Command): CmdReturn => {
+  // Command has no `flags` — the same TypeError device-correct-time already hit. It was
+  // invisible here because the only caller (media/bin/device-link) reads a non-zero exit as
+  // "no device matched", so every file silently went unlinked.
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['serial', 'make', 'model', 'root'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const serialNumber = flags.serial;
+  const make = flags.make;
+  const model = flags.model;
+  const root = flags.root || DEVICES_ROOT;
+
+  if (!serialNumber && !(make && model)) {
+    await cmd.writeError('device-match: need --serial or both --make and --model\n');
+    return 1;
+  }
+
+  let devices;
+  try {
+    devices = await listDevices(cmd, root);
+  } catch {
+    return 1;
+  }
+
+  const match = matchDevice(devices, { serialNumber, make, model });
+  if (!match) return 1;
+
+  if (cmd.json) {
+    await cmd.writeJSON(match);
+  } else {
+    await cmd.writeLn(`${match.path} (${match.matchType})`);
+  }
+
+  return 0;
+};
+
+deviceMatch.spec = {
+  name: 'device-match',
+  effect: 'read' as const,
+  description: 'Match a device by serial number or make/model',
+  args: [],
+  flags: [
+    { name: 'serial', type: 'string' as const, description: 'Device serial number' },
+    { name: 'make', type: 'string' as const, description: 'Camera manufacturer' },
+    { name: 'model', type: 'string' as const, description: 'Camera model' },
+    { name: 'root', type: 'string' as const, description: `Device directory (default: ${DEVICES_ROOT})` },
+  ],
+};
+
+export default deviceMatch;

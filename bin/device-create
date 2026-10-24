@@ -1,0 +1,101 @@
+#!ts
+/**
+ * device-create — register a camera or recorder.
+ *
+ * `--name` is the only required field. The path is derived from it when none is
+ * given (`Canon EOS 5D Mark III` → `/devices/Canon_EOS_5D_Mark_III`), which is
+ * both what the legacy import produced and what a caller with a fingerprint in
+ * hand — the devices page registering a proposal — actually has.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs, shq } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import { DEVICES_ROOT, NODE_TYPE_DEVICE, OWNERS_DIR, slugifyDeviceName } from '@archive/device/device';
+
+const deviceCreate = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['name', 'make', 'model', 'serial', 'timezone', 'description'],
+    boolean: ['digitizer', 'quicktime-utc'],
+    alias: { n: 'name', m: 'make', s: 'serial' },
+  });
+
+  const name = flags.name as string | undefined;
+  if (!name || !name.trim()) {
+    await cmd.writeError('device-create: missing --name\n');
+    return 1;
+  }
+
+  const given = flags._[0] as string | undefined;
+  let path: string;
+  if (given) {
+    path = resolve(cmd.cwd, given);
+  } else {
+    const slug = slugifyDeviceName(name);
+    if (!slug) {
+      await cmd.writeError(`device-create: cannot derive a path from '${name}' — pass one explicitly\n`);
+      return 1;
+    }
+    path = `${DEVICES_ROOT}/${slug}`;
+  }
+
+  if (await cmd.sys.vfs.exists(cmd.access, path)) {
+    await cmd.writeError(`device-create: ${path}: already exists\n`);
+    return 1;
+  }
+
+  const attrs: Record<string, unknown> = { name: name.trim() };
+  if (flags.make) attrs.make = flags.make as string;
+  if (flags.model) attrs.model = flags.model as string;
+  if (flags.serial) attrs.serialNumber = flags.serial as string;
+  if (flags.timezone) attrs.timezone = flags.timezone as string;
+  if (flags.description) attrs.description = flags.description as string;
+  if (flags.digitizer) attrs.digitizer = true;
+  if (flags['quicktime-utc']) attrs.quicktimeUtc = true;
+
+  const sets = Object.entries(attrs).map(([key, value]) => typeof value === 'string' ? `--as ${shq(`${key}=${value}`)}` : `--aj ${shq(`${key}=${JSON.stringify(value)}`)}`)
+    .join(' ');
+
+  const created = await cmd.execute(`mkdir -p ${shq(dirname(path))} && mknode -t ${NODE_TYPE_DEVICE} ${shq(path)} ${sets}`);
+  if (created.code !== 0) {
+    await cmd.writeError(`device-create: ${path}: ${created.stderr.trim() || 'failed to create device node'}\n`);
+    return 1;
+  }
+
+  // Owner links live in their own directory, and `device-set-owner` expects it
+  // to exist — creating it here keeps a fresh device the same shape as an
+  // imported one.
+  const owners = await cmd.execute(`mkdir -p ${shq(`${path}/${OWNERS_DIR}`)}`);
+  if (owners.code !== 0) {
+    await cmd.writeError(`device-create: ${path}/${OWNERS_DIR}: ${owners.stderr.trim() || 'failed to create owners directory'}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path });
+  } else {
+    await cmd.writeLn(path);
+  }
+
+  return 0;
+};
+
+deviceCreate.spec = {
+  name: 'device-create',
+  effect: 'write' as const,
+  description: 'Create a device node',
+  args: [
+    { name: 'target', type: 'path' as const, description: `VFS path for the device node (default: ${DEVICES_ROOT}/<name>)` },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'display name (required)' },
+    { name: 'make', type: 'string' as const, description: 'manufacturer, as exif writes it' },
+    { name: 'model', type: 'string' as const, description: 'model, as exif writes it' },
+    { name: 'serial', type: 'string' as const, description: 'serial number (the strong match key)' },
+    { name: 'timezone', type: 'string' as const, description: 'IANA timezone, e.g. Europe/Stockholm' },
+    { name: 'digitizer', type: 'bool' as const, description: 'scanner whose device dates are digitisation times, not capture times' },
+    { name: 'quicktime-utc', type: 'bool' as const, description: "keeps its videos' QuickTime CreateDate in UTC (phones), not local time" },
+    { name: 'description', type: 'string' as const, description: 'free-text note' },
+  ],
+};
+
+export default deviceCreate;

@@ -1,0 +1,17 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+
+const hello = async (cmd: Command): CmdReturn => {
+  const name = cmd.args[0] || 'world';
+  await cmd.writeLn(`hello, ${name}!`);
+  return 0;
+};
+
+hello.spec = {
+  name: 'hello',
+  effect: 'read' as const,
+  description: 'Say hello (example TypeScript module command)',
+  args: [{ name: 'name', type: 'string' as const, description: 'name to greet' }],
+};
+
+export default hello;

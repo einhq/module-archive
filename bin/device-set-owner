@@ -1,0 +1,97 @@
+#!ts
+/**
+ * device-set-owner — link a person as owner of a device (dated relation pair).
+ *
+ * Creates both halves: device/owners/<person> ↔ person/devices/<device>, each
+ * carrying relation.peerLink so the relations-guard removes the peer on delete.
+ * Ownership can change over time, so optional --from/--to dates are supported;
+ * `--update` rewrites them on an existing pair, where an omitted end clears.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { createRelationPair, updateRelationSpan, validDate } from '@archive/people/genealogy';
+
+const deviceSetOwner = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from', 'to'], boolean: ['update'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const deviceArg = flags._[0] as string | undefined;
+  const personArg = flags._[1] as string | undefined;
+
+  if (!deviceArg || !personArg) {
+    await cmd.writeError('device-set-owner: usage: device-set-owner <device> <person> [--from <date>] [--to <date>] [--update]\n');
+    return 1;
+  }
+
+  for (const [name, value] of [['from', flags.from], ['to', flags.to]] as const) {
+    if (value !== undefined && !validDate(value)) {
+      await cmd.writeError(`device-set-owner: --${name} '${value}' is not a date (YYYY[-MM[-DD]])\n`);
+      return 1;
+    }
+  }
+  const device = resolve(cmd.cwd, deviceArg);
+  const person = resolve(cmd.cwd, personArg);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  try {
+    await vfs.get(access, device);
+    await vfs.get(access, person);
+  } catch {
+    await cmd.writeError(`device-set-owner: ${device} or ${person} not found\n`);
+    return 1;
+  }
+
+  const ownerLink = `${device}/owners/${basename(person)}`;
+  if (flags.update) {
+    if (!(await vfs.exists(access, ownerLink, { follow: false }))) {
+      await cmd.writeError(`device-set-owner: ${ownerLink} does not exist; add the owner first\n`);
+      return 1;
+    }
+    await updateRelationSpan(vfs, access, ownerLink, { from: flags.from, to: flags.to });
+    if (cmd.json) await cmd.writeJSON({ ok: true, link: ownerLink, updated: true });
+    else await cmd.writeLn(`Updated owner ${basename(person)} of device ${basename(device)}`);
+    return 0;
+  }
+  if (await vfs.exists(access, ownerLink, { follow: false })) {
+    await cmd.writeError(`device-set-owner: ${ownerLink} already exists\n`);
+    return 1;
+  }
+
+  await createRelationPair(vfs, access, {
+    aLink: ownerLink,
+    aTarget: person,
+    bLink: `${person}/devices/${basename(device)}`,
+    bTarget: device,
+    from: flags.from,
+    to: flags.to,
+  });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, link: ownerLink });
+  } else {
+    await cmd.writeLn(`Linked owner ${basename(person)} to device ${basename(device)}`);
+  }
+
+  return 0;
+};
+
+deviceSetOwner.spec = {
+  name: 'device-set-owner',
+  effect: 'write' as const,
+  description: 'Link a person as owner of a device (dated relation pair)',
+  args: [
+    { name: 'device', type: 'path' as const, description: 'VFS path to device node' },
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'ownership start date (YYYY[-MM[-DD]])' },
+    { name: 'to', type: 'string' as const, description: 'ownership end date (YYYY[-MM[-DD]])' },
+    { name: 'update', type: 'bool' as const, description: 'rewrite the dates of an existing owner; an omitted date is cleared' },
+  ],
+};
+
+export default deviceSetOwner;

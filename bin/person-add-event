@@ -1,0 +1,119 @@
+#!ts
+/**
+ * person-add-event — add an event (blob) to a person, or to an album, location or device.
+ *
+ * An event is a blob under <owner>/events/<name>: the body (markdown) is the
+ * blob content, metadata lives in attrs {name, eventType, date}, and geo is a
+ * child `position` node (pass --lat/--lng together). --writer names the person
+ * who wrote the text, as a child `writer` link to them; without it, the text is
+ * taken to be by whoever added the event.
+ *
+ * Without a name the event gets a new one from its type and date
+ * (`marriage-1972-05-20`, `event-1998-06`), and its title is the body's first line.
+ * A given name that is taken updates that event in place.
+ *
+ * A dated birth or death also sets the person's `born` / `died` attr: the timeline,
+ * search and the profile read those, and fold the event onto them.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { createEvent, mirrorLifeDate, newEventName, titleFromBody } from '@archive/people/events';
+import type { PersonAddEventAnswer } from '@archive/people/api';
+
+const personAddEvent = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['type', 'date', 'body', 'lat', 'lng', 'writer'],
+    alias: { t: 'type', d: 'date' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  const given = flags._[1] as string | undefined;
+
+  if (!target) {
+    await cmd.writeError(
+      'person-add-event: usage: person-add-event <person> [<name>] [--type <type>] [--date <date>] [--body <text>] [--lat <n> --lng <n>] [--writer <person>]\n',
+    );
+    return 1;
+  }
+
+  const person = resolve(cmd.cwd, target);
+  if (!(await cmd.sys.vfs.exists(cmd.access, person))) {
+    await cmd.writeError(`person-add-event: ${person}: not found\n`);
+    return 1;
+  }
+
+  let latlng: { lat: number; lng: number } | undefined;
+  if (flags.lat !== undefined || flags.lng !== undefined) {
+    const lat = Number(flags.lat);
+    const lng = Number(flags.lng);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      await cmd.writeError('person-add-event: --lat and --lng must both be numbers\n');
+      return 1;
+    }
+    latlng = { lat, lng };
+  }
+
+  const writer = flags.writer ? resolve(cmd.cwd, flags.writer) : undefined;
+  if (writer) {
+    const node = await cmd.sys.vfs.get(cmd.access, writer).catch(() => undefined);
+    if (node?.type !== 'person') {
+      await cmd.writeError(`person-add-event: ${writer}: not a person\n`);
+      return 1;
+    }
+  }
+
+  let name: string;
+  try {
+    name = given ?? await newEventName(cmd.sys.vfs, cmd.access, person, flags.type, flags.date);
+    await createEvent(cmd.sys.vfs, cmd.access, person, name, {
+      displayName: given ? undefined : titleFromBody(flags.body),
+      eventType: flags.type ?? 'generic',
+      date: flags.date,
+      body: flags.body,
+      latlng,
+      writer,
+    });
+    await mirrorLifeDate(cmd.sys.vfs, cmd.access, person, flags.type, flags.date);
+  } catch (error) {
+    await cmd.writeError(`person-add-event: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path: `${person}/events/${name}` } satisfies PersonAddEventAnswer);
+  } else {
+    await cmd.writeLn(`Added event ${name} to ${person}`);
+  }
+  return 0;
+};
+
+personAddEvent.spec = {
+  name: 'person-add-event',
+  effect: 'write' as const,
+  description: 'Add an event (blob) to a person, album, location or device',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to the person, album, location or device' },
+    { name: 'name', type: 'string' as const, description: 'optional event name (e.g. birth, wedding); without one, it is made from the type and date' },
+  ],
+  flags: [
+    { name: 'type', type: 'string' as const, description: 'event type: birth, death, marriage, engagement, generic; a dated birth/death also sets born/died' },
+    { name: 'date', type: 'string' as const, description: 'event date (YYYY[-MM[-DD]])' },
+    { name: 'body', type: 'string' as const, description: 'event body text (markdown)' },
+    { name: 'lat', type: 'string' as const, description: 'latitude for the event position node' },
+    { name: 'lng', type: 'string' as const, description: 'longitude for the event position node' },
+    { name: 'writer', type: 'path' as const, description: "the person who wrote the text, linked as the event's `writer`; without it, whoever adds the event" },
+  ],
+  examples: [
+    "person-add-event --date 1998-06 --body 'Flyttade till Lund' /archive/people/Anna_Exempel",
+    'person-add-event --type marriage --date 1972-05-20 /archive/people/Anna_Exempel wedding',
+    "person-add-event --date 2019-07-14 --body 'A day on the water' --writer /archive/people/Anna_Exempel /archive/albums/Exempelalbum_2019",
+  ],
+  returns: 'the event path; the event is written, and for a dated birth/death the born/died attr.',
+};
+
+export default personAddEvent;

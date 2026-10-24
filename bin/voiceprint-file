@@ -1,0 +1,273 @@
+#!ts
+/**
+ * voiceprint-file — the voices of a recording: who speaks when, one voiceprint per voice.
+ *
+ * The voice half of face detection. `detect-faces` finds the faces in a photo and embeds each
+ * one so recognition has something to compare; this finds the voices in a recording and embeds
+ * each one, writing a speaker node per voice under `metadata/transcript/speakers/` with the turns
+ * it spoke as data (@archive/media/speakers). The person fields follow the face contract, so the
+ * correction tooling that exists for faces works on voices without knowing they are voices.
+ *
+ * It does NOT decide who anyone is. Speakers are written undecided; `assign-speakers` decides,
+ * exactly as `detect-faces` leaves that to `assign-faces`. What a person decided before is kept:
+ * a re-run carries each held assignment (named by hand, or locked) to the new voice it shares
+ * the most speech with.
+ *
+ * Whisper is untouched by all of this. The transcript keeps its own segmentation, based on
+ * pauses; these turns come from a diarizer reading the same audio, and the two are joined by
+ * time when something shows them together.
+ *
+ * **One call to EMS for the voices**, however long the recording: EMS diarizes in whatever
+ * windows its card allows, stitches them into file-wide voices and pools each voice's
+ * voiceprints. **One more for the faces**, on a video: EMS decodes it once and answers, per
+ * voice, the face whose lips moved with it (`speech.active_speakers`); a face recognition
+ * already knows becomes the speaker's `asdPersonId`, one vote among the voiceprints'. Seeing the
+ * speaker is an assist: no face, or nobody known, is the ordinary outcome on home video, where
+ * the speaker is often holding the camera. `--no-video` skips it.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, STEP_EXIT_TEMPORARY, stepPhase } from '@ein/client';
+import { type ActiveSpeaker, activeSpeakers, stepExitCode, voiceprint, type VoiceSpeaker } from '@ems/client';
+import { carryOver, type HeldAssignment, isHeld, type SpeakerAttrs, speakerNodeName, SPEAKERS_DIR, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
+import { personOfFace } from '@archive/media/speaker-faces';
+import { reportUnwritable } from '@archive/media/writable';
+
+/** Write bytes through the VFS, so a long vector survives without going near a shell. */
+const writeNode = async (cmd: Command, path: string, body: string): Promise<void> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
+  try {
+    await handle.write(new TextEncoder().encode(body));
+  } finally {
+    await handle.close();
+  }
+};
+
+/** What a person decided about the voices already under the transcript, as turns and fields. */
+const heldAssignments = async (cmd: Command, transcriptPath: string): Promise<HeldAssignment[]> => {
+  const held: HeldAssignment[] = [];
+  const children = await cmd.sys.vfs.children<Record<string, unknown>>(cmd.access, `${transcriptPath}/${SPEAKERS_DIR}`).catch(() => []);
+  for (const child of children) {
+    const a = child.node.attrs;
+    if (!isHeld(a)) continue;
+    held.push({
+      turns: Array.isArray(a.turns) ? (a.turns as [number, number][]) : [],
+      personId: typeof a.personId === 'string' ? a.personId : null,
+      personSource: typeof a.personSource === 'string' ? a.personSource : null,
+      personConfidence: typeof a.personConfidence === 'number' ? a.personConfidence : null,
+      personAssignedAt: typeof a.personAssignedAt === 'string' ? a.personAssignedAt : null,
+      assignLocked: a.assignLocked === true,
+    });
+  }
+  return held;
+};
+
+/**
+ * The person whose face EMS scored best with each voice, and how well it scored: `voice id →
+ * hint`. Kept whatever the score — it is evidence, and `assign-speakers` decides how much a
+ * score has to be to count (`CFG_VOICE_ASD_MIN_SCORE`).
+ */
+const recognizeSpeakers = async (cmd: Command, seen: ActiveSpeaker[]): Promise<Map<string, { personId: string; score: number }>> => {
+  const out = new Map<string, { personId: string; score: number }>();
+  for (const speaker of seen) {
+    const personId = await personOfFace(cmd.sys.vfs, cmd.access, speaker.embedding);
+    if (personId) out.set(speaker.id, { personId, score: speaker.score });
+  }
+  return out;
+};
+
+/**
+ * Replace the recording's voices: the old `speakers/` goes, and the new speakers
+ * are written in one transaction with the turns nobody could be told for on the directory. The
+ * vectors follow one write each, which is what the embedding store takes; a speaker whose vector
+ * fails to land is kept without it, still part of the timeline but unable to be matched.
+ */
+const writeSpeakers = async (
+  cmd: Command,
+  transcriptPath: string,
+  speakers: VoiceSpeaker[],
+  unattributed: [number, number][],
+  attrsOf: (speaker: VoiceSpeaker) => SpeakerAttrs,
+): Promise<number> => {
+  if (await cmd.sys.vfs.exists(cmd.access, `${transcriptPath}/${SPEAKERS_DIR}`)) {
+    await cmd.sys.vfs.unlink(cmd.access, `${transcriptPath}/${SPEAKERS_DIR}`, transcriptPath, { recursive: true });
+  }
+  await cmd.sys.vfs.createTree(cmd.access, transcriptPath, [{
+    type: 'directory',
+    name: SPEAKERS_DIR,
+    attrs: { unattributed },
+    children: speakers.map((speaker, index) => ({ type: 'embedding', name: speakerNodeName(index), attrs: attrsOf(speaker) })),
+  }]);
+
+  let written = 0;
+  for (const [index, speaker] of speakers.entries()) {
+    const path = `${transcriptPath}/${SPEAKERS_DIR}/${speakerNodeName(index)}`;
+    try {
+      await writeNode(cmd, path, JSON.stringify(speaker.vector));
+      written++;
+    } catch (error) {
+      await cmd.writeError(`voiceprint-file: ${path}: vector not written: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+  return written;
+};
+
+const voiceprintFile = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force', 'no-video'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!inputPath) {
+    await cmd.writeError('voiceprint-file: usage: voiceprint-file [-f] [-v] <path>\n');
+    return 1;
+  }
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  const noVideo = Boolean(flags['no-video']);
+
+  const nodeInfo = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  if (!nodeInfo) {
+    await cmd.writeError(`voiceprint-file: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, nodeInfo)) return 1;
+  const fileAttrs = nodeInfo.attrs as Record<string, unknown>;
+  const mimetype = typeof fileAttrs.mimetype === 'string' ? fileAttrs.mimetype : '';
+  if (!mimetype.startsWith('audio/') && !mimetype.startsWith('video/')) {
+    await cmd.writeError(`voiceprint-file: ${inputPath}: not audio or video (${mimetype})\n`);
+    return 1;
+  }
+
+  const transcriptPath = `${inputPath}/metadata/transcript`;
+
+  // The speakers live under the transcript node, so it has to exist. It is also the cheapest
+  // "is there any speech here at all": transcribe-file writes the node for every file it looks
+  // at, with speech=false on the silent ones, and there is no point diarizing those.
+  // No transcript is nothing to listen to yet, not a failure: the speakers gap starts this again
+  // once a transcript with speech is there.
+  const transcriptInfo = await cmd.sys.vfs.get(cmd.access, transcriptPath).catch(() => undefined);
+  if (!transcriptInfo) {
+    if (verbose) await cmd.writeLn('No transcript yet, nothing to listen to');
+    return 0;
+  }
+  if ((transcriptInfo.attrs as Record<string, unknown>).speech === false) {
+    if (verbose) await cmd.writeLn('No speech in the transcript, skipping');
+    if (cmd.json) await cmd.writeJSON({ path: inputPath, speech: false, speakers: 0 });
+    return 0;
+  }
+  if (typeof fileAttrs.speakersAt === 'string' && !force) {
+    if (verbose) await cmd.writeLn('Already voiceprinted, skipping (use -f to force)');
+    if (cmd.json) await cmd.writeJSON({ path: inputPath, skipped: true });
+    return 0;
+  }
+
+  // Where the time goes, for a step that runs out of it. See @ein/client stepPhase.
+  const phase = stepPhase(cmd, 'voiceprint-file', verbose);
+
+  let result;
+  try {
+    // EMS extracts the sound itself, so the media file is handed over as it stands.
+    await phase('asking ems');
+    result = await voiceprint(cmd, inputPath, { onProgress: (p) => phase(`ems: ${p}`) });
+    await phase(`ems answered: ${result.speakers.length} voices, ${result.turns.length} turns`);
+  } catch (error) {
+    await cmd.writeError(`voiceprint-file: ${inputPath}: diarization failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+  if (!result.audio) {
+    await cmd.writeError(`voiceprint-file: ${inputPath}: no audio to diarize\n`);
+    return 1;
+  }
+
+  let seen = new Map<string, { personId: string; score: number }>();
+  if (!noVideo && mimetype.startsWith('video/') && result.speakers.length > 0) {
+    try {
+      await phase('active speakers');
+      const faces = await activeSpeakers(
+        cmd,
+        inputPath,
+        typeof fileAttrs.angle === 'number' ? fileAttrs.angle : 0,
+        fileAttrs.mirror === true,
+        result.speakers.map((s) => ({ id: s.id, turns: s.turns })),
+        { onProgress: (p) => phase(`ems: ${p}`) },
+      );
+      seen = await recognizeSpeakers(cmd, faces);
+      await phase(`active speakers: a face scored for ${faces.length} voices, ${seen.size} of them known`);
+    } catch (error) {
+      // EMS busy or down is worth waiting for: the hint is evidence, and a run without it would
+      // be final. Anything else leaves the voices without a face, as no face on screen would.
+      const code = stepExitCode(error);
+      await cmd.writeError(`voiceprint-file: ${inputPath}: active speakers: ${error instanceof Error ? error.message : String(error)}\n`);
+      if (code === STEP_EXIT_TEMPORARY) return code;
+    }
+  }
+
+  const held = carryOver(await heldAssignments(cmd, transcriptPath), result.speakers);
+  const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const unattributed = result.turns.filter((t) => t.speaker === null).map((t) => [t.start, t.end] as [number, number]);
+
+  await phase('writing speakers');
+  const written = await writeSpeakers(cmd, transcriptPath, result.speakers, unattributed, (speaker): SpeakerAttrs => {
+    const kept = held.get(speaker.id);
+    return {
+      embeddingType: VOICE_EMBEDDING_TYPE,
+      capacity: speaker.vector.length,
+      fileId: String(nodeInfo.id ?? ''),
+      detectedAt,
+      detectedBy: result.model,
+      speaker: speaker.id,
+      turns: speaker.turns,
+      talkSeconds: speaker.talkSeconds,
+      turnCount: speaker.turns.length,
+      asdPersonId: seen.get(speaker.id)?.personId ?? null,
+      asdScore: seen.get(speaker.id)?.score ?? null,
+      personId: kept?.personId ?? null,
+      personSource: kept?.personSource ?? null,
+      personConfidence: kept?.personConfidence ?? null,
+      personAssignedAt: kept?.personAssignedAt ?? null,
+      assignLocked: kept?.assignLocked ?? false,
+    };
+  });
+  await phase(`wrote ${written} speakers`);
+
+  // `speakersAt` last: it is what announces the voices (media.speakers.detected), so they are
+  // all written by then.
+  await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { speakersAt: detectedAt, speakerCount: result.speakers.length } });
+
+  if (verbose) {
+    await cmd.writeLn(
+      `${inputPath}: ${result.speakers.length} voices over ${result.turns.length} turns, ${seen.size} with a known face, ` +
+        `${held.size} kept from before, model ${result.model}`,
+    );
+  }
+  if (cmd.json) {
+    await cmd.writeJSON({ path: inputPath, speech: result.speakers.length > 0, speakers: result.speakers.length, seen: seen.size, kept: held.size, model: result.model });
+  }
+  return 0;
+};
+
+voiceprintFile.spec = {
+  name: 'voiceprint-file',
+  effect: 'write' as const,
+  description: 'Find the voices of an audio or video recording: who speaks when, with one voiceprint per voice',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to an audio or video file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Force re-voiceprinting even if speakers exist' },
+    { name: 'no-video', type: 'bool' as const, description: 'Skip the faces seen speaking; voices only' },
+  ],
+  examples: [
+    'voiceprint-file /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+  ],
+  returns: 'nothing; one speaker node per voice is written under the file.',
+};
+
+export default voiceprintFile;

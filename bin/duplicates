@@ -1,0 +1,798 @@
+#!ts
+/**
+ * duplicates — find duplicate files.
+ *
+ * Two modes, chosen by --fuzzy:
+ *   exact (default): files that share a content checksum (attrs.sha256). A scan
+ *     groups originals of any type — not their renditions or the metadata,
+ *     prints and transcripts stored under them; one file's copies are the
+ *     originals with its checksum.
+ *   fuzzy (--fuzzy):  compare fingerprints. Catches copies with other bytes: a
+ *     picture resized, re-compressed, cropped, recoloured, written on, scanned
+ *     from its print or screenshotted, and not another photo of the same scene.
+ *     Pictures and video by the cosine of their SSCD descriptors (a video's
+ *     keyframes); sound by aligning chromaprints, so a copy with other audio in
+ *     front of it or cut short still matches. Only covers files that already have
+ *     fingerprints (the compute-fingerprint step). Every file of a cluster is a copy
+ *     of every other, so a chain of retakes, each close to the next, does not form
+ *     one. Clusters of identical files are included too.
+ *
+ * Path semantics (same for both modes):
+ *   (no path), /  scan the whole library, store-wide
+ *   <directory>   scan that subtree: the nodes within it (`NodeQuery.within`).
+ *                 Exact mode counts its checksums in the store and looks up only
+ *                 those shared. With --against it looks up every checksum a
+ *                 small subtree holds, and for a larger one, or `/`, those shared
+ *                 store-wide. Fuzzy mode lists its media originals a page at a
+ *                 time and searches from each one's prints; a subtree larger than
+ *                 a print search is worth takes the store's all-pairs pass,
+ *                 narrowed to it.
+ *   <file>        find the duplicates of that one file
+ *
+ * Two more uses, each its own flag:
+ *   --record <file|dir>…   decide again the staged duplicate findings these files take part in
+ *                          (`@archive/staging/duplicates`): the step `media-duplicates` runs.
+ *   --checksum <sha256>…   which media originals carry these checksums, in the library or the
+ *                          caller's own staging inbox: what an upload client asks before sending.
+ */
+
+import type { CmdReturn, Command, Node } from '@ein/client';
+import { collectUnknownFlags, NOT_DERIVED, parseArgs, reportUnknownFlags } from '@ein/client';
+import type {
+  ChecksumMatches,
+  DuplicatesRecorded,
+  ExactDuplicateGroup,
+  ExactDuplicateScan,
+  ExactDuplicatesOf,
+  FuzzyDuplicateScan,
+  FuzzyDuplicatesOf,
+} from '@archive/media/api';
+import { CHROMAPRINT_MIMETYPE, decodeChromaprint, matchChromaprints } from '@archive/media/chromaprint';
+import { chainedFiles, duplicateClusters, type Edge } from '@archive/media/duplicate-clusters';
+import { isIndexableMedia } from '@archive/media/event-rules';
+import { FINGERPRINT_TYPES } from '@archive/media/fingerprints';
+import { checksumMatches, recordPaths } from '@archive/staging/duplicates';
+import { resolve } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
+
+const FUZZY_TYPES: Record<string, string> = {
+  'image/': FINGERPRINT_TYPES.image,
+  'video/': FINGERPRINT_TYPES.video,
+  'audio/': FINGERPRINT_TYPES.audio,
+};
+/** The fingerprints held as vectors, which the embedding store matches by itself. */
+const VECTOR_TYPES: string[] = [FINGERPRINT_TYPES.image, FINGERPRINT_TYPES.video];
+// SSCD cosine: copies of a picture score above 0.75 and other photos of the same scene below it,
+// but for frames of one burst; a video copy's best keyframe pair scores above 0.8
+// (ein/core#334). A chromaprint's similarity is `1 - 2·BER` at the best alignment.
+// Re-encoded, trimmed and shifted copies score 0.83–0.98 and unrelated recordings at most 0.45
+// (fry's corpus, ein/core#333).
+const DEFAULT_THRESHOLDS: Record<string, number> = {
+  [FINGERPRINT_TYPES.image]: 0.75,
+  [FINGERPRINT_TYPES.video]: 0.80,
+  [FINGERPRINT_TYPES.audio]: 0.70,
+};
+const CHROMAPRINT_PAGE = 500;
+
+/** Checksums one `--checksum` takes at most. */
+const CHECKSUMS_MAX = 1000;
+const SHA256 = /^[0-9a-f]{64}$/;
+
+/** Cap on files listed for one checksum. */
+const PATHS_PER_HASH = 1000;
+/** Checksums per `in` query, and rows per page of one. */
+const HASHES_PER_QUERY = 500;
+const TWIN_PAGE = 1000;
+/** Files per page of a subtree's listing. */
+const WITHIN_PAGE = 1000;
+/** Nodes a subtree may hold for a fuzzy scan to search from each of its prints; a larger one takes the all-pairs pass. */
+const PRINT_SEARCH_LIMIT = 20000;
+/**
+ * Nodes a subtree may hold for an exact scan with --against to look up each checksum it holds; a
+ * larger one starts from the checksums shared store-wide.
+ */
+const OWN_CHECKSUM_LIMIT = 20000;
+/** Ids per batched lookup. */
+const IDS_PER_CALL = 1000;
+/** Levels a store-wide lookup climbs to learn whether a file hangs under another. */
+const MAX_DEPTH = 64;
+/** Nearest prints asked of the index per print, and searches in flight at once. */
+const NEIGHBOURS = 20;
+const SEARCHES_AT_ONCE = 4;
+
+type FileEntry = { id: string; path: string; sha256?: string; size: number };
+
+function humanize(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n.toFixed(2)} ${units[i]}`;
+}
+
+/** Parent file path of a fingerprint node `<file>/metadata/<print-name>`. */
+function fingerprintParent(absPath: string): string | null {
+  const parts = absPath.split('/');
+  const idx = parts.lastIndexOf('metadata');
+  if (idx < 1) return null;
+  return parts.slice(0, idx).join('/');
+}
+
+function fuzzyTypeFor(mimetype: string): string | null {
+  for (const [prefix, type] of Object.entries(FUZZY_TYPES)) {
+    if (mimetype.startsWith(prefix)) return type;
+  }
+  return null;
+}
+
+/** The fingerprint type a node under `<file>/metadata` holds, by its name. */
+function printTypeOf(name: string): string | null {
+  if (name === 'chromaprint') return name;
+  return VECTOR_TYPES.find((type) => name === type || name.startsWith(`${type}-`)) ?? null;
+}
+
+/** Whether a path lies under `root`; everything does under `/`. */
+const under = (root: string) => root === '/' ? () => true : (path: string) => path.startsWith(`${root}/`);
+
+const chunked = <T>(items: T[], size: number): T[][] => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
+
+/** Run `fn` over `items`, `width` at a time. */
+const inParallel = async <T>(items: T[], width: number, fn: (item: T) => Promise<void>): Promise<void> => {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]);
+  }));
+};
+
+async function readBytes(cmd: Command, path: string): Promise<Uint8Array> {
+  const handle = await cmd.sys.vfs.open(cmd.access, path);
+  try {
+    return new Uint8Array(await toArrayBuffer(handle.readable));
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * The media originals the caller can read within `root` (`NodeQuery.within`): through albums,
+ * people and other containers, but not into a file's renditions, along a link, or into a trash.
+ * A page at a time, by id.
+ */
+async function mediaWithin(cmd: Command, root: string): Promise<FileEntry[]> {
+  const files: FileEntry[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  for (;;) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { within: root, types: ['file'], where: [NOT_DERIVED], after, limit: WITHIN_PAGE });
+    for (const row of rows) {
+      if (!isIndexableMedia(row.node)) continue;
+      const sha256 = typeof row.node.attrs.sha256 === 'string' ? row.node.attrs.sha256 : undefined;
+      files.push({ id: row.id, path: row.absPath, sha256, size: Number(row.node.attrs.size ?? 0) });
+    }
+    // Fewer than a page means none are left.
+    if (rows.length < WITHIN_PAGE) return files;
+    after = { value: null, id: rows[rows.length - 1].id };
+  }
+}
+
+// ===== exact (checksum) =====
+
+/**
+ * The checksums that at least `minCount` originals within `scope` (store-wide for `/`) carry,
+ * counted in the store among what the caller may reach. A checksum is only a lead: its copies
+ * are read with the caller's access.
+ */
+async function checksumsIn(cmd: Command, scope: string, minCount: number): Promise<string[]> {
+  const buckets = await cmd.sys.vfs.aggregate(cmd.access, {
+    types: ['file'],
+    where: [NOT_DERIVED],
+    ...(scope === '/' ? {} : { within: scope }),
+    group: [{ ref: 'sha256' }],
+    minCount,
+  });
+  return buckets.map((bucket) => bucket.key[0]);
+}
+
+/**
+ * Which of `ids` hang under a file — its metadata, renditions, prints, transcripts — rather than
+ * in directories of their own. A `within` query never reaches those; a store-wide one does. Asked
+ * one level up at a time, for all of them at once, until each meets a file or the root.
+ */
+async function underAFile(cmd: Command, ids: string[]): Promise<Set<string>> {
+  const under = new Set<string>();
+  // The nodes still to look above, each with the ids it answers for.
+  let climbing = new Map(ids.map((id) => [id, [id]]));
+  for (let level = 0; climbing.size > 0 && level < MAX_DEPTH; level++) {
+    const links = await cmd.sys.vfs.getParentLinksByIds(cmd.access, [...climbing.keys()]);
+    const parentIds = [...new Set([...links.values()].flatMap((list) => list.map((link) => link.parentId)))];
+    const parents = await cmd.sys.vfs.getNodesByIds(cmd.access, parentIds);
+    const next = new Map<string, string[]>();
+    for (const [id, answersFor] of climbing) {
+      for (const { parentId } of links.get(id) ?? []) {
+        if (parents.get(parentId)?.type === 'file') answersFor.forEach((row) => under.add(row));
+        else next.set(parentId, [...next.get(parentId) ?? [], ...answersFor]);
+      }
+    }
+    climbing = next;
+  }
+  return under;
+}
+
+/**
+ * Every readable original carrying one of `hashes`, by checksum, within `scope` when one is given:
+ * `in` queries over the checksum index. An original is a file with bytes that is no rendition and
+ * does not hang under another file.
+ */
+async function twinsOf(cmd: Command, hashes: string[], scope?: string): Promise<Map<string, FileEntry[]>> {
+  const twins = new Map<string, FileEntry[]>();
+  const storeWide = scope === undefined || scope === '/';
+  for (const chunk of chunked(hashes, HASHES_PER_QUERY)) {
+    let after: { value: string | null; id: string } | undefined;
+    while (true) {
+      const rows = await cmd.sys.vfs.query(cmd.access, {
+        types: ['file'],
+        where: [{ ref: 'sha256', op: 'in', value: chunk }, NOT_DERIVED],
+        ...(storeWide ? {} : { within: scope }),
+        orderBy: { ref: 'sha256', dir: 'asc' },
+        after,
+        limit: TWIN_PAGE,
+      });
+      const filed = rows.filter((row) => Number(row.node.attrs.size ?? 0) > 0);
+      const underFiles = storeWide ? await underAFile(cmd, filed.map((row) => row.id)) : new Set<string>();
+      for (const row of filed) {
+        const sha256 = row.node.attrs.sha256;
+        if (typeof sha256 !== 'string' || underFiles.has(row.id)) continue;
+        const list = twins.get(sha256) ?? [];
+        if (list.length < PATHS_PER_HASH) list.push({ id: row.id, path: row.absPath, sha256, size: Number(row.node.attrs.size ?? 0) });
+        twins.set(sha256, list);
+      }
+      // Fewer than a page means none are left.
+      if (rows.length < TWIN_PAGE) break;
+      const last = rows[rows.length - 1];
+      after = { value: last.sortValue, id: last.id };
+    }
+  }
+  return twins;
+}
+
+/**
+ * The checksums an exact scan with a second root looks up. A copy in the other root makes at
+ * least `minCount` of a checksum store-wide, so a large scope, and `/`, need only those; a small
+ * one lists what it holds, which is fewer.
+ */
+async function againstLeads(cmd: Command, scope: string, minCount: number): Promise<string[]> {
+  const small = scope !== '/' && (await cmd.sys.vfs.countWithin(cmd.access, scope, OWN_CHECKSUM_LIMIT + 1)) <= OWN_CHECKSUM_LIMIT;
+  return small ? await checksumsIn(cmd, scope, 1) : await checksumsIn(cmd, '/', minCount);
+}
+
+async function exactScan(
+  cmd: Command,
+  scope: string,
+  against: string | null,
+  minCount: number,
+  minSize: number,
+): Promise<number> {
+  const inScope = under(scope);
+  const inAgainst = against === null ? null : under(against);
+
+  // Without a second root the checksums the scope itself holds `minCount` times are the answer,
+  // and their copies are read within it. With one, a checksum's copies are looked up wherever they
+  // are, and the groups below keep those with a copy in each root.
+  const twins = inAgainst ? await twinsOf(cmd, await againstLeads(cmd, scope, minCount)) : await twinsOf(cmd, await checksumsIn(cmd, scope, minCount), scope);
+
+  const groups: ExactDuplicateGroup[] = [];
+  for (const [sha256, files] of twins) {
+    const allPaths = files.map((file) => file.path);
+    let paths: ExactDuplicateGroup['paths'];
+    if (inAgainst) {
+      const tagged = allPaths
+        .map((path) => ({ path, inScope: inScope(path), inAgainst: inAgainst(path) }))
+        .filter((entry) => entry.inScope || entry.inAgainst);
+      if (!tagged.some((entry) => entry.inScope) || !tagged.some((entry) => entry.inAgainst) || tagged.length < minCount) continue;
+      tagged.sort((a, b) => a.path.localeCompare(b.path));
+      paths = tagged;
+    } else {
+      const scoped = allPaths.filter(inScope);
+      if (scoped.length < minCount) continue;
+      scoped.sort();
+      paths = scoped;
+    }
+    const size = files[0].size;
+    if (size < minSize) continue;
+    groups.push({ sha256, size, count: paths.length, reclaimable: size * (paths.length - 1), paths });
+  }
+
+  groups.sort((a, b) => b.reclaimable - a.reclaimable || (a.sha256 < b.sha256 ? -1 : 1));
+  const totalReclaimable = groups.reduce((sum, g) => sum + g.reclaimable, 0);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ mode: 'exact', totalGroups: groups.length, totalReclaimable, groups } satisfies ExactDuplicateScan);
+    return 0;
+  }
+  if (groups.length === 0) {
+    await cmd.writeLn('no duplicates found');
+    return 0;
+  }
+  await cmd.writeLn(`${groups.length} duplicate group${groups.length === 1 ? '' : 's'}, ${humanize(totalReclaimable)} reclaimable`);
+  for (const g of groups) {
+    await cmd.writeLn(`\n${g.sha256.slice(0, 12)}  x${g.count}  ${humanize(g.size)} each  (${humanize(g.reclaimable)} reclaimable)`);
+    for (const p of g.paths) {
+      if (typeof p === 'string') await cmd.writeLn(`  ${p}`);
+      else await cmd.writeLn(`  ${p.path}${p.inScope ? ' [scope]' : ''}${p.inAgainst ? ' [against]' : ''}`);
+    }
+  }
+  return 0;
+}
+
+async function exactSingle(cmd: Command, filePath: string, file: Node): Promise<number> {
+  const sha256 = file.attrs.sha256;
+  if (typeof sha256 !== 'string' || !sha256) {
+    await cmd.writeError(`duplicates: ${filePath} has no checksum (not synced)\n`);
+    return 1;
+  }
+  const entries = await cmd.sys.vfs.query(cmd.access, {
+    types: ['file'],
+    where: [{ ref: 'sha256', op: 'eq', value: sha256 }, NOT_DERIVED],
+    limit: PATHS_PER_HASH,
+  });
+  // By id, not by path: the file named through a link or another name of its own is not its copy.
+  const dupes = entries.filter((e) => e.id !== file.id).map((e) => e.absPath).sort();
+
+  if (cmd.json) {
+    await cmd.writeJSON({ mode: 'exact', path: filePath, sha256, count: dupes.length, duplicates: dupes } satisfies ExactDuplicatesOf);
+    return 0;
+  }
+  if (dupes.length === 0) {
+    await cmd.writeLn('no duplicates found');
+    return 0;
+  }
+  await cmd.writeLn(filePath);
+  for (const p of dupes) await cmd.writeLn(`  duplicate: ${p}`);
+  return 0;
+}
+
+// ===== fuzzy (fingerprints) =====
+
+/** The files fingerprint nodes belong to, by print id, in batched path lookups. Unreadable prints are absent. */
+async function printFiles(cmd: Command, ids: string[]): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  for (const chunk of chunked(ids, IDS_PER_CALL)) {
+    for (const [id, paths] of await cmd.sys.vfs.resolveIdPaths(cmd.access, chunk)) {
+      const parent = paths.length > 0 ? fingerprintParent(paths[0]) : null;
+      if (parent) files.set(id, parent);
+    }
+  }
+  return files;
+}
+
+async function fuzzySingle(cmd: Command, filePath: string, file: Node, thresholdArg: number | undefined, limit: number): Promise<number> {
+  const mimetype = typeof file.attrs.mimetype === 'string' ? file.attrs.mimetype : '';
+  const fpType = fuzzyTypeFor(mimetype);
+  if (!fpType) {
+    await cmd.writeError(`duplicates: --fuzzy needs image/video/audio, got ${mimetype || 'unknown'}\n`);
+    return 1;
+  }
+  const threshold = thresholdArg ?? DEFAULT_THRESHOLDS[fpType];
+
+  if (fpType === 'chromaprint') return await chromaprintSingle(cmd, filePath, Boolean(file.attrs.fingerprintedAt), threshold, limit);
+
+  const own = (await cmd.sys.vfs.children(cmd.access, `${filePath}/metadata`).catch(() => []))
+    .filter((entry) => printTypeOf(entry.name) === fpType)
+    .map((entry) => entry.node.id);
+  if (own.length === 0) {
+    await cmd.writeError(`duplicates: ${filePath} has no ${fpType} fingerprint\n`);
+    return 1;
+  }
+
+  // Through the VFS, not `regs.embedding`: the store holding the vectors is a mount at `/`, and
+  // the VFS routes a search across mounts.
+  const best = new Map<string, number>();
+  for (const vector of (await cmd.sys.vfs.getVectors(cmd.access, fpType, own)).values()) {
+    for (const match of await cmd.sys.vfs.findSimilar(cmd.access, fpType, vector, limit + 10, threshold)) {
+      if (own.includes(match.id)) continue;
+      if (match.similarity > (best.get(match.id) ?? -Infinity)) best.set(match.id, match.similarity);
+    }
+  }
+
+  const byPath = new Map<string, number>();
+  const parents = await printFiles(cmd, [...best.keys()]);
+  for (const [id, similarity] of best) {
+    const parent = parents.get(id);
+    if (!parent || parent === filePath) continue;
+    if (similarity > (byPath.get(parent) ?? -Infinity)) byPath.set(parent, similarity);
+  }
+  return await writeFuzzySingle(cmd, filePath, byPath, limit);
+}
+
+async function writeFuzzySingle(cmd: Command, filePath: string, byPath: Map<string, number>, limit: number): Promise<number> {
+  const deduped = [...byPath.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit);
+  if (cmd.json) {
+    await cmd.writeJSON(
+      {
+        mode: 'fuzzy',
+        path: filePath,
+        count: deduped.length,
+        duplicates: deduped.map(([path, similarity]) => ({ path, similarity })),
+      } satisfies FuzzyDuplicatesOf,
+    );
+    return 0;
+  }
+  if (deduped.length === 0) {
+    await cmd.writeLn('no duplicates found');
+    return 0;
+  }
+  await cmd.writeLn(filePath);
+  for (const [path, sim] of deduped) await cmd.writeLn(`  duplicate: ${path} (similarity: ${sim.toFixed(3)})`);
+  return 0;
+}
+
+// ===== fuzzy (chromaprint) =====
+
+/** Every stored chromaprint the caller can see, with the id of its node and the file it belongs to. */
+async function readChromaprints(cmd: Command): Promise<{ id: string; file: string; print: Uint32Array }[]> {
+  const prints: { id: string; file: string; print: Uint32Array }[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      where: [{ ref: 'mimetype', op: 'eq', value: CHROMAPRINT_MIMETYPE }],
+      after,
+      limit: CHROMAPRINT_PAGE,
+    });
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      const file = fingerprintParent(row.absPath);
+      if (file) prints.push({ id: row.id, file, print: decodeChromaprint(await readBytes(cmd, row.absPath)) });
+    }
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+  return prints;
+}
+
+/** `fingerprinted`: compute-fingerprint ran on the file, so a missing print means it is too short. */
+async function chromaprintSingle(cmd: Command, filePath: string, fingerprinted: boolean, threshold: number, limit: number): Promise<number> {
+  const ownPath = `${filePath}/metadata/chromaprint`;
+  const ownNode = await cmd.sys.vfs.get(cmd.access, ownPath).catch(() => null);
+  const own = ownNode && await readBytes(cmd, ownPath).catch(() => null);
+  if (!ownNode || !own) {
+    const why = fingerprinted ? ' (too short for one)' : '';
+    await cmd.writeError(`duplicates: ${filePath} has no chromaprint fingerprint${why}\n`);
+    return 1;
+  }
+  const print = decodeChromaprint(own);
+  const byPath = new Map<string, number>();
+  for (const other of await readChromaprints(cmd)) {
+    if (other.id === ownNode.id || other.file === filePath) continue;
+    const match = matchChromaprints(print, other.print);
+    if (match && match.similarity >= threshold) byPath.set(other.file, match.similarity);
+  }
+  return await writeFuzzySingle(cmd, filePath, byPath, limit);
+}
+
+/** Near-duplicate edges among chromaprints, with at least one end inside the scope. */
+function chromaprintEdges(prints: { file: string; print: Uint32Array }[], inScope: (path: string) => boolean, threshold: number): Edge[] {
+  const edges: Edge[] = [];
+  for (let i = 0; i < prints.length; i++) {
+    for (let j = i + 1; j < prints.length; j++) {
+      const [a, b] = [prints[i], prints[j]];
+      if (a.file === b.file || (!inScope(a.file) && !inScope(b.file))) continue;
+      const match = matchChromaprints(a.print, b.print);
+      if (match && match.similarity >= threshold) edges.push({ a: a.file, b: b.file, sim: match.similarity });
+    }
+  }
+  return edges;
+}
+
+/** The fingerprint nodes `<file>/metadata/<print>` of the files in a scope: two hops of child links. */
+async function printsOf(cmd: Command, files: FileEntry[]): Promise<{ id: string; type: string; file: string }[]> {
+  const fileById = new Map(files.map((file) => [file.id, file.path]));
+  const metadataOf = new Map<string, string>();
+  for (const chunk of chunked([...fileById.keys()], IDS_PER_CALL)) {
+    for (const [id, children] of await cmd.sys.vfs.getChildLinksByIds(cmd.access, chunk)) {
+      const metadata = children.find((child) => child.name === 'metadata');
+      if (metadata) metadataOf.set(metadata.id, fileById.get(id)!);
+    }
+  }
+  const prints: { id: string; type: string; file: string }[] = [];
+  for (const chunk of chunked([...metadataOf.keys()], IDS_PER_CALL)) {
+    for (const [id, children] of await cmd.sys.vfs.getChildLinksByIds(cmd.access, chunk)) {
+      for (const child of children) {
+        const type = printTypeOf(child.name);
+        if (type) prints.push({ id: child.id, type, file: metadataOf.get(id)! });
+      }
+    }
+  }
+  return prints;
+}
+
+/** Edges from each scoped file's vector prints to their nearest prints anywhere: one search per print. */
+async function scopedVectorEdges(cmd: Command, prints: { id: string; type: string; file: string }[], thresholdArg: number | undefined): Promise<Edge[]> {
+  const edges: Edge[] = [];
+  for (const type of VECTOR_TYPES) {
+    const own = prints.filter((print) => print.type === type);
+    if (own.length === 0) continue;
+    const threshold = thresholdArg ?? DEFAULT_THRESHOLDS[type];
+    const fileOf = new Map(own.map((print) => [print.id, print.file]));
+
+    const vectors: [string, Uint8Array][] = [];
+    for (const chunk of chunked(own.map((print) => print.id), IDS_PER_CALL)) {
+      vectors.push(...await cmd.sys.vfs.getVectors(cmd.access, type, chunk));
+    }
+    const found: { from: string; to: string; sim: number }[] = [];
+    await inParallel(vectors, SEARCHES_AT_ONCE, async ([id, vector]) => {
+      for (const match of await cmd.sys.vfs.findSimilar(cmd.access, type, vector, NEIGHBOURS + 1, threshold)) {
+        if (match.id !== id) found.push({ from: id, to: match.id, sim: match.similarity });
+      }
+    });
+
+    for (const [id, file] of await printFiles(cmd, [...new Set(found.map((edge) => edge.to).filter((id) => !fileOf.has(id)))])) fileOf.set(id, file);
+    for (const edge of found) {
+      const b = fileOf.get(edge.to);
+      if (b) edges.push({ a: fileOf.get(edge.from)!, b, sim: edge.sim });
+    }
+  }
+  return edges;
+}
+
+/** Edges among every vector print in the store: one all-pairs pass per type. */
+async function storeVectorEdges(cmd: Command, thresholdArg: number | undefined): Promise<Edge[]> {
+  const pairs: { a: string; b: string; sim: number }[] = [];
+  for (const type of VECTOR_TYPES) {
+    const threshold = thresholdArg ?? DEFAULT_THRESHOLDS[type];
+    for (const pair of await cmd.sys.vfs.findAllPairs(cmd.access, type, NEIGHBOURS, threshold)) pairs.push({ a: pair.a, b: pair.b, sim: pair.similarity });
+  }
+  const fileOf = await printFiles(cmd, [...new Set(pairs.flatMap((pair) => [pair.a, pair.b]))]);
+  return pairs.flatMap((pair) => {
+    const [a, b] = [fileOf.get(pair.a), fileOf.get(pair.b)];
+    return a && b ? [{ a, b, sim: pair.sim }] : [];
+  });
+}
+
+/** A file's vector prints of each type, L2-normalised, so a cosine is a dot product. */
+async function vectorsOf(cmd: Command, files: string[]): Promise<Map<string, Map<string, Float32Array[]>>> {
+  const out = new Map<string, Map<string, Float32Array[]>>();
+  const idsOf = new Map<string, { id: string; file: string }[]>();
+  await inParallel(files, SEARCHES_AT_ONCE, async (file) => {
+    for (const entry of await cmd.sys.vfs.children(cmd.access, `${file}/metadata`).catch(() => [])) {
+      const type = printTypeOf(entry.name);
+      if (!type || !VECTOR_TYPES.includes(type)) continue;
+      if (!idsOf.has(type)) idsOf.set(type, []);
+      idsOf.get(type)!.push({ id: entry.node.id, file });
+    }
+  });
+  const decoder = new TextDecoder();
+  for (const [type, prints] of idsOf) {
+    const fileOf = new Map(prints.map((print) => [print.id, print.file]));
+    for (const chunk of chunked(prints.map((print) => print.id), IDS_PER_CALL)) {
+      for (const [id, bytes] of await cmd.sys.vfs.getVectors(cmd.access, type, chunk)) {
+        const values: number[] = JSON.parse(decoder.decode(bytes));
+        const norm = Math.hypot(...values) || 1;
+        const file = fileOf.get(id)!;
+        if (!out.has(file)) out.set(file, new Map());
+        const byType = out.get(file)!;
+        if (!byType.has(type)) byType.set(type, []);
+        byType.get(type)!.push(Float32Array.from(values, (v) => v / norm));
+      }
+    }
+  }
+  return out;
+}
+
+/** The best cosine between any print of one list and any of the other. */
+function bestCosine(a: Float32Array[], b: Float32Array[]): number {
+  let best = -1;
+  for (const x of a) {
+    for (const y of b) {
+      let dot = 0;
+      for (let i = 0; i < x.length; i++) dot += x[i] * y[i];
+      best = Math.max(best, dot);
+    }
+  }
+  return best;
+}
+
+async function fuzzyScan(cmd: Command, scope: string, thresholdArg: number | undefined): Promise<number> {
+  const inScope = under(scope);
+  // A subtree small enough is searched from each of its own prints; a larger one, and `/`, are
+  // cheaper as one all-pairs pass over the store, narrowed to the scope.
+  const searched = scope !== '/' && (await cmd.sys.vfs.countWithin(cmd.access, scope, PRINT_SEARCH_LIMIT + 1)) <= PRINT_SEARCH_LIMIT;
+  const prints = searched ? await printsOf(cmd, await mediaWithin(cmd, scope)) : null;
+
+  const edges = prints ? await scopedVectorEdges(cmd, prints, thresholdArg) : await storeVectorEdges(cmd, thresholdArg);
+  // Chromaprints are aligned pair by pair, against every print in the store; a searched subtree
+  // with none of its own skips reading them.
+  const soundThreshold = thresholdArg ?? DEFAULT_THRESHOLDS['chromaprint'];
+  const sounds = new Map<string, Uint32Array>();
+  if (!prints || prints.some((print) => print.type === 'chromaprint')) {
+    const all = await readChromaprints(cmd);
+    for (const { file, print } of all) sounds.set(file, print);
+    edges.push(...chromaprintEdges(all, inScope, soundThreshold));
+  }
+
+  const scoped = edges.filter((edge) => edge.a !== edge.b && (inScope(edge.a) || inScope(edge.b)));
+  // A cluster takes in a file only when it is a copy of every member, which also asks about pairs
+  // the nearest-neighbour searches did not return: those are scored from their prints here.
+  const vectors = await vectorsOf(cmd, chainedFiles(scoped));
+  const score = (a: string, b: string): number | null => {
+    let best: number | null = null;
+    for (const [type, own] of vectors.get(a) ?? []) {
+      const other = vectors.get(b)?.get(type);
+      const sim = other ? bestCosine(own, other) : -1;
+      if (sim >= (thresholdArg ?? DEFAULT_THRESHOLDS[type])) best = Math.max(best ?? sim, sim);
+    }
+    const [sa, sb] = [sounds.get(a), sounds.get(b)];
+    const match = sa && sb ? matchChromaprints(sa, sb) : null;
+    if (match && match.similarity >= soundThreshold) best = Math.max(best ?? match.similarity, match.similarity);
+    return best;
+  };
+
+  const groups = duplicateClusters(scoped, score).sort((a, b) => b.topSimilarity - a.topSimilarity);
+  if (cmd.json) {
+    await cmd.writeJSON({ mode: 'fuzzy', totalClusters: groups.length, clusters: groups } satisfies FuzzyDuplicateScan);
+    return 0;
+  }
+  if (groups.length === 0) {
+    await cmd.writeLn('no near-duplicates found');
+    return 0;
+  }
+  await cmd.writeLn(`${groups.length} near-duplicate cluster${groups.length === 1 ? '' : 's'}`);
+  for (const g of groups) {
+    await cmd.writeLn(`\ncluster (top similarity: ${g.topSimilarity.toFixed(3)})`);
+    for (const m of g.members) await cmd.writeLn(`  ${m}`);
+  }
+  return 0;
+}
+
+// ===== findings and checksums =====
+
+async function record(cmd: Command, paths: string[]): Promise<number> {
+  if (paths.length === 0) {
+    await cmd.writeError('duplicates: --record needs a file or a directory\n');
+    return 1;
+  }
+  const answer = await recordPaths(cmd, paths.map((path) => resolve(cmd.cwd, path)));
+  if (cmd.json) await cmd.writeJSON(answer satisfies DuplicatesRecorded);
+  else {
+    await cmd.writeLn(`${answer.recorded} recorded, ${answer.unchanged} unchanged, ${answer.skipped.length} skipped`);
+    for (const skip of answer.skipped) await cmd.writeLn(`  ${skip.path}: ${skip.reason}`);
+  }
+  return 0;
+}
+
+async function checksums(cmd: Command, values: string[]): Promise<number> {
+  const hashes = values.map((value) => value.toLowerCase());
+  const bad = hashes.find((hash) => !SHA256.test(hash));
+  if (hashes.length === 0 || hashes.length > CHECKSUMS_MAX || bad !== undefined) {
+    await cmd.writeError(`duplicates: --checksum takes 1 to ${CHECKSUMS_MAX} sha256 checksums in hex${bad !== undefined ? `, not '${bad}'` : ''}\n`);
+    return 1;
+  }
+  const user = cmd.env.USER || cmd.env.HOME?.split('/').filter(Boolean).pop() || '';
+  const answer = await checksumMatches(cmd, user, hashes);
+  if (cmd.json) await cmd.writeJSON(answer satisfies ChecksumMatches);
+  else if (answer.matches.length === 0) await cmd.writeLn('no copies found');
+  else for (const match of answer.matches) await cmd.writeLn(`${match.sha256}  ${match.where}  ${match.path}`);
+  return 0;
+}
+
+// ===== entry =====
+
+const duplicates = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['fuzzy', 'f', 'record', 'checksum'],
+    string: ['t', 'threshold', 'n', 'limit', 'min-count', 'min-size', 'against'],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const fuzzy = flags.fuzzy || flags.f;
+  const against = flags.against as string | undefined;
+  if (flags.record || flags.checksum) {
+    if ((flags.record && flags.checksum) || fuzzy || against) {
+      await cmd.writeError('duplicates: --record and --checksum each go alone, without --fuzzy or --against\n');
+      return 1;
+    }
+    // Read raw: the parser turns a positional that looks like a number into one, and a checksum
+    // of decimal digits only, or a file named by one, would come back changed.
+    const values = cmd.args.filter((arg) => !arg.startsWith('-'));
+    try {
+      return flags.record ? await record(cmd, values) : await checksums(cmd, values);
+    } catch (error) {
+      await cmd.writeError(`duplicates: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+  if (against && fuzzy) {
+    await cmd.writeError('duplicates: --against applies to exact checksum mode only\n');
+    return 1;
+  }
+  const thresholdRaw = flags.threshold ?? flags.t;
+  const threshold = thresholdRaw !== undefined ? Number.parseFloat(thresholdRaw) : undefined;
+  if (threshold !== undefined && Number.isNaN(threshold)) {
+    await cmd.writeError('duplicates: --threshold must be a number\n');
+    return 1;
+  }
+  const limit = (flags.limit ?? flags.n) !== undefined ? Number.parseInt((flags.limit ?? flags.n)!, 10) : 20;
+  const minCount = flags['min-count'] !== undefined ? Number.parseInt(flags['min-count'], 10) : 2;
+  if (!Number.isInteger(minCount) || minCount < 2) {
+    await cmd.writeError('duplicates: --min-count must be an integer >= 2\n');
+    return 1;
+  }
+  const minSize = flags['min-size'] !== undefined ? Number.parseInt(flags['min-size'], 10) : 0;
+
+  const rawPath = flags._[0] as string | undefined;
+  if (!rawPath && against) {
+    await cmd.writeError('duplicates: --against needs a scope path\n');
+    return 1;
+  }
+
+  try {
+    if (!rawPath) return fuzzy ? await fuzzyScan(cmd, '/', threshold) : await exactScan(cmd, '/', null, minCount, minSize);
+
+    const path = resolve(cmd.cwd, rawPath);
+    const node = await cmd.sys.vfs.get(cmd.access, path).catch(() => null);
+    if (!node) {
+      await cmd.writeError(`duplicates: ${rawPath}: no such node\n`);
+      return 1;
+    }
+    if (node.type === 'file') {
+      if (against) {
+        await cmd.writeError('duplicates: --against needs a subtree, not a single file\n');
+        return 1;
+      }
+      return fuzzy ? await fuzzySingle(cmd, path, node, threshold, limit) : await exactSingle(cmd, path, node);
+    }
+    if (fuzzy) return await fuzzyScan(cmd, path, threshold);
+    return await exactScan(cmd, path, against === undefined ? null : resolve(cmd.cwd, against), minCount, minSize);
+  } catch (error) {
+    await cmd.writeError(`duplicates: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+duplicates.spec = {
+  name: 'duplicates',
+  effect: 'read' as const,
+  description:
+    'Find duplicate files by checksum (exact) or by fingerprint, copies with other bytes (--fuzzy); record the staged exact copies of files (--record), or look checksums up before an upload (--checksum)',
+  args: [
+    {
+      name: 'path',
+      type: 'path' as const,
+      variadic: true,
+      description: 'file, subtree, or omit for the whole library; --record takes files and directories, --checksum checksums',
+    },
+  ],
+  flags: [
+    { name: 'fuzzy', type: 'bool' as const, description: 'match fingerprints (resized, cropped, edited or rescanned copies) instead of checksums' },
+    { name: 't', type: 'string' as const, description: 'fuzzy similarity threshold (default 0.75 image / 0.80 video / 0.70 audio)' },
+    { name: 'n', type: 'string' as const, description: 'fuzzy: max results for a single file (default 20)' },
+    { name: 'min-count', type: 'string' as const, description: 'exact: minimum copies to report a group (default 2)' },
+    { name: 'min-size', type: 'string' as const, description: 'exact: ignore files smaller than this many bytes' },
+    { name: 'against', type: 'string' as const, description: 'exact: require copies in both the scoped subtree and this second root' },
+    {
+      name: 'record',
+      writes: true,
+      type: 'bool' as const,
+      description: 'decide again the duplicate findings of these staged files, of the staged copies of these library files, and of the files within these directories',
+    },
+    {
+      name: 'checksum',
+      type: 'bool' as const,
+      description: `the media originals you can read in the library or your own staging inbox that carry these checksums (at most ${CHECKSUMS_MAX})`,
+    },
+  ],
+  examples: [
+    'duplicates /archive/albums/Exempelalbum_2019',
+    'duplicates /home/anna/staging/files --against /archive/albums',
+    'duplicates --fuzzy --min-count 2 /archive/albums',
+    'duplicates --record /home/anna/staging/files/inbox/upload-2026-10-01/IMG_0001.jpg',
+    'duplicates --checksum 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+  ],
+  returns: 'groups of files that share a checksum, or with --fuzzy a fingerprint; --record: DuplicatesRecorded; --checksum: ChecksumMatches.',
+};
+
+export default duplicates;

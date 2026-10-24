@@ -1,0 +1,733 @@
+#!ts
+/**
+ * album-stack — reconcile album-local stacks of consecutive, visually similar photos.
+ *
+ * The album manifest is authoritative. Managed softlinks under
+ * `<front>/stack/<album-id>/` make the group browsable without moving an
+ * original or changing any path-based relationship.
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { albumMembers } from '@archive/media/album-members';
+import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, MEDIA_STACKS_VERSION, type MediaStackGroup, parseAlbumMediaStacks } from '@archive/media/media-stacks';
+import { basename, dirname, resolve } from '@std/path';
+import type { AlbumStackMutation } from '@archive/media/api';
+import { AUTO_ORIGIN } from '@archive/staging/auto-album';
+import { FINGERPRINT_TYPES } from '@archive/media/fingerprints';
+
+// SSCD cosine: frames of one burst score above it, a retake of the same scene below
+// (ein/core#334).
+const DEFAULT_THRESHOLD = 0.75;
+const DEFAULT_MAX_GAP_SECONDS = 10;
+const ALBUM_PAGE = 200;
+const FINGERPRINT_PAGE = 2_000;
+const GROUP_PAGE = 500;
+const STACK_DIR = 'stack';
+
+type NodeLike = Awaited<ReturnType<Command['sys']['vfs']['get']>>;
+
+type AlbumMember = {
+  id: string;
+  path: string;
+  memberPath?: string;
+  node: NodeLike;
+  takenAt?: string;
+  takenAtUtc?: string;
+  fingerprintId?: string;
+  fingerprintComputedAt?: string;
+  vector?: number[];
+};
+
+type StackMarker = { mediaStack?: { version?: number; albumId?: string; albumPath?: string } };
+
+type RefreshOptions = {
+  threshold: number;
+  maxGapSeconds: number;
+  dryRun: boolean;
+  verbose: boolean;
+  fingerprints?: ReadonlyMap<string, { id: string; computedAt?: string }>;
+};
+
+type RefreshResult = {
+  album: string;
+  changed: boolean;
+  groups: number;
+  stackedPhotos: number;
+  excluded: number;
+  missingFingerprints: number;
+  manifest: AlbumMediaStacks;
+};
+
+const albumLocks = new Map<string, Promise<void>>();
+
+async function withAlbumLock<T>(albumId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = albumLocks.get(albumId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => current);
+  albumLocks.set(albumId, tail);
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (albumLocks.get(albumId) === tail) albumLocks.delete(albumId);
+  }
+}
+
+const captureTime = (node: NodeLike): { takenAt?: string; takenAtUtc?: string } => ({
+  ...(typeof node.attrs.takenAt === 'string' ? { takenAt: node.attrs.takenAt } : {}),
+  ...(typeof node.attrs.takenAtUtc === 'string' && Number.isFinite(Date.parse(node.attrs.takenAtUtc)) ? { takenAtUtc: node.attrs.takenAtUtc } : {}),
+});
+
+/**
+ * Every album member, stacked or not, in stable chronological order, retaining both target and
+ * member identities. Who is a member is `@archive/media/album-members`, the rule `search --under` uses.
+ */
+async function readAlbumMembers(cmd: Command, albumPath: string): Promise<{ album: NodeLike; members: AlbumMember[] }> {
+  const { album, members: listed } = await albumMembers(cmd, albumPath);
+  const members: AlbumMember[] = listed.map((member) => ({
+    id: member.node.id,
+    path: member.path,
+    ...(member.memberPath ? { memberPath: member.memberPath } : {}),
+    node: member.node,
+    ...captureTime(member.node),
+  }));
+  members.sort((a, b) => {
+    if (a.takenAtUtc === b.takenAtUtc) return a.path.localeCompare(b.path);
+    if (!a.takenAtUtc) return 1;
+    if (!b.takenAtUtc) return -1;
+    return a.takenAtUtc.localeCompare(b.takenAtUtc);
+  });
+  return { album, members };
+}
+
+async function readFingerprints(
+  cmd: Command,
+  members: AlbumMember[],
+  index?: ReadonlyMap<string, { id: string; computedAt?: string }>,
+): Promise<number> {
+  const photos = members.filter((member) => String(member.node.attrs.mimetype ?? '').startsWith('image/'));
+  if (index) {
+    for (const member of photos) {
+      const fingerprint = index.get(member.path);
+      if (fingerprint) {
+        member.fingerprintId = fingerprint.id;
+        member.fingerprintComputedAt = fingerprint.computedAt;
+      }
+    }
+  } else {
+    await Promise.all(photos.map(async (member) => {
+      try {
+        const entries = await cmd.sys.vfs.children<{ computedAt?: string }>(cmd.access, `${member.path}/metadata`);
+        const fingerprint = entries.find((entry) => entry.name === FINGERPRINT_TYPES.image);
+        if (fingerprint) {
+          member.fingerprintId = fingerprint.node.id;
+          member.fingerprintComputedAt = fingerprint.node.attrs.computedAt;
+        }
+      } catch {
+        // A missing metadata directory is a normal not-yet-fingerprinted photo.
+      }
+    }));
+  }
+
+  const ids = photos.flatMap((member) => member.fingerprintId ? [member.fingerprintId] : []);
+  const vectors = ids.length > 0 ? await cmd.sys.vfs.getVectors(cmd.access, FINGERPRINT_TYPES.image, ids) : new Map<string, Uint8Array>();
+  const decoder = new TextDecoder();
+  for (const member of photos) {
+    if (!member.fingerprintId) continue;
+    const bytes = vectors.get(member.fingerprintId);
+    if (!bytes) continue;
+    try {
+      const vector = JSON.parse(decoder.decode(bytes));
+      if (Array.isArray(vector) && vector.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+        member.vector = vector;
+      }
+    } catch {
+      // A corrupt vector behaves like a missing one and breaks a chain.
+    }
+  }
+  return photos.filter((member) => !member.vector).length;
+}
+
+/** Build one photo-fingerprint lookup for a whole-corpus refresh. */
+async function readPrimaryFingerprintIndex(
+  cmd: Command,
+): Promise<Map<string, { id: string; computedAt?: string }>> {
+  const index = new Map<string, { id: string; computedAt?: string }>();
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['embedding'],
+      where: [{ ref: 'embeddingType', op: 'eq', value: FINGERPRINT_TYPES.image }],
+      after,
+      limit: FINGERPRINT_PAGE,
+    });
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      // Stacks consume only a photo's own fingerprint, `<file>/metadata/sscd-image`.
+      if (basename(row.absPath) !== FINGERPRINT_TYPES.image || basename(dirname(row.absPath)) !== 'metadata') continue;
+      const attrs = row.node.attrs as { computedAt?: string };
+      index.set(dirname(dirname(row.absPath)), { id: row.id, computedAt: attrs.computedAt });
+    }
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+  return index;
+}
+
+function cosine(a: readonly number[], b: readonly number[]): number {
+  if (a.length === 0 || a.length !== b.length) return -1;
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return aa > 0 && bb > 0 ? dot / Math.sqrt(aa * bb) : -1;
+}
+
+/**
+ * Hand-made groups, brought forward to the current membership.
+ *
+ * A member that left the album or was kept separate drops out; a group left with one
+ * photo is no group. The front moves to the earliest remaining member if it went.
+ */
+function carryManualGroups(
+  groups: readonly MediaStackGroup[],
+  members: readonly AlbumMember[],
+  excluded: ReadonlySet<string>,
+): MediaStackGroup[] {
+  const position = new Map(members.map((member, index) => [member.id, index]));
+  const carried: MediaStackGroup[] = [];
+  for (const group of groups) {
+    if (!group.manual) continue;
+    const memberIds = group.memberIds
+      .filter((id) => position.has(id) && !excluded.has(id))
+      .sort((a, b) => position.get(a)! - position.get(b)!);
+    if (memberIds.length < 2) continue;
+    carried.push({ frontId: memberIds.includes(group.frontId) ? group.frontId : memberIds[0], memberIds, manual: true });
+  }
+  return carried;
+}
+
+function deriveGroups(
+  members: readonly AlbumMember[],
+  previous: AlbumMediaStacks | undefined,
+  excluded: ReadonlySet<string>,
+  manual: readonly MediaStackGroup[],
+  threshold: number,
+  maxGapSeconds: number,
+): MediaStackGroup[] {
+  // A hand-stacked photo is spoken for: it neither joins a similarity chain
+  // nor bridges one across itself.
+  const taken = new Set(manual.flatMap((group) => group.memberIds));
+  const chains: string[][] = [];
+  let chain: AlbumMember[] = [];
+
+  const flush = () => {
+    if (chain.length >= 2) chains.push(chain.map((member) => member.id));
+    chain = [];
+  };
+
+  for (const member of members) {
+    const eligible = String(member.node.attrs.mimetype ?? '').startsWith('image/') &&
+      !!member.takenAt && !!member.takenAtUtc && !!member.vector && !excluded.has(member.id) && !taken.has(member.id);
+    if (!eligible) {
+      flush();
+      continue;
+    }
+    if (chain.length === 0) {
+      chain = [member];
+      continue;
+    }
+
+    const prior = chain[chain.length - 1];
+    const gapSeconds = (Date.parse(member.takenAtUtc!) - Date.parse(prior.takenAtUtc!)) / 1000;
+    if (gapSeconds >= 0 && gapSeconds <= maxGapSeconds && cosine(prior.vector!, member.vector!) >= threshold) {
+      chain.push(member);
+    } else {
+      flush();
+      chain = [member];
+    }
+  }
+  flush();
+
+  const derived = chains.map((memberIds) => {
+    const preserved = previous?.groups.find((group) => !group.manual && memberIds.includes(group.frontId));
+    return { frontId: preserved?.frontId ?? memberIds[0], memberIds };
+  });
+  // One order for both kinds, so a manifest compares equal when nothing moved.
+  const position = new Map(members.map((member, index) => [member.id, index]));
+  return [...derived, ...manual].sort((a, b) => position.get(a.memberIds[0])! - position.get(b.memberIds[0])!);
+}
+
+async function signatureFor(
+  members: readonly AlbumMember[],
+  excludedIds: readonly string[],
+  manual: readonly MediaStackGroup[],
+  threshold: number,
+  maxGapSeconds: number,
+): Promise<string> {
+  const input = JSON.stringify({
+    threshold,
+    maxGapSeconds,
+    excludedIds,
+    manual,
+    members: members.map((member) => [
+      member.id,
+      member.takenAt ?? null,
+      member.takenAtUtc ?? null,
+      member.node.attrs.mimetype ?? null,
+      member.fingerprintId ?? null,
+      member.fingerprintComputedAt ?? null,
+      member.vector ?? null,
+    ]),
+  });
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+const groupsEqual = (a: readonly MediaStackGroup[], b: readonly MediaStackGroup[]): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+const markerMatches = (attrs: StackMarker, albumId: string): boolean => attrs.mediaStack?.version === MEDIA_STACKS_VERSION && attrs.mediaStack.albumId === albumId;
+
+async function removeManagedGroup(cmd: Command, groupPath: string, albumId: string, refuseUnmanaged = true): Promise<void> {
+  if (!await cmd.sys.vfs.exists(cmd.access, groupPath, { follow: false })) return;
+  const node = await cmd.sys.vfs.get<StackMarker>(cmd.access, groupPath, { follow: false });
+  if (node.type !== 'directory' || !markerMatches(node.attrs, albumId)) {
+    if (refuseUnmanaged) throw new Error(`${groupPath}: refusing to replace an unmanaged stack directory`);
+    return;
+  }
+  await cmd.sys.vfs.unlink(cmd.access, groupPath, dirname(groupPath), { recursive: true, readlink: true });
+}
+
+async function materializeGroup(
+  cmd: Command,
+  albumPath: string,
+  albumId: string,
+  group: MediaStackGroup,
+  byId: ReadonlyMap<string, AlbumMember>,
+): Promise<string> {
+  const front = byId.get(group.frontId);
+  if (!front) throw new Error(`${albumPath}: stack front ${group.frontId} is no longer a member`);
+  const stackPath = `${front.path}/${STACK_DIR}`;
+  await cmd.sys.vfs.ensure(cmd.access, 'directory', front.path, STACK_DIR, {
+    props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o750 },
+  });
+  const groupPath = `${stackPath}/${albumId}`;
+  await removeManagedGroup(cmd, groupPath, albumId);
+  await cmd.sys.vfs.create(cmd.access, 'directory', stackPath, albumId, {
+    props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o750 },
+    attrs: { mediaStack: { version: MEDIA_STACKS_VERSION, albumId, albumPath } },
+  });
+
+  const used = new Set<string>();
+  for (const memberId of group.memberIds) {
+    if (memberId === group.frontId) continue;
+    const member = byId.get(memberId);
+    if (!member) continue;
+    const base = basename(member.path);
+    let name = base;
+    for (let suffix = 2; used.has(name); suffix++) name = `${base}-${suffix}`;
+    used.add(name);
+    await cmd.sys.vfs.create(cmd.access, 'softlink', groupPath, name, {
+      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: member.path },
+    });
+  }
+  return groupPath;
+}
+
+/**
+ * This album's managed stack directories, wherever they sit, by every path that reaches them.
+ *
+ * One query on the `media_stack_album` index rather than a walk to `<member>/stack/<albumId>` per
+ * photo: a whole-corpus sweep would walk more distinct paths than the store's path cache holds, so
+ * every one of them would reach PostgreSQL (ein/core#517).
+ */
+async function managedGroups(cmd: Command, albumId: string): Promise<Map<string, StackMarker>> {
+  const markers = new Map<string, StackMarker>();
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['directory'],
+      where: [{ ref: { path: ['mediaStack', 'albumId'] }, op: 'eq', value: albumId }],
+      after,
+      limit: GROUP_PAGE,
+    });
+    for (const row of rows) if (markerMatches(row.node.attrs as StackMarker, albumId)) markers.set(row.id, row.node.attrs as StackMarker);
+    if (rows.length < GROUP_PAGE) break;
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+
+  const groups = new Map<string, StackMarker>();
+  if (markers.size === 0) return groups;
+  const paths = await cmd.sys.vfs.resolveIdPaths(cmd.access, [...markers.keys()]);
+  for (const [id, marker] of markers) {
+    for (const path of paths.get(id) ?? []) {
+      if (basename(path) === albumId && basename(dirname(path)) === STACK_DIR) groups.set(path, marker);
+    }
+  }
+  return groups;
+}
+
+async function materializationCurrent(
+  cmd: Command,
+  albumPath: string,
+  albumId: string,
+  groups: readonly MediaStackGroup[],
+  byId: ReadonlyMap<string, AlbumMember>,
+): Promise<boolean> {
+  const managed = await managedGroups(cmd, albumId);
+  for (const group of groups) {
+    const front = byId.get(group.frontId);
+    if (!front) return false;
+    const groupPath = `${front.path}/${STACK_DIR}/${albumId}`;
+    if (managed.get(groupPath)?.mediaStack?.albumPath !== albumPath) return false;
+    try {
+      const links = await cmd.sys.vfs.children(cmd.access, groupPath);
+      const targets = new Set(links.flatMap((entry) => entry.node.props.softlink ? [entry.node.props.softlink] : []));
+      const expected = new Set(
+        group.memberIds.filter((id) => id !== group.frontId).flatMap((id) => {
+          const member = byId.get(id);
+          return member ? [member.path] : [];
+        }),
+      );
+      if (targets.size !== expected.size || [...expected].some((path) => !targets.has(path))) return false;
+    } catch {
+      return false;
+    }
+  }
+  const expectedPaths = new Set(groups.flatMap((group) => {
+    const front = byId.get(group.frontId);
+    return front ? [`${front.path}/${STACK_DIR}/${albumId}`] : [];
+  }));
+  for (const member of byId.values()) {
+    const groupPath = `${member.path}/${STACK_DIR}/${albumId}`;
+    if (!expectedPaths.has(groupPath) && managed.has(groupPath)) return false;
+  }
+  return true;
+}
+
+async function cleanupOldGroups(
+  cmd: Command,
+  albumId: string,
+  previous: AlbumMediaStacks | undefined,
+  keep: ReadonlySet<string>,
+): Promise<void> {
+  const oldFrontIds = [...new Set(previous?.groups.map((group) => group.frontId) ?? [])];
+  if (oldFrontIds.length === 0) return;
+  const paths = await cmd.sys.vfs.resolveIdPaths(cmd.access, oldFrontIds);
+  for (const id of oldFrontIds) {
+    for (const frontPath of paths.get(id) ?? []) {
+      const groupPath = `${frontPath}/${STACK_DIR}/${albumId}`;
+      if (!keep.has(groupPath)) await removeManagedGroup(cmd, groupPath, albumId, false);
+    }
+  }
+}
+
+async function cleanupMemberGroups(
+  cmd: Command,
+  albumId: string,
+  members: readonly AlbumMember[],
+  keep: ReadonlySet<string>,
+): Promise<void> {
+  const managed = await managedGroups(cmd, albumId);
+  for (const member of members) {
+    const groupPath = `${member.path}/${STACK_DIR}/${albumId}`;
+    if (!keep.has(groupPath) && managed.has(groupPath)) await removeManagedGroup(cmd, groupPath, albumId);
+  }
+}
+
+async function writeManifest(
+  cmd: Command,
+  albumPath: string,
+  album: NodeLike,
+  previous: AlbumMediaStacks | undefined,
+  manifest: AlbumMediaStacks,
+  members: readonly AlbumMember[],
+): Promise<void> {
+  const byId = new Map(members.map((member) => [member.id, member]));
+  const keep = new Set<string>();
+  for (const group of manifest.groups) keep.add(await materializeGroup(cmd, albumPath, album.id, group, byId));
+  await cmd.sys.vfs.update(cmd.access, albumPath, { attrs: { [MEDIA_STACKS_ATTR]: manifest } });
+  await cleanupOldGroups(cmd, album.id, previous, keep);
+  // A run interrupted after making links but before publishing the manifest
+  // leaves a managed orphan on one of the current members. Reconcile it too.
+  await cleanupMemberGroups(cmd, album.id, members, keep);
+}
+
+/** What a curation action changes under the derivation; a refresh keeps both as they are. */
+type CurationOverride = {
+  excluded?: ReadonlySet<string>;
+  manual?: readonly MediaStackGroup[];
+};
+
+async function refreshAlbumLocked(
+  cmd: Command,
+  albumPath: string,
+  options: RefreshOptions,
+  override: CurationOverride = {},
+): Promise<RefreshResult> {
+  const { album, members } = await readAlbumMembers(cmd, albumPath);
+  const previous = parseAlbumMediaStacks(album.attrs[MEDIA_STACKS_ATTR]);
+  const memberIds = new Set(members.map((member) => member.id));
+  const excludedIds = [...new Set(override.excluded ?? previous?.excludedIds ?? [])].filter((id) => memberIds.has(id)).sort();
+  const excluded = new Set(excludedIds);
+  const manual = carryManualGroups(override.manual ?? previous?.groups ?? [], members, excluded);
+  const missingFingerprints = await readFingerprints(cmd, members, options.fingerprints);
+  const groups = deriveGroups(members, previous, excluded, manual, options.threshold, options.maxGapSeconds);
+  const sourceSignature = await signatureFor(members, excludedIds, manual, options.threshold, options.maxGapSeconds);
+  const manifest: AlbumMediaStacks = {
+    version: MEDIA_STACKS_VERSION,
+    threshold: options.threshold,
+    maxGapSeconds: options.maxGapSeconds,
+    sourceSignature,
+    computedAt: new Date().toISOString(),
+    excludedIds,
+    groups,
+  };
+  const byId = new Map(members.map((member) => [member.id, member]));
+  const manifestChanged = !previous || previous.sourceSignature !== sourceSignature || !groupsEqual(previous.groups, groups) ||
+    JSON.stringify(previous.excludedIds) !== JSON.stringify(excludedIds);
+  const materializationNeedsRepair = !await materializationCurrent(cmd, albumPath, album.id, groups, byId);
+  const changed = manifestChanged || materializationNeedsRepair;
+  if (changed && !options.dryRun) await writeManifest(cmd, albumPath, album, previous, manifest, members);
+
+  if (options.verbose && !cmd.json) {
+    await cmd.writeLn(
+      `${albumPath}: ${groups.length} stack(s), ${groups.reduce((sum, group) => sum + group.memberIds.length, 0)} photo(s)${
+        changed ? options.dryRun ? ' (would update)' : ' (updated)' : ''
+      }`,
+    );
+  }
+  return {
+    album: albumPath,
+    changed,
+    groups: groups.length,
+    stackedPhotos: groups.reduce((sum, group) => sum + group.memberIds.length, 0),
+    excluded: excludedIds.length,
+    missingFingerprints,
+    manifest,
+  };
+}
+
+async function refreshAlbum(cmd: Command, albumPath: string, options: RefreshOptions): Promise<RefreshResult> {
+  const album = await cmd.sys.vfs.get(cmd.access, albumPath);
+  return await withAlbumLock(album.id, () => refreshAlbumLocked(cmd, albumPath, options));
+}
+
+/**
+ * Every album node but the staging suggestions, paged by id. `media-album` stacks a suggestion
+ * whenever its members change, which the organizer's runs do.
+ */
+async function* allAlbums(cmd: Command): AsyncGenerator<string> {
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { types: ['album'], where: [{ ref: 'origin', op: 'ne', value: AUTO_ORIGIN }], after, limit: ALBUM_PAGE });
+    if (rows.length === 0) return;
+    for (const row of rows) yield row.absPath;
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+}
+
+type MutateAction = 'front' | 'separate' | 'allow' | 'stack' | 'unstack';
+
+async function mutateMember(
+  cmd: Command,
+  action: MutateAction,
+  albumPath: string,
+  filePaths: readonly string[],
+): Promise<RefreshResult & AlbumStackMutation> {
+  const album = await cmd.sys.vfs.get(cmd.access, albumPath);
+  return await withAlbumLock(album.id, async () => {
+    const { album: freshAlbum, members } = await readAlbumMembers(cmd, albumPath);
+    const selected = filePaths.map((filePath) => {
+      const member = members.find((entry) => entry.path === filePath || entry.memberPath === filePath);
+      if (!member) throw new Error(`${filePath}: not a member of ${albumPath}`);
+      return member;
+    });
+    const previous = parseAlbumMediaStacks(freshAlbum.attrs[MEDIA_STACKS_ATTR]);
+    if (!previous) throw new Error(`${albumPath}: has no photo-stack manifest; run album-stack refresh first`);
+    const refreshOptions = { threshold: previous.threshold, maxGapSeconds: previous.maxGapSeconds, dryRun: false, verbose: false };
+
+    if (action === 'stack') {
+      // Everything picked, plus the whole of any stack one of them is already in, becomes one
+      // hand-made stack. The front is the earliest stack's own front, so adding to a stack
+      // does not change the picture it shows; a stack made from loose photos shows the first.
+      const position = new Map(members.map((member, index) => [member.id, index]));
+      const selectedIds = new Set(selected.map((member) => member.id));
+      const joined = previous.groups.filter((group) => group.memberIds.some((id) => selectedIds.has(id)));
+      const memberIds = [...new Set([...selected.map((member) => member.id), ...joined.flatMap((group) => group.memberIds)])]
+        .filter((id) => position.has(id))
+        .sort((a, b) => position.get(a)! - position.get(b)!);
+      if (memberIds.length < 2) throw new Error('stack: needs at least two photos');
+      const frontId = joined.map((group) => group.frontId).sort((a, b) => position.get(a)! - position.get(b)!)[0] ?? memberIds[0];
+      const manual = [
+        ...previous.groups.filter((group) => group.manual && !joined.includes(group)),
+        { frontId, memberIds, manual: true as const },
+      ];
+      // Stacking is the answer to "keep separate"; a member picked here is meant to join.
+      const excluded = new Set(previous.excludedIds.filter((id) => !memberIds.includes(id)));
+      const result = await refreshAlbumLocked(cmd, albumPath, refreshOptions, { excluded, manual });
+      return { ...result, focusPath: members.find((entry) => entry.id === frontId)?.path ?? selected[0].path };
+    }
+
+    const [member] = selected;
+    if (action === 'unstack') {
+      // Only a hand-made stack is undone; what similarity finds comes back on the refresh.
+      const group = previous.groups.find((entry) => entry.manual && entry.memberIds.includes(member.id));
+      if (!group) throw new Error(`${member.path}: is not in a hand-made stack in ${albumPath}`);
+      const manual = previous.groups.filter((entry) => entry.manual && entry !== group);
+      const result = await refreshAlbumLocked(cmd, albumPath, refreshOptions, { manual });
+      const visibleFrontId = result.manifest.groups.find((entry) => entry.memberIds.includes(member.id))?.frontId;
+      return { ...result, focusPath: members.find((entry) => entry.id === visibleFrontId)?.path ?? member.path };
+    }
+
+    if (action === 'front') {
+      const group = previous.groups.find((entry) => entry.memberIds.includes(member.id));
+      if (!group) throw new Error(`${member.path}: is not in a stack in ${albumPath}`);
+      const groups = previous.groups.map((entry) => entry === group ? { ...entry, frontId: member.id } : entry);
+      const manifest = { ...previous, groups, computedAt: new Date().toISOString() };
+      await writeManifest(cmd, albumPath, freshAlbum, previous, manifest, members);
+      return {
+        album: albumPath,
+        changed: true,
+        groups: groups.length,
+        stackedPhotos: groups.reduce((sum, entry) => sum + entry.memberIds.length, 0),
+        excluded: previous.excludedIds.length,
+        missingFingerprints: 0,
+        manifest,
+        focusPath: member.path,
+      };
+    }
+
+    const excluded = new Set(previous.excludedIds);
+    if (action === 'separate') excluded.add(member.id);
+    else excluded.delete(member.id);
+    const result = await refreshAlbumLocked(cmd, albumPath, refreshOptions, { excluded });
+    const visibleFrontId = result.manifest.groups.find((group) => group.memberIds.includes(member.id))?.frontId;
+    return { ...result, focusPath: members.find((entry) => entry.id === visibleFrontId)?.path ?? member.path };
+  });
+}
+
+const albumStack = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'dry-run', 'verbose'],
+    string: ['threshold', 'max-gap-seconds', 'limit'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [action, ...args] = flags._ as string[];
+  if (!['refresh', 'front', 'separate', 'allow', 'stack', 'unstack'].includes(action)) {
+    await cmd.writeError('album-stack: usage: album-stack <refresh|front|separate|allow|stack|unstack> ...\n');
+    return 1;
+  }
+
+  try {
+    if (action !== 'refresh') {
+      if (action === 'stack' ? args.length < 2 : args.length !== 2) {
+        throw new Error(`${action}: expected <album> ${action === 'stack' ? '<file>...' : '<file>'}`);
+      }
+      const [albumArg, ...fileArgs] = args;
+      const result = await mutateMember(cmd, action as MutateAction, resolve(cmd.cwd, albumArg), fileArgs.map((file) => resolve(cmd.cwd, file)));
+      if (cmd.json) await cmd.writeJSON(result);
+      else await cmd.writeLn(`${action}: ${result.focusPath}`);
+      return 0;
+    }
+
+    const threshold = flags.threshold === undefined ? Number(cmd.env.CFG_ALBUM_STACK_THRESHOLD ?? DEFAULT_THRESHOLD) : Number(flags.threshold);
+    const maxGapSeconds = flags['max-gap-seconds'] === undefined
+      ? Number(cmd.env.CFG_ALBUM_STACK_MAX_GAP_SECONDS ?? DEFAULT_MAX_GAP_SECONDS)
+      : Number(flags['max-gap-seconds']);
+    const limit = flags.limit === undefined ? Infinity : Number(flags.limit);
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error(`invalid --threshold '${flags.threshold}'`);
+    if (!Number.isFinite(maxGapSeconds) || maxGapSeconds < 0) throw new Error(`invalid --max-gap-seconds '${flags['max-gap-seconds']}'`);
+    if (!(limit > 0)) throw new Error(`invalid --limit '${flags.limit}'`);
+    const paths = args.map((path) => resolve(cmd.cwd, path));
+    if (!flags.all && paths.length === 0) throw new Error('refresh: give one or more album paths, or --all');
+
+    const results: RefreshResult[] = [];
+    if (flags.all) {
+      const fingerprints = await readPrimaryFingerprintIndex(cmd);
+      for await (const path of allAlbums(cmd)) {
+        if (results.length >= limit) break;
+        results.push(
+          await refreshAlbum(cmd, path, {
+            threshold,
+            maxGapSeconds,
+            dryRun: !!flags['dry-run'],
+            verbose: !!flags.verbose,
+            fingerprints,
+          }),
+        );
+      }
+    } else {
+      for (const path of paths.slice(0, limit)) {
+        results.push(
+          await refreshAlbum(cmd, path, {
+            threshold,
+            maxGapSeconds,
+            dryRun: !!flags['dry-run'],
+            verbose: !!flags.verbose,
+          }),
+        );
+      }
+    }
+
+    const summary = {
+      scanned: results.length,
+      changed: results.filter((result) => result.changed).length,
+      groups: results.reduce((sum, result) => sum + result.groups, 0),
+      stackedPhotos: results.reduce((sum, result) => sum + result.stackedPhotos, 0),
+      missingFingerprints: results.reduce((sum, result) => sum + result.missingFingerprints, 0),
+      dryRun: !!flags['dry-run'],
+      albums: results,
+    };
+    if (cmd.json) await cmd.writeJSON(summary);
+    else {await cmd.writeLn(
+        `album-stack: ${summary.scanned} scanned / ${summary.changed} ${
+          summary.dryRun ? 'would change' : 'changed'
+        } / ${summary.groups} stacks / ${summary.stackedPhotos} photos`,
+      );}
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`album-stack: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+albumStack.spec = {
+  name: 'album-stack',
+  effect: 'write' as const,
+  description: 'Reconcile album-local stacks of consecutive, perceptually similar photos',
+  args: [
+    { name: 'action', type: 'string' as const, description: 'refresh, front, separate, allow, stack or unstack' },
+    { name: 'album', type: 'path' as const, description: 'album path' },
+    { name: 'file', type: 'path' as const, description: 'member path for front/separate/allow/unstack; two or more for stack' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'refresh every album but the staging suggestions' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without writing manifests or links' },
+    { name: 'threshold', type: 'number' as const, description: "minimum cosine of adjacent photos' SSCD fingerprints (default 0.75)" },
+    { name: 'max-gap-seconds', type: 'number' as const, description: 'maximum adjacent capture-time gap (default 10)' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many albums' },
+    { name: 'verbose', type: 'bool' as const, description: 'print one line per album' },
+  ],
+  examples: [
+    'album-stack refresh /archive/albums/Exempelalbum_2019 --dry-run -v',
+    'album-stack front /archive/albums/Exempelalbum_2019 /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'refresh: how many albums were scanned and changed, stacks and stacked photos, and per album its manifest; the others: the album and member acted on.',
+};
+
+export default albumStack;

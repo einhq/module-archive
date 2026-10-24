@@ -1,0 +1,932 @@
+#!ts
+/**
+ * media-details — everything the UI sidebar shows for one media file, in one
+ * read: description, the extracted text, capture
+ * time, location + location, tagged people with their age at capture time,
+ * photographer, the device that took it with its owners, the albums holding it
+ * and comments.
+ *
+ * Sources are the file-node children documented in docs/architecture.md:
+ * `position` (content = lat/lng, attrs = reverse geocode), `location` and
+ * `photographer` softlinks, `people/<slug>` softlinks, `regions/*`
+ * carrying `personId`, `metadata/content` (index-document's extracted text), `metadata/sscd-*` and
+ * `metadata/chromaprint` (compute-fingerprint) and `comments/<slug>` blobs. Every section is
+ * best-effort — a missing or unreadable child yields null/[] instead of an
+ * error, so a half-indexed file still renders.
+ */
+import { type CmdReturn, collectUnknownFlags, type Command, type CommentEntry, parseArgs, readComments, reportUnknownFlags } from '@ein/client';
+import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
+import { faceEmbeddingsOfRegions, regionsPathOf } from '@archive/media/regions';
+import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
+import { basename, resolve } from '@std/path';
+import { isFingerprintName } from '@archive/media/fingerprints';
+import { isStoryboardName, STORYBOARD_ATTR, type StoryboardGeometry } from '@archive/media/storyboard';
+import type { ChapterBoundary } from '@archive/media/chapters';
+import { toText } from '@std/streams/to-text';
+import { ageAt, ageMonthsAt } from '@archive/people/genealogy';
+import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@archive/media/orientation';
+import type {
+  AlbumRef,
+  DeviceRef,
+  FaceBox,
+  FingerprintRef,
+  LocationRef,
+  MediaDetails,
+  MediaExif,
+  MediaFace,
+  MediaHashes,
+  MediaPosition,
+  MediaSpeaker,
+  MediaStackDetails,
+  NodeRef,
+  OwnerRef,
+  PersonTag,
+  StackMemberRef,
+  UnknownFace,
+} from '@archive/media/api';
+import { COVER_LINK_NAME } from '@ein/paths';
+
+type Vfs = Command['sys']['vfs'];
+type Access = Command['access'];
+
+const readJson = async (vfs: Vfs, access: Access, path: string): Promise<unknown> => {
+  const handle = await vfs.open(access, path, { mode: 'r' });
+  try {
+    return JSON.parse(await toText(handle.readable));
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * How much extracted text the sidebar is handed. `metadata/content` is the whole of whatever was
+ * extracted — a scanned book would otherwise put megabytes into every details fetch.
+ */
+const TEXT_LIMIT = 4000;
+
+/** A db-tier text child (`metadata/content`), or null when absent. */
+const readText = async (vfs: Vfs, access: Access, path: string): Promise<string | null> => {
+  try {
+    const handle = await vfs.open(access, path, { mode: 'r' });
+    try {
+      const text = (await toText(handle.readable)).trim();
+      return text || null;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The language `read-text` stored on a picture's extracted text: `ocrLanguage`, with the
+ * confidence EMS told it with, or null when the node is absent or carries none. A language a
+ * person set is stored without a confidence.
+ */
+const readTextLanguage = async (vfs: Vfs, access: Access, path: string): Promise<{ code: string; confidence?: number } | null> => {
+  try {
+    const attrs = (await vfs.get(access, path)).attrs as Record<string, unknown>;
+    if (typeof attrs.ocrLanguage !== 'string' || !attrs.ocrLanguage) return null;
+    return { code: attrs.ocrLanguage, ...(typeof attrs.ocrLanguageConfidence === 'number' ? { confidence: attrs.ocrLanguageConfidence } : {}) };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Provenance of a file's timed transcript, or null when it has none.
+ *
+ * The WebVTT body is deliberately not read here. An hour of speech is far past TEXT_LIMIT
+ * and would be truncated mid-cue into every details fetch, for a panel that streams the
+ * same node over HTTP anyway — where the browser caches it and can hand it to `<track>`.
+ * What the sidebar needs from the server is only whether there is one, and in what language.
+ */
+const readTranscript = async (vfs: Vfs, access: Access, path: string): Promise<{ language?: string; segmentCount?: number; duration?: number } | null> => {
+  try {
+    const node = await vfs.get(access, path);
+    const attrs = node.attrs as Record<string, unknown>;
+    return {
+      ...(typeof attrs.language === 'string' ? { language: attrs.language } : {}),
+      ...(typeof attrs.segmentCount === 'number' ? { segmentCount: attrs.segmentCount } : {}),
+      ...(typeof attrs.duration === 'number' ? { duration: attrs.duration } : {}),
+    };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A video's storyboard sheet and how to cut it into tiles, from the sheet's node; null when it
+ * has none. Only a sheet with bytes and its geometry counts: a temp or a half-written one is not one.
+ */
+const readStoryboard = async (vfs: Vfs, access: Access, path: string): Promise<MediaDetails['storyboard'] | null> => {
+  try {
+    for (const child of await vfs.children(access, `${path}/thumbnails`)) {
+      if (!isStoryboardName(child.name)) continue;
+      const attrs = child.node.attrs as Record<string, unknown>;
+      const geometry = attrs[STORYBOARD_ATTR] as Partial<StoryboardGeometry> | undefined;
+      if (!geometry || !(Number(attrs.size) > 0) || typeof attrs.sha256 !== 'string') continue;
+      const { interval, count, columns, tileWidth, tileHeight } = geometry;
+      if (![interval, count, columns, tileWidth, tileHeight].every((n) => typeof n === 'number' && n > 0)) continue;
+      return { name: child.name, sha256: attrs.sha256, interval: interval!, count: count!, columns: columns!, tileWidth: tileWidth!, tileHeight: tileHeight! };
+    }
+  } catch {
+    // No thumbnails yet.
+  }
+  return null;
+};
+
+/**
+ * Where a video's chapters start, from the cuts on its `metadata/chapters` node; null without one
+ * or with no cut. The WebVTT body is not read: the cuts on the node are the same, and smaller.
+ */
+const readChapters = async (vfs: Vfs, access: Access, path: string): Promise<number[] | null> => {
+  try {
+    const boundaries = (await vfs.get(access, path)).attrs.boundaries as ChapterBoundary[] | undefined;
+    if (!Array.isArray(boundaries) || boundaries.length === 0) return null;
+    return [0, ...boundaries.map((b) => b.t).filter((t) => typeof t === 'number' && t > 0)];
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The voices of a recording, in the order they are first heard, and the named people among them.
+ *
+ * A voice nobody is decided for is still returned: who speaks when is worth showing before
+ * anyone is identified. The turns no voice could be told for come back on their own, so the
+ * timeline of speech stays complete.
+ */
+const readSpeakers = async (
+  vfs: Vfs,
+  access: Access,
+  path: string,
+  takenAt?: string,
+): Promise<{ speakers: MediaSpeaker[]; unattributedTurns: [number, number][]; heard: PersonTag[] }> => {
+  const speakersPath = speakersPathOf(path);
+  let dir;
+  let children;
+  try {
+    dir = await vfs.get<{ unattributed?: [number, number][] }>(access, speakersPath);
+    children = await vfs.children<Partial<SpeakerAttrs>>(access, speakersPath);
+  } catch {
+    return { speakers: [], unattributedTurns: [], heard: [] };
+  }
+
+  const speakers: MediaSpeaker[] = [];
+  const heard: PersonTag[] = [];
+  for (const child of children) {
+    const attrs = child.node.attrs;
+    if (attrs.embeddingType !== VOICE_EMBEDDING_TYPE || !Array.isArray(attrs.turns)) continue;
+    const speaker: MediaSpeaker = {
+      speakerPath: `${speakersPath}/${child.name}`,
+      speaker: attrs.speaker ?? child.name,
+      turns: attrs.turns,
+      talkSeconds: typeof attrs.talkSeconds === 'number' ? attrs.talkSeconds : 0,
+    };
+    const personId = attrs.personId;
+    if (personId) {
+      const entries = await vfs.resolveId(access, personId).catch(() => []);
+      const target = entries[0]?.vfsAbsPath;
+      const result = target ? await toPersonTag(vfs, access, target, 'voice', takenAt) : null;
+      if (result && target) {
+        Object.assign(speaker, { personId, personPath: target, personName: result.tag.name, ...(result.unnamed ? { unnamed: true } : {}) });
+        if (!result.unnamed) heard.push(result.tag);
+      }
+      if (attrs.personSource) speaker.personSource = attrs.personSource;
+    }
+    speakers.push(speaker);
+  }
+
+  speakers.sort((a, b) => (a.turns[0]?.[0] ?? 0) - (b.turns[0]?.[0] ?? 0));
+  const unattributed = Array.isArray(dir.attrs.unattributed) ? dir.attrs.unattributed : [];
+  return { speakers, unattributedTurns: unattributed, heard };
+};
+
+/** Resolve a softlink child to its target node, or null when absent/dangling. */
+const linkTarget = async (vfs: Vfs, access: Access, linkPath: string): Promise<NodeRef | null> => {
+  try {
+    const link = await vfs.get(access, linkPath, { follow: false });
+    const target = link.props.softlink;
+    if (!target) return null;
+    const node = await vfs.get<{ name?: string }>(access, target);
+    return { id: basename(target), path: target, name: node.attrs.name ?? basename(target) };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A location link, plus the location's own coordinates when it has them.
+ *
+ * A location's shape is its `position` child, read exactly like the file's own — which is what
+ * lets the sidebar draw a map for a photo that was linked to a location but never carried GPS of
+ * its own.
+ */
+const locationTarget = async (vfs: Vfs, access: Access, linkPath: string): Promise<LocationRef | null> => {
+  const ref = await linkTarget(vfs, access, linkPath);
+  if (!ref) return null;
+  try {
+    const point = await readJson(vfs, access, `${ref.path}/position`) as { lat?: number; lng?: number; radius?: number };
+    if (typeof point?.lat !== 'number' || typeof point?.lng !== 'number') return ref;
+    return { ...ref, lat: point.lat, lng: point.lng, ...(typeof point.radius === 'number' && point.radius > 0 ? { radius: point.radius } : {}) };
+  } catch {
+    return ref;
+  }
+};
+
+type ExifAttrs = {
+  deviceinfo?: { make?: string; model?: string };
+  deviceSerialNumber?: string;
+  fileinfo?: {
+    width?: number;
+    height?: number;
+    fps?: number;
+    iso?: number;
+    exposure?: number;
+    frames?: number;
+    duration?: number;
+    bitrate?: number;
+    sampleRate?: number;
+    channels?: number;
+    codec?: string;
+    sar?: number;
+  };
+  raw?: Record<string, unknown>;
+};
+
+/**
+ * The exif node, flattened. Falls back to the file node's own hot attrs for dimensions —
+ * `exif-extract` promotes `width`/`height` there, and a file indexed before the exif node
+ * gained `fileinfo` still has them.
+ */
+const readExif = async (
+  vfs: Vfs,
+  access: Access,
+  path: string,
+  fileAttrs: { width?: number; height?: number; sar?: number; devicePath?: string },
+  angle: Angle,
+  wantRaw: boolean,
+): Promise<MediaExif | null> => {
+  let attrs: ExifAttrs = {};
+  try {
+    attrs = (await vfs.get<ExifAttrs>(access, `${path}/metadata/exif`)).attrs;
+  } catch {
+    // Not indexed yet. Dimensions may still be on the file node, so fall through rather
+    // than returning null — a half-indexed file should still show what it has.
+  }
+
+  const info = attrs.fileinfo ?? {};
+  const width = info.width ?? fileAttrs.width;
+  const height = info.height ?? fileAttrs.height;
+  const sar = info.sar ?? fileAttrs.sar;
+  const dims = width !== undefined && height !== undefined ? pictureDims(width, height, angle, sar) : undefined;
+
+  const exif: MediaExif = {};
+  if (attrs.deviceinfo?.make) exif.make = attrs.deviceinfo.make;
+  if (attrs.deviceinfo?.model) exif.model = attrs.deviceinfo.model;
+  if (attrs.deviceSerialNumber) exif.serial = attrs.deviceSerialNumber;
+  if (typeof info.iso === 'number') exif.iso = info.iso;
+  if (typeof info.exposure === 'number') exif.exposure = info.exposure;
+  if (typeof info.fps === 'number') exif.fps = info.fps;
+  if (typeof info.duration === 'number') exif.duration = info.duration;
+  if (typeof info.frames === 'number') exif.frames = info.frames;
+  if (typeof info.bitrate === 'number') exif.bitrate = info.bitrate;
+  if (typeof info.sampleRate === 'number') exif.sampleRate = info.sampleRate;
+  if (typeof info.channels === 'number') exif.channels = info.channels;
+  if (typeof info.codec === 'string') exif.codec = info.codec;
+  if (width !== undefined) exif.width = width;
+  if (height !== undefined) exif.height = height;
+  if (typeof sar === 'number') exif.sar = sar;
+  if (dims) {
+    exif.displayWidth = dims.width;
+    exif.displayHeight = dims.height;
+  }
+  if (fileAttrs.devicePath) exif.devicePath = fileAttrs.devicePath;
+  if (wantRaw && attrs.raw) exif.raw = attrs.raw;
+
+  return Object.keys(exif).length > 0 ? exif : null;
+};
+
+/** A file's `position` child: its point, and the address the reverse geocoder wrote on it. */
+const readPosition = async (vfs: Vfs, access: Access, path: string): Promise<MediaPosition | null> => {
+  try {
+    const data = await readJson(vfs, access, path) as { lat?: number; lng?: number };
+    if (typeof data?.lat !== 'number' || typeof data?.lng !== 'number') return null;
+
+    const node = await vfs.get<{ displayName?: string; city?: string; country?: string }>(access, path);
+    return {
+      lat: data.lat,
+      lng: data.lng,
+      address: node.attrs.displayName,
+      city: node.attrs.city,
+      country: node.attrs.country,
+    };
+  } catch {
+    return null;
+  }
+};
+
+const NODE_TYPE_ALBUM = 'album';
+const NODE_TYPE_FILE = 'file';
+/** How far above a file an album may sit: `<album>/<file>` or `<album>/files/<file>`. */
+const ALBUM_LOOKUP_DEPTH = 4;
+/** Ceiling on the reverse lookup. A file in more albums than this is not a sidebar. */
+const ALBUM_LINK_LIMIT = 200;
+
+/**
+ * The album above each of a set of starting ancestors, climbing by id a whole
+ * generation per round trip.
+ *
+ * The same shape as `search --group-by` uses, written here rather than imported:
+ * modules carry no dependency on core, and `cmd.sys.vfs` exposes everything the
+ * climb needs. Bounded by depth rather than by how many starts there are, so a
+ * file linked into twenty auto albums costs the same handful of queries as one
+ * linked into none.
+ *
+ * @param starts caller's key -> the ancestor id to begin testing at
+ * @returns caller's key -> the album id found above it
+ */
+const albumsAbove = async (
+  vfs: Vfs,
+  access: Access,
+  starts: Map<string, string>,
+): Promise<Map<string, string>> => {
+  let climbing = new Map(starts);
+  const found = new Map<string, string>();
+
+  for (let depth = 0; depth < ALBUM_LOOKUP_DEPTH && climbing.size > 0; depth++) {
+    const nodes = await vfs.getNodesByIds(access, [...new Set(climbing.values())]);
+
+    const next = new Map<string, string>();
+    const unresolved = new Set<string>();
+
+    for (const [key, ancestor] of climbing) {
+      const node = nodes.get(ancestor);
+      if (!node) continue; // unreadable ancestor — nothing above it is reachable
+      if (node.type === NODE_TYPE_ALBUM) {
+        found.set(key, ancestor);
+        continue;
+      }
+      if (node.type === NODE_TYPE_FILE) continue;
+      next.set(key, ancestor);
+      unresolved.add(ancestor);
+    }
+
+    if (next.size === 0) break;
+
+    const up = await vfs.getParentLinksByIds(access, [...unresolved]);
+    climbing = new Map();
+    for (const [key, ancestor] of next) {
+      const parent = up.get(ancestor)?.[0]?.parentId;
+      if (parent) climbing.set(key, parent);
+    }
+  }
+
+  return found;
+};
+
+/**
+ * Every album holding the file: the one it lives under, plus any that link it.
+ *
+ * An album holds its files, so the first is found by climbing the hierarchy. A
+ * file added to an album, or a staging suggestion's member, is a link instead,
+ * so the only way to see those from the file is `findLinks` — the indexed
+ * reverse lookup — and climbing from each link's own directory. A `coverPhoto`
+ * link is skipped: an album may use a picture that lives elsewhere as its cover,
+ * and that does not make the picture a member. A climb that reaches a file is
+ * dropped: a link below a file (a relation, a stack) is about that file
+ * and files nothing.
+ */
+const readAlbums = async (vfs: Vfs, access: Access, path: string, fileId: string): Promise<AlbumRef[]> => {
+  /** Key -> the member link's path, absent for the album the file lives in. */
+  const memberPaths = new Map<string, string | undefined>();
+  const starts = new Map<string, string>();
+
+  try {
+    const own = await vfs.getParentLinksByIds(access, [fileId]);
+    const parent = own.get(fileId)?.[0]?.parentId;
+    if (parent) {
+      starts.set('self', parent);
+      memberPaths.set('self', undefined);
+    }
+  } catch {
+    // No hierarchy edge readable — the linked albums may still answer.
+  }
+
+  try {
+    for (const link of await vfs.findLinks(access, path, ALBUM_LINK_LIMIT)) {
+      if (basename(link.absPath) === COVER_LINK_NAME) continue;
+      starts.set(link.id, link.parentId);
+      memberPaths.set(link.id, link.absPath);
+    }
+  } catch {
+    // A store without the backlink index contributes nothing here.
+  }
+
+  if (starts.size === 0) return [];
+
+  const found = await albumsAbove(vfs, access, starts);
+  if (found.size === 0) return [];
+
+  const albumIds = [...new Set(found.values())];
+  const [paths, nodes] = await Promise.all([
+    vfs.resolveIdEntries(access, albumIds),
+    vfs.getNodesByIds<{ name?: string }>(access, albumIds),
+  ]);
+
+  const byId = new Map<string, AlbumRef>();
+  for (const [key, albumId] of found) {
+    const albumPath = paths.get(albumId)?.[0]?.path;
+    if (!albumPath) continue;
+    const memberPath = memberPaths.get(key);
+
+    const existing = byId.get(albumId);
+    if (existing) {
+      // Reached twice — once as a member link and once by climbing. Where the
+      // file actually lives is the stronger answer, so it drops the link.
+      if (memberPath === undefined) delete existing.memberPath;
+      continue;
+    }
+    byId.set(albumId, {
+      id: albumId,
+      path: albumPath,
+      name: nodes.get(albumId)?.attrs.name ?? basename(albumPath),
+      ...(memberPath ? { memberPath } : {}),
+    });
+  }
+
+  return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
+type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
+
+/**
+ * The device that took the file, with its owners.
+ *
+ * `devicePath` is stamped on the file by `device-link`. Owners are one listing
+ * of `<device>/owners/` — softlinks at whose target the person lives, carrying
+ * the ownership span in `attrs.relation`, exactly as `device-info` reads them.
+ */
+const readDevice = async (vfs: Vfs, access: Access, devicePath: string): Promise<DeviceRef | null> => {
+  let node;
+  try {
+    node = await vfs.get<{ name?: string; make?: string; model?: string }>(access, devicePath);
+  } catch {
+    return null;
+  }
+
+  const owners: OwnerRef[] = [];
+  try {
+    for (const entry of await vfs.children<OwnerLinkAttrs>(access, `${devicePath}/owners`)) {
+      const target = entry.node.props.softlink;
+      if (!target) continue;
+      const relation = entry.node.attrs.relation;
+      let name = basename(target);
+      try {
+        name = (await vfs.get<{ name?: string }>(access, target)).attrs.name ?? name;
+      } catch {
+        // A dangling owner link still names a slug, which is an answer.
+      }
+      owners.push({
+        id: basename(target),
+        path: target,
+        name,
+        ...(relation?.from ? { from: relation.from } : {}),
+        ...(relation?.to ? { to: relation.to } : {}),
+      });
+    }
+  } catch {
+    // no owners directory
+  }
+
+  return {
+    id: basename(devicePath),
+    path: devicePath,
+    name: node.attrs.name ?? basename(devicePath),
+    ...(node.attrs.make ? { make: node.attrs.make } : {}),
+    ...(node.attrs.model ? { model: node.attrs.model } : {}),
+    owners: owners.sort((a, b) => a.name.localeCompare(b.name)),
+  };
+};
+
+/**
+ * Fingerprints, as provenance only.
+ *
+ * `compute-fingerprint` writes them as children of `metadata/` (@archive/media/fingerprints).
+ * The values themselves say nothing to a reader, so only the name and who computed it when are
+ * reported.
+ */
+const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise<FingerprintRef[]> => {
+  try {
+    const entries = await vfs.children<{ computedAt?: string; computedBy?: string }>(access, `${path}/metadata`);
+    return entries
+      .filter((entry) => isFingerprintName(entry.name))
+      .map((entry) => ({
+        name: entry.name,
+        ...(entry.node.attrs.computedAt ? { computedAt: entry.node.attrs.computedAt } : {}),
+        ...(entry.node.attrs.computedBy ? { computedBy: entry.node.attrs.computedBy } : {}),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+};
+
+const toPersonTag = async (
+  vfs: Vfs,
+  access: Access,
+  personPath: string,
+  source: PersonTag['source'],
+  takenAt?: string,
+): Promise<{ tag: PersonTag; unnamed: boolean } | null> => {
+  try {
+    const node = await vfs.get<{ name?: string; born?: string; unnamed?: boolean }>(access, personPath);
+    const born = node.attrs.born;
+    const age = born && takenAt ? ageAt(born, takenAt) : null;
+    const ageMonths = born && takenAt && age?.years === 0 ? ageMonthsAt(born, takenAt) : null;
+    return {
+      unnamed: node.attrs.unnamed === true,
+      tag: {
+        id: basename(personPath),
+        path: personPath,
+        name: node.attrs.name ?? basename(personPath),
+        born,
+        age: age?.years,
+        ageMonths: ageMonths?.months,
+        ageApprox: age?.approx,
+        source,
+      },
+    };
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * People in the file: `people/<slug>` softlinks first, then regions with a
+ * `personId` for anyone not already tagged (a box is weaker evidence than an
+ * explicit tag, and the same person often has both).
+ *
+ * People face recognition invented but nobody has named are returned
+ * separately. They are real person nodes, but listing them alongside the named
+ * ones would fill every sidebar with "Unknown 3PW8M9" — as identities they are
+ * a prompt to go and name someone, not a fact about the photo.
+ */
+const readPeople = async (
+  vfs: Vfs,
+  access: Access,
+  path: string,
+  takenAt?: string,
+): Promise<{ people: PersonTag[]; faces: MediaFace[]; unknownFaces: UnknownFace[] }> => {
+  const byPath = new Map<string, PersonTag>();
+  const faces: MediaFace[] = [];
+  const unknownFaces: UnknownFace[] = [];
+
+  try {
+    for (const link of await vfs.children(access, `${path}/people`)) {
+      const target = link.node.props.softlink;
+      if (!target || byPath.has(target)) continue;
+      const result = await toPersonTag(vfs, access, target, 'tag', takenAt);
+      if (result && !result.unnamed) byPath.set(target, result.tag);
+    }
+  } catch {
+    // no people directory
+  }
+
+  try {
+    const regions = await vfs.children<{ personId?: string; faceBox?: FaceBox; transferredTo?: string }>(access, regionsPathOf(path));
+    // Which boxes are faces and which are tags, in one lookup for the whole photo.
+    const embeddings = await faceEmbeddingsOfRegions(vfs, access, regions.map((region) => region.node.id));
+    for (const face of regions) {
+      const faceBox = face.node.attrs.faceBox;
+      // A transferred legacy tag is the hidden source of another active face, not a second
+      // editable box. It may still contribute identity below if it carries one.
+      const activeFaceBox = face.node.attrs.transferredTo ? undefined : faceBox;
+      const facePath = `${regionsPathOf(path)}/${face.name}`;
+      const hasFace = embeddings.has(face.node.id);
+      const personId = face.node.attrs.personId;
+      if (!personId) {
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace });
+        continue;
+      }
+      const entries = await vfs.resolveId(access, personId).catch(() => []);
+      const target = entries[0]?.vfsAbsPath;
+      if (!target) {
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId });
+        continue;
+      }
+
+      const result = await toPersonTag(vfs, access, target, 'face', takenAt);
+      if (!result) {
+        if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId, personPath: target });
+        continue;
+      }
+      if (activeFaceBox) {
+        faces.push({
+          faceId: face.node.id,
+          facePath,
+          faceBox: activeFaceBox,
+          hasFace,
+          personId,
+          personPath: target,
+          personName: result.tag.name,
+          unnamed: result.unnamed,
+        });
+      }
+      if (result.unnamed) {
+        unknownFaces.push({
+          faceId: face.node.id,
+          facePath,
+          personId,
+          personPath: target,
+          personName: result.tag.name,
+          ...(activeFaceBox ? { faceBox: activeFaceBox } : {}),
+        });
+        continue;
+      }
+      if (!byPath.has(target)) byPath.set(target, activeFaceBox ? { ...result.tag, faceBox: activeFaceBox } : result.tag);
+    }
+  } catch {
+    // no regions directory
+  }
+
+  return { people: [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name)), faces, unknownFaces };
+};
+
+type FileAttrs = {
+  name?: string;
+  description?: string;
+  /** The language a person set for the text in a picture (`file-set-text-language`). */
+  ocrLanguageManual?: string;
+  takenAt?: string;
+  takenAtUtc?: string;
+  takenAtSource?: string;
+  digitized?: boolean;
+  takenAtNote?: string;
+  whenManual?: string;
+  angle?: unknown;
+  mirror?: unknown;
+  mimetype?: string;
+  size?: number;
+  undecodable?: string | null;
+  sha256?: string;
+  sha1?: string;
+  md5?: string;
+  width?: number;
+  height?: number;
+  sar?: number;
+  duration?: number;
+  devicePath?: string;
+};
+
+const stackMember = (id: string, path: string, node: Awaited<ReturnType<Vfs['get']>>): StackMemberRef => {
+  const attrs = node.attrs as FileAttrs;
+  return {
+    id,
+    path,
+    name: attrs.name ?? basename(path),
+    ownership: { uid: node.props.uid, gid: node.props.gid, mode: node.props.mode },
+    ...(attrs.mimetype ? { mimetype: attrs.mimetype } : {}),
+    ...(attrs.takenAt ? { takenAt: attrs.takenAt } : {}),
+    ...(typeof attrs.width === 'number' ? { width: attrs.width } : {}),
+    ...(typeof attrs.height === 'number' ? { height: attrs.height } : {}),
+    ...(typeof attrs.sar === 'number' ? { sar: attrs.sar } : {}),
+    ...(typeof attrs.angle === 'number' ? { angle: attrs.angle } : {}),
+    ...(typeof attrs.duration === 'number' ? { duration: attrs.duration } : {}),
+    ...(typeof attrs.size === 'number' ? { size: attrs.size } : {}),
+  };
+};
+
+const readAlbumStack = async (
+  vfs: Vfs,
+  access: Access,
+  albumPath: string,
+  fileId: string,
+  filePath: string,
+): Promise<MediaStackDetails | undefined> => {
+  let album;
+  try {
+    album = await vfs.get<{ [MEDIA_STACKS_ATTR]?: AlbumMediaStacks }>(access, albumPath);
+  } catch {
+    return undefined;
+  }
+  if (album.type !== 'album') return undefined;
+  const manifest = parseAlbumMediaStacks(album.attrs[MEDIA_STACKS_ATTR]);
+  if (!manifest) return undefined;
+
+  const group = manifest.groups.find((entry) => entry.memberIds.includes(fileId));
+  const excluded = manifest.excludedIds.includes(fileId);
+  if (!group && !excluded) return undefined;
+
+  const ids = group?.memberIds ?? [fileId];
+  const [paths, nodes] = await Promise.all([
+    vfs.resolveIdEntries(access, ids),
+    vfs.getNodesByIds<FileAttrs>(access, ids),
+  ]);
+  const members = ids.flatMap((id) => {
+    const node = nodes.get(id);
+    const path = id === fileId ? filePath : paths.get(id)?.[0]?.path;
+    return node && path ? [stackMember(id, path, node)] : [];
+  });
+  return {
+    albumId: album.id,
+    albumPath,
+    albumOwnership: { uid: album.props.uid, gid: album.props.gid, mode: album.props.mode },
+    excluded,
+    membersComplete: members.length === ids.length,
+    ...(group ? { frontId: group.frontId } : {}),
+    members,
+  };
+};
+
+const mediaDetails = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['fields', 'album'], collect: ['fields'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('media-details: usage: media-details <file> [--album <path>] [--fields raw]\n');
+    return 1;
+  }
+  // The full exiftool dump is far bigger than everything else here put together, so the
+  // sidebar asks for it only when someone opens the raw section.
+  const wantRaw = flags.fields.flatMap((f) => f.split(',')).includes('raw');
+  const path = resolve(cmd.cwd, target);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const albumPath = flags.album ? resolve(cmd.cwd, flags.album) : undefined;
+
+  let node;
+  try {
+    node = await vfs.get<FileAttrs>(access, path);
+  } catch (error) {
+    await cmd.writeError(`media-details: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  // Capture time only — never fall back to modtime: ages are computed from
+  // this, and a file's modtime would silently produce "age today" instead.
+  //
+  // One attr now, not a coalesce: `takenAt` *is* the resolution of the manual, GPS, device and
+  // name sources (`@archive/media/resolve-time`). `whenManual` travels alongside it so the lightbox can
+  // offer a revert, and `takenAtSource` so it can say where the date came from.
+  const takenAt = node.attrs.takenAt;
+  const angle = normalizeAngle(node.attrs.angle);
+  const mirror = normalizeMirror(node.attrs.mirror);
+
+  const childNames = new Set((await vfs.children(access, path)).map((c) => c.name));
+
+  const isVideo = typeof node.attrs.mimetype === 'string' && node.attrs.mimetype.startsWith('video/');
+  const [
+    exif,
+    position,
+    location,
+    photographer,
+    device,
+    albums,
+    peopleResult,
+    comments,
+    content,
+    contentLanguage,
+    transcript,
+    voices,
+    fingerprints,
+    albumStack,
+    storyboard,
+    chapters,
+  ] = await Promise.all([
+    readExif(vfs, access, path, node.attrs, angle, wantRaw),
+    childNames.has('position') ? readPosition(vfs, access, `${path}/position`) : Promise.resolve(null),
+    childNames.has('location') ? locationTarget(vfs, access, `${path}/location`) : Promise.resolve(null),
+    childNames.has('photographer') ? linkTarget(vfs, access, `${path}/photographer`) : Promise.resolve(null),
+    node.attrs.devicePath ? readDevice(vfs, access, node.attrs.devicePath) : Promise.resolve(null),
+    readAlbums(vfs, access, path, node.id),
+    readPeople(vfs, access, path, takenAt),
+    readComments(cmd, path),
+    childNames.has('metadata') ? readText(vfs, access, `${path}/metadata/content`) : Promise.resolve(null),
+    childNames.has('metadata') ? readTextLanguage(vfs, access, `${path}/metadata/content`) : Promise.resolve(null),
+    childNames.has('metadata') ? readTranscript(vfs, access, `${path}/metadata/transcript`) : Promise.resolve(null),
+    childNames.has('metadata') ? readSpeakers(vfs, access, path, takenAt) : Promise.resolve({ speakers: [], unattributedTurns: [], heard: [] }),
+    childNames.has('metadata') ? readFingerprints(vfs, access, path) : Promise.resolve([]),
+    albumPath ? readAlbumStack(vfs, access, albumPath, node.id, path).catch(() => undefined) : Promise.resolve(undefined),
+    isVideo && childNames.has('thumbnails') ? readStoryboard(vfs, access, path) : Promise.resolve(null),
+    isVideo && childNames.has('metadata') ? readChapters(vfs, access, `${path}/metadata/chapters`) : Promise.resolve(null),
+  ]);
+
+  const details: MediaDetails = {
+    path,
+    name: node.attrs.name ?? basename(path),
+    ownership: { uid: node.props.uid, gid: node.props.gid, mode: node.props.mode },
+    description: node.attrs.description,
+    ...(content ? { content: content.slice(0, TEXT_LIMIT) } : {}),
+    ...(content && content.length > TEXT_LIMIT ? { contentTruncated: true } : {}),
+    ...(contentLanguage ? { contentLanguage } : {}),
+    ...(node.attrs.ocrLanguageManual ? { contentLanguageManual: node.attrs.ocrLanguageManual } : {}),
+    // Only announced when it has something to show. A silent clip still gets a transcript
+    // node — that is what stops it being re-transcribed on every sweep — but an empty cue
+    // list is not a panel worth opening or a subtitle track worth offering.
+    ...(transcript && (transcript.segmentCount ?? 0) > 0 ? { hasTranscript: true } : {}),
+    ...(transcript?.language ? { transcriptLanguage: transcript.language } : {}),
+    ...(storyboard ? { storyboard } : {}),
+    ...(chapters ? { chapters } : {}),
+    takenAt,
+    takenAtUtc: node.attrs.takenAtUtc,
+    takenAtSource: node.attrs.takenAtSource,
+    ...(node.attrs.digitized === true ? { digitized: true as const } : {}),
+    ...(node.attrs.takenAtNote ? { takenAtNote: node.attrs.takenAtNote } : {}),
+    ...(node.attrs.whenManual ? { whenManual: node.attrs.whenManual } : {}),
+    angle,
+    mirror,
+    mimetype: node.attrs.mimetype,
+    size: node.attrs.size,
+    // Null is how a re-index clears the mark, so only a non-empty reason is a reason.
+    ...(node.attrs.undecodable ? { undecodable: node.attrs.undecodable } : {}),
+    hashes: {
+      ...(node.attrs.sha256 ? { sha256: node.attrs.sha256 } : {}),
+      ...(node.attrs.sha1 ? { sha1: node.attrs.sha1 } : {}),
+      ...(node.attrs.md5 ? { md5: node.attrs.md5 } : {}),
+    },
+    exif,
+    position,
+    location,
+    photographer,
+    device,
+    albums,
+    // People seen or tagged first; someone only heard joins them, so "who is in this" covers
+    // a recording as it does a photo.
+    people: [
+      ...peopleResult.people,
+      ...voices.heard.filter((tag) => !peopleResult.people.some((p) => p.path === tag.path)),
+    ].sort((a, b) => a.name.localeCompare(b.name)),
+    faces: peopleResult.faces,
+    unknownFaces: peopleResult.unknownFaces,
+    speakers: voices.speakers,
+    unattributedTurns: voices.unattributedTurns,
+    comments,
+    fingerprints,
+    ...(albumStack ? { albumStack } : {}),
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(details satisfies MediaDetails);
+  } else {
+    await cmd.writeLn(`${details.name}${details.takenAt ? ` (${details.takenAt})` : ''}`);
+    if (details.description) await cmd.writeLn(details.description);
+    if (details.content) await cmd.writeLn(`text: ${details.content}${details.contentTruncated ? '…' : ''}`);
+    if (details.exif?.displayWidth) await cmd.writeLn(`size: ${details.exif.displayWidth}x${details.exif.displayHeight}`);
+    if (details.undecodable) await cmd.writeLn(`undecodable: ${details.undecodable}`);
+    if (details.storyboard) await cmd.writeLn(`storyboard: ${details.storyboard.name}, ${details.storyboard.count} frames ${details.storyboard.interval}s apart`);
+    if (details.chapters) await cmd.writeLn(`chapters: ${details.chapters.map((t) => t.toFixed(2)).join(', ')}`);
+    if (details.exif?.model) await cmd.writeLn(`camera: ${[details.exif.make, details.exif.model].filter(Boolean).join(' ')}`);
+    if (details.position) await cmd.writeLn(`position: ${details.position.lat},${details.position.lng} ${details.position.address ?? ''}`);
+    if (details.location) await cmd.writeLn(`location: ${details.location.name}`);
+    if (details.photographer) await cmd.writeLn(`photographer: ${details.photographer.name}`);
+    if (details.device) {
+      const owners = details.device.owners.map((o) => o.name).join(', ');
+      await cmd.writeLn(`device: ${details.device.name}${owners ? ` (owned by ${owners})` : ''}`);
+    }
+    for (const a of details.albums) {
+      await cmd.writeLn(`album: ${a.name} ${a.path}${a.memberPath ? ' (linked)' : ''}`);
+    }
+    for (const p of details.people) {
+      const age = p.age === undefined ? '' : ` (${p.ageApprox ? '~' : ''}${p.age})`;
+      await cmd.writeLn(`person: ${p.name}${age}`);
+    }
+    if (details.unknownFaces.length > 0) {
+      await cmd.writeLn(`unidentified: ${details.unknownFaces.length} face${details.unknownFaces.length === 1 ? '' : 's'}`);
+    }
+    for (const c of details.comments) {
+      await cmd.writeLn(`comment ${c.author}: ${c.body}`);
+    }
+    for (const [name, value] of Object.entries(details.hashes)) {
+      await cmd.writeLn(`${name}: ${value}`);
+    }
+    for (const f of details.fingerprints) {
+      await cmd.writeLn(`fingerprint: ${f.name}${f.computedAt ? ` (${f.computedAt})` : ''}`);
+    }
+  }
+  return 0;
+};
+
+mediaDetails.spec = {
+  name: 'media-details',
+  effect: 'read' as const,
+  description: 'Read description, time, location, location, device with owners, albums, tagged people (with age) and comments for a media file',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
+  ],
+  flags: [
+    { name: 'album', type: 'path' as const, description: 'album context for stack membership and exclusion details' },
+    { name: 'fields', type: 'string' as const, description: 'extra fields to include: raw (the full exiftool dump)' },
+  ],
+  examples: [
+    'media-details /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: "the file's description, when and where it was taken, its albums, and the people in it with their ages.",
+};
+
+export default mediaDetails;

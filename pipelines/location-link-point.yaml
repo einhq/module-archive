@@ -1,0 +1,18 @@
+name: location-link-point
+description: Link a photo to the location containing its GPS point when the point is written
+
+# Subject is the photo's `<file>/position` node. The fact comes from
+# archive-bridge when the point is written — not when the node appears, which
+# writers do first, empty.
+trigger:
+  on: location.point.changed
+
+steps:
+  link:
+    command: location-link-media --point $NODE_PATH
+    description: Link the photo to the location whose shape contains it
+
+options:
+  maxAttempts: 2
+  # Beside media-geocode: cheap, one registry query per photo.
+  priority: 5

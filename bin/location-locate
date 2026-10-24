@@ -1,0 +1,405 @@
+#!ts
+/**
+ * location-locate — give a location coordinates, from its media first and its address
+ * second.
+ *
+ * A location's position is its `position` child. Without a shape there nothing can
+ * be found near the location, no photo can be attached to it by shape, and no auto
+ * album can be named after it. There are two ways to give it one and they fail
+ * in opposite directions, which is why this tries them in order:
+ *
+ *  1. The **media centroid** — where the geotagged files linked to this location
+ *     actually are. Exact, free, no network, and it cannot invent a position for
+ *     a location nobody has photographed. It also describes the location's *extent*,
+ *     which an address never can: a park is not a doorway.
+ *  2. The **address**, handed to `geocode-location`. The only option for the 42
+ *     locations that carry a name and nothing else, or that were never
+ *     photographed with a GPS.
+ *
+ * Everything is gathered in three batched passes over the whole corpus rather
+ * than per location — see `collectPoints`.
+ *
+ * `--refresh` is the form the `location-upkeep` pipeline runs whenever a location or
+ * its photos change. It re-derives instead of skipping a placed location, but
+ * writes only what moved, so a location's own writes announcing it again cost one
+ * run that changes nothing. Coordinates set by hand are never touched.
+ */
+import { LOCATIONS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { centroidOf, DEFAULT_MAX_SPREAD_M, DEFAULT_MIN_POINTS } from '@archive/location/centroid';
+import type { Point } from '@archive/location/centroid';
+import { basename, dirname, resolve } from '@std/path';
+import { isShapeLink, LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
+import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
+
+/** The whole earth: one bounding-box scan returns every stored point. */
+const WORLD = { north: 90, south: -90, east: 180, west: -180 };
+/** Ceiling on the registry scan and the backlink scan. */
+const SCAN_LIMIT = 200000;
+
+/** Closer than this, a recomputed centre is the same centre. */
+const SAME_POINT_M = 1;
+
+type Shape = { lat: number; lng: number; radius?: number; polygon?: unknown };
+
+/** A location's stored shape, or undefined when it has none. */
+const readShape = async (cmd: Command, location: string): Promise<Shape | undefined> => {
+  let handle;
+  try {
+    handle = await cmd.sys.vfs.open(cmd.access, `${location}/${POSITION_CHILD}`, { mode: 'r' });
+  } catch {
+    return undefined;
+  }
+  try {
+    const data = await handle.read(1 << 20);
+    if (data.length === 0) return undefined;
+    const json = JSON.parse(new TextDecoder().decode(data));
+    return typeof json?.lat === 'number' && typeof json?.lng === 'number' ? json : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+};
+
+/** Metres between two points; an equirectangular approximation is plenty at this distance. */
+const metersBetween = (a: { lat: number; lng: number }, b: { lat: number; lng: number }): number => {
+  const x = ((b.lng - a.lng) * Math.PI / 180) * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+  const y = (b.lat - a.lat) * Math.PI / 180;
+  return Math.hypot(x, y) * 6_371_000;
+};
+
+type LocationResult = {
+  path: string;
+  status: string;
+  source?: string;
+  reason?: string;
+  lat?: number;
+  lng?: number;
+  radius?: number;
+  used?: number;
+  dropped?: number;
+  spread?: number;
+  /** Whether this location cost a geocoder request, so the caller can pace itself. */
+  requested?: boolean;
+};
+
+/**
+ * The geotagged media behind every location, and which locations already sit
+ * somewhere.
+ *
+ * Three batched calls for the entire corpus, not one per location: the registry
+ * scan (~5k points), one resolve of those ids to their paths, and one backlink
+ * lookup for every location at once. The join is on the file's node id, which both
+ * `resolveIdEntries` and `findLinks` hand back directly — no path arithmetic.
+ */
+const collectPoints = async (
+  cmd: Command,
+  locationPaths: string[],
+): Promise<{ points: Map<string, Point[]>; placed: Set<string> }> => {
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  const hits = await vfs.findWithin(access, WORLD, SCAN_LIMIT);
+  const byId = new Map(hits.map((hit) => [hit.id, { lat: hit.lat, lng: hit.lng }]));
+
+  // A position's id says nothing about what it belongs to; its parent does.
+  const resolved = await vfs.resolveIdEntries(access, [...byId.keys()]);
+
+  /** File node id -> that file's own GPS point. */
+  const filepoints = new Map<string, Point>();
+  /** Location paths that already have a shape — a position without one never comes back. */
+  const placed = new Set<string>();
+  const wanted = new Set(locationPaths);
+
+  for (const [id, entries] of resolved) {
+    const point = byId.get(id);
+    if (!point) continue;
+    for (const entry of entries) {
+      if (basename(entry.path) !== POSITION_CHILD) continue;
+      const owner = dirname(entry.path);
+      if (wanted.has(owner)) placed.add(owner);
+      else filepoints.set(entry.parentId, point);
+    }
+  }
+
+  const links = await vfs.findLinks(access, locationPaths, SCAN_LIMIT);
+  const points = new Map<string, Point[]>();
+
+  for (const link of links) {
+    // Only `<file>/location`. A resident relation or a label pointing at the same
+    // location is not media and has no position of its own.
+    if (basename(link.absPath) !== LOCATION_LINK_NAME) continue;
+    if (!wanted.has(link.target)) continue;
+    // A link made *because* the photo is inside the shape says nothing about
+    // where the location is, and counting it would let the shape define itself.
+    if (isShapeLink(link.node)) continue;
+    const point = filepoints.get(link.parentId);
+    if (!point) continue;
+    const list = points.get(link.target);
+    if (list) list.push(point);
+    else points.set(link.target, [point]);
+  }
+
+  return { points, placed };
+};
+
+export const locationLocate = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'force', 'refresh', 'dry-run', 'verbose', 'no-geocode'],
+    string: ['root', 'limit', 'min-points', 'max-spread', 'radius'],
+    alias: { f: 'force', n: 'dry-run', v: 'verbose', a: 'all' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const root = (flags.root as string | undefined) ?? LOCATIONS_ROOT;
+  const target = flags._[0] as string | undefined;
+
+  if (!target && !flags.all) {
+    await cmd.writeError('location-locate: missing location path (or --all)\n');
+    return 1;
+  }
+
+  const num = (value: string | undefined, fallback: number, name: string): number => {
+    if (value === undefined) return fallback;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`invalid --${name}, must be a non-negative number`);
+    return parsed;
+  };
+
+  let minPoints: number, maxSpread: number, radius: number | undefined, max: number;
+  try {
+    minPoints = num(flags['min-points'] as string | undefined, DEFAULT_MIN_POINTS, 'min-points');
+    maxSpread = num(flags['max-spread'] as string | undefined, DEFAULT_MAX_SPREAD_M, 'max-spread');
+    radius = flags.radius !== undefined ? num(flags.radius as string, 0, 'radius') : undefined;
+    max = flags.limit !== undefined ? num(flags.limit as string, Infinity, 'limit') : Infinity;
+  } catch (error) {
+    await cmd.writeError(`location-locate: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  // ----- which locations to work on -----
+  let targets: string[];
+  try {
+    if (flags.all) {
+      const entries = await cmd.sys.vfs.children(cmd.access, root);
+      targets = entries.filter((e) => e.node.type === NODE_TYPE_LOCATION).map((e) => `${root}/${e.name}`);
+    } else {
+      const path = resolve(cmd.cwd, target!);
+      const node = await cmd.sys.vfs.get(cmd.access, path);
+      if (node.type !== NODE_TYPE_LOCATION) {
+        await cmd.writeError(`location-locate: ${path}: not a location (a location node, is ${node.type})\n`);
+        return 1;
+      }
+      targets = [path];
+    }
+  } catch (error) {
+    await cmd.writeError(`location-locate: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  let points: Map<string, Point[]>, placed: Set<string>;
+  try {
+    ({ points, placed } = await collectPoints(cmd, targets));
+  } catch (error) {
+    await cmd.writeError(`location-locate: cannot collect media points: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const geocodeFlags = [
+    flags.force ? '--force' : '',
+    flags['dry-run'] ? '--dry-run' : '',
+    radius !== undefined ? `--radius ${shq(String(radius))}` : '',
+  ].filter(Boolean).join(' ');
+
+  const results: LocationResult[] = [];
+  let processed = 0;
+
+  for (const path of targets) {
+    if (processed >= max) break;
+    processed++;
+    results.push(
+      await locateOne(cmd, path, points.get(path) ?? [], placed.has(path), {
+        minPoints,
+        maxSpread,
+        radius,
+        force: Boolean(flags.force),
+        refresh: Boolean(flags.refresh),
+        dryRun: Boolean(flags['dry-run']),
+        geocode: !flags['no-geocode'],
+        geocodeFlags,
+      }),
+    );
+
+    // No pacing here: `nominatimSearch` throttles the public instance itself,
+    // which is the only layer that sees all of a lookup's retries.
+  }
+
+  // ----- report -----
+  if (!flags.all) {
+    const only = results[0];
+    if (cmd.json) {
+      await cmd.writeJSON(only);
+    } else {
+      await cmd.writeLn(describe(only));
+    }
+    return only.status === 'failed' ? 1 : 0;
+  }
+
+  const counts: Record<string, number> = {};
+  for (const result of results) counts[result.status] = (counts[result.status] ?? 0) + 1;
+
+  if (flags.verbose && !cmd.json) {
+    for (const result of results) {
+      if (result.status !== 'skipped') await cmd.writeLn(describe(result));
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ counts, results });
+    return counts.failed > 0 ? 1 : 0;
+  }
+
+  await cmd.writeLn(
+    Object.entries(counts).sort().map(([status, n]) => `${status} ${n}`).join(', ') || 'nothing to do',
+  );
+  return counts.failed > 0 ? 1 : 0;
+};
+
+const describe = (result: LocationResult): string => {
+  const where = result.lat !== undefined && result.lng !== undefined
+    ? ` ${result.lat.toFixed(5)},${result.lng.toFixed(5)}${result.radius !== undefined ? ` r${result.radius}m` : ''}`
+    : '';
+  const via = result.source ? ` [${result.source}]` : '';
+  return `${result.status.padEnd(8)} ${result.path}${where}${via}${result.reason ? ` — ${result.reason}` : ''}`;
+};
+
+type LocateOptions = {
+  minPoints: number;
+  maxSpread: number;
+  radius?: number;
+  force: boolean;
+  refresh: boolean;
+  dryRun: boolean;
+  geocode: boolean;
+  geocodeFlags: string;
+};
+
+/** The two-source rule for one location. */
+const locateOne = async (
+  cmd: Command,
+  path: string,
+  media: Point[],
+  alreadyPlaced: boolean,
+  opts: LocateOptions,
+): Promise<LocationResult> => {
+  try {
+    const attrs = opts.refresh ? (await cmd.sys.vfs.get(cmd.access, path)).attrs as LocationAttrs : {};
+
+    if (opts.refresh && attrs.locationSource === 'manual') {
+      return { path, status: 'skipped', reason: 'set by hand' };
+    }
+    if (alreadyPlaced && !opts.force && !opts.refresh) {
+      return { path, status: 'skipped', reason: 'already placed' };
+    }
+
+    const centroid = centroidOf(media, { minPoints: opts.minPoints, maxSpread: opts.maxSpread, radius: opts.radius });
+
+    if (centroid.status === 'good') {
+      const { lat, lng, radius, used, dropped, spread } = centroid;
+      if (opts.refresh && attrs.locationSource === 'media-centroid') {
+        const current = await readShape(cmd, path);
+        if (current && current.radius === radius && metersBetween(current, { lat, lng }) < SAME_POINT_M) {
+          return { path, status: 'skipped', source: 'media-centroid', reason: 'photos have not moved it' };
+        }
+      }
+      if (opts.dryRun) {
+        return { path, status: 'dry-run', source: 'media-centroid', lat, lng, radius, used, dropped, spread, reason: centroid.reason };
+      }
+
+      await cmd.sys.vfs.ensure(cmd.access, 'position', path, POSITION_CHILD);
+      const handle = await cmd.sys.vfs.open(cmd.access, `${path}/${POSITION_CHILD}`, { mode: 'w' });
+      try {
+        await handle.write(new TextEncoder().encode(JSON.stringify({ lat, lng, radius })));
+      } finally {
+        await handle.close();
+      }
+
+      await cmd.sys.vfs.update(cmd.access, path, {
+        attrs: {
+          locationSource: 'media-centroid',
+          locationPoints: used,
+          locationSpread: spread,
+          geocodedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+          // It is placed now; a half-finished geocoder question is stale.
+          geocodeCandidates: null,
+        },
+      });
+
+      return { path, status: 'applied', source: 'media-centroid', lat, lng, radius, used, dropped, spread, reason: centroid.reason };
+    }
+
+    // ----- fall back to the written address -----
+    const centroidReason = centroid.reason;
+    // A photo unlinked from a location does not make where the rest of them were
+    // wrong, and the address is the weaker source: keep the centroid.
+    if (opts.refresh && alreadyPlaced && attrs.locationSource === 'media-centroid') {
+      return { path, status: 'skipped', source: 'media-centroid', reason: `kept (${centroidReason})` };
+    }
+    if (!opts.geocode) {
+      return { path, status: centroid.status === 'empty' ? 'empty' : 'poor', reason: centroidReason, used: centroid.used };
+    }
+
+    const run = await cmd.execute(`JSON_OUTPUT=1 geocode-location ${shq(path)} ${opts.geocodeFlags}`);
+    if (run.code !== 0) {
+      return { path, status: 'failed', source: 'nominatim', reason: run.stderr.trim() || 'geocode-location failed', requested: true };
+    }
+
+    let parsed: LocationResult;
+    try {
+      parsed = JSON.parse(run.stdout);
+    } catch {
+      return { path, status: 'failed', source: 'nominatim', reason: 'geocode-location returned unparseable output', requested: true };
+    }
+
+    return {
+      ...parsed,
+      path,
+      source: 'nominatim',
+      reason: `no centroid (${centroidReason}); ${parsed.reason ?? parsed.status}`,
+      used: centroid.used,
+      // A skip never touched the network.
+      requested: parsed.status !== 'skipped' && parsed.status !== 'dry-run',
+    };
+  } catch (error) {
+    return { path, status: 'failed', reason: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+locationLocate.spec = {
+  name: 'location-locate',
+  effect: 'write' as const,
+  description: 'Give a location coordinates from its linked media, falling back to geocoding its address',
+  args: [
+    { name: 'path', type: 'path' as const, description: `VFS path to a location (e.g. ${LOCATIONS_ROOT}/<slug>); omit with --all` },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'Process every location under --root' },
+    { name: 'root', type: 'string' as const, description: `Locations root (default: ${LOCATIONS_ROOT})` },
+    { name: 'limit', type: 'string' as const, description: 'Stop after this many locations' },
+    { name: 'min-points', type: 'string' as const, description: `Fewest geotagged files a centroid may rest on (default ${DEFAULT_MIN_POINTS})` },
+    { name: 'max-spread', type: 'string' as const, description: `Reject a centroid whose media spread wider than this, in meters (default ${DEFAULT_MAX_SPREAD_M})` },
+    { name: 'radius', type: 'string' as const, description: 'Fixed radius in meters, instead of one derived from the media spread' },
+    { name: 'no-geocode', type: 'bool' as const, description: 'Centroid only — never fall back to the address geocoder' },
+    { name: 'force', type: 'bool' as const, description: 'Re-locate locations that already have a shape' },
+    { name: 'refresh', type: 'bool' as const, description: 'Re-derive a placed location too, writing only what moved; never touches coordinates set by hand' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'Report what would be applied without writing anything' },
+    { name: 'verbose', type: 'bool' as const, description: 'Print each location' },
+  ],
+};
+
+export default locationLocate;

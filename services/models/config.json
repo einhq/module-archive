@@ -1,0 +1,5 @@
+{
+  "description": "Worker for the model-bound media steps — faces, picture and text vectors, text in pictures, transcripts, voices — each one a call into EMS",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

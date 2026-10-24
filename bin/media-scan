@@ -1,0 +1,475 @@
+#!ts
+/**
+ * media-scan — replay the bridge's rules over an existing tree.
+ *
+ * The bridge only sees mutations that happen while it is running. Anything that
+ * landed before it existed, while it was down, or through a path that emitted no
+ * event (a bulk import) is invisible to it. This walks a subtree, applies the
+ * same rules to what is already there, and publishes whatever facts are missing.
+ *
+ * Backfill and the live path therefore share one derivation: there is no second
+ * definition of "this file needs indexing" that can drift from the first. That
+ * is what retires import-pipeline-kick, which walked the importer's files.json
+ * and had its own idea of what counted as unindexed.
+ *
+ * Bounded by design: --limit caps facts per run and --max-active refuses to add
+ * work while the engine still has a backlog.
+ *
+ * **Run this by hand, not on a timer.** The facts it publishes are predicates
+ * ("this file has no exif yet"), not events, so re-evaluating them re-publishes
+ * them: a file stays undiscovered for exactly as long as the engine is behind,
+ * and every sweep announces it again. A 15-minute timer here put 975,781
+ * `media.file.discovered` messages on the trigger queue for 119,765 files —
+ * 8.1x redundant — and the backlog it created is what kept those files
+ * unindexed. The live path is archive-bridge, which is event-driven and does not
+ * have that property; this is for closing a gap after downtime, a bulk import
+ * or a pipeline change.
+ *
+ * A pass is **resumable**. Each run examines at most `--scan-limit` files and stores where it
+ * stopped on the root node (`mediaScanCursor`); the next run carries on from there and clears the
+ * cursor once it reaches the end of the subtree. Without that, every run started at the top: a
+ * run that spent its event budget in the first thousand files re-announced those same thousand on
+ * the next one — the 8.1x redundancy above — and a fully indexed corpus paid a read per file, every
+ * run, to discover nothing at all. Repeated runs now cover the library instead of repeating its
+ * first slice, which is what makes a sweep of 126k files converge.
+ */
+
+import { POOLS_PATH } from '@ein/paths';
+import { ALBUMS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
+import { join } from '@std/path';
+import { ulid } from '@std/ulid/ulid';
+import { deriveForFile, deriveGaps, deriveTextGap, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
+import { stampLanes } from '@archive/staging/facts';
+import { imageEmbedGeneration, ocrGeneration as readTextGeneration, textEmbedGeneration, transcodeBudget, transcribeSignature } from '@ems/client';
+
+const encoder = new TextEncoder();
+
+/**
+ * Where an unfinished pass left off, kept on the node that was scanned.
+ *
+ * On the root rather than in a state directory of its own so it is per-subtree without any
+ * encoding of the path into a name, and so it disappears with the root it describes — a staging
+ * area that is deleted leaves nothing behind to go stale.
+ */
+const CURSOR_ATTR = 'mediaScanCursor';
+
+/**
+ * A numeric flag, falling back to its default when it is absent or not a number.
+ *
+ * `Number('x')` is NaN and every comparison against NaN is false, which is exactly how the
+ * backlog gate below came to be inert for as long as it was. One helper so no flag can acquire
+ * that property again.
+ */
+const numFlag = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+
+  return value === undefined || !Number.isFinite(parsed) ? fallback : parsed;
+};
+
+/** The stored resume point for `root`, or undefined when there is none. */
+const readCursor = async (cmd: Command, root: string): Promise<string | undefined> => {
+  try {
+    const node = await cmd.sys.vfs.get(cmd.access, root);
+    const cursor = (node.attrs as Record<string, unknown>)[CURSOR_ATTR];
+
+    return typeof cursor === 'string' && cursor ? cursor : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Store where the pass stopped, or clear it when the pass finished.
+ *
+ * Not being able to write it does not fail the scan: the walk has already happened and its
+ * events are out. All that is lost is the resume point, and a run that starts at the top is what
+ * every run did before this existed.
+ */
+const writeCursor = async (cmd: Command, root: string, cursor: string | null): Promise<void> => {
+  try {
+    await cmd.sys.vfs.update(cmd.access, root, { attrs: { [CURSOR_ATTR]: cursor } });
+  } catch (error) {
+    await cmd.writeError(`media-scan: could not store the resume point on ${root}: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+};
+
+/** The cursor as path segments below `root`, or undefined when it does not sit under it. */
+const segmentsBelow = (root: string, cursor: string | undefined): string[] | undefined => {
+  if (!cursor) return undefined;
+
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+
+  if (!cursor.startsWith(prefix)) return undefined;
+
+  const segments = cursor.slice(prefix.length).split('/').filter(Boolean);
+
+  return segments.length > 0 ? segments : undefined;
+};
+
+const mediaScan = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit', 'max-active', 'depth', 'scan-limit', 'only'],
+    boolean: ['dry-run', 'verbose', 'no-gaps', 'restart'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const root = (flags._[0] as string | undefined) ?? ALBUMS_ROOT;
+  // Half-indexed files — exif, but some stage hanging off it never ran — are the normal state
+  // after an interrupted crawl, so filling those gaps is on by default.
+  const gaps = !flags['no-gaps'];
+  // Emit only these fact types: one backfill at a time, so a cheap one is not held up behind an
+  // expensive one announced beside it at the same priority.
+  const only = typeof flags.only === 'string' && flags.only ? new Set(flags.only.split(',').map((type) => type.trim()).filter(Boolean)) : undefined;
+  const limit = numFlag(flags.limit, 1000);
+  const maxActive = numFlag(flags['max-active'], 500);
+  const maxDepth = numFlag(flags.depth, 12);
+  // Files *examined*, where `--limit` caps files announced. The two are separate budgets because
+  // they bound different costs: a corpus with nothing left to do spends no event budget at all,
+  // and used to walk all 126k files reading the exif child of each one to find that out. A run
+  // now covers a slice and the cursor carries the rest to the next run, so the default sweeps a
+  // library that size in about seven runs. 0 walks to the end of the subtree.
+  const scanLimit = numFlag(flags['scan-limit'], 20000);
+  const dry = flags['dry-run'];
+  const verbose = flags.verbose;
+
+  // Read even under --restart, so a restarted pass that runs to the end still clears whatever
+  // the previous one left behind.
+  const stored = await readCursor(cmd, root);
+  const resumeAt = flags.restart ? undefined : segmentsBelow(root, stored);
+
+  // Backlog gate: the whole point of a reconciler is to top the pipeline up, not
+  // to bury it. Counting the entry-point pipeline is enough — everything else
+  // fans out from it.
+  //
+  // Two things are counted, because a matched trigger is a job in
+  // the trigger pool before it is an instance: work that has been *announced* is
+  // just as much backlog as work that is running, and counting only instances
+  // would let a scan pile on top of a million pending announcements.
+  //
+  // This goes through aggregate/stat rather than `pipeline instances`: that
+  // command pages (default 100) and returns `{items}`, so the old
+  // `JSON.parse(stdout).length` read undefined, made the budget NaN, and
+  // `emitted >= NaN` is false — the gate never once stopped a walk.
+  let budget = limit;
+  {
+    let running = 0;
+    try {
+      const buckets = await cmd.sys.vfs.aggregate(cmd.access, {
+        where: [{ ref: 'status', op: 'eq', value: 'running' }, { ref: 'pipelineName', op: 'exists' }],
+        group: [{ ref: 'pipelineName' }],
+      });
+      running = buckets.find((bucket) => bucket.key[0] === 'media-ingest')?.count ?? 0;
+    } catch {
+      // Unreadable — fall back to the plain limit rather than stalling
+    }
+
+    let announced = 0;
+    try {
+      const stat = await cmd.sys.vfs.stat(cmd.access, join(cmd.env.POOLS_PATH || POOLS_PATH, 'triggers'));
+      announced = typeof stat.size === 'number' ? stat.size : 0;
+    } catch {
+      // No trigger pool yet (fresh boot): nothing announced
+    }
+
+    budget = Math.min(limit, Math.max(0, maxActive - running - announced));
+    if (verbose) await cmd.writeLn(`${running} running, ${announced} announced, budget ${budget}`);
+  }
+
+  if (budget <= 0) {
+    // The pass is reported as incomplete with its cursor untouched: nothing was examined, so
+    // whatever the last run stored is still where the next one has to pick up.
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [] });
+    else await cmd.writeLn('media-scan: backlog full, nothing started');
+    return 0;
+  }
+
+  // The `transcribedWith` a transcript decoded now would carry: a transcript stamped with anything
+  // else is transcribed again. The value is what EMS says it would write now, derived on the side
+  // that decodes — the only way the two cannot disagree. When EMS cannot be asked the check is off
+  // for this pass, and says so, rather than guessing. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off` turns it
+  // off for good: a change of whisper settings re-transcribes every recording, hours of the card,
+  // which an operator may rather schedule than have start itself.
+  const transcriptsOff = cmd.env.CFG_MEDIA_TRANSCRIPTS_CURRENT === 'off';
+  const transcriptGeneration = transcriptsOff || !gaps ? undefined : (await transcribeSignature(cmd) ?? undefined);
+  if (gaps && !transcriptsOff && !transcriptGeneration && verbose) {
+    await cmd.writeLn('EMS unavailable: transcripts are not checked for staleness this pass');
+  }
+
+  // The CPU-decode budget EMS refuses transcodes against, asked of EMS itself. A rendition it
+  // refused under this same budget is not a gap; one refused under a different budget is,
+  // because the operator moved it and the refusal no longer follows. Undefined when EMS cannot
+  // be asked, which trusts no refusal — the direction that can only re-announce, never hide.
+  const cpuEncodeBudget = gaps ? (await transcodeBudget(cmd) ?? undefined) : undefined;
+
+  // The image embedder EMS runs now: a file whose picture vectors name another, or none, is
+  // re-embedded. Asked of EMS like the transcript signature, and off for this pass when EMS
+  // cannot answer rather than guessed.
+  const pictureGeneration = gaps ? (await imageEmbedGeneration(cmd) ?? undefined) : undefined;
+  // The same for text in pictures: a picture read by another engine is read again.
+  const ocrGeneration = gaps ? (await readTextGeneration(cmd) ?? undefined) : undefined;
+  // The same for text vectors: extracted text, a transcript or a hand-written description
+  // whose vector names another text embedder, or has none, is embedded again from its text.
+  const textGeneration = gaps ? (await textEmbedGeneration(cmd) ?? undefined) : undefined;
+
+  // Every *method* present, which is what the reconciler path needs. Spelled out rather than
+  // `Required<RuleContext>` so the config fields stay genuinely optional.
+  const ctx: Required<Pick<RuleContext, 'getNode' | 'exists' | 'childNames'>> & RuleContext = {
+    getNode: async (path: string): Promise<NodeSnapshot | undefined> => {
+      try {
+        const node = await cmd.sys.vfs.get(cmd.access, path);
+        return { id: node.id, type: node.type, attrs: node.attrs as Record<string, unknown> };
+      } catch {
+        return undefined;
+      }
+    },
+    exists: async (path: string): Promise<boolean> => {
+      try {
+        return await cmd.sys.vfs.exists(cmd.access, path);
+      } catch {
+        return false;
+      }
+    },
+    childNames: async (path: string): Promise<string[]> => {
+      try {
+        return (await cmd.sys.vfs.children(cmd.access, path)).map((c) => c.name);
+      } catch {
+        return [];
+      }
+    },
+    transcriptGeneration,
+    cpuEncodeBudget,
+    pictureGeneration,
+    ocrGeneration,
+    textGeneration,
+  };
+
+  /**
+   * `ctx` narrowed to one file, answered from the directory listing wherever it can be.
+   *
+   * The rules ask the same handful of questions of every file — the exif child, the names under
+   * `metadata/`, whether `thumbnails/` and `location` are there — and at 126k files those reads
+   * are the pass. The listing already carries the file's own child edges, which settles every
+   * "does it exist" outright and lets anything below a branch the file does not have answer
+   * without a read at all. What is left is memoised, because `deriveForFile` and `deriveGaps`
+   * each read the exif node and only one of them has to.
+   */
+  const contextFor = (filePath: string, childNames: string[]): RuleContext => {
+    const names = new Set(childNames);
+    /** Whether `path` exists, where the listing settles it; undefined where it does not. */
+    const listed = (path: string): boolean | undefined => {
+      if (!path.startsWith(`${filePath}/`)) return undefined;
+
+      const relative = path.slice(filePath.length + 1);
+
+      // Nothing under a branch the file does not have can exist either.
+      if (!names.has(relative.split('/')[0])) return false;
+
+      return relative.includes('/') ? undefined : true;
+    };
+    const nodes = new Map<string, NodeSnapshot | undefined>();
+
+    return {
+      getNode: async (path: string): Promise<NodeSnapshot | undefined> => {
+        if (listed(path) === false) return undefined;
+        if (!nodes.has(path)) nodes.set(path, await ctx.getNode(path));
+
+        return nodes.get(path);
+      },
+      exists: async (path: string): Promise<boolean> => listed(path) ?? await ctx.exists(path),
+      childNames: async (path: string): Promise<string[]> => listed(path) === false ? [] : await ctx.childNames(path),
+      // Every setting of the full context, not only the listing answers: a field left out here
+      // silently turns its check off on the fast path — `cpuEncodeBudget` was, and every
+      // refused rendition was re-announced on each scan.
+      transcriptGeneration,
+      cpuEncodeBudget: ctx.cpuEncodeBudget,
+      pictureGeneration,
+      ocrGeneration,
+      textGeneration,
+    };
+  };
+
+  const events = dry ? undefined : await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+
+  let scanned = 0;
+  let emitted = 0;
+  const emittedPaths: string[] = [];
+  /** Node ids already descended into, so a cycle cannot make the walk diverge. */
+  const visited = new Set<string>();
+  /** The last file examined, and whether a budget cut the walk short there. */
+  let lastPath: string | undefined;
+  let stopped = false;
+
+  /** Depth-first walk, stopping as soon as either budget is spent. */
+  const walk = async (path: string, depth: number, resume: string[] | undefined): Promise<void> => {
+    if (stopped || depth > maxDepth) return;
+
+    let children;
+    try {
+      // `childLinks` so each entry carries its own child edges: one batched lookup per directory
+      // in place of up to four reads per file below.
+      children = await cmd.sys.vfs.children(cmd.access, path, { childLinks: true });
+    } catch {
+      return;
+    }
+
+    // Resuming means finding the entry the cursor names, not comparing names against it: a
+    // listing is ordered by (position, name) in PostgreSQL and by insertion order in memory, so
+    // "skip everything sorting before the cursor" would skip or repeat whole subtrees. If that
+    // entry is gone the level simply restarts, which costs a repeat rather than a hole.
+    //
+    // An empty tail means the cursor named this directory rather than a file inside it, so there
+    // is nothing to resume past and the level is walked whole. Dropping it here is what lets the
+    // loop below read an empty tail as "this is the file the cursor named".
+    const index = resume?.length ? children.findIndex((child) => child.name === resume[0]) : -1;
+    const tail = index < 0 ? undefined : resume;
+    const start = index < 0 ? 0 : index;
+
+    for (let i = start; i < children.length; i++) {
+      if (stopped) return;
+
+      const child = children[i];
+      const childPath = join(path, child.name);
+      const childResume = tail && i === start ? tail.slice(1) : undefined;
+
+      // Descend into anything that is not a file, except a softlink. Container
+      // node types are open-ended — modules define their own (`album`,
+      // `person`, …) — so an allow-list of 'directory' walks nothing: in production
+      // every album is an `album` node, and the scan reported 0 files under a
+      // full library.
+      //
+      // Softlinks are excluded because following them turns the tree into a
+      // graph with cycles: a file's `relations/*` point at other files, `cover`
+      // points back into an album. The visited set below is the
+      // real guard (a link may resolve to a plain type), but skipping links
+      // keeps the walk to the containment hierarchy it is meant to cover.
+      if (child.node.type !== 'file') {
+        if (child.node.type !== 'softlink' && !visited.has(child.node.id)) {
+          visited.add(child.node.id);
+          await walk(childPath, depth + 1, childResume);
+        }
+        continue;
+      }
+
+      // The file the cursor names was examined by the run that stored it.
+      if (childResume) continue;
+
+      scanned++;
+
+      // The listing already carries the node in full, so hand it to the rules
+      // rather than making them re-read it — at 132k files those duplicate
+      // reads dominate the pass.
+      const snapshot: NodeSnapshot = {
+        id: child.node.id,
+        type: child.node.type,
+        attrs: child.node.attrs as Record<string, unknown>,
+      };
+
+      // Answer this file's questions from the edges the listing brought back, where they can
+      // be. Trusted only when the edge list is complete: a child with something mounted on it is
+      // remapped to the mount root before the edges are fetched, so its list comes back empty
+      // rather than absent, and an empty list would read as "this file has nothing".
+      const edges = child.children && child.children.length === child.childCount ? child.children.map((edge) => edge.name) : undefined;
+      const fileCtx = edges ? contextFor(childPath, edges) : ctx;
+
+      // Discovery for an unindexed file; otherwise re-open the fan-out for one whose later
+      // stages never ran. A file with no children at all cannot have a gap — that check alone
+      // skips every un-indexed file's extra reads. It reads `childCount`, the entry's own number
+      // of children; `node.props.count` is the *link* count (how many parents the node has) and
+      // is at least 1 for anything reachable, so asking it never skipped a single file. The text
+      // gap is the exception: it reads only the file's own attrs, and a document never indexed
+      // has no children.
+      const hasChildren = child.childCount > 0;
+      // In the lane the bridge would give them: a scan over a bulk category stays in the bulk lane.
+      const facts = await stampLanes(
+        [
+          ...await deriveForFile(childPath, fileCtx, Date.now(), snapshot),
+          ...(gaps && hasChildren ? await deriveGaps(childPath, fileCtx, Date.now(), snapshot) : []),
+          ...(gaps ? deriveTextGap(childPath, snapshot, Date.now()) : []),
+        ].filter((fact) => !only || only.has(fact.type)),
+        ctx,
+        Date.now(),
+      );
+
+      for (const fact of facts) {
+        if (events) {
+          await events.write(encoder.encode(JSON.stringify({ id: ulid(), ...fact }) + '\n'));
+        }
+        emitted++;
+        if (verbose) await cmd.writeLn(`${fact.type} ${childPath}`);
+      }
+      if (facts.length > 0) emittedPaths.push(childPath);
+
+      // A file's own children are its metadata and derivatives — never media to
+      // scan, and descending into them is how a crawl turns quadratic.
+
+      // Recorded after the file is done, so the next run resumes past it rather than at it.
+      lastPath = childPath;
+      if (emitted >= budget || (scanLimit > 0 && scanned >= scanLimit)) {
+        stopped = true;
+        return;
+      }
+    }
+  };
+
+  try {
+    await walk(root, 0, resumeAt);
+  } finally {
+    await events?.close().catch(() => {});
+  }
+
+  const cursor = stopped ? lastPath ?? null : null;
+
+  // Only when it moves. A completed pass over a root that never had a cursor must not write to
+  // the root at all, or every run would bump its modtime to say nothing changed.
+  if (!dry && cursor !== (stored ?? null)) await writeCursor(cmd, root, cursor);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, paths: emittedPaths });
+  } else {
+    const pass = stopped ? `, paused at ${cursor} (run again to continue)` : ', pass complete';
+    await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${pass}${dry ? ' (dry run)' : ''}`);
+    if (verbose) {
+      for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);
+    }
+  }
+
+  return 0;
+};
+
+mediaScan.spec = {
+  name: 'media-scan',
+  effect: 'write' as const,
+  description: 'Emit media events for files the bridge never saw (backfill / gap recovery)',
+  args: [
+    { name: 'root', type: 'path' as const, description: `Subtree to scan (default ${ALBUMS_ROOT})` },
+  ],
+  flags: [
+    { name: 'limit', type: 'number' as const, description: 'Maximum events to emit per run (default 1000)' },
+    { name: 'max-active', type: 'number' as const, description: 'Cap running media-ingest instances plus queued triggers (default 500)' },
+    { name: 'depth', type: 'number' as const, description: 'Maximum directory depth (default 12)' },
+    { name: 'scan-limit', type: 'number' as const, description: 'Maximum files examined per run; 0 walks the whole subtree (default 20000)' },
+    { name: 'restart', type: 'bool' as const, description: 'Ignore the stored resume point and start the pass at the top' },
+    { name: 'no-gaps', type: 'bool' as const, description: 'Only discover unindexed files; skip half-indexed ones' },
+    {
+      name: 'only',
+      type: 'string' as const,
+      description: 'Emit only these fact types, comma-separated (e.g. media.picture.stale); the cursor still moves, so follow with a --restart pass for the rest',
+    },
+    { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — report what would be emitted' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: [
+    'media-scan /archive/albums/Exempelalbum_2019',
+    'media-scan --limit 500 /archive/albums',
+    'media-scan --only media.picture.stale --scan-limit 0 /archive/albums',
+  ],
+  returns: 'how many files were announced to the media pipeline.',
+};
+
+export default mediaScan;

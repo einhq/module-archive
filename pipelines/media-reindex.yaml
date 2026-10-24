@@ -1,0 +1,31 @@
+name: media-reindex
+description: Re-extract EXIF for an indexed file whose bytes changed
+
+# The other half of media-ingest, split off deliberately.
+#
+# `media.file.content-changed` means the bytes moved out from under an existing
+# index (the bridge compares `exif.sourceSha256` against the file's current
+# sha256 — timestamps are useless here because the pipeline's own writes bump
+# modtime). So exif *does* exist and everything derived from it is stale, which
+# is the exact opposite of media-ingest's precondition.
+#
+# Keeping this as its own definition rather than a second event on media-ingest
+# is what lets that one carry `skipIfExists: .../metadata/exif` without the skip
+# swallowing a real re-index. Same step, opposite guard — hence `-f`, which turns
+# off the command's own "already indexed" skip for the one case that needs it.
+trigger:
+  on: media.file.content-changed
+
+steps:
+  exif-extract:
+    command: exif-extract -f $NODE_PATH
+    description: Re-extract EXIF, promote hot attrs, refresh the position node
+    pool: media
+    kind: ingest
+    priority: 100
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 3
+  priority: 20

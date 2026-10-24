@@ -1,0 +1,277 @@
+#!ts
+/**
+ * search-album — find albums by what they are called, what they say they are, and what is
+ * inside them.
+ *
+ * Discovered by `search` like every other `search-*` on PATH. Three channels:
+ *
+ *  - `name`: the album's name or slug, exact > prefix > substring.
+ *  - `description`: its written description, the same ladder.
+ *  - `members`: what its pictures show — the query against every picture, pooled by the albums
+ *    holding them (`byMembers`), the ones an album links to included.
+ *
+ * `--like /archive/tags/<label>` answers `members` alone, with the label's learned direction
+ * (`label-model`) for the query and its floor for the picture floor, leaving out the albums that
+ * carry the label or were rejected for it. It ranks by labels only (`likeLabel`), not by a
+ * picture: picture-to-picture likeness has no floor for an album's members to be counted above.
+ */
+import { basename, resolve } from '@std/path';
+import { ALBUMS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchChannel, SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { embedPictureQuery } from '@ems/text-embedding';
+import { albumsHolding } from '@archive/media/album-members';
+import { nameScore, quality } from '@archive/media/name-quality';
+import { fileOfPictureVector, PICTURE_FLOOR, pictureEmbeddingType } from '@archive/media/embedding-types';
+import { labelLike } from '@archive/labels/label-model';
+import { listedRows } from '@archive/search/listed';
+
+/** An album under the root: what its rows carry, and how many media it holds (`album-span`). */
+type Album = { name: string; id: string; description?: string; mediaCount?: number };
+
+/** Each matching album's score on one channel's scale, by path. */
+type Scores = Map<string, number>;
+
+/**
+ * How many pictures nearest the query the `members` channel pools. Fixed rather than following
+ * `-l`, so an album scores the same however many albums are asked for.
+ */
+const MEMBER_POOL = 2000;
+
+/**
+ * Members at the floor an album is taken to have beyond its own when it is scored by its
+ * pictures: a small album's few pictures are weak evidence of what it is about.
+ */
+const MEMBER_PRIOR = 10;
+
+/** The albums under `root`, by path; none when there is no such root. */
+const listAlbums = async (cmd: Command, root: string): Promise<Map<string, Album>> => {
+  const albums = new Map<string, Album>();
+  try {
+    for (const entry of await cmd.sys.vfs.children(cmd.access, root)) {
+      if (entry.node.type !== 'album') continue;
+      const attrs = entry.node.attrs as { name?: string; description?: string; mediaCount?: number };
+      albums.set(`${root}/${entry.name}`, {
+        name: attrs.name || entry.name,
+        id: entry.node.id,
+        ...(attrs.description ? { description: attrs.description } : {}),
+        ...(typeof attrs.mediaCount === 'number' ? { mediaCount: attrs.mediaCount } : {}),
+      });
+    }
+  } catch {
+    // no albums root
+  }
+  return albums;
+};
+
+/** A question in the pictures' space: a vector of one embedding type, and the floor a picture counts from. */
+type PictureQuestion = { type: string; bytes: Uint8Array; floor: number };
+
+/** The words through the picture embedder's text tower, from the picture space's own floor. */
+const wordsQuestion = async (cmd: Command, query: string): Promise<PictureQuestion> => {
+  const { bytes, producer } = await embedPictureQuery(cmd, query);
+  const type = pictureEmbeddingType(producer);
+  if (!type) throw new Error(`no embedding type for picture embedder "${producer}"`);
+  return { type, bytes, floor: PICTURE_FLOOR };
+};
+
+/**
+ * Albums by what their pictures show: the question against every picture, and each album of
+ * `listing` scored by its pictures among the `MEMBER_POOL` nearest. The score is the album's mean
+ * likeness, with every member outside the pool and `MEMBER_PRIOR` more at the floor: an album
+ * that is mostly the question ranks above one holding as many of it among thousands, and a lone
+ * matching picture does not carry a small album to the top. A file counts once per album, by its
+ * best vector (a video's best keyframe). The pool holds no picture under a `notWithin` tree
+ * (`listedRows`). `full`: the pool was cut, so an album whose pictures all lie beyond it is missing.
+ */
+const byMembers = async (
+  cmd: Command,
+  question: PictureQuestion,
+  listing: Promise<Map<string, Album>>,
+  notWithin: string[],
+): Promise<{ scores: Scores; full: boolean }> => {
+  const { type, bytes, floor } = question;
+  const { rows: matches, paths: vectorPaths, full } = await listedRows(cmd, notWithin, MEMBER_POOL, (asked) => cmd.sys.vfs.findSimilar(cmd.access, type, bytes, asked, floor));
+
+  // Each file's best likeness under every path it has, and the file by its first path, so a file
+  // reached twice in one album counts there once.
+  const likeness = new Map<string, number>();
+  const fileOf = new Map<string, string>();
+  for (const match of matches) {
+    const paths = (vectorPaths.get(match.id) ?? []).map(fileOfPictureVector).filter((path): path is string => path !== undefined).sort();
+    for (const path of paths) {
+      fileOf.set(path, paths[0]);
+      if (match.similarity > (likeness.get(path) ?? -Infinity)) likeness.set(path, match.similarity);
+    }
+  }
+
+  const albums = await listing;
+  const pictures = new Map<string, Map<string, number>>();
+  for (const [path, held] of await albumsHolding(cmd, [...likeness.keys()], new Set(albums.keys()))) {
+    const file = fileOf.get(path)!;
+    for (const album of held) {
+      let theirs = pictures.get(album);
+      if (!theirs) pictures.set(album, theirs = new Map());
+      theirs.set(file, Math.max(theirs.get(file) ?? -Infinity, likeness.get(path)!));
+    }
+  }
+
+  const scores: Scores = new Map();
+  for (const [album, theirs] of pictures) {
+    let above = 0;
+    for (const similarity of theirs.values()) above += similarity - floor;
+    const size = Math.max(albums.get(album)?.mediaCount ?? 0, theirs.size);
+    scores.set(album, floor + above / (size + MEMBER_PRIOR));
+  }
+  return { scores, full };
+};
+
+const searchAlbum = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    // `notWithin`: its pictures leave out the trees `search` names (`--not-within`).
+    await cmd.writeLn(JSON.stringify({ kinds: ['album'], likeLabel: true, notWithin: true }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = ALBUMS_ROOT;
+  let like: string | undefined;
+  const notWithin: string[] = [];
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
+    else if (arg === '--root') root = cmd.args[++i] || ALBUMS_ROOT;
+    else if (arg === '--like') like = cmd.args[++i];
+    else if (arg === '--not-within') notWithin.push(cmd.args[++i]);
+    else queryParts.push(arg);
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+  if (like !== undefined) return await answerLike(cmd, resolve(cmd.cwd, like), root, limit, notWithin);
+  if (!query) {
+    await cmd.writeError('search-album: missing search query\n');
+    return 1;
+  }
+
+  // The listing and the picture lookup go at once; the pictures wait for the listing only to pool
+  // their hits by album. The pictures are best-effort: EMS not answering, or nothing embedded yet,
+  // still leaves name matching working rather than failing the whole provider.
+  const listing = listAlbums(cmd, root);
+  const unavailable = (what: string) => async (error: unknown) => {
+    await cmd.writeError(`search-album: ${what} match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+    return { scores: new Map() as Scores, full: false };
+  };
+  const [albums, members] = await Promise.all([
+    listing,
+    wordsQuestion(cmd, query).then((question) => byMembers(cmd, question, listing, notWithin)).catch(unavailable('picture')),
+  ]);
+
+  // ===== The album's own name and description =====
+  const queryLower = query.toLowerCase();
+  const named: Scores = new Map();
+  const described: Scores = new Map();
+  for (const [path, album] of albums) {
+    const name = Math.max(nameScore(queryLower, album.name), nameScore(queryLower, basename(path)));
+    if (name > 0) named.set(path, name);
+    const description = quality(queryLower, album.description);
+    if (description > 0) described.set(path, description);
+  }
+
+  // Each channel's best `limit`; path breaks ties.
+  const channels = new Map<SearchChannel, Scores>([['name', named], ['description', described], ['members', members.scores]]);
+  const results: SearchProviderHit[] = [];
+  let truncated = members.full;
+  for (const [channel, scores] of channels) {
+    const { rows, cut } = rowsOf(channel, scores, albums, limit);
+    if (cut) truncated = true;
+    results.push(...rows);
+  }
+
+  return await answer(cmd, results, truncated);
+};
+
+/** One row per album on a channel, best first and at most `limit`; path breaks ties. */
+const rowsOf = (channel: SearchChannel, scores: Scores, albums: Map<string, Album>, limit: number): { rows: SearchProviderHit[]; cut: boolean } => {
+  const best = [...scores].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const rows = best.slice(0, limit).map(([path, score]): SearchProviderHit => {
+    const album = albums.get(path);
+    return {
+      path,
+      type: 'album',
+      name: album?.name ?? basename(path),
+      channel,
+      score,
+      ...(album ? { id: album.id } : {}),
+      ...(album?.description ? { description: album.description } : {}),
+    };
+  });
+  return { rows, cut: best.length > limit };
+};
+
+const answer = async (cmd: Command, results: SearchProviderHit[], truncated: boolean): Promise<number> => {
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ results, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse));
+  } else if (results.length === 0) {
+    await cmd.writeLn('No matches found.');
+  } else {
+    for (const r of results) {
+      await cmd.writeLn(`${r.score.toFixed(3)} ${r.channel.padEnd(11)} ${r.path}`);
+      if (r.description) await cmd.writeLn(`     ${r.description}`);
+    }
+  }
+  return 0;
+};
+
+/** `--like`: albums whose pictures look like a label. */
+const answerLike = async (cmd: Command, path: string, root: string, limit: number, notWithin: string[]): Promise<number> => {
+  let asked;
+  try {
+    asked = await labelLike(cmd, path);
+  } catch (error) {
+    await cmd.writeError(`search-album: --like ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (!asked) {
+    await cmd.writeError(`search-album: --like takes a label's tag directory, not ${path}\n`);
+    return 1;
+  }
+  const listing = listAlbums(cmd, root);
+  const [albums, members] = await Promise.all([listing, byMembers(cmd, { type: asked.type, bytes: asked.vector, floor: asked.floor }, listing, notWithin)]);
+  for (const album of asked.excludedAlbums) members.scores.delete(album);
+  const { rows, cut } = rowsOf('members', members.scores, albums, limit);
+  return await answer(cmd, rows, members.full || cut);
+};
+
+searchAlbum.spec = {
+  name: 'search-album',
+  effect: 'read' as const,
+  description: 'Search albums by name, description and what their pictures show',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
+    { name: 'root', type: 'string' as const, description: `Albums root (default: ${ALBUMS_ROOT})` },
+    { name: 'like', type: 'path' as const, description: 'albums whose pictures look like the label of this tag directory, by its model (label-model)' },
+    {
+      name: 'not-within',
+      type: 'path' as const,
+      description: 'leave the pictures under this directory out of what albums are scored by; may be given more than once (how `search` leaves out staging)',
+    },
+  ],
+  examples: [
+    "search-album 'kalas' -l 10",
+    'search-album --like /archive/tags/exempeletikett -l 10',
+  ],
+  returns: 'matching albums, one row per channel that found it (name, description, members), best first within each channel.',
+};
+
+export default searchAlbum;

@@ -1,0 +1,291 @@
+#!ts
+/**
+ * cluster-voices — recognize undecided voices as existing people by propagating person labels
+ * across the voice-embedding similarity graph, and group the leftover voices into candidate
+ * people.
+ *
+ * The batch counterpart of `assign-speakers`, and a structural port of `cluster-faces` down to
+ * the same voting core in @archive/media/face-cluster, so the incremental and batch paths cannot
+ * decide a voice differently from each other or from how a face is decided. A node here is one
+ * voice of one recording (@archive/media/speakers).
+ *
+ * The diarizer's word holds as it does for faces in a photo: two voices of one recording are
+ * different people. So no edge joins them, and of two voices of one recording that would go to
+ * the same person, only the first is written.
+ *
+ * Writes are gated the same way: --dry-run previews, creation is off by default and fenced by
+ * --max-cluster, because clusters are single-link connected components and at a loose
+ * threshold one weak edge chains two speakers into one person that cannot be split
+ * afterwards. Run --dry-run first and read the clusterSizes histogram.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { type FaceEdge, mutualEdges, propagateLabels } from '@archive/media/face-cluster';
+import { createUnnamedPerson } from '@archive/people/person';
+
+const VOICE_TYPE = 'voice';
+const VOICE_QUERY_LIMIT = 500000;
+
+const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
+
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+/** Bucketed cluster sizes — the number to read before allowing creation. */
+const histogram = (sizes: number[]): Record<string, number> => {
+  const buckets: Record<string, number> = {};
+  for (const s of sizes) {
+    const key = s < 3 ? String(s) : s < 5 ? '3-4' : s < 10 ? '5-9' : s < 25 ? '10-24' : s < 60 ? '25-59' : s < 200 ? '60-199' : '200+';
+    buckets[key] = (buckets[key] ?? 0) + 1;
+  }
+  return buckets;
+};
+
+const clusterVoices = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['threshold', 'margin', 'min-votes', 'k', 'min-cluster', 'cluster-threshold', 'max-cluster', 'max-people'],
+    boolean: ['dry-run', 'verbose', 'create-people', 'mutual', 'no-mutual'],
+    alias: { n: 'dry-run', v: 'verbose' },
+  });
+  const threshold = flags.threshold ? Number(flags.threshold) : 0.5;
+  const margin = flags.margin ? Number(flags.margin) : 1.2;
+  const minVotes = flags['min-votes'] ? Number(flags['min-votes']) : 0.5;
+  const k = flags.k ? Number(flags.k) : 8;
+  const minCluster = flags['min-cluster'] ? Number(flags['min-cluster']) : 3;
+  const clusterThreshold = flags['cluster-threshold'] ? Number(flags['cluster-threshold']) : 0.6;
+  const maxCluster = flags['max-cluster'] ? Number(flags['max-cluster']) : 60;
+  const maxPeople = flags['max-people'] ? Number(flags['max-people']) : 500;
+  const createPeople = !!flags['create-people'];
+  // Mutual-kNN defaults on whenever people are being created: it is the cheap guard against
+  // a hub voice chaining two people into one component.
+  const mutual = flags['no-mutual'] ? false : (flags.mutual || createPeople);
+  const dryRun = !!flags['dry-run'];
+  const verbose = !!flags.verbose;
+
+  for (
+    const [name, v] of [
+      ['threshold', threshold],
+      ['margin', margin],
+      ['min-votes', minVotes],
+      ['k', k],
+      ['min-cluster', minCluster],
+      ['cluster-threshold', clusterThreshold],
+      ['max-cluster', maxCluster],
+      ['max-people', maxPeople],
+    ] as const
+  ) {
+    if (!Number.isFinite(v)) {
+      await cmd.writeError(`cluster-voices: --${name} must be a number\n`);
+      return 1;
+    }
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  // 1. Load every voice node in one query.
+  const voices = await vfs.query(access, {
+    types: ['embedding'],
+    where: [{ ref: 'embeddingType', op: 'eq', value: VOICE_TYPE }],
+    limit: VOICE_QUERY_LIMIT,
+  });
+  const labeledPerson = new Map<string, string>();
+  const voicePathById = new Map<string, string>();
+  const fileOf = new Map<string, string>();
+  const lockedVoices = new Set<string>();
+  // The people each recording's voices are already, so a second voice never joins them.
+  const peopleOfFile = new Map<string, Set<string>>();
+  for (const v of voices) {
+    voicePathById.set(v.id, v.absPath);
+    const attrs = v.node.attrs as { personId?: unknown; assignLocked?: unknown; fileId?: unknown };
+    if (occ(attrs.fileId)) fileOf.set(v.id, attrs.fileId);
+    if (occ(attrs.personId)) {
+      labeledPerson.set(v.id, attrs.personId);
+      if (occ(attrs.fileId)) peopleOfFile.set(attrs.fileId, (peopleOfFile.get(attrs.fileId) ?? new Set()).add(attrs.personId));
+    }
+    // A voice a human has explicitly untagged must never be re-tagged.
+    if (attrs.assignLocked === true) lockedVoices.add(v.id);
+  }
+  const labeledCount = labeledPerson.size;
+  const untaggedCount = voices.length - labeledCount;
+
+  // 2. Near-neighbour edges among all voices.
+  let edges: FaceEdge[] = [];
+  try {
+    const pairs = await vfs.findAllPairs(access, VOICE_TYPE, k, threshold);
+    edges = pairs.map((p) => ({ a: p.a, b: p.b, sim: p.similarity }));
+  } catch (error) {
+    await cmd.writeError(`cluster-voices: findAllPairs failed (${error instanceof Error ? error.message : String(error)})\n`);
+    return 1;
+  }
+  // Two voices of one recording are different people: no vote, no chain, between them.
+  edges = edges.filter((e) => !fileOf.get(e.a) || fileOf.get(e.a) !== fileOf.get(e.b));
+  const rawEdgeCount = edges.length;
+  if (mutual) edges = mutualEdges(edges);
+
+  // 3. Propagate.
+  const { assignments, clusters } = propagateLabels(edges, labeledPerson, { threshold, minMargin: margin, minVotes, clusterThreshold });
+  const suggestions = clusters.filter((c) => c.size >= minCluster);
+
+  const write = async (path: string, attrs: Record<string, unknown>): Promise<boolean> => {
+    try {
+      await vfs.update(access, path, { attrs });
+      return true;
+    } catch (error) {
+      await cmd.writeError(`cluster-voices: failed to tag ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return false;
+    }
+  };
+
+  // 4. Write recognized personIds (existing people only).
+  let written = 0, lockedSkipped = 0;
+  for (const a of assignments) {
+    const path = voicePathById.get(a.faceId);
+    if (!path) continue;
+    if (lockedVoices.has(a.faceId)) {
+      lockedSkipped++;
+      continue;
+    }
+    const fileId = fileOf.get(a.faceId);
+    if (fileId && peopleOfFile.get(fileId)?.has(a.personId)) continue;
+    if (fileId) peopleOfFile.set(fileId, (peopleOfFile.get(fileId) ?? new Set()).add(a.personId));
+    if (dryRun) {
+      written++;
+      if (verbose) await cmd.writeLn(`would tag ${path} -> ${a.personId} (${(a.confidence * 100).toFixed(0)}%, ${a.votes} votes)`);
+      continue;
+    }
+    const ok = await write(path, {
+      personId: a.personId,
+      personSource: 'cluster',
+      personConfidence: a.confidence,
+      personAssignedAt: nowIso(),
+    });
+    if (!ok) continue;
+    written++;
+    if (verbose) await cmd.writeLn(`tag ${path} -> ${a.personId} (${(a.confidence * 100).toFixed(0)}%, ${a.votes} votes)`);
+  }
+
+  // 5. Mint an unnamed person per leftover cluster.
+  let created = 0, clusterTagged = 0;
+  const oversized: { size: number; sample: string[] }[] = [];
+  const eligible: typeof suggestions = [];
+  for (const c of suggestions) {
+    if (c.size > maxCluster) {
+      // Almost certainly a chained component rather than one speaker. Report it so the
+      // threshold can be raised; never turn it into a person.
+      oversized.push({ size: c.size, sample: c.members.slice(0, 5).map((m) => voicePathById.get(m) ?? m) });
+      continue;
+    }
+    eligible.push(c);
+  }
+
+  if (createPeople) {
+    for (const c of eligible) {
+      if (created >= maxPeople) break;
+
+      // One voice per recording: a chain through other recordings can still reach two of one.
+      const files = new Set<string>();
+      const keep = c.members.filter((id) => {
+        if (lockedVoices.has(id)) {
+          lockedSkipped++;
+          return false;
+        }
+        const fileId = fileOf.get(id);
+        if (fileId && files.has(fileId)) return false;
+        if (fileId) files.add(fileId);
+        return true;
+      });
+      if (keep.length < minCluster) continue;
+
+      if (dryRun) {
+        created++;
+        clusterTagged += keep.length;
+        if (verbose) await cmd.writeLn(`would create an unnamed person for ${keep.length} voices`);
+        continue;
+      }
+
+      let person;
+      try {
+        person = await createUnnamedPerson(vfs, access, { createdBy: 'cluster-voices', origin: 'voice' });
+      } catch (error) {
+        await cmd.writeError(`cluster-voices: failed to create person: ${error instanceof Error ? error.message : String(error)}\n`);
+        continue;
+      }
+      created++;
+
+      const assignedAt = nowIso();
+      for (const voiceId of keep) {
+        const path = voicePathById.get(voiceId);
+        if (!path) continue;
+        if (await write(path, { personId: person.id, personSource: 'cluster', personConfidence: null, personAssignedAt: assignedAt })) clusterTagged++;
+      }
+      if (verbose) await cmd.writeLn(`created ${person.path} for ${keep.length} turns`);
+    }
+  }
+
+  const summary = {
+    voices: voices.length,
+    tagged: labeledCount,
+    untagged: untaggedCount,
+    edges: edges.length,
+    edgesBeforeMutual: rawEdgeCount,
+    mutual,
+    recognized: assignments.length,
+    written,
+    lockedSkipped,
+    suggestionClusters: suggestions.length,
+    suggestionVoices: suggestions.reduce((s, c) => s + c.size, 0),
+    clusterSizes: histogram(clusters.map((c) => c.size)),
+    largestCluster: clusters[0]?.size ?? 0,
+    oversized: oversized.length,
+    created,
+    clusterTagged,
+    createPeople,
+    dryRun,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ...summary, oversizedClusters: oversized.slice(0, 20), suggestions: suggestions.slice(0, 100) });
+    return 0;
+  }
+  await cmd.writeLn(
+    `Voices ${summary.voices} (${summary.tagged} tagged, ${summary.untagged} untagged): ` +
+      `recognized ${summary.recognized}` + (dryRun ? ' (dry run)' : `, wrote ${written}`) +
+      `; ${summary.suggestionClusters} new-speaker cluster${summary.suggestionClusters === 1 ? '' : 's'} (${summary.suggestionVoices} turns)`,
+  );
+  await cmd.writeLn(`  cluster sizes: ${Object.entries(summary.clusterSizes).map(([k2, v]) => `${k2}:${v}`).join(' ') || 'none'} (largest ${summary.largestCluster})`);
+  if (oversized.length > 0) {
+    await cmd.writeLn(`  ${oversized.length} cluster(s) over --max-cluster ${maxCluster} skipped — raise --cluster-threshold if this is high`);
+  }
+  if (createPeople) {
+    await cmd.writeLn(`  created ${created} unnamed ${created === 1 ? 'person' : 'people'} covering ${clusterTagged} turns${dryRun ? ' (dry run)' : ''}`);
+  }
+  return 0;
+};
+
+clusterVoices.spec = {
+  name: 'cluster-voices',
+  effect: 'write' as const,
+  description: 'Recognize untagged speech turns as existing people (label propagation) + optionally create unnamed people for leftover clusters',
+  args: [],
+  flags: [
+    { name: 'threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
+    { name: 'margin', type: 'string' as const, description: 'winning person must beat runner-up by this factor (default 1.2)' },
+    { name: 'min-votes', type: 'string' as const, description: 'min winning vote weight to assign (default 0.5)' },
+    { name: 'k', type: 'string' as const, description: 'nearest neighbours per turn (default 8)' },
+    { name: 'min-cluster', type: 'string' as const, description: 'min turns in a new-speaker cluster (default 3)' },
+    { name: 'cluster-threshold', type: 'string' as const, description: 'stricter min similarity to group two untagged turns (default 0.6)' },
+    { name: 'max-cluster', type: 'string' as const, description: 'skip clusters larger than this as likely chained (default 60)' },
+    { name: 'max-people', type: 'string' as const, description: 'max unnamed people to create per run (default 500)' },
+    { name: 'create-people', type: 'bool' as const, description: 'create an unnamed person per leftover cluster (off by default)' },
+    { name: 'mutual', type: 'bool' as const, description: 'keep only mutual nearest-neighbour edges (on with --create-people)' },
+    { name: 'no-mutual', type: 'bool' as const, description: 'disable the mutual-neighbour filter' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report recognitions without writing personId' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each recognition' },
+  ],
+  examples: [
+    'cluster-voices --create-people --min-cluster 4',
+  ],
+  returns: 'how many speech turns were recognised and how many clusters became new unnamed people.',
+};
+
+export default clusterVoices;

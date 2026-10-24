@@ -1,0 +1,29 @@
+/* Markdown a person wrote (an event, a description) at the size of the text around it: blocks spaced like lines, headings barely larger. */
+.mrx-user-text {
+  font-size: inherit;
+  color: inherit;
+}
+
+.mrx-user-text p,
+.mrx-user-text ul,
+.mrx-user-text ol,
+.mrx-user-text blockquote,
+.mrx-user-text pre,
+.mrx-user-text table {
+  margin: 0 0 0.5em;
+  font-size: inherit;
+}
+
+.mrx-user-text h1,
+.mrx-user-text h2,
+.mrx-user-text h3,
+.mrx-user-text h4,
+.mrx-user-text h5,
+.mrx-user-text h6 {
+  margin: 0 0 0.35em;
+  font-size: 1.1em;
+}
+
+.mrx-user-text > :last-child {
+  margin-bottom: 0;
+}

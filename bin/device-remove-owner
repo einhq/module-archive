@@ -1,0 +1,55 @@
+#!ts
+/**
+ * device-remove-owner — undo `device-set-owner`.
+ *
+ * Removes both halves of the pair directly (`removeRelationPair`) rather than
+ * unlinking one and trusting `relations-guard` to catch up: the guard is
+ * asynchronous, and a caller that re-reads the person immediately afterwards —
+ * which the UI does — would otherwise still see the device it just detached.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { removeRelationPair } from '@archive/people/genealogy';
+import { OWNERS_DIR } from '@archive/device/device';
+
+const deviceRemoveOwner = async (cmd: Command): CmdReturn => {
+  const [deviceArg, personArg] = cmd.args.filter((arg) => !arg.startsWith('-'));
+
+  if (!deviceArg || !personArg) {
+    await cmd.writeError('device-remove-owner: usage: device-remove-owner <device> <person>\n');
+    return 1;
+  }
+
+  const device = resolve(cmd.cwd, deviceArg);
+  // The person may be given as a path or as the bare link name; both end up as
+  // the same segment under owners/.
+  const ownerLink = `${device}/${OWNERS_DIR}/${basename(personArg)}`;
+
+  try {
+    await removeRelationPair(cmd.sys.vfs, cmd.access, ownerLink);
+  } catch (error) {
+    await cmd.writeError(`device-remove-owner: ${ownerLink}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, removed: ownerLink });
+  } else {
+    await cmd.writeLn(`Removed owner ${basename(personArg)} from device ${basename(device)}`);
+  }
+
+  return 0;
+};
+
+deviceRemoveOwner.spec = {
+  name: 'device-remove-owner',
+  effect: 'write' as const,
+  description: 'Unlink a person from a device (removes both halves)',
+  args: [
+    { name: 'device', type: 'path' as const, description: 'VFS path to device node' },
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node, or the owner link name' },
+  ],
+  flags: [],
+};
+
+export default deviceRemoveOwner;

@@ -1,0 +1,438 @@
+#!ts
+/**
+ * tag-transfer — give face recognition its anchors by moving the identity off
+ * the legacy manual tags onto the auto-detected faces in the same image.
+ *
+ * The archive's faces come in two halves: legacy manual tags
+ * (detectedBy=legacy-manual) carry a personId and a hand-drawn box but no
+ * embedding, while auto-detected faces carry a 512-d embedding but no personId.
+ * So recognition has nothing to match against — every known person is invisible
+ * to it. Pairing the two by box containment and copying the personId across
+ * turns each pair into an anchor, with no model involved.
+ *
+ * This replaces a crop-embedding approach (the since-deleted `embed-faces`),
+ * which asked InsightFace to find a face inside a loose hand-drawn box and
+ * mostly came back empty. The detector has already found those faces in the full
+ * image; matching boxes just reuses that work.
+ *
+ * A tag pairs with the largest detection lying wholly inside its box (see
+ * `@archive/media/face-match`), as long as that detection is not far smaller than the
+ * box (`minScale`): a box drawn round the back of someone's head can hold a
+ * stranger's face in the background, and the name must not go to them. A tag
+ * that is left behind gets a crop instead, so the person is still visible to a
+ * human in the UI — that, not the transfer, is what the unmatched cases are for.
+ *
+ * Both are regions (@media/regions): the tag a `manual-<n>` with no embedding,
+ * the detection a face region with one. Only face regions are candidates — a
+ * detection that failed the quality gate has no vector and would be no anchor.
+ *
+ * A transferred tag is deleted in the same run: its identity now lives on the
+ * detection, and a second box over the same face would only be a duplicate in
+ * the lightbox. The `transferredTo` marker is written first, so a run that dies
+ * between the two writes leaves a tag the next run finishes deleting rather
+ * than one it transfers twice — and `detect-faces --force` reopens a marked
+ * tag whose detection it removes, so the window is repairable, not one-way.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, NodeAccessDeniedError, parseArgs, reportUnknownFlags, verifyAccess } from '@ein/client';
+import { type Box, DEFAULT_MIN_SCALE, matchFacesUnique } from '@archive/media/face-match';
+import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
+import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
+import { allRegions, faceEmbeddingsOfRegions, imageOfRegion, MANUAL_DETECTOR as MANUAL, REGION_TYPE, type RegionAttrs } from '@archive/media/regions';
+
+const QUERY_LIMIT = 500000;
+
+/**
+ * Assignments a human tag outranks.
+ *
+ * `assign-faces` runs off `media.face.detected`, so a detection is routinely
+ * given a minted personId before this command ever sees it. Those are kNN
+ * guesses; a legacy tag is a name a person typed. Never `manual` (someone said
+ * so) or `transfer` (already claimed by another tag).
+ */
+const OVERRIDABLE = new Set(['auto', 'cluster']);
+
+type FaceAttrs = RegionAttrs & { faceBox?: Box };
+
+type FaceRow = { id: string; path: string; attrs: FaceAttrs };
+
+type FileAttrs = { angle?: number | string; mirror?: unknown; width?: number; height?: number; mimetype?: string };
+
+/** Match rate split by the source image's EXIF rotation. */
+type AngleStat = { files: number; manual: number; matched: number };
+
+const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
+
+/** An auto face this run may claim: unowned, or owned only by a machine guess. */
+const claimable = (a: FaceAttrs): boolean => !occ(a.personId) || OVERRIDABLE.has(a.personSource ?? '');
+
+const tagTransfer = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['margin', 'limit', 'file', 'min-scale'],
+    boolean: ['dry-run', 'verbose', 'no-crop'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const margin = flags.margin ? Number(flags.margin) : 0;
+  const minScale = flags['min-scale'] !== undefined ? Number(flags['min-scale']) : DEFAULT_MIN_SCALE;
+  const limit = flags.limit ? Number(flags.limit) : Infinity;
+  const dryRun = !!flags['dry-run'];
+  const verbose = !!flags.verbose;
+  const crop = !flags['no-crop'];
+
+  if (!Number.isFinite(margin) || margin < 0) {
+    await cmd.writeError('tag-transfer: --margin must be a number >= 0\n');
+    return 1;
+  }
+  if (!Number.isFinite(minScale) || minScale < 0 || minScale > 1) {
+    await cmd.writeError('tag-transfer: --min-scale must be a number from 0 to 1\n');
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  // Restrict to one image when asked. Resolved before the query, because it is
+  // what the query filters on — running as a per-image pipeline step, loading
+  // every face node in the archive to then discard all but a handful is the
+  // difference between a step and a full-corpus scan per photo.
+  let onlyFileId: string | undefined;
+  if (flags.file) {
+    try {
+      onlyFileId = (await vfs.get(access, flags.file)).id;
+    } catch (error) {
+      await cmd.writeError(`tag-transfer: ${flags.file}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  // 1. Regions: this image's, or every one of them (the shape cluster-faces already runs at scale),
+  //    each marked a face or not. A legacy tag goes on one side, a face on the other; a box a
+  //    human drew in the lightbox, or a detection with no vector, is neither.
+  const rows: { id: string; path: string; attrs: FaceAttrs; face: boolean }[] = [];
+  if (onlyFileId) {
+    const regions = await vfs.query(access, { types: [REGION_TYPE], where: [{ ref: 'fileId', op: 'eq', value: onlyFileId }], limit: QUERY_LIMIT });
+    const faces = await faceEmbeddingsOfRegions(vfs, access, regions.map((r) => r.id));
+    for (const r of regions) rows.push({ id: r.id, path: r.absPath, attrs: r.node.attrs as FaceAttrs, face: faces.has(r.id) });
+  } else {
+    const { faces, tags } = await allRegions(vfs, access);
+    for (const f of faces) rows.push({ id: f.regionId, path: f.regionPath, attrs: f.attrs as FaceAttrs, face: true });
+    for (const t of tags) rows.push({ id: t.regionId, path: t.regionPath, attrs: t.attrs as FaceAttrs, face: false });
+  }
+
+  // 2. Bucket by the image they belong to.
+  const byFile = new Map<string, { manual: FaceRow[]; auto: FaceRow[] }>();
+  for (const r of rows) {
+    const fileId = r.attrs.fileId;
+    if (!occ(fileId)) continue;
+    const bucket = byFile.get(fileId) ?? { manual: [], auto: [] };
+    byFile.set(fileId, bucket);
+    if (r.attrs.detectedBy === MANUAL) bucket.manual.push({ id: r.id, path: r.path, attrs: r.attrs });
+    else if (r.face) bucket.auto.push({ id: r.id, path: r.path, attrs: r.attrs });
+  }
+
+  /**
+   * Ids of every region in an image, so a `transferredTo` can be checked.
+   *
+   * A marker naming a face that no longer exists is *stranded*, not handled: the
+   * identity points at nothing. `detect-faces --force` used to leave these behind
+   * on every tag it orphaned, and the tag was then skipped forever while looking
+   * like a finished transfer. Treating it as untransferred is what repairs a
+   * corpus already in that state.
+   */
+  const liveIds = new Map<string, Set<string>>();
+  for (const [fileId, bucket] of byFile) {
+    liveIds.set(fileId, new Set([...bucket.manual, ...bucket.auto].map((f) => f.id)));
+  }
+
+  /** Its transfer target is gone, so the tag is open again. */
+  const stranded = (f: FaceRow, fileId: string): boolean => {
+    const target = f.attrs.transferredTo;
+    const live = liveIds.get(fileId);
+    return occ(target) && !!live && !live.has(target);
+  };
+
+  let transferred = 0, conflicts = 0, failed = 0, cropped = 0, pruned = 0;
+
+  /**
+   * Delete a tag whose identity lives on a detection. Recursive: the tag owns
+   * its crop. A failure leaves the marker in place, so the next run gets
+   * another go rather than transferring the tag a second time.
+   */
+  const pruneTag = async (tag: FaceRow, why: string): Promise<void> => {
+    if (dryRun) {
+      pruned++;
+      if (verbose) await cmd.writeLn(`would prune ${tag.path} (${why})`);
+      return;
+    }
+    try {
+      const parent = tag.path.slice(0, tag.path.lastIndexOf('/')) || '/';
+      await vfs.unlink(access, tag.path, parent, { recursive: true });
+      pruned++;
+      if (verbose) await cmd.writeLn(`pruned ${tag.path} (${why})`);
+    } catch (error) {
+      failed++;
+      await cmd.writeError(`tag-transfer: ${tag.path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  // 3. Candidate images: those still holding a transferable tag. Unlike the
+  //    match pass, an image with no free detection is still interesting — its
+  //    tags are exactly the ones that need a crop. A tag a previous run marked
+  //    and did not get to delete is finished here instead.
+  const candidates: { fileId: string; manual: FaceRow[]; auto: FaceRow[] }[] = [];
+  let strandedTags = 0;
+  for (const [fileId, bucket] of byFile) {
+    const manual: FaceRow[] = [];
+    for (const f of bucket.manual) {
+      if (!occ(f.attrs.personId) || !f.attrs.faceBox) continue;
+      if (occ(f.attrs.transferredTo)) {
+        if (!stranded(f, fileId)) {
+          await pruneTag(f, 'transferred by a previous run');
+          continue;
+        }
+        strandedTags++;
+      }
+      manual.push(f);
+    }
+    if (manual.length === 0) continue;
+    // Every detection takes part in the geometry, owned or not: the largest face
+    // inside a box is the person it was drawn around, and if a human already
+    // named that face something else, the tag has lost the argument — it must
+    // not fall through to a smaller face in the background instead.
+    candidates.push({ fileId, manual, auto: bucket.auto.filter((f) => f.attrs.faceBox) });
+  }
+
+  // The manual boxes were written by a legacy conversion, and a systematic frame
+  // error would only show on rotated images. Bucketing the match rate by angle
+  // surfaces that before thousands of wrong tags are written, so resolve the
+  // source images in one batched call rather than per face. The crop needs the
+  // same node's dimensions and orientation, so one fetch serves both.
+  const fileNodes = await vfs.getNodesByIds<FileAttrs>(access, candidates.map((c) => c.fileId));
+  const byAngle: Record<string, AngleStat> = {};
+  const bump = (angle: string, key: keyof AngleStat, n = 1) => {
+    byAngle[angle] = byAngle[angle] ?? { files: 0, manual: 0, matched: 0 };
+    byAngle[angle][key] += n;
+  };
+
+  const ambiguity = { none: 0, multiAuto: 0, multiManual: 0, tooSmall: 0 };
+
+  /**
+   * Give a surviving tag the crop it never had.
+   *
+   * Same recipe as detect-faces and the legacy importer (@media/face-crop): the
+   * crop node carries `sourceId` so it is treated as a rendition — the media
+   * trigger skips it and it routes to the volatile tier. Deliberately not done
+   * at import time: cropping every tag would encode ~12k images that are about
+   * to be pruned, so it happens here, to the ones that survive.
+   */
+  const ensureCrop = async (tag: FaceRow, file: FileAttrs | undefined, fileId: string): Promise<void> => {
+    if (!crop || dryRun) return;
+    const box = tag.attrs.faceBox;
+    if (!box || !file?.width || !file?.height) return;
+
+    const cropPath = `${tag.path}/${FACE_CROP_NAME}`;
+    try {
+      if (await vfs.exists(access, cropPath)) {
+        const existing = await vfs.get(access, cropPath);
+        if ((existing.attrs as { size?: number }).size) return; // already cropped; size lands via file-sync
+        // EMS cuts the crop before it is written, so one the caller may not write is refused first.
+        if (!verifyAccess(access, existing.props, 'w')) throw new NodeAccessDeniedError(cropPath, 'w');
+      } else {
+        await vfs.create(access, 'file', tag.path, FACE_CROP_NAME, {
+          attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: fileId },
+        });
+      }
+      // The box is a fraction of the display frame; EMS resolves it against the raster it
+      // decodes, so a RAW or a HEIC needs no dimensions from the node (@media/face-crop).
+      const input = imageOfRegion(tag.path) ?? '';
+      const failure = await writeFaceCrop(cmd, input, cropPath, box, { mimetype: file.mimetype, angle: file.angle, mirror: file.mirror });
+      if (failure) {
+        if (verbose) await cmd.writeError(`tag-transfer: crop failed for ${tag.path}: ${failure}\n`);
+        return;
+      }
+      cropped++;
+    } catch (error) {
+      if (verbose) await cmd.writeError(`tag-transfer: crop failed for ${tag.path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  };
+
+  for (const { fileId, manual, auto } of candidates) {
+    const file = fileNodes.get(fileId)?.attrs;
+    const angle = String(file?.angle ?? 0);
+    bump(angle, 'files');
+    bump(angle, 'manual', manual.length);
+
+    const atLimit = transferred >= limit;
+    const { matches, ambiguous } = atLimit
+      // Past the transfer budget, everything on this image is a survivor: still
+      // report and crop it rather than walking away half-done.
+      ? { matches: [], ambiguous: manual.map((_, i) => ({ manualIndex: i, reason: 'none' as const })) }
+      : matchFacesUnique(manual.map((m) => m.attrs.faceBox!), auto.map((a) => a.attrs.faceBox!), { margin, minScale });
+
+    // A person cannot be two faces in the same photo. The unique matching
+    // already stops two tags claiming one detection; this catches the other
+    // direction, where the image already has a face tagged to that person.
+    // Only settled ownership counts — an overridable guess is not a claim, and
+    // treating it as one would block the very transfer that corrects it.
+    const takenPersonIds = new Set(
+      byFile.get(fileId)!.auto
+        .filter((a) => occ(a.attrs.personId) && !OVERRIDABLE.has(a.attrs.personSource ?? ''))
+        .map((a) => a.attrs.personId as string),
+    );
+
+    const kept: number[] = [];
+    for (const amb of ambiguous) {
+      if (!atLimit) {
+        if (amb.reason === 'none') ambiguity.none++;
+        else if (amb.reason === 'multi-auto') ambiguity.multiAuto++;
+        else if (amb.reason === 'too-small') ambiguity.tooSmall++;
+        else ambiguity.multiManual++;
+        if (verbose && amb.reason === 'too-small') await cmd.writeLn(`too-small ${manual[amb.manualIndex].path}: the largest face inside is under ${minScale} of the box`);
+      }
+      kept.push(amb.manualIndex);
+    }
+
+    for (const m of matches) {
+      const tag = manual[m.manualIndex];
+      const face = auto[m.autoIndex];
+      const personId = tag.attrs.personId!;
+
+      // The detection already is this person, settled — a face a human named
+      // the same. Nothing to move; the tag is only a duplicate box.
+      // (A machine guess that agrees still goes through below, so it is
+      // promoted to `transfer` and outlives a `face-reset --source auto`.)
+      if (face.attrs.personId === personId && !claimable(face.attrs)) {
+        bump(angle, 'matched');
+        if (!dryRun) await vfs.update(access, tag.path, { attrs: { transferredTo: face.id } });
+        await pruneTag(tag, `${face.path} already is ${personId}`);
+        continue;
+      }
+
+      if (!claimable(face.attrs) || takenPersonIds.has(personId)) {
+        conflicts++;
+        kept.push(m.manualIndex);
+        if (verbose) {
+          await cmd.writeLn(
+            !claimable(face.attrs)
+              ? `conflict ${face.path}: already ${face.attrs.personId} (${face.attrs.personSource}), tag says ${personId}`
+              : `conflict ${face.path}: ${personId} already on another face of this image`,
+          );
+        }
+        continue;
+      }
+      takenPersonIds.add(personId);
+      bump(angle, 'matched');
+
+      if (dryRun) {
+        transferred++;
+        if (verbose) {
+          await cmd.writeLn(
+            `would transfer ${personId} -> ${face.path} (iou ${m.iou.toFixed(2)}, coverage ${m.coverage.toFixed(2)})`,
+          );
+        }
+        await pruneTag(tag, 'transferred');
+        continue;
+      }
+
+      try {
+        await vfs.update(access, face.path, {
+          attrs: {
+            personId,
+            personSource: 'transfer',
+            personConfidence: m.score,
+            personAssignedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+          },
+        });
+        await vfs.update(access, tag.path, { attrs: { transferredTo: face.id } });
+        transferred++;
+        if (verbose) await cmd.writeLn(`transfer ${personId} -> ${face.path} (score ${m.score.toFixed(2)})`);
+      } catch (error) {
+        failed++;
+        kept.push(m.manualIndex);
+        await cmd.writeError(`tag-transfer: ${face.path}: ${error instanceof Error ? error.message : String(error)}\n`);
+        continue;
+      }
+      await pruneTag(tag, 'transferred');
+    }
+
+    for (const index of kept) {
+      const tag = manual[index];
+      // Survived the match with a marker still on it, so the marker is stale —
+      // drop it, or the tag looks transferred to the next run and gets pruned.
+      if (stranded(tag, fileId) && !dryRun) {
+        await vfs.update(access, tag.path, { attrs: { transferredTo: null } });
+      }
+      await ensureCrop(tag, file, fileId);
+    }
+  }
+
+  // Rate per angle is the number worth reading: a near-zero 90/270 next to a
+  // healthy 0 means the legacy boxes are in a different frame for rotated files.
+  const angles = Object.fromEntries(
+    Object.entries(byAngle).map(([angle, s]) => [angle, { ...s, rate: s.manual > 0 ? Number((s.matched / s.manual).toFixed(3)) : 0 }]),
+  );
+
+  const unmatched = ambiguity.none + ambiguity.multiAuto + ambiguity.multiManual + ambiguity.tooSmall;
+
+  const summary = {
+    faces: rows.length,
+    images: candidates.length,
+    transferred,
+    unmatched,
+    ambiguous: ambiguity,
+    conflicts,
+    cropped,
+    pruned,
+    failed,
+    stranded: strandedTags,
+    byAngle: angles,
+    dryRun,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(summary);
+    return 0;
+  }
+  await cmd.writeLn(
+    `Images with a transferable tag: ${candidates.length}; ` +
+      `transferred ${transferred}${dryRun ? ' (dry run)' : ''}, kept ${unmatched} ` +
+      `(no match ${ambiguity.none}, two detections ${ambiguity.multiAuto}, two tags ${ambiguity.multiManual}, too small ${ambiguity.tooSmall}), ` +
+      `conflicts ${conflicts}, cropped ${cropped}, pruned ${pruned}, failed ${failed}` +
+      (strandedTags > 0 ? `, reopened ${strandedTags} (transfer target gone)` : ''),
+  );
+  for (const [angle, s] of Object.entries(angles)) {
+    await cmd.writeLn(`  angle ${angle}: ${s.matched}/${s.manual} tags matched across ${s.files} images (${(s.rate * 100).toFixed(0)}%)`);
+  }
+  return 0;
+};
+
+tagTransfer.spec = {
+  name: 'tag-transfer',
+  effect: 'write' as const,
+  description: 'Move legacy manual face tags onto the auto-detected face inside their box (recognition anchors)',
+  args: [],
+  flags: [
+    {
+      name: 'margin',
+      type: 'string' as const,
+      description: 'how far a detection may stick out of the manual box and still count as inside, as a fraction of the box (default 0)',
+    },
+    { name: 'min-scale', type: 'string' as const, description: `narrowest a detection may be, as a fraction of the box's width (default ${DEFAULT_MIN_SCALE})` },
+    { name: 'file', type: 'path' as const, description: 'restrict to one image' },
+    { name: 'limit', type: 'string' as const, description: 'max transfers this run' },
+    { name: 'no-crop', type: 'bool' as const, description: 'skip generating crops for the tags left behind' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without writing' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each transfer' },
+  ],
+  examples: [
+    'tag-transfer --dry-run',
+  ],
+  returns: 'which legacy manual tags would move onto a detected face.',
+};
+
+export default tagTransfer;

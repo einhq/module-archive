@@ -1,0 +1,182 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { ageAt, CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir } from '@archive/people/genealogy';
+import { basename, resolve } from '@std/path';
+import type { PersonAttrs, PersonGender } from '@archive/people/types';
+import type { PersonInfo } from '@archive/people/api';
+
+type RelationInfo = { role: string; path: string; name?: string; kind?: string; from?: string; to?: string };
+type EventInfo = { name: string; eventType: string; date?: string; position?: string; description?: string };
+
+/**
+ * Completed years, and whether they are the age this person reached.
+ *
+ * `approx` comes from `ageAt`: a birth date with no day can be off by one, and
+ * a header saying "77" about a "1948" is a guess that should read as one.
+ */
+type AgeInfo = { years: number; approx: boolean; atDeath: boolean };
+
+async function personAttrs(cmd: Command, path: string): Promise<PersonAttrs | null> {
+  try {
+    return (await cmd.sys.vfs.get<PersonAttrs>(cmd.access, path)).attrs;
+  } catch {
+    return null;
+  }
+}
+
+const parentRole = (g?: PersonGender | null): string => (g === 'male' ? 'father' : g === 'female' ? 'mother' : 'parent');
+
+/** Age reached, if they died; age now, if they did not. Null without a usable birth date. */
+const ageOf = (attrs: PersonAttrs): AgeInfo | null => {
+  if (!attrs.born) return null;
+  const atDeath = Boolean(attrs.died);
+  const reached = ageAt(attrs.born, atDeath ? attrs.died! : new Date());
+  return reached ? { ...reached, atDeath } : null;
+};
+
+const personInfo = async (cmd: Command): CmdReturn => {
+  const targetArg = cmd.args.filter((a) => !a.startsWith('-'))[0];
+  if (!targetArg) {
+    await cmd.writeError('person-info: missing person path\n');
+    return 1;
+  }
+  const target = resolve(cmd.cwd, targetArg);
+
+  // The node rather than its attrs: the page needs the mode and owner to know
+  // whether to offer an edit at all, and that is one read either way.
+  const self = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, target).catch(() => null);
+  if (!self) {
+    await cmd.writeError(`person-info: ${target}: not found\n`);
+    return 1;
+  }
+  const attrs = self.attrs;
+
+  const relations: RelationInfo[] = [];
+  for (const [dir, role] of [[PARENTS_DIR, 'parent'], [PARTNERS_DIR, 'partner'], [CHILDREN_DIR, 'child']] as const) {
+    for (const e of await readRelationDir(cmd.sys.vfs, cmd.access, target, dir)) {
+      if (!e.target) continue;
+      const a = await personAttrs(cmd, e.target);
+      const r: RelationInfo = { role: dir === PARENTS_DIR ? parentRole(a?.gender) : role, path: e.target };
+      if (a?.name) r.name = a.name;
+      if (e.kind) r.kind = e.kind;
+      if (e.from) r.from = e.from;
+      if (e.to) r.to = e.to;
+      relations.push(r);
+    }
+  }
+
+  const homes: RelationInfo[] = [];
+  for (const e of await readRelationDir(cmd.sys.vfs, cmd.access, target, 'homes')) {
+    if (!e.target) continue;
+    const h: RelationInfo = { role: 'home', path: e.target };
+    // The location's own name, the way relations already carry the person's — a
+    // header saying where someone lives wants "Ekbacksvägen", not the slug.
+    const location = await personAttrs(cmd, e.target);
+    if (location?.name) h.name = location.name;
+    if (e.from) h.from = e.from;
+    if (e.to) h.to = e.to;
+    homes.push(h);
+  }
+
+  const events: EventInfo[] = [];
+  const eventsResult = await cmd.execute(`JSON_OUTPUT=1 ls ${JSON.stringify(`${target}/events`)}`);
+  if (eventsResult.code === 0) {
+    try {
+      for (const name of JSON.parse(eventsResult.stdout) as string[]) {
+        const path = `${target}/events/${name}`;
+        const ea = (await personAttrs(cmd, path)) as unknown as Record<string, string> | null;
+        if (ea) {
+          const ev: EventInfo = { name: ea.name || name, eventType: ea.eventType || 'generic' };
+          if (ea.date) ev.date = ea.date;
+          // geo lives in a child `position` node (mirrors files), not an attr
+          if (await cmd.sys.vfs.exists(cmd.access, `${target}/events/${name}/position`)) ev.position = 'geo';
+          // The body is the story. `description` was declared here from the
+          // start and never filled, so every imported story has been invisible.
+          // `size` gates the read: most events have no body at all.
+          if (Number(ea.size) > 0) {
+            const body = await cmd.execute(`cat ${JSON.stringify(path)}`);
+            if (body.code === 0 && body.stdout.trim()) ev.description = body.stdout.trim();
+          }
+          events.push(ev);
+        }
+      }
+    } catch {
+      // no events
+    }
+  }
+
+  const age = ageOf(attrs);
+
+  const info = {
+    path: target,
+    name: attrs.name,
+    ownership: { mode: self.props.mode, uid: self.props.uid, gid: self.props.gid },
+    ...(attrs.fullname ? { fullname: attrs.fullname } : {}),
+    ...(attrs.birthname ? { birthname: attrs.birthname } : {}),
+    ...(attrs.gender ? { gender: attrs.gender } : {}),
+    ...(attrs.born ? { born: attrs.born } : {}),
+    ...(attrs.died ? { died: attrs.died } : {}),
+    ...(age ? { age } : {}),
+    ...(attrs.contact?.length ? { contact: attrs.contact } : {}),
+    ...(attrs.allergies ? { allergies: attrs.allergies } : {}),
+    ...(attrs.description ? { description: attrs.description } : {}),
+    relations,
+    homes,
+    events,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(info satisfies PersonInfo);
+  } else {
+    await cmd.writeLn(`Name: ${info.name}`);
+    if (info.fullname) await cmd.writeLn(`Full name: ${info.fullname}`);
+    if (info.birthname) await cmd.writeLn(`Born as: ${info.birthname}`);
+    if (info.gender) await cmd.writeLn(`Gender: ${info.gender}`);
+    if (info.born) await cmd.writeLn(`Born: ${info.born}`);
+    if (info.died) await cmd.writeLn(`Died: ${info.died}`);
+    if (age) await cmd.writeLn(`Age: ${age.approx ? '~' : ''}${age.years}${age.atDeath ? ' (at death)' : ''}`);
+    if (info.allergies) await cmd.writeLn(`Allergies: ${info.allergies}`);
+    if (info.description) await cmd.writeLn(`Description: ${info.description}`);
+    for (const c of info.contact ?? []) await cmd.writeLn(`${c.type}: ${c.data}`);
+    if (relations.length > 0) {
+      await cmd.writeLn('\nRelations:');
+      for (const rel of relations) {
+        const extra = [rel.kind, rel.from && `${rel.from}–${rel.to ?? ''}`].filter(Boolean).join(', ');
+        await cmd.writeLn(`  ${rel.role}: ${rel.name ?? basename(rel.path)}${extra ? ` [${extra}]` : ''} (${rel.path})`);
+      }
+    }
+    if (homes.length > 0) {
+      await cmd.writeLn('\nHomes:');
+      for (const home of homes) {
+        const span = home.from ? ` [${home.from}–${home.to ?? ''}]` : '';
+        await cmd.writeLn(`  ${home.name ?? basename(home.path)}${span} (${home.path})`);
+      }
+    }
+    if (events.length > 0) {
+      await cmd.writeLn('\nEvents:');
+      for (const ev of events) {
+        let line = `  ${ev.name} [${ev.eventType}]`;
+        if (ev.date) line += ` ${ev.date}`;
+        if (ev.position) line += ` @ ${ev.position}`;
+        await cmd.writeLn(line);
+      }
+    }
+  }
+  return 0;
+};
+
+personInfo.spec = {
+  name: 'person-info',
+  effect: 'read' as const,
+  description: 'Show person details, relationships, and events',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [],
+  examples: [
+    'person-info /archive/people/Bo_Exempel',
+  ],
+  returns: "the person's name, birth and death dates, their parents, partners and children, and their events.",
+};
+
+export default personInfo;

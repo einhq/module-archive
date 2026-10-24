@@ -1,0 +1,163 @@
+#!ts
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationAttrs, type RelationEntry, removeRelationPair } from '@archive/people/genealogy';
+import { holdingsByPerson } from '@archive/people/person';
+
+const QUERY_LIMIT = 500000;
+
+/**
+ * Delete the unnamed people nothing points at any more.
+ *
+ * `person-check` has always reported these as `unnamed-orphan`; nothing acted on them. They became
+ * routine with legacy tag transfer: `assign-faces` mints a person for a fresh detection, then
+ * `tag-transfer` gives that same detection the name a human had already written on it, and the
+ * minted person is left holding nothing.
+ *
+ * Scoped to unnamed people with no region and no voice on purpose. `face-reset --delete-unnamed` deletes every
+ * unnamed person, which throws away legitimate unidentified clusters along with the debris.
+ */
+const deleteOrphans = async (cmd: Command, dryRun: boolean): Promise<number> => {
+  const unnamed = await cmd.sys.vfs.query(cmd.access, {
+    types: ['person'],
+    where: [{ ref: 'unnamed', op: 'exists' }],
+    limit: QUERY_LIMIT,
+  });
+  if (unnamed.length === 0) return 0;
+
+  // Aggregates rather than a query per person: the same shape person-check uses. Regions (faces
+  // and tags) and voices both hold a person; one found by voice alone has no region.
+  const counts = await holdingsByPerson(cmd);
+
+  let deleted = 0;
+  for (const person of unnamed) {
+    if ((counts.get(person.id) ?? 0) > 0) continue;
+    if (!dryRun) {
+      const parent = person.absPath.slice(0, person.absPath.lastIndexOf('/')) || '/';
+      await cmd.sys.vfs.unlink(cmd.access, person.absPath, parent, { recursive: true });
+    }
+    await cmd.writeLn(`${dryRun ? '[dry] ' : ''}delete orphan ${person.absPath}`);
+    deleted++;
+  }
+  return deleted;
+};
+
+const RECIPROCAL_DIR: Record<string, string> = { [PARENTS_DIR]: CHILDREN_DIR, [CHILDREN_DIR]: PARENTS_DIR, [PARTNERS_DIR]: PARTNERS_DIR };
+
+/**
+ * Make one family-tree link and its reciprocal agree.
+ *
+ * The reciprocal is looked for where the link resolves — the link in the far person's matching
+ * directory that points back at `person` — not at the stored `peerLink`, which keeps naming the
+ * old place when either person has been moved without relinking. A reciprocal that is found gets
+ * its `peerLink` and this link's rewritten to name each other; one that is missing is recreated
+ * next to the far person.
+ */
+const fixLink = async (cmd: Command, person: string, dir: string, entry: RelationEntry, dryRun: boolean): Promise<'removed' | 'rewritten' | 'recreated' | undefined> => {
+  const vfs = cmd.sys.vfs;
+  const dry = dryRun ? '[dry] ' : '';
+  if (!entry.target || !(await vfs.exists(cmd.access, entry.target))) {
+    if (!dryRun) await removeRelationPair(vfs, cmd.access, entry.linkPath).catch(() => {});
+    await cmd.writeLn(`${dry}remove dangling ${basename(person)}/${dir}/${entry.name}`);
+    return 'removed';
+  }
+
+  const node = await vfs.get<RelationAttrs>(cmd.access, entry.linkPath, { follow: false });
+  const relation = node.attrs.relation;
+  const peerDir = `${entry.target}/${RECIPROCAL_DIR[dir]}`;
+  const peer = (await readRelationDir(vfs, cmd.access, entry.target, RECIPROCAL_DIR[dir])).find((e) => e.target === person);
+
+  if (peer) {
+    const peerNode = await vfs.get<RelationAttrs>(cmd.access, peer.linkPath, { follow: false });
+    const peerRelation = peerNode.attrs.relation;
+    if (relation?.peerLink === peer.linkPath && peerRelation?.peerLink === entry.linkPath) return undefined;
+    if (!dryRun) {
+      if (relation?.peerLink !== peer.linkPath) {
+        await vfs.update(cmd.access, entry.linkPath, { follow: false, attrs: { relation: { ...relation, peerLink: peer.linkPath } } });
+      }
+      if (peerRelation?.peerLink !== entry.linkPath) {
+        await vfs.update(cmd.access, peer.linkPath, { follow: false, attrs: { relation: { ...relation, ...peerRelation, peerLink: entry.linkPath } } });
+      }
+    }
+    await cmd.writeLn(`${dry}rewrite peer ${entry.linkPath} <-> ${peer.linkPath}`);
+    return 'rewritten';
+  }
+
+  const peerLink = `${peerDir}/${basename(person)}`;
+  if (!dryRun) {
+    if (await vfs.exists(cmd.access, peerLink, { follow: false })) {
+      throw new Error(`${peerLink} exists but does not point at ${person}`);
+    }
+    await vfs.ensure(cmd.access, 'directory', entry.target, RECIPROCAL_DIR[dir]);
+    await vfs.create(cmd.access, 'softlink', peerDir, basename(peerLink), {
+      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: person },
+      attrs: { relation: { ...relation, peerLink: entry.linkPath } } as RelationAttrs,
+    });
+    if (relation?.peerLink !== peerLink) {
+      await vfs.update(cmd.access, entry.linkPath, { follow: false, attrs: { relation: { ...relation, peerLink } } });
+    }
+  }
+  await cmd.writeLn(`${dry}recreate peer ${peerLink}`);
+  return 'recreated';
+};
+
+const personFixup = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const root = rest[0] ? resolve(cmd.cwd, rest[0]) : PEOPLE_ROOT;
+  const dryRun = cmd.args.includes('--dry-run');
+  const orphans = cmd.args.includes('--delete-orphans');
+
+  let persons: string[] = [];
+  try {
+    const children = await cmd.sys.vfs.children(cmd.access, root);
+    persons = children.filter((c) => c.node.type === 'person').map((c) => `${root}/${c.name}`);
+  } catch {
+    persons = [];
+  }
+
+  let repaired = 0;
+  let removed = 0;
+  let failed = 0;
+
+  for (const person of persons) {
+    try {
+      for (const dir of [PARENTS_DIR, CHILDREN_DIR, PARTNERS_DIR]) {
+        for (const entry of await readRelationDir(cmd.sys.vfs, cmd.access, person, dir)) {
+          const outcome = await fixLink(cmd, person, dir, entry, dryRun);
+          if (outcome === 'removed') removed++;
+          else if (outcome) repaired++;
+        }
+      }
+    } catch (error) {
+      await cmd.writeError(`person-fixup: ${person}: ${error instanceof Error ? error.message : String(error)}\n`);
+      failed++;
+    }
+  }
+  const deleted = orphans ? await deleteOrphans(cmd, dryRun) : 0;
+
+  await cmd.writeLn(
+    `person fixup: ${repaired} repaired, ${removed} removed` +
+      (orphans ? `, ${deleted} orphans deleted` : '') + (failed ? `, ${failed} people failed` : '') + (dryRun ? ' (dry run)' : ''),
+  );
+  return failed ? 1 : 0;
+};
+
+personFixup.spec = {
+  name: 'person-fixup',
+  effect: 'write' as const,
+  description: 'Repair family-tree links (recreate missing reciprocals, rewrite stale reciprocal paths, drop dangling)',
+  args: [
+    { name: 'root', type: 'path' as const, description: 'people root (default /people)' },
+  ],
+  flags: [
+    { name: 'dry-run', dryRun: true, type: 'string' as const, description: 'report without changing' },
+    { name: 'delete-orphans', type: 'bool' as const, description: 'delete unnamed people left with no faces' },
+  ],
+  examples: [
+    'person-fixup --dry-run /archive/people',
+  ],
+  returns: 'which family links would be recreated, rewritten or dropped; exits 1 when a person could not be repaired.',
+};
+
+export default personFixup;

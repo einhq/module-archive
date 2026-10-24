@@ -1,0 +1,53 @@
+name: media-ingest
+description: Extract EXIF metadata - the entry point every other media pipeline waits on
+
+# A media file with bytes and no exif yet.
+#
+# `skipIfExists` re-checks at consumption time what the bridge asserted at
+# emission time. Those are not the same moment: `media.file.discovered` means
+# "had no exif when the bridge looked", and a fact that waits hours in the
+# trigger queue is routinely stale by the time the engine reads it. Without this
+# the engine deleted a perfectly good instance, rebuilt it and re-ran exiftool
+# for a file that was already indexed — measured at ~4s of pure waste per stale
+# fact, which was essentially the engine's entire throughput budget.
+#
+# The predicate deliberately mirrors the bridge's own (`<file>/metadata/exif`,
+# see modules/archive/lib/media/event-rules.ts) so there is one definition of "indexed".
+#
+# Bytes changing is a different fact and must NOT be skipped this way — that is
+# media-reindex, and it is a separate definition rather than a second event here
+# precisely so this skip cannot silently swallow it.
+trigger:
+  on: media.file.discovered
+  skipIfExists: $NODE_PATH/metadata/exif
+
+steps:
+  exif-extract:
+    command: exif-extract $NODE_PATH
+    description: Extract EXIF metadata, promote hot attrs, create the position node; a staged exact copy is recorded and left unindexed
+    pool: media
+    kind: ingest
+    priority: 100
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 3
+  priority: 20
+  # This is the pipeline every other media pipeline waits on, so reaching the end
+  # of it is what "this file has been taken in" means. Declared here so the
+  # system dashboard can report crawl progress without core knowing the media
+  # module exists.
+  #
+  # `marker` is the same node the trigger's `skipIfExists` tests, so the
+  # dashboard and the skip agree on what "indexed" means by construction. It is
+  # a node count and not a completed-instance count because pipeline-pruner caps
+  # instances at 2000 per pipeline: the old figure sat at 1,998 forever.
+  #
+  # `exempt` names the files this pipeline takes in without an exif node: a staged
+  # exact copy of an original its owner can read is never indexed
+  # (`duplicate.deferred`), so it is no file left to crawl.
+  entryPoint:
+    kinds: [photo, video, audio]
+    marker: exif
+    exempt: duplicate.deferred

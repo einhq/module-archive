@@ -1,0 +1,731 @@
+#!ts
+/**
+ * search-media — find media by what is in it, and by what it is called.
+ *
+ * Each way of matching is a channel of its own (`SearchChannel`), answered as its own rows: what a
+ * picture shows (`picture`), text written in it (`content`), what is said in a recording
+ * (`transcript`), a hand-written description (`authored`), and the file's name (`name`). "a sailing
+ * boat" is a question about content; "DSC_4471" is one about the name, which nothing in the
+ * picture will ever hold. `search` fuses the channels by rank, since their scores
+ * are on scales of their own.
+ *
+ * The name channel is an indexed lookup: `NodeQuery`'s `contains` operator, served by the trigram
+ * index on the `name` attr, ranked by how well the name matches. Its candidates are the files whose
+ * `name` attr matches; the path's basename is scored too, but a file is only found through its name
+ * attr.
+ *
+ * The transcript and content channels are two lookups each: the query's meaning against each
+ * minute of speech's or extracted text's vector, and the query's words in that minute's or text's
+ * words (`byWords`), the same `contains` served by archive's `spoken_text` trigram index. A name
+ * said once barely moves a minute's vector, and a name on a sign a picture's; both are found by
+ * their words.
+ *
+ * `--like <path>` asks a picture instead of words, and answers the `picture` channel only: which
+ * pictures look like this one (`likeMatches`). A label's tag directory (`/archive/tags/<label>`)
+ * asks with the label's learned direction (`label-model`) instead.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchChannel, SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { basename, dirname, resolve } from '@std/path';
+import { toText } from '@std/streams/to-text';
+import { embedImage } from '@ems/client';
+import { embedPictureQuery, embedQuery, isContentPartName, isTextVectorName, TEXT_VECTOR_NAMES } from '@ems/text-embedding';
+import { fileOfPictureVector, PICTURE_DIR, PICTURE_FLOOR, pictureEmbeddingType } from '@archive/media/embedding-types';
+import { MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
+import { pictureSource } from '@archive/media/picture-source';
+import { resolveChunkPath } from '@archive/media/transcript';
+import { type LabelLike, labelLike } from '@archive/labels/label-model';
+import { listedRows } from '@archive/search/listed';
+
+/**
+ * Name matches scored before the best `limit` of them are kept: the best-matching ones, as the
+ * store ranks them. More than `limit`, since some are dropped as not media and the basename can
+ * raise a score. Scaled to what the caller asked for: `search` asks for up to 500 hits, an
+ * interactive query for ten.
+ */
+const NAME_CANDIDATE_FLOOR = 200;
+const NAME_CANDIDATE_CAP = 2000;
+
+/**
+ * How many extra vector rows to pull before deduping to one per file.
+ *
+ * A long recording contributes one embedding per minute-long chunk, and they are all near each
+ * other in the pool — so a query that matches something said in an hour-long video matches
+ * a dozen of its chunks. The dedupe below collapses those to a single file, but it can only
+ * do that for rows it was given: without the overfetch a talkative video fills the page it
+ * should be one line of, and every other file is pushed off the end.
+ */
+const CONTENT_OVERFETCH = 4;
+const CONTENT_CANDIDATE_CAP = 500;
+
+/**
+ * The `picture` channel: the query through SigLIP2's text tower against every picture vector
+ * (`embed-picture`), for what is *in* a picture, above the picture space's own floor
+ * (`PICTURE_FLOOR`).
+ */
+const PICTURE_CANDIDATE_CAP = 2000;
+
+/**
+ * The `authored` channel: a hand-written description (`attrs.description`, embedded at
+ * `metadata/authored/<type>`). Its floor is stricter than the text space's own: judged caption
+ * pairs held 0.9+ precision from 0.50, against 0.50 precision at the space's general floor.
+ */
+const AUTHORED_FLOOR = 0.5;
+const AUTHORED = /^(.*)\/metadata\/authored\/[a-z]+_[a-z0-9]+$/;
+
+/**
+ * The `name` channel's scale, a score for each step of the store's `MatchRank`. Only an exact name
+ * (its stem, without the extension) is a claim that this is the file meant: a file name is words
+ * run together, so a prefix says little — "fyr" starts "fyra.jpg" — and both it and a substring
+ * stay under the 0.75 a confident name needs.
+ */
+const NAME_EXACT = 0.95;
+const NAME_PREFIX = 0.7;
+const NAME_CONTAINS = 0.6;
+
+/** The file's own name, and the display name if it carries one. */
+const nameScore = (query: string, path: string, attrs: { name?: string }): number => {
+  const candidates = [attrs.name, path.split('/').pop()].filter((value): value is string => Boolean(value));
+  let best = 0;
+  for (const candidate of candidates) {
+    const value = candidate.toLowerCase();
+    // The extension is not part of what anything is called.
+    const stem = value.replace(/\.[a-z0-9]{1,5}$/, '');
+    if (value === query || stem === query) return NAME_EXACT;
+    if (value.startsWith(query)) best = Math.max(best, NAME_PREFIX);
+    else if (value.includes(query)) best = Math.max(best, NAME_CONTAINS);
+  }
+  return best;
+};
+
+/**
+ * Media whose name matches, in one indexed query: the candidates the store ranks best by the
+ * `name` attr (`orderBy` with `match`), so an exact name is among them however many names hold the
+ * query. Within one step of that ranking the store breaks ties by id.
+ *
+ * Originals only (`sourceId` missing) — a rendition is never a result. The
+ * mimetype narrowing stays on this side: media is what most of the corpus is, so
+ * dropping a stray document after the fact is cheaper than the three separate
+ * queries an OR of `image/`, `video/` and `audio/` would need — `NodeQuery`
+ * AND-s its conditions and has no OR.
+ */
+const byName = async (cmd: Command, query: string, limit: number, notWithin: string[]): Promise<{ hits: Map<string, { score: number; id: string }>; full: boolean }> => {
+  const hits = new Map<string, { score: number; id: string }>();
+  const candidates = Math.min(Math.max(limit * 4, NAME_CANDIDATE_FLOOR), NAME_CANDIDATE_CAP);
+
+  const page = await cmd.sys.vfs.query(cmd.access, {
+    types: ['file'],
+    where: [
+      { ref: 'name', op: 'contains', value: query },
+      { ref: 'sourceId', op: 'missing' },
+    ],
+    orderBy: { ref: 'name', dir: 'asc', match: query },
+    ...(notWithin.length > 0 ? { notWithin } : {}),
+    limit: candidates,
+  });
+
+  for (const entry of page) {
+    const attrs = entry.node.attrs as { name?: string; mimetype?: string };
+    const mimetype = attrs.mimetype ?? '';
+    if (!mimetype.startsWith('image/') && !mimetype.startsWith('video/') && !mimetype.startsWith('audio/')) continue;
+    const score = nameScore(query, entry.absPath, attrs);
+    if (score > 0) hits.set(entry.absPath, { score, id: entry.id });
+  }
+
+  return { hits, full: page.length >= candidates };
+};
+
+/**
+ * The phrase scale of the `transcript` and `content` channels, above the text space's similarities,
+ * which are at most 1: a minute of speech or a text that holds the query in so many words outranks
+ * every one that is only about it. As words of their own it is the file meant (`confident`); inside
+ * a longer word ("sjö" in "sjön") it is not.
+ */
+const SAID_WORDS = 1.2;
+const SAID_INSIDE = 1.1;
+
+/**
+ * The shortest query matched as a phrase: a trigram index serves three characters and more, and a
+ * shorter query is inside nearly every minute of speech and every page.
+ */
+const SAID_MIN_LENGTH = 3;
+
+/** Whether `query` stands in `text` as words of its own, rather than inside a longer word. */
+const saysAsWords = (text: string, query: string): boolean =>
+  new RegExp(`(?<![\\p{L}\\p{N}])${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\p{L}\\p{N}])`, 'iu').test(text);
+
+/**
+ * The file an extracted text's vector belongs to: `<file>/metadata/content/<type>`, or one of a long
+ * text's parts, `<file>/metadata/content/<type>/c<N>`. Null for any other vector, and for a file
+ * that is itself in a node's `metadata/` — an album's description is text about the album, no
+ * media of its own.
+ */
+const contentFileOf = (embPath: string): string | null => {
+  const segments = embPath.split('/');
+  let file: string | null = null;
+  if (isContentPartName(segments.at(-1)!) && isTextVectorName(segments.at(-2)!) && segments.at(-3) === 'content' && segments.at(-4) === 'metadata') {
+    file = segments.slice(0, -4).join('/');
+  } else {
+    const single = /^(.*)\/metadata\/content\/([^/]+)$/.exec(embPath);
+    if (single && isTextVectorName(single[2])) file = single[1];
+  }
+  return file && !file.includes('/metadata/') ? file : null;
+};
+
+/** A phrase hit: what is said in a minute of speech, or written in a file's extracted text. */
+type WordsHit =
+  | { channel: 'transcript'; path: string; atSeconds: number; score: number; confident: boolean }
+  | { channel: 'content'; path: string; score: number; confident: boolean; embedding: string; embPath: string };
+
+/**
+ * The minutes of speech and the extracted texts that hold the query, by the vector nodes that carry
+ * their words (`text`: transcript chunks, and a document's or a picture's text), in one indexed
+ * query: each as its file, where in a recording the minute starts, and its score on the scale above
+ * every similarity. As with names, the bound is on rows that matched, in id order, after those in
+ * the unlisted trees are left out (`listedRows`).
+ */
+const byWords = async (
+  cmd: Command,
+  query: string,
+  limit: number,
+  within: Set<string> | undefined,
+  notWithin: string[],
+): Promise<{ hits: WordsHit[]; full: boolean }> => {
+  if (query.length < SAID_MIN_LENGTH) return { hits: [], full: false };
+  const candidates = Math.min(Math.max(limit * 4, NAME_CANDIDATE_FLOOR), NAME_CANDIDATE_CAP);
+  const { rows, paths, full } = await listedRows(cmd, notWithin, candidates, async (asked) =>
+    (await cmd.sys.vfs.query(cmd.access, {
+      types: ['embedding'],
+      where: [{ ref: 'text', op: 'contains', value: query }],
+      limit: asked,
+    })).filter((row) => !within || within.has(row.id)));
+  const hits = rows.flatMap((row): WordsHit[] => {
+    const words = saysAsWords(String(row.node.attrs.text ?? ''), query);
+    const score = words ? SAID_WORDS : SAID_INSIDE;
+    const rowPaths = paths.get(row.id) ?? [];
+    const chunk = rowPaths.map(resolveChunkPath).find((chunk) => chunk !== null);
+    if (chunk) return [{ channel: 'transcript', ...chunk, score, confident: words }];
+    for (const embPath of rowPaths) {
+      const file = contentFileOf(embPath);
+      if (file) return [{ channel: 'content', path: file, score, confident: words, embedding: row.id, embPath }];
+    }
+    return [];
+  });
+  return { hits, full };
+};
+
+/**
+ * The file ids to rank within, from `--within <path>`: a JSON array `search` wrote to /tmp.
+ *
+ * A person's pictures are thousands of ids — too many for a command line, and exactly the set
+ * a nearest-neighbour search over the whole archive misses: "segelbåt" ranks 500 boats before
+ * it reaches one this person is on.
+ */
+const readWithin = async (cmd: Command, path: string): Promise<string[]> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+  try {
+    const ids = JSON.parse(await toText(handle.readable));
+    if (!Array.isArray(ids)) throw new Error('not a JSON array');
+    return ids.filter((id): id is string => typeof id === 'string');
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * Every content embedding under these files, by the layouts the path strip in `searchMedia`
+ * undoes: extracted text's `metadata/content/<type>` or, for a long one, its parts `metadata/content/<type>/c<N>`, a hand-written description's
+ * `metadata/authored/<type>`, and a transcript's `metadata/transcript/<type>/t<N>`. Four levels of
+ * batched child lookups, whatever the number of files.
+ */
+const embeddingsUnder = async (cmd: Command, fileIds: string[]): Promise<{ text: string[]; picture: string[] }> => {
+  /** One batched lookup for a level: the children of `parents`, by name. */
+  const level = async (parents: string[]): Promise<(...names: string[]) => string[]> => {
+    const links = parents.length === 0 ? new Map() : await cmd.sys.vfs.getChildLinksByIds(cmd.access, parents);
+    const all = [...links.values()].flat() as { id: string; name: string }[];
+    return (...names) => all.filter((link) => names.length === 0 || names.includes(link.name)).map((link) => link.id);
+  };
+  const files = await level(fileIds);
+  const underMetadata = await level(files('metadata'));
+  const [texts, transcripts, pictures] = [underMetadata('content', 'authored'), underMetadata('transcript'), underMetadata('picture')];
+  const [underTexts, underTranscripts, underPictures] = await Promise.all([level(texts), level(transcripts), level(pictures)]);
+  const [chunks, parts] = await Promise.all([level(underTranscripts(...TEXT_VECTOR_NAMES)), level(underTexts(...TEXT_VECTOR_NAMES))]);
+  return {
+    text: [...underTexts(...TEXT_VECTOR_NAMES), ...chunks(), ...parts()],
+    picture: underPictures(),
+  };
+};
+
+/**
+ * The picture `--like` names, as vectors in the pictures' space: its own stored ones (a photo's
+ * one, a video's keyframes), or for a file that has none — not embedded yet, or a picture put in
+ * /tmp only to be searched with — the embedder's answer for it now, kept nowhere. `own` are the
+ * stored vectors' ids, which are no answer.
+ */
+const likeVectors = async (cmd: Command, path: string, attrs: Record<string, unknown>): Promise<{ type: string; vectors: Uint8Array[]; own: Set<string> }> => {
+  const dir = `${path}/metadata/${PICTURE_DIR}`;
+  const embedded = await cmd.sys.vfs.get(cmd.access, dir).catch(() => undefined);
+  // `embeddedBy` is written last: a directory without it is half-written, and embedded afresh.
+  if (embedded && typeof embedded.attrs.embeddedBy === 'string' && embedded.attrs.embeddedBy) {
+    const stored = (await cmd.sys.vfs.children(cmd.access, dir)).filter((entry) => entry.node.type === 'embedding');
+    const type = stored.map((entry) => entry.node.attrs.embeddingType).find((type): type is string => typeof type === 'string');
+    if (type) {
+      const vectors = await cmd.sys.vfs.getVectors(cmd.access, type, stored.map((entry) => entry.node.id));
+      if (vectors.size > 0) return { type, vectors: [...vectors.values()], own: new Set(vectors.keys()) };
+    }
+  }
+
+  const source = await pictureSource(cmd, path, attrs);
+  const result = await embedImage(cmd, source.path, { ...source.opts, interactive: true });
+  const type = pictureEmbeddingType(result.producer);
+  if (!type) throw new Error(`no embedding type for picture embedder "${result.producer}"`);
+  const embeddings = result.frames ? result.frames.map((frame) => frame.embedding) : result.embedding ? [result.embedding] : [];
+  if (embeddings.length === 0) throw new Error('EMS returned no vector');
+  return { type, vectors: embeddings.map((embedding) => new TextEncoder().encode(JSON.stringify(embedding))), own: new Set() };
+};
+
+/**
+ * The other files of the stack this one is in, by id: a burst is the same picture taken again, so
+ * the rest of it is no answer to "more like this". A stack is its album's, and the album holds the
+ * file directly or in its `files` directory.
+ */
+const stackmates = async (cmd: Command, path: string, id: string): Promise<string[]> => {
+  const parent = dirname(path);
+  const album = await cmd.sys.vfs.get(cmd.access, basename(parent) === 'files' ? dirname(parent) : parent).catch(() => undefined);
+  const stack = parseAlbumMediaStacks(album?.attrs[MEDIA_STACKS_ATTR])?.groups.find((group) => group.memberIds.includes(id));
+  return stack?.memberIds.filter((member) => member !== id) ?? [];
+};
+
+/** At most this many copies of one file's bytes are looked up to be left out. */
+const COPIES_LIMIT = 50;
+
+/**
+ * The other files with the same bytes (the same picture imported twice): a copy is the picture
+ * itself to anyone looking at it, and the lightbox lists copies on their own as duplicates.
+ */
+const copiesOf = async (cmd: Command, path: string, sha256: unknown): Promise<string[]> => {
+  if (typeof sha256 !== 'string' || !sha256) return [];
+  const entries = await cmd.sys.vfs.query(cmd.access, { types: ['file'], where: [{ ref: 'sha256', op: 'eq', value: sha256 }], limit: COPIES_LIMIT });
+  return entries.map((entry) => entry.absPath).filter((copy) => copy !== path);
+};
+
+/**
+ * The least a cosine can be: every picture is ranked when a picture is the question.
+ *
+ * Image-to-image cosines in this space are high across the board (a corpus's 2000th nearest
+ * picture still scores about 0.75), so a floor would mean nothing over the whole archive, and
+ * inside a set (one person's pictures) it would hide the ones least like it rather than rank them.
+ */
+const ANY_SIMILARITY = -1;
+
+/** Vectors nearest a question, each with its paths, outside the unlisted trees (`listedRows`). */
+type Ranked = { matches: { id: string; similarity: number }[]; paths: Map<string, string[]>; full: boolean };
+
+/** `findSimilar` without the vectors in the unlisted trees `notWithin`, asking for more while they take its place. */
+const similarListed = async (
+  cmd: Command,
+  notWithin: string[],
+  type: string,
+  vector: Uint8Array,
+  candidates: number,
+  floor: number,
+  within: string[] | undefined,
+): Promise<Ranked> => {
+  const { rows, paths, full } = await listedRows(cmd, notWithin, candidates, (asked) => cmd.sys.vfs.findSimilar(cmd.access, type, vector, asked, floor, within));
+  return { matches: rows, paths, full };
+};
+
+/**
+ * Pictures that look like a label (`--like /archive/tags/<label>`): the label's direction against
+ * every picture, from its own floor up, without what already carries the label or was rejected
+ * for it.
+ */
+const labelMatches = async (
+  cmd: Command,
+  asked: LabelLike,
+  candidates: number,
+  within: string[] | undefined,
+  notWithin: string[],
+): Promise<Ranked & { excluded: Set<string> }> => {
+  const ranked = await similarListed(cmd, notWithin, asked.type, asked.vector, candidates, asked.floor, within);
+  const files = [...new Set([...ranked.paths.values()].flat().map(fileOfPictureVector).filter((file): file is string => file !== undefined))];
+  return { ...ranked, excluded: await asked.excludedFiles(files) };
+};
+
+/**
+ * Pictures that look like the one at `path`, nearest first: each of its vectors against every
+ * picture's, a file scoring by its best pair — so a video, asking with its keyframes or found by
+ * them, scores by its best one. Ranked inside `within` when given. The picture itself is not one
+ * of them, nor a copy of its bytes, nor the rest of its stack.
+ */
+const likeMatches = async (
+  cmd: Command,
+  path: string,
+  candidates: number,
+  within: string[] | undefined,
+  notWithin: string[],
+): Promise<Ranked & { excluded: Set<string> }> => {
+  const asked = await labelLike(cmd, path);
+  if (asked) return await labelMatches(cmd, asked, candidates, within, notWithin);
+  const node = await cmd.sys.vfs.get(cmd.access, path);
+  const mimetype = typeof node.attrs.mimetype === 'string' ? node.attrs.mimetype : '';
+  if (node.type !== 'file' || (!mimetype.startsWith('image/') && !mimetype.startsWith('video/'))) {
+    throw new Error(`${path} is not a picture or a video`);
+  }
+  const { type, vectors, own } = await likeVectors(cmd, path, node.attrs);
+  const [ranked, mates, copies] = await Promise.all([
+    Promise.all(vectors.map((vector) => similarListed(cmd, notWithin, type, vector, candidates, ANY_SIMILARITY, within))),
+    stackmates(cmd, path, node.id),
+    copiesOf(cmd, path, node.attrs.sha256),
+  ]);
+  const matePaths = mates.length === 0 ? new Map<string, string[]>() : await cmd.sys.vfs.resolveIdPaths(cmd.access, mates);
+  return {
+    matches: ranked.flatMap((one) => one.matches).filter((match) => !own.has(match.id)),
+    paths: new Map(ranked.flatMap((one) => [...one.paths])),
+    full: ranked.some((one) => one.full),
+    excluded: new Set([path, ...copies, ...[...matePaths.values()].flat()]),
+  };
+};
+
+const searchMedia = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    // `within`: it ranks inside a set of files `search` hands it (`--within`); `notWithin`: it
+    // leaves out the trees `search` names (`--not-within`); `like`: it ranks by likeness to a
+    // picture (`--like`).
+    await cmd.writeLn(JSON.stringify({ kinds: ['photo', 'video', 'audio'], within: true, notWithin: true, like: true }));
+    return 0;
+  }
+
+  // Parse flags manually: everything before first flag is the query
+  const queryParts: string[] = [];
+  let limit = 10;
+  let withinPath: string | undefined;
+  let likePath: string | undefined;
+  const notWithin: string[] = [];
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') {
+      limit = parseInt(cmd.args[++i] || '10', 10);
+    } else if (arg === '--within') {
+      withinPath = cmd.args[++i];
+    } else if (arg === '--like') {
+      likePath = cmd.args[++i];
+    } else if (arg === '--not-within') {
+      notWithin.push(cmd.args[++i]);
+    } else {
+      queryParts.push(arg);
+    }
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+
+  if (!query && likePath === undefined) {
+    await cmd.writeError('search-media: missing search query\n');
+    return 1;
+  }
+  if (query && likePath !== undefined) {
+    await cmd.writeError('search-media: --like ranks by a picture and takes no words\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+
+  // `SEARCH_TRACE=1` (which `search` passes on): where this provider's time went.
+  const startedAt = Date.now();
+  const trace = async (what: string) => {
+    if (cmd.env.SEARCH_TRACE) await cmd.writeError(`search-media: ${what} ${Date.now() - startedAt}ms\n`);
+  };
+
+  let within: { files: Set<string>; embeddings: string[]; pictures: string[] } | undefined;
+  if (withinPath !== undefined) {
+    try {
+      const files = await readWithin(cmd, withinPath);
+      await trace(`within ${files.length} files read`);
+      const under = await embeddingsUnder(cmd, files);
+      within = { files: new Set(files), embeddings: under.text, pictures: under.picture };
+      await trace(`within ${within.embeddings.length} text and ${within.pictures.length} picture embeddings found`);
+    } catch (error) {
+      await cmd.writeError(`search-media: cannot read --within ${withinPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  // Vector rows asked for: more than `limit`, since one file's rows (a recording's chunks, a video's
+  // keyframes) collapse to one per channel.
+  const textCandidates = Math.min(limit * CONTENT_OVERFETCH, CONTENT_CANDIDATE_CAP);
+  const pictureCandidates = Math.min(limit * CONTENT_OVERFETCH, PICTURE_CANDIDATE_CAP);
+
+  // A picture to rank by is the whole question: no words to match, so no names and no texts,
+  // and nothing to degrade to when it cannot be answered.
+  let like: Awaited<ReturnType<typeof likeMatches>> | undefined;
+  if (likePath !== undefined) {
+    try {
+      like = await likeMatches(cmd, resolve(cmd.cwd, likePath), pictureCandidates, within?.pictures, notWithin);
+      await trace(`${like.matches.length} picture matches ranked`);
+    } catch (error) {
+      await cmd.writeError(`search-media: --like ${likePath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  // The four lookups are independent — two store queries, and two round trips to the model server
+  // each followed by a vector query — so they go at once rather than back to back. None is fatal:
+  // the names and what is said still match when EMS cannot answer, and the content still matches
+  // when a store query fails.
+  //
+  // The command answers no sooner than the slowest. The embeds are `interactive`, so they go
+  // ahead of batch work in EMS's queues; a search that is cancelled closes its connection, and
+  // EMS drops the embed rather than run it for nobody.
+  let namesFull = false;
+  let saidFull = false;
+  // The text space's similarity from which a transcript hit is the recording meant.
+  let confidentAt = Infinity;
+  const none: Ranked = { matches: [], paths: new Map(), full: false };
+  const [named, said, content, pictures] = like ? [new Map<string, { score: number; id: string }>(), [] as WordsHit[], none, like] : await Promise.all([
+    byName(cmd, queryLower, limit, notWithin).then(({ hits, full }) => {
+      namesFull = full;
+      return within ? new Map([...hits].filter(([, hit]) => within.files.has(hit.id))) : hits;
+    }).catch(async (error) => {
+      await cmd.writeError(`search-media: name match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+      return new Map<string, { score: number; id: string }>();
+    }),
+    byWords(cmd, queryLower, limit, within && new Set(within.embeddings), notWithin).then(async ({ hits, full }) => {
+      saidFull = full;
+      await trace(`${hits.length} phrase matches found`);
+      return hits;
+    }).catch(async (error) => {
+      await cmd.writeError(`search-media: phrase match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+      return [] as WordsHit[];
+    }),
+    (async () => {
+      // The text space has a floor of its own, as the picture channel does.
+      let embedded: { bytes: Uint8Array; type: string; floor: number; confident: number };
+      try {
+        embedded = await embedQuery(cmd, query);
+        confidentAt = embedded.confident;
+        await trace('query embedded');
+      } catch (error) {
+        await cmd.writeError(`search-media: content match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+        return none;
+      }
+      try {
+        const similar = await similarListed(cmd, notWithin, embedded.type, embedded.bytes, textCandidates, embedded.floor, within?.embeddings);
+        await trace(`${similar.matches.length} content matches ranked`);
+        return similar;
+      } catch (error) {
+        // Nothing embedded in this space yet: the type's table does not exist until the first vector is.
+        await cmd.writeError(`search-media: content match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+        return none;
+      }
+    })(),
+    (async () => {
+      // The same query in the pictures' space, the embed shared with the other providers as the
+      // text one is; a host whose EMS has no picture embedder simply answers without this half.
+      let type: string | undefined;
+      let vectorBytes: Uint8Array;
+      try {
+        const { bytes, producer } = await embedPictureQuery(cmd, query);
+        type = pictureEmbeddingType(producer);
+        if (!type) throw new Error(`no embedding type for picture embedder "${producer}"`);
+        vectorBytes = bytes;
+        await trace('query embedded for pictures');
+      } catch (error) {
+        await cmd.writeError(`search-media: picture match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+        return none;
+      }
+      try {
+        const similar = await similarListed(cmd, notWithin, type, vectorBytes, pictureCandidates, PICTURE_FLOOR, within?.pictures);
+        await trace(`${similar.matches.length} picture matches ranked`);
+        return similar;
+      } catch (error) {
+        // No picture has been embedded yet: the type's table does not exist until the first one is.
+        await cmd.writeError(`search-media: picture match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
+        return none;
+      }
+    })(),
+  ]);
+  await trace('names and content in');
+
+  // Every match's paths, as its lookup resolved them: `search` needs only path and score per hit,
+  // and re-derives name, type and mimetype from the file node itself.
+  const idToPaths = new Map([...content.paths, ...pictures.paths]);
+  const matches = content.matches;
+  const pictureMatches = pictures.matches;
+
+  /**
+   * A channel: its best score per file, where in the file that match is, and whether any of the
+   * file's matches is the file meant.
+   */
+  type Channel = Map<string, { score: number; atSeconds?: number; confident?: boolean }>;
+  const channels: Record<'content' | 'transcript' | 'authored' | 'picture', Channel> = {
+    content: new Map(),
+    transcript: new Map(),
+    authored: new Map(),
+    picture: new Map(),
+  };
+  // `atSeconds` follows the score: it says where in the file the best match is.
+  const note = (channel: Channel, path: string, score: number, atSeconds?: number, confident = false) => {
+    const existing = channel.get(path);
+    const sure = confident || existing?.confident === true;
+    if (!existing || score > existing.score) {
+      channel.set(path, { score, ...(atSeconds !== undefined ? { atSeconds } : {}), ...(sure ? { confident: true } : {}) });
+    } else if (sure) existing.confident = true;
+  };
+
+  /** The file above each embedding, by climbing as many parents as the path strip removes. */
+  const fileIds = new Map<string, string>();
+  const climbing = new Map<string, { at: string; left: number }>();
+  const climb = (filePath: string, embPath: string, from: string) => {
+    const depth = embPath.split('/').length - filePath.split('/').length;
+    if (depth > 0 && !climbing.has(filePath)) climbing.set(filePath, { at: from, left: depth });
+  };
+
+  for (const match of matches) {
+    for (const embPath of idToPaths.get(match.id) ?? []) {
+      // A transcript chunk, which is the only embedding that knows *when* inside the file
+      // it matched. Its node name is its start second, so the timecode comes out of the
+      // path — reading an attr per hit would put a node read back on the search path, which
+      // is exactly what the batched resolveIdPaths above exists to avoid.
+      const chunk = resolveChunkPath(embPath);
+      if (chunk) {
+        // Only what was said is judged confident: the other text channels were not measured.
+        note(channels.transcript, chunk.path, match.similarity, chunk.atSeconds, match.similarity >= confidentAt);
+        continue;
+      }
+
+      // Extracted text, or a part of a long one: the file scores by its best part.
+      const extracted = contentFileOf(embPath);
+      if (extracted) {
+        note(channels.content, extracted, match.similarity);
+        climb(extracted, embPath, match.id);
+        continue;
+      }
+
+      const own = AUTHORED.exec(embPath);
+      if (own) {
+        if (match.similarity >= AUTHORED_FLOOR) {
+          note(channels.authored, own[1], match.similarity);
+          climb(own[1], embPath, match.id);
+        }
+        continue;
+      }
+    }
+  }
+
+  // The query said or written in so many words. Earliest first, so that of a recording's equal
+  // scores the first moment it is said is the one it opens at.
+  const atOf = (hit: WordsHit) => hit.channel === 'transcript' ? hit.atSeconds : 0;
+  for (const hit of [...said].sort((a, b) => atOf(a) - atOf(b))) {
+    if (hit.channel === 'transcript') note(channels.transcript, hit.path, hit.score, hit.atSeconds, hit.confident);
+    else {
+      note(channels.content, hit.path, hit.score, undefined, hit.confident);
+      climb(hit.path, hit.embPath, hit.embedding);
+    }
+  }
+
+  // A photo's vector or one of a video's keyframes; a video scores by its best keyframe.
+  for (const match of pictureMatches) {
+    for (const embPath of idToPaths.get(match.id) ?? []) {
+      const filePath = fileOfPictureVector(embPath);
+      if (!filePath || like?.excluded.has(filePath)) continue;
+      note(channels.picture, filePath, match.similarity);
+      climb(filePath, embPath, match.id);
+    }
+  }
+
+  // The file's id, so the aggregator can preload a page of hits in one batch instead of
+  // reading each by path. The climb mirrors the strip above: one parent per removed segment,
+  // batched per level.
+  while (climbing.size > 0) {
+    const parents = await cmd.sys.vfs.getParentLinksByIds(cmd.access, [...new Set([...climbing.values()].map((c) => c.at))]);
+    for (const [filePath, climb] of [...climbing]) {
+      const parent = parents.get(climb.at)?.[0]?.parentId;
+      if (!parent) {
+        climbing.delete(filePath);
+        continue;
+      }
+      if (climb.left === 1) {
+        fileIds.set(filePath, parent);
+        climbing.delete(filePath);
+      } else climbing.set(filePath, { at: parent, left: climb.left - 1 });
+    }
+  }
+  for (const [path, hit] of named) fileIds.set(path, hit.id);
+  await trace('resolved to files');
+
+  // Each channel's best `limit`, by its own score; path breaks ties so the order is the same on
+  // every page `search` asks for.
+  const results: SearchProviderHit[] = [];
+  let truncated = namesFull || saidFull || content.full || pictures.full;
+  const answer = (channel: SearchChannel, hits: Channel) => {
+    const best = [...hits].sort((a, b) => b[1].score - a[1].score || a[0].localeCompare(b[0]));
+    if (best.length > limit) truncated = true;
+    for (const [path, hit] of best.slice(0, limit)) {
+      const id = fileIds.get(path);
+      results.push({
+        path,
+        type: 'file',
+        name: path.split('/').pop() || '',
+        channel,
+        score: hit.score,
+        ...(id ? { id } : {}),
+        ...(hit.atSeconds !== undefined ? { atSeconds: hit.atSeconds } : {}),
+        ...(hit.confident ? { confident: true } : {}),
+      });
+    }
+  };
+  answer('name', new Map([...named].map(([path, hit]) => [path, { score: hit.score }])));
+  for (const [channel, hits] of Object.entries(channels)) answer(channel as SearchChannel, hits);
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ results, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse));
+  } else if (results.length === 0) {
+    await cmd.writeLn('No matches found.');
+  } else {
+    for (const r of results) {
+      await cmd.writeLn(`${r.score.toFixed(3)} ${r.channel.padEnd(10)} ${r.path}`);
+    }
+  }
+
+  return 0;
+};
+
+searchMedia.spec = {
+  name: 'search-media',
+  effect: 'read' as const,
+  description:
+    'Search media files by what they show, the text in them, what is said in them, their written descriptions and their names, or by likeness to a picture or a label',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text or keywords (none with --like)' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
+    { name: 'within', type: 'path' as const, description: 'rank only these files: a JSON array of file ids (how `search` narrows text to a person, location or album)' },
+    {
+      name: 'not-within',
+      type: 'path' as const,
+      description: 'leave out what lies under this directory; may be given more than once (how `search` leaves out the unlisted trees, such as staging)',
+    },
+    {
+      name: 'like',
+      type: 'path' as const,
+      description:
+        "answer the picture channel only, by likeness to this photo or video: its stored picture vectors, or for a file without them (one put in /tmp) the embedder asked now; or to a label's tag directory, by its model (label-model), without what carries the label",
+    },
+  ],
+  examples: [
+    "search-media 'segelbåt' -l 10",
+    'search-media --like /archive/albums/Exempelalbum/files/IMG_0001.jpg -l 10',
+    'search-media --like /archive/tags/exempeletikett -l 10',
+  ],
+  returns: "matching media, one row per channel that found it, best first within each channel, with its path, channel and score on that channel's scale.",
+};
+
+export default searchMedia;

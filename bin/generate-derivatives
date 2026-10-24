@@ -1,0 +1,637 @@
+#!ts
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_INPUT, STEP_EXIT_TEMPORARY } from '@ein/client';
+import { EmsError, stepExitCode, transcodeBudget } from '@ems/client';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/event-rules';
+import { rebuildFaceCrops } from '@archive/media/face-crop-rebuild';
+import { generateImageLadder, type ImageLadderTarget } from '@archive/media/image-ladder';
+import { type Dims, pictureDims } from '@archive/media/orientation';
+import { type AudioSize, type ImageSize, playbackRendition, readSizes, type SizesConfig, type VideoSize } from '@archive/media/sizes';
+import { storyboardName, type StoryboardSpec, writeStoryboard } from '@archive/media/storyboard';
+import { type AudioRendition, type VideoRendition, writeTranscode } from '@archive/media/transcode';
+import { reportUnwritable } from '@archive/media/writable';
+
+/**
+ * A rendition written under `thumbnails/`, named by its target box out of sizes.yaml.
+ */
+type SizeTarget = { size: string; ext: string; kind: 'image' | 'video' | 'audio'; class: DerivativeClass };
+
+/**
+ * The face crops under `regions/<region>/image.avif`.
+ *
+ * Not a size class: there is one per detected face, its geometry comes from that face's stored
+ * box rather than from sizes.yaml, and it lands beside the face node instead of under
+ * `thumbnails/`. It belongs in this table anyway, because this table is what a `regenerate`
+ * sweep walks — a crop that is in no entry of it has a repair sweep that can find it and
+ * nothing that can rebuild it, which made every interrupted write permanent.
+ */
+type FaceTarget = { size: 'face'; kind: 'face'; class: DerivativeClass };
+
+/**
+ * A video's storyboard sheet under `thumbnails/`, its frames tiled for the player's timeline
+ * (`@archive/media/storyboard`). Named by its tile rather than a box, and made from the rendition
+ * the player plays (`playbackRendition`) rather than from the source, so it waits for that.
+ */
+type StoryboardTarget = { size: 'storyboard'; kind: 'storyboard'; class: DerivativeClass };
+
+type Target = SizeTarget | FaceTarget | StoryboardTarget;
+
+const isSizeTarget = (target: Target): target is SizeTarget => target.kind === 'image' || target.kind === 'video' || target.kind === 'audio';
+
+/**
+ * Which sizes from sizes.yaml to generate per media type, the output extension,
+ * and the class of work.
+ *
+ * The class is the cost of the work, not the media type. `still` writes AVIF
+ * pictures for every type — a photo's ladder and face crops, a video's poster
+ * frames, an audio file's waveform — and is run by `media-stills`. `transcode`
+ * re-encodes a whole video or audio stream (the video's hover clip included) and
+ * can run for minutes; `media-transcode` runs it. They are separate pipelines so a
+ * failed transcode does not take the poster frame down with it, and so the
+ * expensive class can be serialised on its own resource queue. `storyboard` decodes
+ * a video's whole rendition, so it is run after the transcode, in `media-transcode`;
+ * not `still`, which turning a video re-makes inline (`file-set-orientation`).
+ *
+ * Adding or dropping a `transcode` entry means updating `TRANSCODE_RENDITIONS` in
+ * `@archive/media/event-rules` to match: that is how `media-scan` knows a video is missing a rendition,
+ * and it counts them by extension because it cannot see this table.
+ */
+const TARGETS: Record<string, Target[]> = {
+  image: [
+    { size: 'thumb', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'grid', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'small', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'medium', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'large', ext: 'avif', kind: 'image', class: 'still' },
+    // A crop is a few hundred pixels out of a raster that is already open, so it costs about
+    // what one step of the ladder above does — `still`, alongside them. Only images:
+    // `detect-faces` refuses anything else, so no other media type has a `regions/` directory.
+    { size: 'face', kind: 'face', class: 'still' },
+  ],
+  // A video's poster frames are the same sizes a photo gets, minus `large` (only the
+  // photo lightbox ladder reaches 2560). `grid` is what a justified tile draws; `small`
+  // and `medium` are there because the UI hands every tile the 512/800/1600 srcset and a
+  // 2x display picks 800 for any landscape tile — without them that candidate 404s and
+  // the tile falls through its whole chain to a placeholder icon.
+  //
+  // `preview` is the hover clip, a 20-second re-encode: class `transcode`, next to the
+  // full rendition.
+  video: [
+    { size: 'thumb', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'grid', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'small', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'medium', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'preview', ext: 'mp4', kind: 'video', class: 'transcode' },
+    { size: '1080p', ext: 'mp4', kind: 'video', class: 'transcode' },
+    { size: 'storyboard', kind: 'storyboard', class: 'storyboard' },
+  ],
+  // Audio's picture is a rendered waveform, so the sizes are the ones the UI already
+  // asks for and nothing more: `thumb` for the square consumers, and 512/800/1600 —
+  // exactly GRID_BOXES plus GRID_FALLBACK_NAME in the UI's derivatives.ts — so a tile
+  // gets a real srcset. No `large`: only the photo lightbox ladder reaches 2560.
+  audio: [
+    { size: 'thumb', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'grid', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'small', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'medium', ext: 'avif', kind: 'image', class: 'still' },
+    { size: 'standard', ext: 'm4a', kind: 'audio', class: 'transcode' },
+  ],
+};
+
+type DerivativeClass = 'still' | 'transcode' | 'storyboard';
+
+/**
+ * A transcode EMS *refuses* on its CPU-decode budget, as distinct from one it fails at, is
+ * recorded on the file node rather than counted as a failure. The two need telling apart
+ * because only one of them is worth another attempt: a failed encode may well succeed next
+ * time, and a refusal is a property of the source against EMS's limits and will refuse
+ * identically forever. Recorded so `media-scan` stops announcing a gap nothing is going to
+ * close — see TRANSCODE_REFUSED_ATTR.
+ */
+
+const DERIVATIVE_CLASSES: DerivativeClass[] = ['still', 'transcode', 'storyboard'];
+
+/**
+ * Below this, a video gets no storyboard: the grid's hover clip shows it whole, and a timeline
+ * that short has no place a frame would help find.
+ */
+const MIN_STORYBOARD_SECONDS = 4;
+
+/** What the storyboard is made of and the rendition it is made from, or undefined when sizes.yaml does not say. */
+const storyboardSpecOf = (sizes: SizesConfig): (StoryboardSpec & { from: string }) | undefined => {
+  const def = sizes.storyboard;
+  const from = playbackRendition(sizes);
+  if (!def || !from || !(Number(def.tile) > 0)) return undefined;
+  return {
+    from,
+    tile: Number(def.tile),
+    ...(def.columns !== undefined ? { columns: def.columns } : {}),
+    ...(def['max-tiles'] !== undefined ? { maxTiles: def['max-tiles'] } : {}),
+    ...(def['min-interval'] !== undefined ? { minInterval: def['min-interval'] } : {}),
+    ...(def.quality !== undefined ? { quality: def.quality } : {}),
+  };
+};
+
+/** Every size name across all media types — what `--size` is validated against. */
+const SIZE_NAMES = new Set(Object.values(TARGETS).flat().map((t) => t.size));
+
+/**
+ * The picture a viewer sees of this source — rotation and pixel aspect applied — or undefined
+ * when the node has no stored dimensions. Audio has no picture at all: its waveform is drawn
+ * to fit each box rather than resized from anything.
+ */
+const pictureOf = (attrs: Record<string, unknown>, mediaType: string): Dims | undefined => {
+  if (mediaType === 'audio') return undefined;
+  const width = Number(attrs.width);
+  const height = Number(attrs.height);
+  if (!(width > 0 && height > 0)) return undefined;
+  return pictureDims(width, height, attrs.angle, attrs.sar);
+};
+
+/**
+ * The `contain` still-image sizes of `targets` that would only hold a copy of a smaller one
+ * for a picture of `dims`: everything past the first box the picture fits inside without
+ * being resized. Sizes are compared in the order they are listed, which is smallest first.
+ */
+const redundantSizes = (targets: Target[], sizes: SizesConfig, dims: Dims): string[] => {
+  const names: string[] = [];
+  let fitted = false;
+  for (const target of targets) {
+    if (target.kind !== 'image') continue;
+    const def = sizes.image?.[target.size];
+    if (!def || def.mode !== 'contain') continue;
+    if (fitted) names.push(target.size);
+    else fitted = def.width >= dims.width && def.height >= dims.height;
+  }
+  return names;
+};
+
+const generateDerivatives = async (cmd: Command): CmdReturn => {
+  // `string:` is what keeps `--size grid` from making `grid` the input path — the
+  // flag swallows its own value, so `flags._` is only ever the real positionals.
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force', 'prune'],
+    string: ['only', 'size'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  const prune = Boolean(flags.prune);
+
+  const only = flags.only;
+  if (only !== undefined && !DERIVATIVE_CLASSES.includes(only as DerivativeClass)) {
+    await cmd.writeError(`generate-derivatives: unknown class '${only}' (expected ${DERIVATIVE_CLASSES.join(' or ')})\n`);
+    return 1;
+  }
+
+  // `--size a,b` rather than one size per run: a backfill sweep walks the whole corpus and
+  // pays a find + an attrs read per file before it does any work, so adding a size should
+  // not mean paying for that walk twice.
+  let sizeFilter: Set<string> | undefined;
+  if (flags.size !== undefined) {
+    const names = flags.size.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    const bad = names.filter((n) => !SIZE_NAMES.has(n));
+    if (names.length === 0 || bad.length > 0) {
+      await cmd.writeError(
+        `generate-derivatives: unknown size '${bad.join("', '") || flags.size}' (expected ${[...SIZE_NAMES].join(' | ')})\n`,
+      );
+      return 1;
+    }
+    sizeFilter = new Set(names);
+  }
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+
+  if (!inputPath) {
+    await cmd.writeError('generate-derivatives: missing file path\n');
+    return 1;
+  }
+
+  const nodeInfo = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  if (!nodeInfo) {
+    await cmd.writeError(`generate-derivatives: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (nodeInfo.type !== 'file') {
+    await cmd.writeError(`generate-derivatives: ${inputPath}: not a file node (is ${nodeInfo.type})\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, nodeInfo)) return 1;
+
+  const fileAttrs = nodeInfo.attrs;
+  const mimetype = typeof fileAttrs.mimetype === 'string' ? fileAttrs.mimetype : '';
+
+  if (fileAttrs.sourceId) {
+    if (verbose) await cmd.writeLn('File is itself a rendition, skipping');
+    return 0;
+  }
+
+  // A source whose container `exif-extract` could not open. The pipeline trigger already skips
+  // these, but a `regenerate` sweep and a hand-run of this command come in below the trigger,
+  // and without the same answer here they spend a full ffmpeg per size on a file that has no
+  // frame table to read. Not an error: there is nothing wrong with this run.
+  //
+  // `-f` still goes ahead, so bytes that have since been replaced are one forced run away from
+  // renditions. Re-indexing (`exif-extract -f`) is what actually takes the mark back off.
+  const undecodable = fileAttrs[UNDECODABLE_ATTR];
+  if (typeof undecodable === 'string' && undecodable.length > 0 && !force) {
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ created: [], pruned: [], failed: 0, undecodable }));
+    } else {
+      await cmd.writeLn(`${inputPath}: source cannot be decoded (${undecodable}), no derivative is possible`);
+    }
+    return 0;
+  }
+
+  const mediaType = mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : mimetype.startsWith('audio/') ? 'audio' : undefined;
+  if (!mediaType) {
+    await cmd.writeError(`generate-derivatives: ${inputPath}: unsupported mimetype ${mimetype}\n`);
+    return STEP_EXIT_INPUT;
+  }
+
+  let sizes: SizesConfig;
+  try {
+    sizes = await readSizes(cmd);
+  } catch (error) {
+    await cmd.writeError(`generate-derivatives: failed to read sizes.yaml: ${(error as Error).message}\n`);
+    return 1;
+  }
+
+  // Derivatives live under a thumbnails/ directory, named by their size class
+  // (target box) rather than a nickname: images/video -> <width>x<height>,
+  // audio -> <bitrate>-<sampleRate>.
+  // `--under` bounds this to `thumbnails/` itself: the file is the caller's
+  // premise, and rebuilding it (and its album) when it has been deleted mid-run
+  // is never what a derivative writer wants.
+  const destDir = `${inputPath}/thumbnails`;
+  await cmd.execute(`mkdir -p --under ${shq(inputPath)} ${shq(destDir)}`);
+
+  const created: string[] = [];
+  const pruned: string[] = [];
+  let failed = 0;
+  // The exit code of each EMS failure: the step ends with the worst (see the end).
+  const emsFailures: number[] = [];
+
+  // Renditions this run refused, and renditions it made that a previous run had refused. Both
+  // are collected across the loop and written once at the end.
+  const refused = new Map<string, TranscodeRefusal>();
+  const cleared = new Set<string>();
+  // The budget a refusal is recorded against — EMS's, asked for once and only when a refusal
+  // has to be written — so raising it there re-opens the gap without anyone clearing the attr
+  // by hand. `media-scan` counts a refusal only while its signature is the one in force.
+  let encodeBudget: string | null | undefined;
+
+  const sizeDefOf = (target: SizeTarget) => (sizes[target.kind === 'audio' ? 'audio' : target.kind] as Record<string, ImageSize> | undefined)?.[target.size];
+
+  // Name by target box, not nickname: images/video -> <width>x<height>, audio -> <bitrate>-<rate>
+  const baseNameOf = (target: { kind: 'image' | 'video' | 'audio' }, sizeDef: ImageSize) => {
+    const audioDef = sizeDef as unknown as AudioSize;
+    return target.kind === 'audio' ? `${audioDef.bitrate}-${audioDef['sample-rate']}` : `${sizeDef.width}x${sizeDef.height}`;
+  };
+
+  // The still-image sizes a source this small never needs. `contain` does not upscale, so
+  // the first box the picture fits inside stores it at its own size and every larger box
+  // would store the very same pixels again — an 800x600 photo would get three identical
+  // files named 800, 1600 and 2560. Only the sizes with a known picture behind them: a
+  // waveform is drawn to fit each box, and a file indexed before `width`/`height` were
+  // promoted keeps the full set rather than guess.
+  //
+  // The UI mirrors this rule (`availableBoxes` in src/builtin/ui/src/client/lib/derivatives.ts)
+  // to ask only for sizes that exist, so the two must change together.
+  const picture = pictureOf(fileAttrs, mediaType);
+  const redundant = new Set(picture ? redundantSizes(TARGETS[mediaType], sizes, picture) : []);
+  if (verbose && picture && redundant.size > 0) {
+    await cmd.writeLn(`Source is ${picture.width}x${picture.height}, skipping ${[...redundant].join(', ')} (would be copies of a smaller size)`);
+  }
+
+  // Every derivative this media type should have — from the full target list, not the --only
+  // subset, so `--only still --prune` cannot delete the transcode. --prune removes anything
+  // else under thumbnails/, which is how a format or size change (webp -> avif, 800 -> 1600)
+  // cleans up after itself, and how a size this source is too small for goes away once it has
+  // been generated. Face crops are not in this set and cannot be: they live under `regions/`,
+  // which --prune never walks, so their absence here costs them nothing.
+  const expectedNames = new Set(
+    TARGETS[mediaType]
+      .filter((t): t is SizeTarget => isSizeTarget(t) && !redundant.has(t.size))
+      .map((t) => {
+        const def = sizeDefOf(t);
+        return def ? `${baseNameOf(t, def)}.${t.ext}` : undefined;
+      })
+      .filter((n): n is string => n !== undefined),
+  );
+  // The storyboard is named by its tile, not by a box out of the sizes, so it is added by name.
+  const storyboard = TARGETS[mediaType].some((t) => t.kind === 'storyboard') ? storyboardSpecOf(sizes) : undefined;
+  if (storyboard) expectedNames.add(storyboardName(storyboard.tile));
+
+  // A `--size` that this media type has no target for is not an error: a sweep like
+  // `regenerate --size grid` runs over a mixed tree, and erroring on every audio file
+  // would fail the whole crawl.
+  const targets = TARGETS[mediaType].filter((t) => (only === undefined || t.class === only) && (sizeFilter?.has(t.size) ?? true) && !redundant.has(t.size));
+
+  // Every still-image size goes to EMS as one call — a photo's ladder from one decode, a
+  // video's poster frame fitted into the same sizes, a recording's waveform drawn per size.
+  const groupedImageTargets = targets.filter((target): target is SizeTarget => target.kind === 'image');
+  const ladderTargets: ImageLadderTarget[] = [];
+
+  for (const target of groupedImageTargets) {
+    const sizeDef = sizeDefOf(target);
+    if (!sizeDef) {
+      await cmd.writeError(`generate-derivatives: size '${target.size}' missing in sizes.yaml\n`);
+      failed++;
+      continue;
+    }
+    const outputPath = `${destDir}/${baseNameOf(target, sizeDef)}.${target.ext}`;
+    if (!force) {
+      const existing = await cmd.sys.vfs.get(cmd.access, outputPath).catch(() => undefined);
+      if (Number(existing?.attrs.size ?? 0) > 0) {
+        if (verbose) await cmd.writeLn(`${outputPath} exists, skipping (use -f to force)`);
+        continue;
+      }
+      if (existing && verbose) await cmd.writeLn(`${outputPath} exists but is empty, regenerating`);
+    }
+    ladderTargets.push({ outputPath, ...sizeDef });
+  }
+
+  if (ladderTargets.length > 0) {
+    try {
+      if (verbose) await cmd.writeLn(`Generating ${ladderTargets.length} image size(s) from one decode...`);
+      created.push(
+        ...await generateImageLadder(cmd, {
+          path: inputPath,
+          id: nodeInfo.id,
+          mimetype,
+          angle: fileAttrs.angle,
+          mirror: fileAttrs.mirror,
+        }, ladderTargets),
+      );
+    } catch (error) {
+      await cmd.writeError(`generate-derivatives: image ladder: ${error instanceof Error ? error.message : String(error)}\n`);
+      failed += ladderTargets.length;
+      emsFailures.push(...ladderTargets.map(() => stepExitCode(error)));
+    }
+  }
+
+  for (const target of targets) {
+    if (target.kind === 'image') continue;
+    if (target.kind === 'face') {
+      // Every stored box for this image, rebuilt from the image itself. Nothing here re-runs
+      // detection: the box is the input, and a crop is reproducible from it forever.
+      const faces = await rebuildFaceCrops(cmd, {
+        source: inputPath,
+        sourceId: nodeInfo.id,
+        attrs: fileAttrs,
+        force,
+        log: verbose ? (message) => cmd.writeLn(message) : undefined,
+      });
+      created.push(...faces.written);
+      for (const failure of faces.failed) {
+        await cmd.writeError(`generate-derivatives: ${failure.path}: ${failure.reason}\n`);
+        failed++;
+      }
+      continue;
+    }
+
+    if (target.kind === 'storyboard') {
+      if (!storyboard) {
+        await cmd.writeError(`generate-derivatives: sizes.yaml has no storyboard, or no 1080p video size to make it from\n`);
+        failed++;
+        continue;
+      }
+      const outputPath = `${destDir}/${storyboardName(storyboard.tile)}`;
+      const duration = Number(fileAttrs.duration);
+      if (Number.isFinite(duration) && duration > 0 && duration < MIN_STORYBOARD_SECONDS) {
+        if (verbose) await cmd.writeLn(`${outputPath} skipped: source is ${duration}s, shorter than a storyboard`);
+        continue;
+      }
+      if (!force) {
+        const existing = await cmd.sys.vfs.get(cmd.access, outputPath).catch(() => undefined);
+        if (Number(existing?.attrs.size ?? 0) > 0) {
+          if (verbose) await cmd.writeLn(`${outputPath} exists, skipping (use -f to force)`);
+          continue;
+        }
+      }
+      // Made from the rendition, so not before there is one: the transcode step runs first.
+      const renditionPath = `${destDir}/${storyboard.from}`;
+      const rendition = await cmd.sys.vfs.get(cmd.access, renditionPath).catch(() => undefined);
+      if (!(Number(rendition?.attrs.size ?? 0) > 0)) {
+        if (verbose) await cmd.writeLn(`${outputPath} skipped: ${renditionPath} is not made yet`);
+        continue;
+      }
+      if (verbose) await cmd.writeLn(`Generating ${outputPath}...`);
+      try {
+        created.push((await writeStoryboard(cmd, { id: nodeInfo.id, rendition: renditionPath }, outputPath, storyboard)).made);
+      } catch (error) {
+        // An EMS from before the op has no route for it; the sheet waits for one that has.
+        if (error instanceof EmsError && error.code === 'http_404') {
+          if (verbose) await cmd.writeLn(`${outputPath} skipped: this EMS makes no storyboards`);
+          continue;
+        }
+        await cmd.writeError(`generate-derivatives: ${outputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+        // A rendition EMS cannot read will not be read on a retry either. Failing the step for it
+        // would only have the pipeline run again, and a turned video's run re-encodes it first.
+        const code = stepExitCode(error);
+        if (code === STEP_EXIT_INPUT) continue;
+        failed++;
+        emsFailures.push(code);
+      }
+      continue;
+    }
+
+    const sizeDef = sizeDefOf(target);
+    if (!sizeDef) {
+      await cmd.writeError(`generate-derivatives: size '${target.size}' missing in sizes.yaml\n`);
+      failed++;
+      continue;
+    }
+
+    const audioDef = sizeDef as unknown as AudioSize;
+    const baseName = baseNameOf(target, sizeDef);
+    const outputPath = `${destDir}/${baseName}.${target.ext}`;
+
+    // A rendition counts as present only if it has bytes. The converters create the output
+    // node before running ffmpeg/convert, so a failed encode leaves a 0-byte node behind —
+    // and an existence-only check then skipped it forever, making one failure permanent.
+    if (!force) {
+      const existing = await cmd.sys.vfs.get(cmd.access, outputPath).catch(() => undefined);
+      if (existing) {
+        const existingSize = Number(existing.attrs.size ?? 0);
+        if (existingSize > 0) {
+          if (verbose) await cmd.writeLn(`${outputPath} exists, skipping (use -f to force)`);
+          continue;
+        }
+        if (verbose) await cmd.writeLn(`${outputPath} exists but is empty, regenerating`);
+      }
+    }
+
+    let rendition: VideoRendition | AudioRendition;
+
+    if (target.kind === 'video') {
+      const videoDef = sizeDef as unknown as VideoSize;
+      rendition = {
+        kind: 'video',
+        outputPath,
+        width: sizeDef.width,
+        height: sizeDef.height,
+        crf: videoDef.crf,
+        preset: videoDef.preset,
+        audioBitrate: videoDef['audio-bitrate'],
+        mute: videoDef.mute,
+      };
+
+      // A clipped rendition against a video shorter than the clip. `duration` is the
+      // promoted attr, absent on anything indexed before it existed — in which case fall
+      // through with the configured start, the same >=1s the poster frame already assumes.
+      if (videoDef.seconds !== undefined) {
+        const duration = Number(fileAttrs.duration);
+        const known = Number.isFinite(duration) && duration > 0;
+        let start = videoDef.start ?? 0;
+
+        // Nothing to preview: the poster frame already is the whole video. `MIN_PREVIEW_SECONDS`
+        // in `@archive/media/event-rules` is this same threshold — without it `media-scan` would report
+        // every short clip as missing a rendition it is never going to get.
+        if (known && duration < 2) {
+          if (verbose) await cmd.writeLn(`${outputPath} skipped: source is ${duration}s, shorter than a preview`);
+          continue;
+        }
+        // Seeking past (or almost past) the end yields an empty clip that still has mp4
+        // headers, so `size > 0` would read as success and never be retried.
+        if (known && duration <= start + 2) start = 0;
+
+        if (start > 0) rendition.start = start;
+        rendition.seconds = videoDef.seconds;
+      }
+    } else {
+      rendition = { kind: 'audio', outputPath, bitrate: audioDef.bitrate, sampleRate: audioDef['sample-rate'] };
+    }
+
+    if (verbose) await cmd.writeLn(`Generating ${outputPath}...`);
+    let outcome;
+    try {
+      outcome = await writeTranscode(cmd, {
+        path: inputPath,
+        id: nodeInfo.id,
+        mimetype,
+        angle: fileAttrs.angle,
+        mirror: fileAttrs.mirror,
+        // The picture codec, off the attrs already read: EMS starts one stage down for a codec
+        // NVDEC cannot decode instead of spending a doomed ffmpeg per rendition. Absent on
+        // anything indexed before `exif-extract` wrote it, which EMS treats as "unknown".
+        ...(typeof fileAttrs.codec === 'string' && fileAttrs.codec ? { codec: fileAttrs.codec } : {}),
+      }, rendition);
+    } catch (error) {
+      await cmd.writeError(`generate-derivatives: ${outputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      failed++;
+      emsFailures.push(stepExitCode(error));
+      continue;
+    }
+
+    // A refusal is not a failure. Nothing was left half-written, another attempt would refuse
+    // the same way, and counting it in `failed` would fail the step and hold `--prune` off
+    // forever on a file that has nothing stale to prune. Record it and carry on; the marker is
+    // what closes the gap, not the exit code.
+    if ('refused' in outcome) {
+      if (encodeBudget === undefined) encodeBudget = await transcodeBudget(cmd);
+      refused.set(`${baseName}.${target.ext}`, { reason: outcome.refused, budget: encodeBudget ?? '', at: Date.now() });
+      await cmd.writeError(`generate-derivatives: ${outputPath}: refused: ${outcome.refused}\n`);
+      continue;
+    }
+
+    created.push(outputPath);
+    // Made after all — by a raised budget, a hand-run `regenerate`, or a GPU stage that was not
+    // available last time. Whatever the reason, the recorded refusal is now false.
+    cleared.add(`${baseName}.${target.ext}`);
+  }
+
+  // One write, after the loop, and only when the record actually changes. `cleared` collects
+  // every rendition this run made — most runs are the poster-frame pass over an image and have
+  // no refusal to clear — so writing on `cleared.size > 0` alone would put a node update on the
+  // hottest path in the crawl for nothing.
+  const storedRefusals = fileAttrs[TRANSCODE_REFUSED_ATTR];
+  const existing: Record<string, TranscodeRefusal> = storedRefusals && typeof storedRefusals === 'object' && !Array.isArray(storedRefusals) ? storedRefusals : {};
+  const next: Record<string, TranscodeRefusal> = { ...existing };
+
+  for (const name of cleared) delete next[name];
+  for (const [name, refusal] of refused) next[name] = refusal;
+
+  if (JSON.stringify(next) !== JSON.stringify(existing)) {
+    // An empty map is removed rather than stored: `undecodable` reads as absent-or-set and this
+    // attr should too, so `attrs` on a file that no longer refuses anything says nothing at all.
+    // `null` is what removes an attr — omitting the key means "leave it alone", so `undefined`
+    // here would silently keep the last refusal forever. See NodeAttrsUpdate.
+    await cmd.sys.vfs.update(cmd.access, inputPath, {
+      attrs: { [TRANSCODE_REFUSED_ATTR]: Object.keys(next).length > 0 ? next : null },
+    });
+  }
+
+  // Drop renditions that are no longer part of the target set. Only ever runs when nothing
+  // failed: a transcode that died leaves the old rendition as the only playable copy, and
+  // deleting it would turn a retryable failure into a missing file.
+  if (prune && failed === 0) {
+    const entries = await cmd.sys.vfs.children(cmd.access, destDir);
+
+    for (const entry of entries) {
+      if (expectedNames.has(entry.name)) {
+        continue;
+      }
+
+      // By path, not by node id: NodePath and NodeId are both `string`, so an id here would
+      // type-check and then be resolved as a path
+      const stalePath = `${destDir}/${entry.name}`;
+      await cmd.sys.vfs.unlink(cmd.access, stalePath, destDir, { recursive: true });
+      pruned.push(stalePath);
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ created, pruned, failed }));
+  } else {
+    await cmd.writeLn(
+      `Created ${created.length} derivative(s)${pruned.length ? `, pruned ${pruned.length}` : ''}${failed ? `, ${failed} failed` : ''}`,
+    );
+    for (const p of created) {
+      await cmd.writeLn(`  ${p}`);
+    }
+    for (const p of pruned) {
+      await cmd.writeLn(`  - ${p}`);
+    }
+  }
+
+  if (failed === 0) return 0;
+  // Only when every failure was EMS's does EMS's verdict decide: all of them temporary means
+  // the step waits for EMS, and an input failure among them means the file cannot be made.
+  // Any failure of the step's own (a missing size, a crop that did not write) is a failure.
+  if (emsFailures.length < failed) return 1;
+  if (emsFailures.includes(1)) return 1;
+  return emsFailures.includes(STEP_EXIT_INPUT) ? STEP_EXIT_INPUT : STEP_EXIT_TEMPORARY;
+};
+
+generateDerivatives.spec = {
+  name: 'generate-derivatives',
+  effect: 'write' as const,
+  description: 'Generate web derivatives (still pictures, transcoded renditions) for a media file',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to media file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Force regenerate even if derivatives exist' },
+    { name: 'only', type: 'string' as const, description: `Generate one class only: ${DERIVATIVE_CLASSES.join(' | ')}` },
+    { name: 'size', type: 'string' as const, description: `Generate only these sizes (comma-separated): ${[...SIZE_NAMES].join(' | ')}` },
+    { name: 'prune', type: 'bool' as const, description: 'Delete renditions under thumbnails/ that are no longer targets' },
+  ],
+  examples: [
+    'generate-derivatives /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+    'generate-derivatives --only still /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'nothing; the thumbnail, display and transcode renditions are written.',
+};
+
+export default generateDerivatives;

@@ -1,0 +1,558 @@
+#!ts
+import { basename, dirname, join, resolve } from '@std/path';
+import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
+import {
+  applySharePreference,
+  collectUnknownFlags,
+  NodeAccessDeniedError,
+  NodeNotFoundError,
+  parseArgs,
+  readSettings,
+  reportUnknownFlags,
+  resolveDefaultOwnership,
+  shq,
+} from '@ein/client';
+import { albumMembers } from '@archive/media/album-members';
+import { NEXT_LINK_NAME, PREVIOUS_LINK_NAME } from '@archive/media/types';
+import { mediaSpan, SPAN_DAY, SPAN_KEYS } from '@archive/media/album-span';
+import type { AlbumAddResult, AlbumInfo, AlbumInfoAnswer, AlbumListItem, AlbumListResult } from '@archive/media/api';
+import type { StagingAlbumRef } from '@archive/staging/api';
+import { leavesStaging } from '@archive/staging';
+import { fileStagedMany, freeName } from '@archive/staging/file';
+import { AUTO_ORIGIN, type AutoAlbumMeta } from '@archive/staging/auto-album';
+import { groupDetailOf, type GroupRowAttrs, matchedAlbumIds, stagingRowOf } from '@archive/staging/rows';
+import { albumRefs } from '@archive/staging/status';
+
+const NODE_TYPE_ALBUM = 'album';
+const NODE_TYPE_DIRECTORY = 'directory';
+const NODE_TYPE_SOFTLINK = 'softlink';
+const COVER_LINK_NAME = 'coverPhoto';
+
+const USAGE = 'Usage: album <create|info|list|set|add> <path> [options]';
+
+/** `album info` takes this many albums at most, read this many at a time. */
+const INFO_MAX_PATHS = 50;
+const INFO_CONCURRENCY = 16;
+
+/** Keep each API-shell response small even when /albums contains thousands of entries. */
+const LIST_PAGE_SIZE = 1000;
+const LIST_MAX_PAGE_SIZE = 1000;
+
+const SETTABLE_KEYS = ['name', 'description'] as const;
+
+/** The keys of `album set` that link the album to its neighbours in a series, and the links they write. */
+const SERIES_LINKS = { previous: PREVIOUS_LINK_NAME, next: NEXT_LINK_NAME } as const;
+type SeriesKey = keyof typeof SERIES_LINKS;
+const SERIES_KEYS = Object.keys(SERIES_LINKS) as SeriesKey[];
+
+/** Set (or replace) the cover: a `coverPhoto` softlink child pointing at a media node. */
+const setCover = async (cmd: Command, albumPath: string, target: string): Promise<void> => {
+  const linkPath = `${albumPath}/${COVER_LINK_NAME}`;
+  if (await cmd.sys.vfs.exists(cmd.access, linkPath, { follow: false })) {
+    await cmd.sys.vfs.unlink(cmd.access, linkPath, albumPath, { follow: false });
+  }
+  await cmd.sys.vfs.create(cmd.access, NODE_TYPE_SOFTLINK, albumPath, COVER_LINK_NAME, {
+    props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: target },
+  });
+};
+
+/** Where the softlink `name` in `albumPath` points, as an absolute path, or undefined without one. */
+const readLink = async (cmd: Command, albumPath: string, name: string): Promise<string | undefined> => {
+  const link = await cmd.sys.vfs.get(cmd.access, `${albumPath}/${name}`, { readlink: true }).catch(() => null);
+  return typeof link?.props.softlink === 'string' ? resolve(albumPath, link.props.softlink) : undefined;
+};
+
+/** Point the softlink `name` in `albumPath` at `target`, replacing what it pointed at; no target removes it. */
+const writeLink = async (cmd: Command, albumPath: string, name: string, target: string | undefined): Promise<void> => {
+  const linkPath = `${albumPath}/${name}`;
+  if (await cmd.sys.vfs.exists(cmd.access, linkPath, { follow: false })) {
+    await cmd.sys.vfs.unlink(cmd.access, linkPath, albumPath, { follow: false });
+  }
+  if (target === undefined) return;
+  await cmd.sys.vfs.create(cmd.access, NODE_TYPE_SOFTLINK, albumPath, name, {
+    props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: target },
+  });
+};
+
+/** Throws unless `path` is a library album: a suggested one is the organizer's, and has no place in a series. */
+const assertSeriesAlbum = async (cmd: Command, path: string): Promise<void> => {
+  const node = await cmd.sys.vfs.get<{ origin?: string }>(cmd.access, path);
+  if (node.type !== NODE_TYPE_ALBUM) throw new Error(`${path}: not an album (is ${node.type})`);
+  if (node.attrs.origin === AUTO_ORIGIN) throw new Error(`${path}: a suggested album is not part of a series`);
+};
+
+/**
+ * Link the album at `path` to the album before or after it in a series (`key`), or unlink it when
+ * `value` is empty. The series reads the same from both ends: the neighbour gets the link back,
+ * the neighbour it replaces loses its link to this album, and so does the one the new neighbour
+ * pointed back at. A neighbour the caller may not change keeps its links, and is named on stderr.
+ */
+const albumSetSeries = async (cmd: Command, path: string, key: SeriesKey, value: string): Promise<number> => {
+  const name = SERIES_LINKS[key];
+  const opposite = SERIES_LINKS[key === 'next' ? 'previous' : 'next'];
+  const target = value === '' ? undefined : resolve(cmd.cwd, value);
+  await assertSeriesAlbum(cmd, path);
+  if (target !== undefined) {
+    if (target === path) throw new Error(`${path}: an album cannot follow itself`);
+    await assertSeriesAlbum(cmd, target);
+  }
+
+  const untouched: string[] = [];
+  /** A write to a neighbour, skipped when the caller may not change it. */
+  const onNeighbour = async (write: () => Promise<void>, neighbour: string) => {
+    try {
+      await write();
+    } catch (error) {
+      if (!(error instanceof NodeAccessDeniedError)) throw error;
+      untouched.push(neighbour);
+    }
+  };
+
+  const old = await readLink(cmd, path, name);
+  if (old !== undefined && old !== target && await readLink(cmd, old, opposite) === path) {
+    await onNeighbour(() => writeLink(cmd, old, opposite, undefined), old);
+  }
+  await writeLink(cmd, path, name, target);
+  if (target !== undefined) {
+    const theirs = await readLink(cmd, target, opposite);
+    if (theirs !== undefined && theirs !== path && await readLink(cmd, theirs, name) === target) {
+      await onNeighbour(() => writeLink(cmd, theirs, name, undefined), theirs);
+    }
+    await onNeighbour(() => writeLink(cmd, target, opposite, path), target);
+  }
+
+  for (const neighbour of untouched) await cmd.writeError(`album: ${neighbour}: not yours to change, its links are left as they were\n`);
+  await cmd.writeLn(target === undefined ? `Cleared ${key} on ${path}` : `Set ${key} on ${path} to ${target}`);
+  return 0;
+};
+
+/** What `--share` takes: as the owner's new albums are (`default`), theirs alone, shared, or everyone's. */
+const SHARES = ['default', 'private', 'shared', 'everyone'] as const;
+
+/**
+ * Make an album at `path` titled `name` (its slug by default), owned and shared as the creator's
+ * new albums are, or as `share` asks. The configured owner and group may be ones the creator could
+ * not give it themselves; the server applies them.
+ */
+const createAlbum = async (cmd: Command, path: string, name: string | undefined, share: string | undefined, description?: string): Promise<void> => {
+  if (share !== undefined && !(SHARES as readonly string[]).includes(share)) throw new Error(`--share is one of ${SHARES.join(', ')}`);
+  // `name` always gets written, defaulting to the slug. The importer and the occasion builder
+  // both set one, so this was the only way to end up with a nameless album — and search orders
+  // albums by name, which silently drops any row that has none.
+  const attrs: Record<string, unknown> = { name: name || basename(path) };
+  if (description) attrs.description = description;
+
+  // Ownership comes from the system default, narrowed or widened by `share`, or by this person's
+  // own preference. Through the settings files rather than cmd.env: the web UI holds one
+  // long-lived shell, so a preference changed in this session would otherwise not apply until the
+  // page was reloaded.
+  const ownership = await resolveDefaultOwnership(cmd, cmd.access);
+  const preference = share === undefined || share === 'default' ? (await readSettings(cmd, cmd.access)).CFG_USER_DEFAULT_SHARE : share;
+  const mode = applySharePreference(ownership.mode, preference);
+
+  await cmd.sys.vfs.create(cmd.access, NODE_TYPE_ALBUM, dirname(path), basename(path), {
+    props: { gid: cmd.access.gid, mode },
+    attrs,
+  });
+  const result = await cmd.execute(`share-set ${shq(path)} --default-owner --no-recursive${preference === 'everyone' ? ' -m g:users:rx' : ''}`);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || 'failed to apply the default owner');
+};
+
+const albumCreate = async (cmd: Command, path: string, flags: Record<string, unknown>): Promise<number> => {
+  await createAlbum(cmd, path, flags.name as string | undefined, flags.share as string | undefined, flags.description as string | undefined);
+  if (flags.cover) await setCover(cmd, path, resolve(cmd.cwd, flags.cover as string));
+  await cmd.writeLn(`Created album ${path}`);
+  return 0;
+};
+
+/**
+ * An album's attrs as a listing reads them. A suggested album's `autoAlbum` is what the staging
+ * organizer recorded about the grouping it made: the grid shows its summary beside hand-made
+ * albums, so it travels with the listing, and so do its matches (`stagingMatches`), resolved to the
+ * albums they name.
+ */
+type AlbumListAttrs = GroupRowAttrs & {
+  description?: string;
+  origin?: string;
+  labels?: string[];
+  timeStart?: string;
+  timeEnd?: string;
+  autoAlbum?: AutoAlbumMeta & { scores?: { overall?: number } };
+};
+
+/**
+ * The row `album list` and `album info` give for one album or directory: its own metadata, a
+ * suggested album's summary, and for a suggested album what staging decides it by (`staging`),
+ * its matches as the albums `refs` name them. The list row's `kind` is a trip or nothing, as the
+ * albums grid knows them; the full kind is in `staging`.
+ */
+const listItem = (
+  name: string,
+  path: string,
+  node: { props: { modtime?: { timestamp: number } }; attrs: AlbumListAttrs },
+  hasFilesDir: boolean,
+  refs: ReadonlyMap<string, StagingAlbumRef>,
+): AlbumListItem => {
+  const attrs = node.attrs;
+  const auto = attrs.autoAlbum;
+  const staging = attrs.origin === AUTO_ORIGIN ? stagingRowOf(attrs, refs) : undefined;
+  return {
+    name,
+    title: attrs.name || name,
+    path,
+    hasFilesDir,
+    origin: attrs.origin,
+    modtime: node.props.modtime?.timestamp,
+    description: attrs.description,
+    labels: attrs.labels,
+    timeStart: attrs.timeStart ?? auto?.timeStart,
+    timeEnd: attrs.timeStart ? attrs.timeEnd : auto?.timeEnd,
+    locationPath: auto?.locationPath,
+    memberCount: auto?.memberCount,
+    provisional: auto?.provisional,
+    pinned: auto?.pinned,
+    overall: auto?.scores?.overall,
+    kind: auto?.kind === 'trip' ? 'trip' : undefined,
+    days: auto?.days,
+    ...(staging ? { staging } : {}),
+  };
+};
+
+/** The albums the matches of suggested albums among `attrs` name, as the reader sees them: one batched read. */
+const matchRefs = async (cmd: Command, attrs: AlbumListAttrs[]): Promise<Map<string, StagingAlbumRef>> =>
+  await albumRefs(cmd.sys.vfs, cmd.access, [...new Set(attrs.flatMap((each) => each.origin === AUTO_ORIGIN ? matchedAlbumIds(each) : []))]);
+
+const NODE_TYPES_LISTED = [NODE_TYPE_ALBUM, NODE_TYPE_DIRECTORY];
+
+/**
+ * Several albums (or directories) at once, each as its `album list` row plus its id, cover and
+ * child count, and for a suggested album its parts and candidates (`suggested`): what a page
+ * re-reads for the rows that changed under it, and what deciding a group needs. Read a few at a
+ * time, with whether each keeps its media in `files/` from one batched child-edge read and the
+ * albums the matches name from one more. A path that names nothing is answered in `missing`
+ * rather than failing the rest.
+ */
+const albumInfo = async (cmd: Command, paths: string[]): Promise<number> => {
+  if (paths.length > INFO_MAX_PATHS) {
+    await cmd.writeError(`album: info takes at most ${INFO_MAX_PATHS} paths\n`);
+    return 1;
+  }
+  type Read = {
+    path: string;
+    node: Awaited<ReturnType<typeof cmd.sys.vfs.get<AlbumListAttrs>>>;
+    coverPhoto: string | null;
+    previous: string | null;
+    next: string | null;
+    count: number;
+  };
+  const reads: (Read | null)[] = [];
+  for (let start = 0; start < paths.length; start += INFO_CONCURRENCY) {
+    reads.push(
+      ...await Promise.all(
+        paths.slice(start, start + INFO_CONCURRENCY).map(async (path): Promise<Read | null> => {
+          let node: Read['node'];
+          try {
+            node = await cmd.sys.vfs.get<AlbumListAttrs>(cmd.access, path);
+          } catch (error) {
+            if (error instanceof NodeNotFoundError) return null;
+            throw error;
+          }
+          if (!NODE_TYPES_LISTED.includes(node.type)) throw new Error(`${path}: not an album (is ${node.type})`);
+          const cover = await cmd.sys.vfs.get(cmd.access, `${path}/${COVER_LINK_NAME}`, { readlink: true }).catch(() => null);
+          return {
+            path,
+            node,
+            coverPhoto: cover?.props.softlink ?? null,
+            previous: await readLink(cmd, path, PREVIOUS_LINK_NAME) ?? null,
+            next: await readLink(cmd, path, NEXT_LINK_NAME) ?? null,
+            count: await cmd.sys.vfs.childCount(cmd.access, path),
+          };
+        }),
+      ),
+    );
+  }
+
+  const found = reads.filter((read): read is Read => read !== null);
+  const childLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, found.map((read) => read.node.id));
+  const refs = await matchRefs(cmd, found.map((read) => read.node.attrs));
+  const albums = found.map((read): AlbumInfo => ({
+    ...listItem(basename(read.path), read.path, read.node, (childLinks.get(read.node.id) ?? []).some((child) => child.name === 'files'), refs),
+    id: read.node.id,
+    coverPhoto: read.coverPhoto,
+    previous: read.previous,
+    next: read.next,
+    count: read.count,
+    ...(read.node.attrs.origin === AUTO_ORIGIN && read.node.attrs.autoAlbum ? { suggested: groupDetailOf(read.node.attrs, refs) } : {}),
+  }));
+  const missing = paths.filter((_, index) => reads[index] === null);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ albums, missing } satisfies AlbumInfoAnswer);
+    return 0;
+  }
+  for (const [index, info] of albums.entries()) {
+    if (paths.length > 1) await cmd.writeLn(`${index > 0 ? '\n' : ''}path:        ${info.path}`);
+    await cmd.writeLn(`name:        ${info.title}`);
+    await cmd.writeLn(`description: ${info.description ?? '-'}`);
+    await cmd.writeLn(`cover:       ${info.coverPhoto ?? '-'}`);
+    await cmd.writeLn(`previous:    ${info.previous ?? '-'}`);
+    await cmd.writeLn(`next:        ${info.next ?? '-'}`);
+    await cmd.writeLn(`children:    ${info.count}`);
+  }
+  for (const path of missing) await cmd.writeError(`album: ${path}: not found\n`);
+  return 0;
+};
+
+/**
+ * A page of the albums and directories under `path`, as the albums grid and the staging stream
+ * show them (`listItem`): each one's own metadata and whether its media sits in a `files/` child,
+ * rather than every node property and every child's edges. Paged through the store in its name
+ * order, after `--cursor`; dot names are left out, so a page is read on past them until it is
+ * full. Whether an album has `files/` comes from one batched child-edge read for the whole page,
+ * and the albums its suggested albums are matched to from one more.
+ */
+const albumList = async (cmd: Command, path: string, flags: Record<string, unknown>): Promise<number> => {
+  const requested = parseInt(flags.limit as string) || LIST_PAGE_SIZE;
+  const limit = Math.min(Math.max(requested, 1), LIST_MAX_PAGE_SIZE);
+  const listed: NodeChildEntry<AlbumListAttrs>[] = [];
+  let after = flags.cursor as string | undefined;
+  for (;;) {
+    // One more than the page: whether it was read says whether another page follows.
+    const read = await cmd.sys.vfs.children<AlbumListAttrs>(cmd.access, path, { page: { limit: limit + 1, after }, types: NODE_TYPES_LISTED });
+    listed.push(...read.filter((entry) => !entry.name.startsWith('.')));
+    if (listed.length > limit || read.length < limit + 1) break;
+    after = read[read.length - 1].name;
+  }
+  const selected = listed.slice(0, limit);
+  const childLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, selected.map((entry) => entry.node.id));
+  const refs = await matchRefs(cmd, selected.map((entry) => entry.node.attrs));
+
+  const items = selected.map((entry) =>
+    listItem(entry.name, join(path, entry.name), entry.node, (childLinks.get(entry.node.id) ?? []).some((child) => child.name === 'files'), refs)
+  );
+  const nextCursor = listed.length > limit ? selected[selected.length - 1].name : null;
+
+  if (cmd.json) {
+    await cmd.writeJSON({ items, nextCursor } satisfies AlbumListResult);
+  } else {
+    for (const item of items) await cmd.writeLn(item.path);
+  }
+  return 0;
+};
+
+/**
+ * Set by hand the day the album's span starts or ends on, to cover what its media do not: the
+ * drive out before the first photo, the flight home after the last. It may widen the span, never
+ * narrow it, so a start after the first capture or an end before the last is refused; an empty
+ * value clears it. `album-span` then writes the span, and drops the day once a capture reaches it.
+ */
+const albumSetSpan = async (cmd: Command, path: string, key: typeof SPAN_KEYS[number], value: string): Promise<number> => {
+  if (value !== '' && !SPAN_DAY.test(value)) {
+    await cmd.writeError(`album: ${key} is a day, YYYY-MM-DD (got '${value}')\n`);
+    return 1;
+  }
+  if (value !== '') {
+    const node = await cmd.sys.vfs.get(cmd.access, path);
+    if (node.type !== NODE_TYPE_ALBUM) throw new Error(`${path}: not an album (is ${node.type})`);
+    const { mediaStart, mediaEnd } = await mediaSpan(cmd, path);
+    const first = mediaStart?.slice(0, 10);
+    const last = mediaEnd?.slice(0, 10);
+    const otherEnd = node.attrs[key === 'spanStart' ? 'spanEnd' : 'spanStart'];
+    let refusal: string | undefined;
+    if (key === 'spanStart') {
+      if (first && value > first) refusal = `its first capture is on ${first}`;
+      else if (typeof otherEnd === 'string' && value > otherEnd) refusal = `it is set to end on ${otherEnd}`;
+    } else {
+      if (last && value < last) refusal = `its last capture is on ${last}`;
+      else if (typeof otherEnd === 'string' && value < otherEnd) refusal = `it is set to start on ${otherEnd}`;
+    }
+    if (refusal) {
+      await cmd.writeError(`album: ${key} ${value} would narrow the album's span: ${refusal}\n`);
+      return 1;
+    }
+  }
+  await cmd.sys.vfs.update(cmd.access, path, { attrs: { [key]: value === '' ? null : value } });
+  const span = await cmd.execute(`album-span ${shq(path)}`);
+  if (span.code !== 0) {
+    await cmd.writeError(span.stderr);
+    return 1;
+  }
+  await cmd.writeLn(`${value === '' ? 'Cleared' : 'Set'} ${key} on ${path}`);
+  return 0;
+};
+
+const albumSet = async (cmd: Command, path: string, key: string, value: string): Promise<number> => {
+  if (value === undefined) {
+    await cmd.writeError('album: value required\n');
+    return 1;
+  }
+
+  if ((SPAN_KEYS as readonly string[]).includes(key)) return await albumSetSpan(cmd, path, key as typeof SPAN_KEYS[number], value);
+  if ((SERIES_KEYS as string[]).includes(key)) return await albumSetSeries(cmd, path, key as SeriesKey, value);
+
+  // cover is a softlink child, not an attr
+  if (key === 'cover' || key === 'coverPhoto') {
+    await setCover(cmd, path, resolve(cmd.cwd, value));
+    await cmd.writeLn(`Set cover on ${path}`);
+    return 0;
+  }
+
+  if (!SETTABLE_KEYS.includes(key as typeof SETTABLE_KEYS[number])) {
+    await cmd.writeError(`album: unknown key '${key}' (use ${[...SETTABLE_KEYS, ...SPAN_KEYS, ...SERIES_KEYS].join(', ')}, cover)\n`);
+    return 1;
+  }
+
+  // An empty value *clears* the attr rather than storing an empty string.
+  const stored = value === '' ? null : value;
+  await cmd.sys.vfs.update(cmd.access, path, { attrs: { [key]: stored } });
+  await cmd.writeLn(`${stored === null ? 'Cleared' : 'Set'} ${key} on ${path}`);
+  return 0;
+};
+
+/**
+ * Put files in an album, where it keeps its members (the album itself, or an imported album's
+ * `files/`). A file is linked there, except a staged one going to an album outside staging, which
+ * is filed there and shared as the album is (`fileStagedMany`, all of them in one go, journaled so
+ * `staging undo` puts them back). A file the album already holds or links is left alone. With
+ * `create`, an album that is not there is made first (`createAlbum`, titled `name`, shared as
+ * `share` asks). The span is refreshed at once, since a member arriving in `files/` raises no
+ * membership fact of its own.
+ */
+const albumAdd = async (cmd: Command, path: string, files: string[], flags: Record<string, unknown>): Promise<number> => {
+  if (files.length === 0) {
+    await cmd.writeError('album: add needs at least one file\n');
+    return 1;
+  }
+  const targets = [...new Set(files.map((file) => resolve(cmd.cwd, file)))];
+  for (const target of targets) await cmd.sys.vfs.get(cmd.access, target);
+
+  const created = Boolean(flags.create) && !(await cmd.sys.vfs.exists(cmd.access, path));
+  if (!flags.create && (flags.name !== undefined || flags.share !== undefined)) throw new Error('--name and --share are for --create');
+  if (created) await createAlbum(cmd, path, flags.name as string | undefined, flags.share as string | undefined);
+
+  const { album, containerPath } = await albumMembers(cmd, path);
+  const entries = await cmd.sys.vfs.children(cmd.access, containerPath);
+  const used = new Set(entries.map((entry) => entry.name));
+  // What the album already files: its own children, and what its links point at.
+  const memberPaths = new Set(entries.map((entry) => entry.node.props.softlink ? resolve(containerPath, entry.node.props.softlink) : join(containerPath, entry.name)));
+
+  const result: AlbumAddResult = { album: path, added: [], moved: [], already: [], ...(created ? { created } : {}) };
+  const staged: string[] = [];
+  for (const target of targets) {
+    if (memberPaths.has(target)) {
+      result.already.push(target);
+      continue;
+    }
+    if (leavesStaging(target, path)) {
+      staged.push(target);
+      continue;
+    }
+    const name = freeName(basename(target), used);
+    used.add(name);
+    await cmd.sys.vfs.create(cmd.access, NODE_TYPE_SOFTLINK, containerPath, name, {
+      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: target },
+    });
+    result.added.push({ path: target, link: join(containerPath, name) });
+  }
+  // The staged ones in one go, each under a name free beside the links just made.
+  if (staged.length > 0) {
+    const title = typeof album.attrs.name === 'string' && album.attrs.name ? album.attrs.name : basename(path);
+    const filed = await fileStagedMany(cmd, staged, containerPath, { id: album.id, title, created });
+    for (const { path: from, to } of filed.filed) result.moved.push({ path: from, to });
+    result.journal = filed.journal;
+  }
+
+  if (result.added.length + result.moved.length > 0) await cmd.execute(`album-span ${shq(path)}`);
+
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies AlbumAddResult);
+  } else {
+    const notes = [
+      created ? 'album created' : '',
+      result.moved.length ? `${result.moved.length} moved out of staging` : '',
+      result.already.length ? `${result.already.length} already there` : '',
+    ].filter(Boolean);
+    await cmd.writeLn(`Added ${result.added.length + result.moved.length} to ${path}${notes.length ? ` (${notes.join(', ')})` : ''}`);
+  }
+  return 0;
+};
+
+const album = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['name', 'description', 'cover', 'limit', 'cursor', 'share'],
+    boolean: ['create'],
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [sub, pathArg, key, value] = flags._ as string[];
+
+  if (!sub || !pathArg) {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, pathArg);
+
+  try {
+    switch (sub) {
+      case 'create':
+        return await albumCreate(cmd, path, flags);
+      case 'info':
+        return await albumInfo(cmd, [path, ...(flags._ as string[]).slice(2).map((each) => resolve(cmd.cwd, each))]);
+      case 'list':
+        return await albumList(cmd, path, flags);
+      case 'set':
+        return await albumSet(cmd, path, key, value);
+      case 'add':
+        return await albumAdd(cmd, path, (flags._ as string[]).slice(2), flags);
+      default:
+        await cmd.writeError(`album: unknown subcommand '${sub}'\n${USAGE}\n`);
+        return 1;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`album: ${message}\n`);
+    return 1;
+  }
+};
+
+album.spec = {
+  name: 'album',
+  effect: 'read' as const,
+  description: 'Manage albums (create, info, list, set, add files)',
+  args: [
+    { name: 'subcommand', type: 'string' as const, writes: ['create', 'set', 'add'], description: 'create | info | list | set | add' },
+    { name: 'path', type: 'path' as const, description: 'album path' },
+    {
+      name: 'files',
+      type: 'path' as const,
+      variadic: true,
+      description: 'add: the files to put in the album: linked, or moved there out of staging; info: more albums, up to 50 in all',
+    },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'create, add --create: the album display name (defaults to the slug)' },
+    { name: 'share', type: 'string' as const, description: `create, add --create: who sees it (${SHARES.join(', ')}; default: as your new albums are)` },
+    { name: 'create', type: 'bool' as const, description: 'add: make the album first when it is not there' },
+    { name: 'description', type: 'string' as const, description: 'album description (create)' },
+    { name: 'cover', type: 'string' as const, description: 'cover media path (create)' },
+    { name: 'limit', type: 'string' as const, description: `albums per list page (max ${LIST_MAX_PAGE_SIZE})` },
+    { name: 'cursor', type: 'string' as const, description: "list: the last name of the page before (pages are in the store's name order)" },
+  ],
+  examples: [
+    'album info /archive/albums/Exempelalbum_2019',
+    'album info /archive/albums/Exempelalbum_2019 /archive/albums/Sommar_2020',
+    "album create /archive/albums/Nytt_Exempelalbum --name 'Nytt exempelalbum'",
+    'album set /archive/albums/Exempelalbum_2019 spanStart 2019-05-30',
+    'album set /archive/albums/Exempelalbum_2019 next /archive/albums/Exempelalbum_2020',
+    "album create /archive/albums/Stugan --name 'Stugan' --share private",
+    "album add /archive/albums/Sommar_2020 /home/anna/staging/files/inbox/upload-2026-10-01/IMG_0001.jpg --create --name 'Sommar 2020'",
+  ],
+  returns:
+    "for `info`, each album's list row with its id, cover, neighbours in a series and child count, a suggested album's parts and candidate albums, and the paths that name none (AlbumInfoAnswer); for `list`, the albums under a root, a suggested album's with what staging decides it by and its best match (AlbumListResult); for `add`, the files linked and moved and where each now files, whether it made the album, and the staging journal entries that undo the moves (AlbumAddResult); for `create` and `set`, nothing.",
+};
+
+export default album;

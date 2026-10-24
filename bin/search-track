@@ -1,0 +1,114 @@
+#!ts
+/**
+ * search-track — find recorded tracks by what they are called.
+ *
+ * Discovered by `search` like every other `search-*` on PATH. Its rows are in the `name` channel
+ * (the track's name and id) and the `description` channel.
+ *
+ * The same substring ladder `search-people` and `search-device` use — `NodeQuery`
+ * has no `contains` operator, only prefix, so a scan of the devices' tracks
+ * (`track-list`) is the only option. A track is named by its device.
+ *
+ * A track *does* have a time (`firstTs`), unlike the other timeless kinds, so it
+ * is reported: it is the one field that tells apart two tracks along the same
+ * route, and it lets a result card date itself without a second lookup.
+ */
+import { DEVICES_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { nameScore } from '@archive/media/name-quality';
+import { shq } from '@ein/client';
+import type { TrackEntry } from '@archive/location/api';
+
+const NODE_TYPE_TRACK = 'track';
+
+/** The best `nameScore` over the fields. */
+const scoreText = (query: string, fields: (string | undefined)[]): number => Math.max(0, ...fields.map((field) => nameScore(query, field)));
+
+const searchTrack = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    await cmd.writeLn(JSON.stringify({ kinds: ['track'] }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = DEVICES_ROOT;
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
+    else if (arg === '--root') root = cmd.args[++i] || DEVICES_ROOT;
+    else queryParts.push(arg);
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+  if (!query) {
+    await cmd.writeError('search-track: missing search query\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+  const named: SearchProviderHit[] = [];
+  const described: SearchProviderHit[] = [];
+
+  const listed = await cmd.execute(`JSON_OUTPUT=1 track-list ${shq(root)}`);
+  const tracks: TrackEntry[] = listed.code === 0 ? JSON.parse(listed.stdout) : [];
+
+  for (const track of tracks) {
+    const hit = {
+      path: track.path,
+      type: NODE_TYPE_TRACK,
+      name: track.name,
+      ...(track.description ? { description: track.description } : {}),
+      ...(track.firstTs ? { takenAt: track.firstTs } : {}),
+    };
+    const name = scoreText(queryLower, [track.name, track.id]);
+    if (name > 0) named.push({ ...hit, channel: 'name', score: name });
+    const description = scoreText(queryLower, [track.description]);
+    if (description > 0) described.push({ ...hit, channel: 'description', score: description });
+  }
+
+  // Each channel's best `limit`; path breaks ties.
+  const best = (hits: SearchProviderHit[]) => hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+  const limited = [...best(named), ...best(described)];
+  const truncated = named.length > limit || described.length > limit;
+
+  if (cmd.json) {
+    await cmd.writeJSON({ results: limited, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse);
+  } else if (limited.length === 0) {
+    await cmd.writeLn('No matches found.');
+  } else {
+    for (const r of limited) {
+      await cmd.writeLn(`${(r.score * 100).toFixed(1)}% ${r.channel.padEnd(11)} ${r.path}`);
+      if (r.description) await cmd.writeLn(`     ${r.description}`);
+    }
+  }
+
+  return 0;
+};
+
+searchTrack.spec = {
+  name: 'search-track',
+  effect: 'read' as const,
+  description: 'Search tracks by the name of the device that recorded them, or their description',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
+    { name: 'root', type: 'string' as const, description: `Devices root (default: ${DEVICES_ROOT})` },
+  ],
+  examples: [
+    "search-track 'exempeltur' -l 10",
+  ],
+  returns: 'matching tracks, one row per channel that found it (name, description), best first within each.',
+};
+
+export default searchTrack;

@@ -1,0 +1,145 @@
+#!ts
+/**
+ * auto-album-cluster <path>… — how the organizer would group the media at and under the paths:
+ * directories (everything within them), albums (their members) and files. Read only: it answers
+ * the groups it proposes and writes nothing, so it can be pointed at any readable media, a staging
+ * category or a year of the library's own albums alike.
+ *
+ * It plans as `staging organize` does (`@archive/staging/organizer`), with the strategy and
+ * significance of the category the paths lie in, or `--strategy` and `--significance`; home is the
+ * `--user`'s residence each year (by default the staging area's owner, else the caller), or
+ * `--home`. No edits and no pins apply.
+ */
+import type { AutoAlbumClusterReport, GroupKind, GroupStrategy, SignificancePreset } from '@archive/staging/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { COVER_LINK_NAME } from '@archive/staging/auto-album';
+import { GROUP_STRATEGIES, readCategories, SIGNIFICANCE_PRESETS } from '@archive/staging/category';
+import { nodesAt } from '@archive/staging/nodes-at';
+import { type FileRow, mergeMedia, planScope, proposedGroups, readMedia, readOwner, readScopeFiles, type ScopeMedia } from '@archive/staging/organizer';
+import { categoryPath, stagedPlace, stagingRoots } from '@archive/staging/paths';
+
+/** The rows of the files at `paths`, as the organizer reads them; a path with nothing at it is skipped. */
+const rowsAt = async (cmd: Command, paths: string[]): Promise<FileRow[]> => {
+  const nodes = await nodesAt(cmd.sys.vfs, cmd.access, paths);
+  return [...nodes].flatMap(([path, node]) => node.type === 'file' ? [{ id: node.id, path, attrs: node.attrs as FileRow['attrs'] }] : []);
+};
+
+/** The members of the album at `path`: what its links point at. */
+const albumMembers = async (cmd: Command, path: string): Promise<string[]> =>
+  (await cmd.sys.vfs.children(cmd.access, path, { follow: false }))
+    .flatMap((child) => child.name !== COVER_LINK_NAME && typeof child.node.props.softlink === 'string' ? [child.node.props.softlink] : []);
+
+/** The staging category a path is in, or is: a category's own directory counts as within it. */
+const placeOf = (path: string) => stagedPlace(path) ?? stagedPlace(`${path}/.`);
+
+const autoAlbumCluster = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['user', 'strategy', 'significance', 'home'],
+    boolean: ['members'],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const paths = (flags._ as unknown[]).map((raw) => resolve(cmd.cwd, String(raw)).replace(/(.)\/+$/, '$1'));
+  if (paths.length === 0) {
+    await cmd.writeError('auto-album-cluster: usage: auto-album-cluster <path>… [--strategy S] [--significance P] [--home lat,lng|<location>] [--members]\n');
+    return 1;
+  }
+  const strategy = flags.strategy as string | undefined;
+  const significance = flags.significance as string | undefined;
+  if (strategy !== undefined && !(GROUP_STRATEGIES as string[]).includes(strategy)) {
+    await cmd.writeError(`auto-album-cluster: --strategy is one of ${GROUP_STRATEGIES.join(', ')}\n`);
+    return 1;
+  }
+  if (significance !== undefined && !(SIGNIFICANCE_PRESETS as string[]).includes(significance)) {
+    await cmd.writeError(`auto-album-cluster: --significance is one of ${SIGNIFICANCE_PRESETS.join(', ')}\n`);
+    return 1;
+  }
+  const { vfs } = cmd.sys;
+  try {
+    const staged = placeOf(paths[0]);
+    const user = String(flags.user ?? staged?.user ?? cmd.env.USER ?? 'admin');
+    const owner = await readOwner(vfs, cmd.access, user, stagingRoots(user).homePath);
+
+    // Home: a coordinate pair, or a location the owner can open.
+    let flagHome: { lat: number; lng: number } | undefined;
+    if (typeof flags.home === 'string' && flags.home !== '') {
+      const pair = flags.home.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+      const location = pair ? undefined : owner.locations.find((each) => each.path === resolve(cmd.cwd, String(flags.home)).replace(/\/+$/, ''));
+      if (!pair && !location) throw new Error('--home is lat,lng or a location with a point');
+      flagHome = pair ? { lat: Number(pair[1]), lng: Number(pair[2]) } : { lat: location!.lat, lng: location!.lng };
+    }
+
+    let media: ScopeMedia | undefined;
+    for (const path of paths) {
+      const node = await vfs.get(cmd.access, path, { follow: false });
+      const place = placeOf(path);
+      const base = place ? categoryPath(place.user, place.category) : path;
+      const rows = node.type === 'album'
+        ? await rowsAt(cmd, await albumMembers(cmd, path))
+        : node.type === 'file'
+        ? await rowsAt(cmd, [path])
+        : await readScopeFiles(vfs, cmd.access, path);
+      const read = await readMedia(vfs, cmd.access, rows, base, true);
+      if (media) mergeMedia(media, read);
+      else media = read;
+    }
+
+    const settings = staged ? (await readCategories(vfs, cmd.access, staged.user)).find((category) => category.name === staged.category)?.settings.group : undefined;
+    const group = {
+      strategy: (strategy ?? settings?.strategy ?? 'events') as GroupStrategy,
+      significance: (significance ?? settings?.significance ?? 'normal') as SignificancePreset,
+    };
+    const { plan, homes, names, library } = await planScope(vfs, media!, owner, { strategy: group, edits: [], flagHome });
+    const groups = proposedGroups(plan, owner, library, names, Boolean(flags.members));
+    const byKind: Partial<Record<GroupKind, number>> = {};
+    for (const each of groups) byKind[each.kind] = (byKind[each.kind] ?? 0) + 1;
+    const items = media!.items;
+    const report: AutoAlbumClusterReport = {
+      scopes: paths,
+      items: items.length,
+      undated: items.filter((item) => item.precision === 'none').length,
+      geotagged: items.filter((item) => item.lat !== undefined).length,
+      withPeople: items.filter((item) => (item.persons ?? []).length > 0).length,
+      home: Object.fromEntries(homes),
+      byKind,
+      groups,
+    };
+    if (cmd.json) {
+      await cmd.writeJSON(report satisfies AutoAlbumClusterReport);
+      return 0;
+    }
+    for (const each of groups) await cmd.writeLn(`${each.kind.padEnd(7)}  ${String(each.members).padStart(5)}  ${each.name}`);
+    const kinds = Object.entries(byKind).map(([kind, n]) => `${n} ${kind}`).join(', ');
+    await cmd.writeLn(`${report.items} media (${report.undated} undated, ${report.geotagged} geotagged, ${report.withPeople} with people): ${kinds || 'no groups'}`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`auto-album-cluster: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+autoAlbumCluster.spec = {
+  name: 'auto-album-cluster',
+  effect: 'read' as const,
+  description: 'Show how the staging organizer would group the media at and under some paths (directories, albums or files) into suggested albums, writing nothing',
+  args: [{ name: 'path', type: 'path' as const, variadic: true, description: 'directories (everything within), albums (their members) or files' }],
+  flags: [
+    { name: 'user', type: 'string' as const, description: "whose home and household count (default the staging area's owner, else you)" },
+    { name: 'strategy', type: 'string' as const, description: `how to group (${GROUP_STRATEGIES.join(', ')}; default the category's, else events)` },
+    {
+      name: 'significance',
+      type: 'string' as const,
+      description: `how readily a day is a group of its own (${SIGNIFICANCE_PRESETS.join(', ')}; default the category's, else normal)`,
+    },
+    { name: 'home', type: 'string' as const, description: 'home for every year, as lat,lng or a location path (default the residence each year, else the densest cell)' },
+    { name: 'members', type: 'bool' as const, description: "list each group's member paths" },
+  ],
+  examples: ['auto-album-cluster /home/anna/staging/files/inbox', 'auto-album-cluster /archive/albums/2019-lake --members --significance more'],
+  returns: 'AutoAlbumClusterReport: the media read, the home each year, and the groups proposed, by kind',
+};
+
+export default autoAlbumCluster;

@@ -1,0 +1,32 @@
+name: staging-sidecars
+description: Pair the sidecars that landed in a staging folder with their files
+
+# `staging.sidecars.arrived` names a folder of a category that pairs sidecars (`sidecars: pair`):
+# a Google Photos Takeout JSON or an XMP file landed there unpaired, a media file landed beside one,
+# or the folder moved in whole. `media-sidecars` pairs every unpaired sidecar within it as
+# `<file>/sidecar`, gives a Takeout album folder its title, and dates again what is indexed
+# already; a sidecar already paired is not looked at again, so a run with nothing new costs one
+# query.
+trigger:
+  on: staging.sidecars.arrived
+
+steps:
+  pair:
+    command: media-sidecars $NODE_PATH
+    description: Pair the folder's sidecars with their files and carry over their dates and places
+    pool: media
+    kind: sidecars
+    priority: 30
+    requires:
+      cpu: 1
+    # One at a time: two runs over nested folders would both find the sidecars of the inner one.
+    exclusive: staging-sidecars
+
+options:
+  # The files of one Takeout part land one by one, each announcing its folder: the hold lets them
+  # arrive before the job is claimed, and a fact landing while a run is live folds into one
+  # further run, which pairs what came after the first.
+  coalesce: rerun
+  debounceMs: 30000
+  maxAttempts: 2
+  priority: 0

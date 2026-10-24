@@ -1,0 +1,5 @@
+{
+  "description": "Turns VFS mutations into the media and location domain facts pipelines trigger on",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

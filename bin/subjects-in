@@ -1,0 +1,146 @@
+#!ts
+/**
+ * subjects-in — who and what the media in a container have: the people in them, the locations they
+ * are linked to, the devices that took them and who held the camera, each counted.
+ *
+ * People are the named ones, directly under the people root, not the groups of faces nobody has
+ * named yet. The container is whatever `members` lists — an album by its own rules, any other folder as its
+ * media — and the media counted are the members it shows, so a stack of similar photos counts once.
+ * The signals are read in batches by id (`readSignals`, the files' nodes for `devicePath`, their
+ * `photographer` links); only the distinct subjects are resolved to a path and a name.
+ */
+
+import { basename, dirname, resolve } from '@std/path';
+import { PEOPLE_ROOT } from '@archive/paths';
+import { type CmdReturn, collectUnknownFlags, type Command, type ContainerListing, type NodeId, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import type { ContainerSubjects, SubjectTally } from '@archive/media/api';
+import { readSignals } from '@archive/staging/signals';
+
+/** A file's link to the person who took it. */
+const PHOTOGRAPHER_LINK = 'photographer';
+
+/** Ids per batched lookup. */
+const IDS_PER_CALL = 1000;
+
+const chunks = <T>(items: T[]): T[][] => {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += IDS_PER_CALL) out.push(items.slice(i, i + IDS_PER_CALL));
+  return out;
+};
+
+/** What a subject node is called: its name, else its display name, else its slug. */
+const nameOf = (path: string, attrs: Record<string, unknown> | undefined): string => {
+  for (const key of ['name', 'displayName']) {
+    const value = attrs?.[key];
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return basename(path).replaceAll('_', ' ');
+};
+
+/** Counts per path, as tallies with their names, the most counted first. Paths the reader cannot read are left out. */
+const tallies = async (cmd: Command, counts: Map<string, number>): Promise<SubjectTally[]> => {
+  const rows = await Promise.all([...counts].map(async ([path, count]) => {
+    try {
+      const node = await cmd.sys.vfs.get(cmd.access, path);
+      return { path, name: nameOf(path, node.attrs), count };
+    } catch {
+      return undefined;
+    }
+  }));
+  return rows.filter((row): row is SubjectTally => row !== undefined).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+};
+
+const bump = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
+
+const subjectsIn = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [arg] = flags._.map(String);
+  if (!arg) {
+    await cmd.writeError('subjects-in: expected a path\n');
+    return 1;
+  }
+
+  try {
+    const path = resolve(cmd.cwd, arg);
+    const listed = await cmd.execute(`JSON_OUTPUT=1 members ${shq(path)}`);
+    if (listed.code !== 0) throw new Error(listed.stderr.trim() || `${path}: cannot list its members`);
+    const listing = JSON.parse(listed.stdout) as ContainerListing;
+    const ids: NodeId[] = listing.members.filter((member) => !member.front).map((member) => member.id);
+
+    const vfs = cmd.sys.vfs;
+    const signals = await readSignals(vfs, cmd.access, ids);
+    const people = new Map<string, number>();
+    const locations = new Map<string, number>();
+    const devices = new Map<string, number>();
+    const photographers = new Map<string, number>();
+    let positioned = 0;
+
+    const personIds = new Map<NodeId, number>();
+    for (const signal of signals.values()) {
+      if (signal.point) positioned++;
+      if (signal.location) bump(locations, signal.location);
+      for (const person of signal.persons) personIds.set(person, (personIds.get(person) ?? 0) + 1);
+    }
+
+    for (const page of chunks(ids)) {
+      const [nodes, children] = await Promise.all([vfs.getNodesByIds(cmd.access, page), vfs.getChildLinksByIds(cmd.access, page)]);
+      for (const node of nodes.values()) {
+        if (typeof node.attrs.devicePath === 'string') bump(devices, node.attrs.devicePath);
+      }
+      const links = [...children.values()].flatMap((entries) => entries.filter((entry) => entry.name === PHOTOGRAPHER_LINK).map((entry) => entry.id));
+      if (links.length === 0) continue;
+      for (const link of (await vfs.getNodesByIds(cmd.access, links)).values()) {
+        if (link.props.softlink) bump(photographers, link.props.softlink);
+      }
+    }
+
+    // A person comes as an id; the path is what the page links to. Only the people the archive
+    // names count: a group of faces nobody has named yet lives further down, and is no one yet.
+    for (const page of chunks([...personIds.keys()])) {
+      for (const [id, paths] of await vfs.resolveIdPaths(cmd.access, page)) {
+        const named = paths.find((path) => dirname(path) === PEOPLE_ROOT);
+        if (named) people.set(named, personIds.get(id) ?? 0);
+      }
+    }
+
+    const answer = {
+      total: ids.length,
+      positioned,
+      people: await tallies(cmd, people),
+      locations: await tallies(cmd, locations),
+      devices: await tallies(cmd, devices),
+      photographers: await tallies(cmd, photographers),
+      truncated: listing.truncated,
+    } satisfies ContainerSubjects;
+
+    if (cmd.json) {
+      await cmd.writeJSON(answer);
+      return 0;
+    }
+    await cmd.writeLn(`${answer.total} media, ${answer.positioned} with a position${answer.truncated ? ' (more exist than were listed)' : ''}`);
+    for (const [label, rows] of [['People', answer.people], ['Locations', answer.locations], ['Devices', answer.devices], ['Photographers', answer.photographers]] as const) {
+      if (rows.length === 0) continue;
+      await cmd.writeLn(`${label}:`);
+      for (const row of rows) await cmd.writeLn(`  ${String(row.count).padStart(5)}  ${row.name}  ${row.path}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`subjects-in: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+subjectsIn.spec = {
+  name: 'subjects-in',
+  effect: 'read' as const,
+  description: 'Who and what the media in an album or folder have: the people in them, their locations, the devices that took them and the photographers, counted',
+  args: [{ name: 'path', type: 'path' as const, description: 'the album or folder' }],
+  flags: [],
+  examples: ['subjects-in /archive/albums/Exempelalbum_2019', 'JSON_OUTPUT=1 subjects-in /archive/albums/Exempelalbum_2019'],
+  returns:
+    'how many media the container shows and how many carry a position; its people, locations, devices and photographers, each with its path, name and how many of the media have it, the most first.',
+};
+
+export default subjectsIn;

@@ -1,0 +1,164 @@
+#!ts
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, stepPhase } from '@ein/client';
+import { EmsError, extractText, stepExitCode } from '@ems/client';
+import { storeExtractedText } from '@archive/media/extracted-text';
+import { reportUnwritable } from '@archive/media/writable';
+
+type ExtractResult = {
+  text: string;
+  summary: string;
+  pages: number;
+  wordCount: number;
+};
+
+/** The first 500 characters, which is what is shown. */
+const summarize = (text: string): string => text.slice(0, 500).trim();
+
+/**
+ * Mark a file as having been through text extraction.
+ *
+ * This attr, and nothing else, is what stops the file being picked up again — by the skipIf of
+ * document-index and by every later crawl. A file with no text gets it and nothing more: no
+ * empty node, no description. Written for a photo that simply has no text as much as for a
+ * file that cannot be read at all.
+ */
+const markIndexed = async (cmd: Command, inputPath: string, indexedAt: string): Promise<void> => {
+  await cmd.execute(`attrs ${shq(inputPath)} -s textIndexedAt=${indexedAt}`);
+};
+
+const indexDocument = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+
+  if (!inputPath) {
+    await cmd.writeError('index-document: missing file path\n');
+    return 1;
+  }
+
+  // Where the time goes, for a step that runs out of it. See @ein/client stepPhase.
+  const phase = stepPhase(cmd, 'index-document', verbose);
+
+  // Validate it's a file node
+  const infoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(inputPath)}`);
+  await phase('read file node');
+  if (infoResult.code !== 0) {
+    await cmd.writeError(`index-document: ${inputPath}: ${infoResult.stderr}\n`);
+    return 1;
+  }
+  const nodeInfo = JSON.parse(infoResult.stdout);
+  if (nodeInfo.type !== 'file') {
+    await cmd.writeError(`index-document: ${inputPath}: not a file node (is ${nodeInfo.type})\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, await cmd.sys.vfs.get(cmd.access, inputPath))) return 1;
+
+  // Get mimetype
+  const attrsResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(inputPath)}`);
+  if (attrsResult.code !== 0) {
+    await cmd.writeError(`index-document: ${inputPath}: failed to read attrs\n`);
+    return 1;
+  }
+  const fileAttrs = JSON.parse(attrsResult.stdout);
+  const mimetype = fileAttrs.mimetype || '';
+
+  // Check if already indexed (unless --force). The marker is an attr, not a node: a file with
+  // no text creates no node at all, so there would be nothing to probe for.
+  if (!force && fileAttrs.textIndexedAt) {
+    if (verbose) await cmd.writeLn('Already indexed, skipping (use -f to force)');
+    return 0;
+  }
+
+  if (verbose) await cmd.writeLn(`Extracting text from ${mimetype}...`);
+
+  // Extraction (PyMuPDF, python-docx, odfpy, and OCR for a scanned page) lives in EMS.
+  const indexedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  let output: ExtractResult;
+  try {
+    await phase('asking ems to extract');
+    const extracted = await extractText(cmd, inputPath, mimetype);
+    await phase('ems answered');
+    output = { text: extracted.text, summary: summarize(extracted.text), pages: extracted.pages, wordCount: extracted.wordCount };
+  } catch (error) {
+    if (error instanceof EmsError && error.permanent) {
+      // The file itself is the problem — corrupt bytes, a format no extractor handles. Failing
+      // here would spend the pipeline's remaining attempts on a result that cannot change and
+      // leave a failed instance behind, so record "nothing to index" and succeed.
+      if (verbose) await cmd.writeLn(`Not extractable, marking: ${error.message}`);
+      await markIndexed(cmd, inputPath, indexedAt);
+      return 0;
+    }
+    await cmd.writeError(`index-document: text extraction failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+
+  if (!output.text) {
+    if (verbose) await cmd.writeLn('No text extracted, marking');
+    await markIndexed(cmd, inputPath, indexedAt);
+    return 0;
+  }
+
+  if (verbose) await cmd.writeLn(`Extracted ${output.wordCount} words`);
+
+  // The text's node and its vector, whole or, when it is long, in parts. A text EMS could not embed
+  // is kept and said so; `media-reembed` embeds it later.
+  let unstored: string | undefined;
+  try {
+    unstored = await storeExtractedText(cmd, inputPath, output.text, {}, { textIndexedAt: indexedAt });
+  } catch (error) {
+    await cmd.writeError(`index-document: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (unstored) await cmd.writeError(`index-document: ${inputPath}: text saved but not embedded: ${unstored}\n`);
+  await phase('stored text and embedding');
+  if (verbose) await cmd.writeLn('Stored extracted text');
+
+  await markIndexed(cmd, inputPath, indexedAt);
+  if (output.pages > 0) {
+    await cmd.execute(`attrs ${shq(inputPath)} -J pages=${output.pages}`);
+  }
+  await cmd.execute(`attrs ${shq(inputPath)} -J wordCount=${output.wordCount}`);
+
+  // Output
+  if (cmd.json) {
+    await cmd.writeJSON({
+      textIndexedAt: indexedAt,
+      wordCount: output.wordCount,
+      pages: output.pages,
+      summary: output.summary,
+    });
+  } else {
+    await cmd.writeLn(`Indexed ${inputPath}: ${output.wordCount} words`);
+    if (output.pages > 0) await cmd.writeLn(`  Pages: ${output.pages}`);
+    await cmd.writeLn(`  Summary: ${output.summary.slice(0, 100)}...`);
+  }
+
+  return 0;
+};
+
+indexDocument.spec = {
+  name: 'index-document',
+  effect: 'write' as const,
+  description: 'Extract text content and generate embedding for a document file',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to document file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Force reindex even if already indexed' },
+  ],
+};
+
+export default indexDocument;

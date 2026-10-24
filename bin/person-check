@@ -1,0 +1,170 @@
+#!ts
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, comparableDate, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationAttrs, wouldCreateCycle } from '@archive/people/genealogy';
+import { holdingsByPerson, isUnnamed, type PersonAttrs, type PersonNodeAttrs, UNKNOWN_ROOT } from '@archive/people/person';
+import { EVENTS_DIR, LIFE_ATTRS } from '@archive/people/events';
+import { HOMES_DIR, MOVED_IN_ATTR, MOVED_OUT_ATTR, readResidences } from '@archive/people/residence';
+
+type Issue = { person: string; kind: string; detail: string };
+
+async function peerLinkOf(cmd: Command, linkPath: string): Promise<string | undefined> {
+  try {
+    const node = await cmd.sys.vfs.get<RelationAttrs>(cmd.access, linkPath, { follow: false });
+    return node.attrs.relation?.peerLink;
+  } catch {
+    return undefined;
+  }
+}
+
+const personCheck = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const root = rest[0] ? resolve(cmd.cwd, rest[0]) : PEOPLE_ROOT;
+  const json = cmd.args.includes('--json') || cmd.json;
+  const ctx = makeCtx(cmd.sys.vfs, cmd.access);
+  const issues: Issue[] = [];
+
+  let persons: string[] = [];
+  try {
+    const children = await cmd.sys.vfs.children(cmd.access, root);
+    persons = children.filter((c) => c.node.type === 'person').map((c) => `${root}/${c.name}`);
+  } catch {
+    persons = [];
+  }
+
+  for (const person of persons) {
+    const self = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, person).catch(() => undefined);
+    const born = self?.attrs.born ?? undefined;
+    const died = self?.attrs.died ?? undefined;
+    if (born && died && comparableDate(died) < comparableDate(born)) {
+      issues.push({ person, kind: 'dates', detail: `died ${died} before born ${born}` });
+    }
+
+    // The timeline orders births and deaths on `born` / `died` and leaves birth and
+    // death events out, so a dated one whose date is not on the person is invisible
+    // there (ein/core#290). A date that refines the attr (`1815` →
+    // `1815-03-04`) agrees with it.
+    for (const event of await cmd.sys.vfs.children(cmd.access, `${person}/${EVENTS_DIR}`).catch(() => [])) {
+      const attrs = event.node.attrs as { eventType?: string; date?: string };
+      const lifeAttr = attrs.eventType ? LIFE_ATTRS[attrs.eventType] : undefined;
+      if (!lifeAttr || !attrs.date) continue;
+      const value = lifeAttr === 'born' ? born : died;
+      if (!value) {
+        issues.push({ person, kind: 'life-date-missing', detail: `${EVENTS_DIR}/${event.name} ${attrs.eventType} ${attrs.date} but ${lifeAttr} is unset` });
+      } else if (!attrs.date.startsWith(value) && !value.startsWith(attrs.date)) {
+        issues.push({ person, kind: 'life-date-drift', detail: `${EVENTS_DIR}/${event.name} ${attrs.eventType} ${attrs.date} but ${lifeAttr}=${value}` });
+      }
+    }
+
+    for (const dir of [PARENTS_DIR, CHILDREN_DIR, PARTNERS_DIR]) {
+      for (const entry of await readRelationDir(cmd.sys.vfs, cmd.access, person, dir)) {
+        if (!entry.target || !(await cmd.sys.vfs.exists(cmd.access, entry.target))) {
+          issues.push({ person, kind: 'dangling', detail: `${dir}/${entry.name} -> ${entry.target || '?'} (missing)` });
+          continue;
+        }
+        const peer = await peerLinkOf(cmd, entry.linkPath);
+        if (!peer || !(await cmd.sys.vfs.exists(cmd.access, peer, { follow: false }))) {
+          issues.push({ person, kind: 'reciprocity', detail: `${dir}/${entry.name} peer link missing` });
+        } else if ((await peerLinkOf(cmd, peer)) !== entry.linkPath) {
+          issues.push({ person, kind: 'reciprocity', detail: `${dir}/${entry.name} peer does not point back` });
+        }
+        if (dir === PARENTS_DIR && born) {
+          const parent = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, entry.target).catch(() => undefined);
+          if (parent?.attrs.born && !(comparableDate(parent.attrs.born) < comparableDate(born))) {
+            issues.push({ person, kind: 'dates', detail: `parent ${basename(entry.target)} born ${parent.attrs.born} not before child born ${born}` });
+          }
+        }
+        if (dir === PARTNERS_DIR && entry.from && entry.to && comparableDate(entry.to) < comparableDate(entry.from)) {
+          issues.push({ person, kind: 'dates', detail: `partnership with ${basename(entry.target)} ends ${entry.to} before start ${entry.from}` });
+        }
+      }
+    }
+    // Residence carries its span twice — on `relation` and, so the timeline can
+    // index it, as two flat attrs. Only person-set-home writes them, and it
+    // writes both together; a disagreement means something else edited the link.
+    for (const home of await readResidences(cmd.sys.vfs, cmd.access, person)) {
+      if (home.from && home.to && comparableDate(home.to) < comparableDate(home.from)) {
+        issues.push({ person, kind: 'dates', detail: `left ${basename(home.target)} ${home.to} before moving in ${home.from}` });
+      }
+      const link = await cmd.sys.vfs.get(cmd.access, home.linkPath, { follow: false }).catch(() => undefined);
+      if (!link) continue;
+      const attrs = link.attrs as Record<string, unknown>;
+      for (const [attr, value] of [[MOVED_IN_ATTR, home.from], [MOVED_OUT_ATTR, home.to]] as const) {
+        if ((attrs[attr] as string | undefined) !== value) {
+          issues.push({ person, kind: 'home-date-drift', detail: `${HOMES_DIR}/${home.name} ${attr}=${attrs[attr] ?? '-'} but relation says ${value ?? '-'}` });
+        }
+      }
+    }
+
+    for (const { path } of (await readRelationDir(cmd.sys.vfs, cmd.access, person, PARENTS_DIR)).map((e) => ({ path: e.target }))) {
+      if (path && await wouldCreateCycle(ctx, person, path)) {
+        issues.push({ person, kind: 'cycle', detail: `parent ${basename(path)} is also a descendant` });
+      }
+    }
+  }
+
+  // Auto-created people, which live one level down in /people/unknown and are
+  // therefore invisible to the walk above. Only their own integrity is checked:
+  // an unnamed person with no faces left is dead weight, and the marker and the
+  // location must agree or the unidentified view and `ls /people` disagree.
+  const unnamed = await cmd.sys.vfs.query(cmd.access, {
+    types: ['person'],
+    where: [{ ref: 'unnamed', op: 'exists' }],
+    limit: 500000,
+  });
+  let unnamedFaces = 0;
+  if (unnamed.length > 0) {
+    const counts = await holdingsByPerson(cmd);
+
+    for (const p of unnamed) {
+      const faces = counts.get(p.id) ?? 0;
+      unnamedFaces += faces;
+      if (faces === 0) {
+        issues.push({ person: p.absPath, kind: 'unnamed-orphan', detail: 'unnamed person with no faces, tags or voices' });
+      }
+      if (!p.absPath.startsWith(`${UNKNOWN_ROOT}/`)) {
+        issues.push({ person: p.absPath, kind: 'unnamed-misplaced', detail: `marked unnamed but not under ${UNKNOWN_ROOT}` });
+      }
+    }
+  }
+  // A person parked under /people/unknown without the marker is invisible to
+  // both the unidentified view and the people list.
+  for (const c of await cmd.sys.vfs.children(cmd.access, UNKNOWN_ROOT).catch(() => [])) {
+    if (c.node.type !== 'person') continue;
+    if (!isUnnamed(c.node.attrs as PersonNodeAttrs)) {
+      issues.push({ person: `${UNKNOWN_ROOT}/${c.name}`, kind: 'unnamed-named', detail: 'named person still under unknown/' });
+    }
+  }
+
+  if (json) {
+    await cmd.writeLn(JSON.stringify(issues));
+  } else if (issues.length === 0) {
+    await cmd.writeLn(
+      `person check: ${persons.length} person(s), no issues` +
+        (unnamed.length > 0 ? ` (plus ${unnamed.length} unidentified covering ${unnamedFaces} faces)` : ''),
+    );
+  } else {
+    for (const i of issues) await cmd.writeLn(`${i.kind}: ${basename(i.person)}: ${i.detail}`);
+    await cmd.writeLn(`${issues.length} issue(s)`);
+  }
+  return issues.length === 0 ? 0 : 1;
+};
+
+personCheck.spec = {
+  name: 'person-check',
+  effect: 'read' as const,
+  description: 'Check family-tree integrity (dangling links, reciprocity, cycles, dates, birth/death events not on born/died)',
+  args: [
+    { name: 'root', type: 'path' as const, description: 'people root (default /people)' },
+  ],
+  flags: [
+    { name: 'json', type: 'string' as const, description: 'JSON output' },
+  ],
+  examples: [
+    'person-check /archive/people',
+  ],
+  returns: 'every dangling link, missing reciprocal, cycle, impossible date and birth/death event not mirrored onto born/died it found.',
+};
+
+export default personCheck;

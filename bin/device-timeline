@@ -1,0 +1,93 @@
+#!ts
+/**
+ * device-timeline — one device's history as a chronological feed.
+ *
+ * The device-side counterpart of `person-timeline` and `location-timeline`: when
+ * each owner got it and gave it up, the stories written on the device itself, and
+ * the albums holding photos it took. The
+ * entries are the core feed's, so the UI draws them with the same card.
+ *
+ * Ownership is an `event` owned by the person, because that is who a reader
+ * wants to open from it — the device is the page they are already on.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { readRelationDir } from '@archive/people/genealogy';
+import { albumEntries, attrsOf, coverOf, mapLimited, nameOf, newestFirst, ownEventEntries, type TimelineEntry, writeFeed } from '@archive/people/feed';
+import type { DeviceTimeline } from '@archive/device/api';
+import { OWNERS_DIR } from '@archive/device/device';
+
+/** Each owner getting the device and giving it up, one entry each; an undated ownership says nothing about when. */
+async function ownerEntries(cmd: Command, device: string, deviceName: string): Promise<TimelineEntry[]> {
+  const owners = await readRelationDir(cmd.sys.vfs, cmd.access, device, OWNERS_DIR);
+
+  const nested = await mapLimited(owners.filter((owner) => owner.target && (owner.from || owner.to)), async (owner) => {
+    const person = owner.target;
+    const [personName, cover] = await Promise.all([nameOf(cmd, person), coverOf(cmd, person)]);
+    const common = { kind: 'event' as const, path: owner.linkPath, ownerPath: person, people: [person], ...(cover ? { cover } : {}) };
+
+    const entries: TimelineEntry[] = [];
+    if (owner.from) {
+      entries.push({ ...common, key: `${owner.linkPath}#owned-from`, date: owner.from, title: `${personName} started using ${deviceName}`, eventType: 'owned-from' });
+    }
+    if (owner.to) {
+      entries.push({ ...common, key: `${owner.linkPath}#owned-to`, date: owner.to, title: `${personName} stopped using ${deviceName}`, eventType: 'owned-to' });
+    }
+    return entries;
+  });
+
+  return nested.flat();
+}
+
+const deviceTimeline = async (cmd: Command): CmdReturn => {
+  const targetArg = cmd.args.filter((a) => !a.startsWith('-'))[0];
+  // As on a person: the albums are the slow half, so a page can ask for the
+  // rest first and fill them in.
+  const withAlbums = !cmd.args.includes('--no-albums');
+  if (!targetArg) {
+    await cmd.writeError('device-timeline: missing device path\n');
+    return 1;
+  }
+  const device = resolve(cmd.cwd, targetArg);
+
+  const attrs = await attrsOf(cmd, device);
+  if (!attrs) {
+    await cmd.writeError(`device-timeline: ${device}: not found\n`);
+    return 1;
+  }
+
+  const deviceName = (attrs.name as string | undefined) ?? basename(device);
+  const [owners, events, albums] = await Promise.all([
+    ownerEntries(cmd, device, deviceName),
+    ownEventEntries(cmd, device),
+    withAlbums ? albumEntries(cmd, `device:${device}`) : Promise.resolve([]),
+  ]);
+
+  const entries = [...owners, ...events, ...albums].sort(newestFirst);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ device, name: deviceName, entries } satisfies DeviceTimeline);
+    return 0;
+  }
+
+  await writeFeed(cmd, entries);
+  return 0;
+};
+
+deviceTimeline.spec = {
+  name: 'device-timeline',
+  effect: 'read' as const,
+  description: "One device's history as a chronological feed: owners getting and giving it up, its events and the albums with photos it took",
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to device node' },
+  ],
+  flags: [
+    { name: 'no-albums', type: 'bool' as const, description: 'skip the albums, which are most of the cost' },
+  ],
+  examples: [
+    'device-timeline /archive/devices/canon-eos',
+  ],
+  returns: "the device's history in order: owners getting and giving it up, its events and the albums with photos it took.",
+};
+
+export default deviceTimeline;

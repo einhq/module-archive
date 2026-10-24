@@ -1,0 +1,292 @@
+#!ts
+/**
+ * person-unknown — list the people face recognition created but nobody has
+ * named yet, with a few face crops each so they can be recognized at a glance.
+ *
+ * This is the data behind the "unidentified people" view, so it answers in a
+ * fixed handful of VFS calls no matter how many people come back. The ranking
+ * is aggregates only — the unnamed people's ids, and every person's region and
+ * recording counts — and only the page's people are read, resolved to a path
+ * and given crops. Fetching per person would put the page back into the 1+N
+ * pattern that makes the albums page slow, and reading every person to rank
+ * them would make every page cost the whole set.
+ */
+import type { Access, AttrCondition, CmdReturn, Command, NodeVFS } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { type PersonNodeAttrs, type VoiceView, voiceView, withRecordings } from '@archive/people/person';
+import { VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
+import { REGION_TYPE } from '@archive/media/regions';
+import type { UnknownFaceThumb, UnknownListResult, UnknownPerson, UnknownVoiceThumb } from '@archive/people/api';
+
+const FACES = { types: [REGION_TYPE], where: [] as AttrCondition[] };
+const VOICES = { types: ['embedding'], where: [{ ref: 'embeddingType', op: 'eq', value: VOICE_EMBEDDING_TYPE }] as AttrCondition[] };
+
+/**
+ * How many of `of` (regions, or voice embeddings) each person holds, `personId → count`, in one
+ * aggregate. `ids` narrows it to those people; without it every person is counted.
+ */
+const countsByPerson = async (vfs: NodeVFS, access: Access, of: typeof FACES, ids?: string[]): Promise<Map<string, number>> => {
+  if (ids?.length === 0) return new Map();
+  const person: AttrCondition = ids ? heldBy(ids) : { ref: 'personId', op: 'exists' };
+  const buckets = await vfs.aggregate(access, { types: of.types, where: [...of.where, person], group: [{ ref: 'personId' }] });
+  return new Map(buckets.map((bucket) => [bucket.key[0], bucket.count]));
+};
+
+/** The condition for the regions or voice embeddings held by any of `ids`. */
+const heldBy = (ids: string[]): AttrCondition => ({ ref: 'personId', op: 'in', value: ids });
+
+const append = <T>(map: Map<string, T[]>, key: string, value: T) => {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+};
+
+/**
+ * The best `per` faces of each of `ids`, by detector confidence (none counts as 0). One aggregate
+ * gives every region's confidence, and only the faces kept are read and resolved, so a person
+ * with thousands of faces costs no more than one with four.
+ */
+const topFaces = async (vfs: NodeVFS, access: Access, ids: string[], per: number): Promise<Map<string, UnknownFaceThumb[]>> => {
+  const out = new Map<string, UnknownFaceThumb[]>();
+  if (ids.length === 0 || per === 0) return out;
+
+  const byPerson = new Map<string, { id: string; confidence: number }[]>();
+  const buckets = await vfs.aggregate(access, {
+    types: FACES.types,
+    where: [heldBy(ids)],
+    group: [{ column: 'id' }, { ref: 'personId' }],
+    sum: 'confidence',
+  });
+  for (const { key: [id, personId], sum } of buckets) {
+    append(byPerson, personId, { id, confidence: sum ?? 0 });
+  }
+  const kept = [...byPerson].flatMap(([personId, faces]) =>
+    faces.sort((a, b) => b.confidence - a.confidence || a.id.localeCompare(b.id)).slice(0, per).map((face) => ({ ...face, personId }))
+  );
+
+  const keptIds = kept.map((face) => face.id);
+  const [nodes, paths] = await Promise.all([vfs.getNodesByIds<{ fileId?: string }>(access, keptIds), vfs.resolveIdPaths(access, keptIds)]);
+  for (const face of kept) {
+    const facePath = paths.get(face.id)?.[0];
+    const node = nodes.get(face.id);
+    if (!facePath || !node) continue;
+    append(out, face.personId, { facePath, fileId: node.attrs.fileId, confidence: face.confidence });
+  }
+  return out;
+};
+
+/**
+ * The `per` recordings each of `ids` speaks longest in, with each recording's kind. The voices are
+ * read without a path, since how long one speaks is in its turns; only the ones kept are resolved.
+ */
+const topVoices = async (vfs: NodeVFS, access: Access, ids: string[], per: number): Promise<Map<string, VoiceView[]>> => {
+  const out = new Map<string, VoiceView[]>();
+  if (ids.length === 0 || per === 0) return out;
+
+  const buckets = await vfs.aggregate(access, { types: VOICES.types, where: [...VOICES.where, heldBy(ids)], group: [{ column: 'id' }] });
+  const nodes = await vfs.getNodesByIds<{ personId?: string }>(access, buckets.map((bucket) => bucket.key[0]));
+
+  const byPerson = new Map<string, { id: string; talkSeconds: number }[]>();
+  for (const [id, node] of nodes) {
+    const personId = node.attrs.personId;
+    if (!personId) continue;
+    append(byPerson, personId, { id, talkSeconds: voiceView({ absPath: '', node }).talkSeconds });
+  }
+  const kept = [...byPerson].flatMap(([personId, voices]) =>
+    voices.sort((a, b) => b.talkSeconds - a.talkSeconds || a.id.localeCompare(b.id)).slice(0, per).map((voice) => ({ ...voice, personId }))
+  );
+
+  const paths = await vfs.resolveIdPaths(access, kept.map((voice) => voice.id));
+  const views: { personId: string; view: VoiceView }[] = [];
+  for (const voice of kept) {
+    const absPath = paths.get(voice.id)?.[0];
+    if (absPath) views.push({ personId: voice.personId, view: voiceView({ absPath, node: nodes.get(voice.id)! }) });
+  }
+  await withRecordings(vfs, access, views.map(({ view }) => view));
+  for (const { personId, view } of views) append(out, personId, view);
+  return out;
+};
+
+/** A card's voices, as the player needs them. */
+const voiceThumbs = (voices: VoiceView[]): UnknownVoiceThumb[] =>
+  voices.map(({ voicePath, filePath, start, end, mimetype }) => ({ voicePath, filePath, start, end, mimetype }));
+
+const personUnknown = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit', 'offset', 'faces', 'sort', 'person', 'min-faces'],
+    alias: { l: 'limit' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const limit = flags.limit ? Number(flags.limit) : 200;
+  const offset = flags.offset ? Number(flags.offset) : 0;
+  const facesPer = flags.faces ? Number(flags.faces) : 4;
+  const minFaces = flags['min-faces'] ? Number(flags['min-faces']) : 0;
+  const sort = flags.sort ?? 'faces';
+
+  for (const [name, v] of [['limit', limit], ['offset', offset], ['faces', facesPer], ['min-faces', minFaces]] as const) {
+    if (!Number.isFinite(v) || v < 0) {
+      await cmd.writeError(`person-unknown: --${name} must be a non-negative number\n`);
+      return 1;
+    }
+  }
+  if (sort !== 'faces' && sort !== 'created') {
+    await cmd.writeError("person-unknown: --sort must be 'faces' or 'created'\n");
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  const requestedPerson = flags.person;
+  if (requestedPerson) {
+    const path = requestedPerson.startsWith('/') ? requestedPerson : (await vfs.resolveId(access, requestedPerson).catch(() => []))[0]?.vfsAbsPath;
+    let people: UnknownPerson[] = [];
+
+    if (path) {
+      try {
+        const node = await vfs.get<PersonNodeAttrs>(access, path);
+        if (node.attrs.unnamed === true) {
+          const ids = [node.id];
+          const [faceCounts, voiceCounts, faces, voices] = await Promise.all([
+            countsByPerson(vfs, access, FACES, ids),
+            countsByPerson(vfs, access, VOICES, ids),
+            topFaces(vfs, access, ids, facesPer),
+            topVoices(vfs, access, ids, facesPer),
+          ]);
+          const person: UnknownPerson = {
+            id: node.id,
+            path,
+            name: node.attrs.name ?? path.split('/').pop() ?? '',
+            faceCount: faceCounts.get(node.id) ?? 0,
+            voiceCount: voiceCounts.get(node.id) ?? 0,
+            voices: voiceThumbs(voices.get(node.id) ?? []),
+            createdAt: node.attrs.createdAt,
+            faces: faces.get(node.id) ?? [],
+          };
+          people = [person];
+        }
+      } catch {
+        // A stale or inaccessible deep link behaves like an empty result.
+      }
+    }
+
+    const result = { total: people.length, offset: 0, people };
+    if (cmd.json) {
+      await cmd.writeJSON(result satisfies UnknownListResult);
+      return 0;
+    }
+    if (people.length === 0) {
+      await cmd.writeLn('No unidentified people.');
+      return 0;
+    }
+    const person = people[0];
+    await cmd.writeLn(`1 unidentified person:`);
+    await cmd.writeLn(`  ${person.path}  ${person.name}  ${person.faceCount} face${person.faceCount === 1 ? '' : 's'}`);
+    return 0;
+  }
+
+  // 1. The unnamed people as (id, createdAt) buckets, which is all the ranking reads. Queried
+  //    by attr rather than by listing /people/unknown, so one that ended up elsewhere is still
+  //    found; every unnamed person is created with a createdAt.
+  // 2. Region and recording counts, one aggregate each: for every person when the order or the
+  //    filter needs them, otherwise for the page's people once the page is known. A region or
+  //    recording with no personId drops out of the aggregate on its own.
+  const countAll = minFaces > 0 || (sort === 'faces' && limit > 0);
+  const [unnamed, allFaces, allVoices] = await Promise.all([
+    vfs.aggregate(access, { types: ['person'], where: [{ ref: 'unnamed', op: 'exists' }], group: [{ column: 'id' }, { ref: 'createdAt' }] }),
+    countAll ? countsByPerson(vfs, access, FACES) : undefined,
+    countAll ? countsByPerson(vfs, access, VOICES) : undefined,
+  ]);
+
+  // Evidence first: a face and a recording each count as one sighting.
+  const sightings = (id: string) => (allFaces?.get(id) ?? 0) + (allVoices?.get(id) ?? 0);
+  const ranked = unnamed.map(({ key: [id, createdAt] }) => ({ id, createdAt, sightings: sightings(id) }))
+    .filter((p) => p.sightings >= minFaces);
+
+  // The id breaks every tie, so the order is total and consecutive pages neither repeat nor
+  // skip a person.
+  const newest = (a: { id: string; createdAt: string }, b: { id: string; createdAt: string }) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id);
+  ranked.sort((a, b) => sort === 'created' ? newest(a, b) : b.sightings - a.sightings || newest(a, b));
+
+  const pageIds = ranked.slice(offset, offset + limit).map((p) => p.id);
+  const end = offset + pageIds.length;
+
+  // The page's people, read and resolved in one batch each. The aggregates count in the store,
+  // so one the caller cannot read or reach still takes its place in the order and the total,
+  // and is left off the page here.
+  const [nodes, paths, faceCounts, voiceCounts] = await Promise.all([
+    vfs.getNodesByIds<PersonNodeAttrs>(access, pageIds),
+    vfs.resolveIdPaths(access, pageIds),
+    allFaces ?? countsByPerson(vfs, access, FACES, pageIds),
+    allVoices ?? countsByPerson(vfs, access, VOICES, pageIds),
+  ]);
+  const page: UnknownPerson[] = pageIds.flatMap((id) => {
+    const node = nodes.get(id);
+    const path = paths.get(id)?.[0];
+    if (!node || !path) return [];
+    return [{
+      id,
+      path,
+      name: node.attrs.name ?? path.split('/').pop() ?? '',
+      faceCount: faceCounts.get(id) ?? 0,
+      voiceCount: voiceCounts.get(id) ?? 0,
+      createdAt: node.attrs.createdAt,
+      faces: [],
+      voices: [],
+    }];
+  });
+
+  // 3. The page's crops and voices: the best few of each person's faces and recordings.
+  if (facesPer > 0) {
+    const [faces, voices] = await Promise.all([
+      topFaces(vfs, access, page.map((p) => p.id), facesPer),
+      topVoices(vfs, access, page.filter((p) => p.voiceCount > 0).map((p) => p.id), facesPer),
+    ]);
+    for (const p of page) {
+      p.faces = faces.get(p.id) ?? [];
+      p.voices = voiceThumbs(voices.get(p.id) ?? []);
+    }
+  }
+
+  const result = { total: ranked.length, offset, ...(end < ranked.length ? { nextOffset: end } : {}), people: page };
+
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies UnknownListResult);
+    return 0;
+  }
+  if (ranked.length === 0) {
+    await cmd.writeLn('No unidentified people.');
+    return 0;
+  }
+  await cmd.writeLn(`${ranked.length} unidentified ${ranked.length === 1 ? 'person' : 'people'}:`);
+  for (const p of page) {
+    await cmd.writeLn(`  ${p.path}  ${p.name}  ${p.faceCount} face${p.faceCount === 1 ? '' : 's'}`);
+  }
+  return 0;
+};
+
+personUnknown.spec = {
+  name: 'person-unknown',
+  effect: 'read' as const,
+  description: 'List auto-created people nobody has named yet, with face counts and crops',
+  args: [],
+  flags: [
+    { name: 'limit', type: 'string' as const, description: 'max people to return (default 200)' },
+    { name: 'offset', type: 'string' as const, description: 'skip this many (default 0)' },
+    { name: 'faces', type: 'string' as const, description: 'crops per person (default 4)' },
+    { name: 'sort', type: 'string' as const, description: "'faces' (default) or 'created'" },
+    { name: 'min-faces', type: 'string' as const, description: 'only people with at least this many faces and recordings together' },
+    { name: 'person', type: 'string' as const, description: 'return one person by node id or path' },
+  ],
+  examples: [
+    'person-unknown --limit 20 --sort faces',
+    'person-unknown --sort created --min-faces 5',
+  ],
+  returns: 'auto-created people nobody has named, with their face counts and crops; JSON pages, and nextOffset starts the next page.',
+};
+
+export default personUnknown;

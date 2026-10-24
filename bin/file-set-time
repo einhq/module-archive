@@ -1,0 +1,130 @@
+#!ts
+/**
+ * file-set-time — set, annotate or clear a file's hand-typed capture time.
+ *
+ * Writes `whenManual`, which is an **input**, not the answer: it is one of the sources
+ * `@archive/media/resolve-time` weighs, and it outranks the others because a person looked at the
+ * photograph and said so. What the rest of the system reads is the resolved `takenAt` /
+ * `takenAtUtc` / `takenAtSource`, rewritten here on every change.
+ *
+ * A time may be **as vague as it really is**. `1975`, `2004-03`, `2003-04-30`,
+ * `2003-04-30T14:03` and `2003-04-30T14:03:11` are all accepted, with an optional `+HH:MM` or
+ * `Z` on the last two, and the value is stored exactly as typed — its length is its precision.
+ * 1,023 files in this archive are known only to a year and 800 only to a month; padding those
+ * out to a midnight would be inventing a day and an hour nobody ever knew.
+ *
+ * Takes any number of `<file> <time>` pairs, because the callers that matter are the bulk
+ * set-time dialog and dating a whole staged group: they recompute many files at once, and a
+ * round trip per file over the API shell is the slow part. Every pair is validated, every file
+ * read and its time resolved before anything is written, so one bad date or missing file fails
+ * the batch instead of leaving half of it applied; then the files are written together, a store
+ * write per batch of files (`updateEach`) rather than per file.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, isCaptureTime, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { FileSetTimeAnswer } from '@archive/media/api';
+import { applyFileTimes } from '@archive/media/resolve-time';
+import { resolve } from '@std/path';
+
+const fileSetTime = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['clear'],
+    string: ['note'],
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const rest = flags._.map(String);
+  const clear = Boolean(flags.clear);
+  const note = typeof flags.note === 'string' ? flags.note : undefined;
+
+  if (clear && note !== undefined) {
+    await cmd.writeError('file-set-time: --clear takes no --note\n');
+    return 1;
+  }
+
+  const usage = 'file-set-time: usage: file-set-time <file> <time> [<file> <time> ...] [--note <text>]\n' +
+    '                      file-set-time --clear <file> [<file> ...]\n' +
+    '  <time> is YYYY[-MM[-DD[THH:MM[:SS]]]], optionally +HH:MM or Z below day precision\n';
+
+  // --clear takes bare paths; the ordinary form takes pairs. Two shapes, one command, because
+  // reverting a time is the same operation with the value removed.
+  const pairs: { path: string; when?: string }[] = [];
+  if (clear) {
+    if (rest.length === 0) {
+      await cmd.writeError(usage);
+      return 1;
+    }
+    for (const arg of rest) pairs.push({ path: resolve(cmd.cwd, arg) });
+  } else {
+    if (rest.length === 0 || rest.length % 2 !== 0) {
+      await cmd.writeError(usage);
+      return 1;
+    }
+    for (let i = 0; i < rest.length; i += 2) {
+      const when = rest[i + 1];
+      // Not `Date.parse`, which accepts `12/25/2003` and `Tue Mar 3 2020` and would write them
+      // verbatim into an attr every range query and every index compares as bytes.
+      if (!isCaptureTime(when)) {
+        await cmd.writeError(`file-set-time: not a capture time: ${when}\n`);
+        return 1;
+      }
+      pairs.push({ path: resolve(cmd.cwd, rest[i]), when });
+    }
+  }
+
+  // Every file is read and its time resolved before any is written — a batch that writes three
+  // files and then dies on a typo'd fourth leaves the caller with no idea what landed — then one
+  // batched write gives each its manual time, a note that goes with it, and what it resolves to. A note belongs to the time it explains, so clearing one clears the other; an
+  // omitted --note on a re-set is not a request to delete the existing note.
+  const extra = clear ? { takenAtNote: null } : note !== undefined ? { takenAtNote: note } : {};
+  let settled: Awaited<ReturnType<typeof applyFileTimes>>;
+  try {
+    settled = await applyFileTimes(cmd, pairs.map(({ path, when }) => ({ path, manual: when ?? null, attrs: extra })));
+  } catch (error) {
+    await cmd.writeError(`file-set-time: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const refused = settled.flatMap((result, i) => result.status === 'rejected' ? [{ path: pairs[i].path, reason: result.reason }] : []);
+  for (const { path, reason } of refused) {
+    await cmd.writeError(`file-set-time: ${path}: ${reason instanceof Error ? reason.message : String(reason)}\n`);
+  }
+  if (refused.length > 0) return 1;
+  const results = settled.map((result, i) => {
+    const resolved = result.status === 'fulfilled' ? result.value : null;
+    return { path: pairs[i].path, ...(resolved ? { takenAt: resolved.takenAt, source: resolved.takenAtSource } : {}) };
+  });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, updated: pairs.length, files: results } satisfies FileSetTimeAnswer);
+    return 0;
+  }
+
+  for (const { path, takenAt, source } of results) {
+    await cmd.writeLn(takenAt ? `${path}: ${takenAt} (${source})` : `${path}: no capture time`);
+  }
+  return 0;
+};
+
+fileSetTime.spec = {
+  name: 'file-set-time',
+  effect: 'write' as const,
+  description: 'Set, annotate or clear a hand-typed capture time (whenManual) on one or more files',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
+    { name: 'when', type: 'string' as const, description: 'Capture time, YYYY[-MM[-DD[THH:MM[:SS]]]] (repeatable as file/time pairs)' },
+  ],
+  flags: [
+    { name: 'note', type: 'string' as const, description: 'Why this time is what it is — shown beside the date' },
+    { name: 'clear', type: 'bool' as const, description: 'Remove the manual time and note, letting the exif-derived date win again' },
+  ],
+  examples: [
+    'file-set-time /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg 2019-06-01T12:00',
+    'file-set-time --clear /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'FileSetTimeAnswer: each file with the capture time it now resolves to and its source.',
+};
+
+export default fileSetTime;

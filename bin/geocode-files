@@ -1,0 +1,118 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+
+const geocodeFiles = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['recursive', 'force', 'verbose'],
+    alias: { r: 'recursive', f: 'force', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? String(flags._[0]) : '';
+  const recursive = Boolean(flags.recursive);
+  const force = Boolean(flags.force);
+  const verbose = Boolean(flags.verbose);
+
+  if (!inputPath) {
+    await cmd.writeError('geocode-files: missing directory path\n');
+    return 1;
+  }
+
+  let geocoded = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  async function processDir(dirPath: string): Promise<void> {
+    const listResult = await cmd.execute(`JSON_OUTPUT=1 ls ${shq(dirPath)}`);
+    if (listResult.code !== 0) {
+      await cmd.writeError(`geocode-files: cannot list ${dirPath}\n`);
+      errors++;
+      return;
+    }
+
+    const entries = JSON.parse(listResult.stdout);
+
+    for (const entry of entries) {
+      const childPath = `${dirPath}/${entry.name}`;
+
+      // Get node info
+      const infoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(childPath)}`);
+      if (infoResult.code !== 0) continue;
+      const info = JSON.parse(infoResult.stdout);
+
+      // Recurse into directories
+      if (info.type === 'directory' && recursive) {
+        await processDir(childPath);
+        continue;
+      }
+
+      // Only process file nodes
+      if (info.type !== 'file') continue;
+
+      // Check if file has a position child
+      const locInfoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(`${childPath}/position`)}`);
+      if (locInfoResult.code !== 0) continue;
+
+      const locInfo = JSON.parse(locInfoResult.stdout);
+      if (locInfo.type !== 'position') continue;
+
+      // Check if already geocoded
+      if (!force) {
+        const attrsResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(`${childPath}/position`)}`);
+        if (attrsResult.code === 0) {
+          const attrs = JSON.parse(attrsResult.stdout);
+          if (attrs.geocodedAt) {
+            skipped++;
+            continue;
+          }
+        }
+      }
+
+      // Run geocode-position
+      const flags = [force ? '--force' : '', verbose ? '-v' : ''].filter(Boolean).join(' ');
+      const result = await cmd.execute(`geocode-position ${shq(`${childPath}/position`)} ${flags}`);
+      if (result.code === 0) {
+        geocoded++;
+      } else {
+        errors++;
+      }
+
+      // Rate limit: 1 request per second (Nominatim policy)
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+
+  await processDir(inputPath);
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ geocoded, skipped, errors }));
+  } else {
+    await cmd.writeLn(`Geocoded: ${geocoded}, skipped: ${skipped}, errors: ${errors}`);
+  }
+
+  return errors > 0 ? 1 : 0;
+};
+
+geocodeFiles.spec = {
+  name: 'geocode-files',
+  effect: 'write' as const,
+  description: 'Batch reverse geocode the position nodes of the files under a directory',
+  args: [
+    { name: 'path', type: 'path' as const, description: 'VFS directory path' },
+  ],
+  flags: [
+    { name: 'r', type: 'bool' as const, description: 'Recurse into subdirectories' },
+    { name: 'f', type: 'bool' as const, description: 'Force re-geocode even if cached' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: [
+    'geocode-files -r /archive/albums/Exempelalbum_2019',
+  ],
+  returns: 'how many position nodes were geocoded.',
+};
+
+export default geocodeFiles;

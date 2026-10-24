@@ -1,0 +1,30 @@
+#!ts
+/**
+ * subject-device — the media a device produced, as the attr equality the store answers (`@archive/subjects`).
+ *
+ * Its name is what makes it the device's: `search --subject device:<ref>` runs `subject-<kind>`, and
+ * orders, intersects, pages and counts what it answers; `search --group-by device` asks it `--of` a set of
+ * media, and counts the devices they have.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { runSubjectCommand } from '@archive/subjects';
+
+const subjectDeviceCommand = (cmd: Command): CmdReturn => runSubjectCommand(cmd, 'device');
+
+subjectDeviceCommand.spec = {
+  name: 'subject-device',
+  effect: 'read' as const,
+  description: 'What `search --subject device:<ref>` asks: the media a device produced, as the attr equality the store answers',
+  args: [
+    { name: 'ref', type: 'string' as const, description: 'device slug or path (repeatable)', repeatable: true },
+  ],
+  flags: [
+    { name: 'of', type: 'path' as const, description: 'a JSON array of media ids: answer with the device that took each, for `search --group-by device`' },
+  ],
+  examples: ['JSON_OUTPUT=1 subject-device Exempelkamera_X100', 'JSON_OUTPUT=1 subject-device --of /tmp/ids.json'],
+  returns:
+    'per ref, the path of the device and its media as an attr match, or why the ref names no device; with --of, the devices that took them once each and per media id the ones it has.',
+};
+
+export default subjectDeviceCommand;

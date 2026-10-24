@@ -1,0 +1,92 @@
+#!ts
+/**
+ * person-set-home — record where somebody lived, and when.
+ *
+ * Creates both halves of the pair: person/homes/<location> ↔ location/residents/<person>,
+ * each carrying relation.peerLink (relations-guard removes the peer on delete).
+ * Residence spans time, so --from/--to are the point of the command.
+ *
+ * A second run over an existing residence fails rather than quietly rewriting
+ * it; --update is how a span is corrected, and there the flags given *are* the
+ * new span, so leaving --to off reopens a residence that was closed by mistake.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { createResidence, homeLink, updateResidence } from '@archive/people/residence';
+
+const personSetHome = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from', 'to'], boolean: ['update'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const personArg = flags._[0] as string | undefined;
+  const locationArg = flags._[1] as string | undefined;
+
+  if (!personArg || !locationArg) {
+    await cmd.writeError('person-set-home: usage: person-set-home <person> <location> [--from <date>] [--to <date>] [--update]\n');
+    return 1;
+  }
+
+  const person = resolve(cmd.cwd, personArg);
+  const location = resolve(cmd.cwd, locationArg);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  try {
+    await vfs.get(access, person);
+    await vfs.get(access, location);
+  } catch {
+    await cmd.writeError(`person-set-home: ${person} or ${location} not found\n`);
+    return 1;
+  }
+
+  const link = homeLink(person, location);
+  const exists = await vfs.exists(access, link, { follow: false });
+  if (exists && !flags.update) {
+    await cmd.writeError(`person-set-home: ${link} already exists (use --update to change the dates)\n`);
+    return 1;
+  }
+  if (!exists && flags.update) {
+    await cmd.writeError(`person-set-home: ${link} does not exist\n`);
+    return 1;
+  }
+
+  const span = { from: flags.from, to: flags.to };
+  try {
+    if (exists) await updateResidence(vfs, access, person, location, span);
+    else await createResidence(vfs, access, person, location, span);
+  } catch (err) {
+    await cmd.writeError(`person-set-home: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, link, person, location, ...span });
+    return 0;
+  }
+  await cmd.writeLn(`${exists ? 'Updated' : 'Linked'} ${basename(person)} home to ${basename(location)}`);
+  return 0;
+};
+
+personSetHome.spec = {
+  name: 'person-set-home',
+  effect: 'write' as const,
+  description: 'Record where a person lived, and when (dated relation pair)',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node' },
+    { name: 'location', type: 'path' as const, description: 'VFS path to a location' },
+  ],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'moved in (YYYY[-MM[-DD]])' },
+    { name: 'to', type: 'string' as const, description: 'moved out (YYYY[-MM[-DD]])' },
+    { name: 'update', type: 'bool' as const, description: 'rewrite the span of a residence that already exists; the flags given are the new span' },
+  ],
+  examples: [
+    'person-set-home --from 2001-01 /archive/people/Anna_Exempel /archive/locations/Exempelstad',
+  ],
+  returns: 'nothing; the residence relation is written on both sides.',
+};
+
+export default personSetHome;

@@ -1,0 +1,77 @@
+# Read the text written in a picture (EMS `ocr.read`, PP-OCRv6), for search by the words in it.
+# ein/core#352, ein/core#670.
+#
+# On the media pool with a kind of its own: a reading is a model request like a picture vector,
+# and in `document-index`'s inline lane it ran unbounded beside every crawl. After the EXIF, not on
+# the file's first write, so the picture is read the way it is shown (`angle`, `mirror`).
+#
+# A staged picture is read once it is filed, not while it waits: the paths `document-index` never
+# reads are left out here too, and a picture moved out of them is read on the move. A directory
+# moved whole publishes one event, for the directory, so its pictures arrive as
+# `media.text.missing`. `textIndexedAt` is the "already read" mark, written whether there was text
+# or not.
+name: media-ocr
+description: Read the text written in a picture
+
+vars:
+  FORCE: ''
+
+triggers:
+  - on: media.metadata.extracted
+    match:
+      mimetype: 'image/*'
+    # The same paths as document-index's `unless`; see there for why each is left out.
+    unless: &unread
+      nodePath:
+        - '/home/*/staging/**'
+        - '/var/**'
+        - '/etc/**'
+        - '/usr/**'
+        - '/dev/**'
+        - '/tmp/**'
+        - '**/.**'
+    skipIfAttr: textIndexedAt
+
+  - event: moved
+    nodeType: file
+    match:
+      mimetype: 'image/*'
+    unless: *unread
+    skipIfAttr: textIndexedAt
+
+  - on: media.text.missing
+    match:
+      mimetype: 'image/*'
+    unless: *unread
+    skipIfAttr: textIndexedAt
+
+  # A person set or cleared the language of a read picture's text (`file-set-text-language`): read
+  # again in it, ahead of the backlog, as someone is looking at it.
+  - on: media.text.language-set
+    unless: *unread
+    vars:
+      FORCE: -f
+    priority: 50
+
+  # Emitted by the scan for a picture read by another engine than EMS runs now (`ocrBy`); one
+  # Tesseract read has none and keeps its reading. The fact is the guard, so there is no
+  # skipIfAttr. Behind new media and the picture vectors (20): a reading makes a file findable by
+  # its words only when it has some.
+  - on: media.ocr.stale
+    unless: *unread
+    vars:
+      FORCE: -f
+    priority: 10
+
+steps:
+  read-text:
+    command: read-text $FORCE $NODE_PATH
+    description: Text in the picture, for search
+    pool: media
+    kind: ocr
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 40

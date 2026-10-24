@@ -1,0 +1,228 @@
+#!ts
+/**
+ * search-document — documents whose text is about the query.
+ *
+ * A document's extracted text is embedded by `index-document` into the text space every other
+ * text is in — the text in photos, the chunks of transcripts — so this provider must name its own
+ * candidates: a nearest-neighbour search over the whole space would answer a text search with
+ * photos and transcript chunks, duplicate `search-media`, and with a person filter rank the whole
+ * archive only for the filter to throw nearly all of it away.
+ *
+ * Every hit is in the `content` channel: text inside a file, by meaning.
+ *
+ * So the candidates come first — the documents in the archive, or in the set `search` hands over
+ * with `--within` (a person's files, an album's), without those under a `--not-within` tree (what
+ * `search` leaves out, such as staging) — and the vector search runs only over their text.
+ * With no document among them the answer is empty at once and the query is never embedded.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { isUnlistedPath } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { embedQuery, TEXT_VECTOR_NAMES } from '@ems/text-embedding';
+
+/**
+ * What a document is: the mimetypes `index-document` extracts text from, and search's `document`
+ * kind (`search/filters.ts` `DOCUMENT_MIMETYPES`) — the two must agree or a document is found by
+ * one and not the other.
+ */
+const DOCUMENT_MIMETYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.oasis.opendocument.text',
+  'application/rtf',
+  'text/plain',
+  'text/markdown',
+  'text/html',
+];
+
+/** Documents looked at per store page when there is no `--within` set. */
+const PAGE = 5000;
+
+type Document = { id: string; path: string };
+
+/** Vectors fetched per result wanted, since one long document's parts can take several locations. */
+const PART_OVERFETCH = 5;
+
+/**
+ * A file's own `metadata/` holds text files too — a photo's OCR text is `metadata/content`, a
+ * `text/plain` file — and those are what a document's text is, not documents.
+ */
+const isDerived = (path: string): boolean => path.includes('/metadata/');
+
+/** Every document in the archive, but those under `notWithin`. */
+const allDocuments = async (cmd: Command, notWithin: string[]): Promise<Document[]> => {
+  const documents: Document[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      // `name`: an uploaded file carries one, the text `index-document` extracts into a file's
+      // `metadata/content` does not. Without it every photo's OCR text is a `text/plain`
+      // "document" — in production the query then walked them all and the provider took 74 s.
+      where: [{ ref: 'mimetype', op: 'in', value: DOCUMENT_MIMETYPES }, { ref: 'name', op: 'exists' }],
+      // A range on the media module's `mime` index, rather than a scan in id order.
+      orderBy: { ref: 'mimetype', dir: 'asc' },
+      ...(notWithin.length > 0 ? { notWithin } : {}),
+      after,
+      limit: PAGE,
+    });
+    for (const row of rows) if (!isDerived(row.absPath)) documents.push({ id: row.id, path: row.absPath });
+    if (rows.length < PAGE) return documents;
+    after = { value: rows[rows.length - 1].sortValue, id: rows[rows.length - 1].id };
+  }
+};
+
+/** The documents among the files `search` handed over (`--within`: a JSON array of file ids). */
+const documentsWithin = async (cmd: Command, withinPath: string): Promise<Document[]> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, withinPath, { mode: 'r' });
+  let ids: unknown;
+  try {
+    ids = JSON.parse(await new Response(handle.readable).text());
+  } finally {
+    await handle.close();
+  }
+  if (!Array.isArray(ids)) throw new Error('not a JSON array');
+  const nodes = await cmd.sys.vfs.getNodesByIds(cmd.access, ids.filter((id): id is string => typeof id === 'string'));
+  const documentIds = [...nodes.values()]
+    .filter((node) => node.type === 'file' && DOCUMENT_MIMETYPES.includes(String(node.attrs.mimetype ?? '')))
+    .map((node) => node.id);
+  if (documentIds.length === 0) return [];
+  const paths = await cmd.sys.vfs.resolveIdPaths(cmd.access, documentIds);
+  return documentIds.flatMap((id) => (paths.get(id) ?? []).filter((path) => !isDerived(path)).slice(0, 1).map((path) => ({ id, path })));
+};
+
+/**
+ * Each document's text vectors by vector id: `<document>/metadata/content/embedding`, the current
+ * space's `content/<type>`, and for a long text the parts under it (`content/<type>/c<N>`).
+ */
+const textEmbeddings = async (cmd: Command, documents: Document[]): Promise<Map<string, Document>> => {
+  /** The children of `parents` with one of `names`, by parent. */
+  const children = async (parents: string[], names?: string[]): Promise<Map<string, string[]>> => {
+    const links = parents.length === 0 ? new Map() : await cmd.sys.vfs.getChildLinksByIds(cmd.access, parents);
+    const found = new Map<string, string[]>();
+    for (const [parent, list] of links) {
+      const ids = (list as { id: string; name: string }[]).filter((entry) => !names || names.includes(entry.name)).map((entry) => entry.id);
+      if (ids.length > 0) found.set(parent as string, ids);
+    }
+    return found;
+  };
+  const metadata = await children(documents.map((document) => document.id), ['metadata']);
+  const content = await children([...metadata.values()].flat(), ['content']);
+  // Both text spaces' vectors: `findSimilar` reads one type's table and finds only its own.
+  const vectors = await children([...content.values()].flat(), ['embedding', ...TEXT_VECTOR_NAMES]);
+  const parts = await children([...vectors.values()].flat());
+
+  const byEmbedding = new Map<string, Document>();
+  for (const document of documents) {
+    for (const metadataId of metadata.get(document.id) ?? []) {
+      for (const contentId of content.get(metadataId) ?? []) {
+        for (const vectorId of vectors.get(contentId) ?? []) {
+          byEmbedding.set(vectorId, document);
+          for (const partId of parts.get(vectorId) ?? []) byEmbedding.set(partId, document);
+        }
+      }
+    }
+  }
+  return byEmbedding;
+};
+
+const searchDocument = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out. `within`: it ranks inside
+  // a set of files `search` hands it, so a person's or an album's documents are searched as such.
+  if (cmd.args.includes('--kinds')) {
+    // `notWithin`: it leaves out the trees `search` names (`--not-within`).
+    await cmd.writeLn(JSON.stringify({ kinds: ['document'], within: true, notWithin: true }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let withinPath: string | undefined;
+  const notWithin: string[] = [];
+  for (let i = 0; i < cmd.args.length; i++) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
+    else if (arg === '--within') withinPath = cmd.args[++i];
+    else if (arg === '--not-within') notWithin.push(cmd.args[++i]);
+    else queryParts.push(arg);
+  }
+
+  const query = queryParts.join(' ').trim();
+  if (!query) {
+    await cmd.writeError('search-document: missing search query\n');
+    return 1;
+  }
+
+  const startedAt = Date.now();
+  const trace = async (what: string) => {
+    if (cmd.env.SEARCH_TRACE) await cmd.writeError(`search-document: ${what} ${Date.now() - startedAt}ms\n`);
+  };
+
+  const answer = async (results: SearchProviderHit[], truncated = false): Promise<CmdReturn> => {
+    if (cmd.json) await cmd.writeLn(JSON.stringify({ results, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse));
+    else if (results.length === 0) await cmd.writeLn('No document matches found.');
+    else for (const result of results) await cmd.writeLn(`${(result.score * 100).toFixed(1)}% ${result.path}`);
+    return 0;
+  };
+
+  let documents: Document[];
+  try {
+    documents = withinPath === undefined
+      ? await allDocuments(cmd, notWithin)
+      : (await documentsWithin(cmd, withinPath)).filter((document) => !isUnlistedPath(notWithin, document.path));
+  } catch (error) {
+    await cmd.writeError(`search-document: cannot read --within ${withinPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  await trace(`${documents.length} documents`);
+  const embeddings = await textEmbeddings(cmd, documents);
+  await trace(`${embeddings.size} with text`);
+  if (embeddings.size === 0) return await answer([]);
+
+  // Documents and media must embed with the same model or the vectors are not comparable: both
+  // go through the media service.
+  let embedded: { bytes: Uint8Array; type: string; floor: number };
+  try {
+    embedded = await embedQuery(cmd, query);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`search-document: failed to embed query: ${message}\n`);
+    return 1;
+  }
+
+  // A long document is many parts, and several of them can match: ask for more than a page and
+  // keep each document's best.
+  const matches = await cmd.sys.vfs.findSimilar(cmd.access, embedded.type, embedded.bytes, limit * PART_OVERFETCH, embedded.floor, [...embeddings.keys()]);
+  await trace(`${matches.length} ranked`);
+  const best = new Map<string, SearchProviderHit>();
+  for (const match of matches) {
+    const document = embeddings.get(match.id);
+    if (!document || (best.get(document.id)?.score ?? -1) >= match.similarity) continue;
+    best.set(document.id, { path: document.path, type: 'file', name: document.path.split('/').pop() || '', channel: 'content', score: match.similarity, id: document.id });
+  }
+  const ranked = [...best.values()].sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  return await answer(ranked.slice(0, limit), ranked.length > limit || matches.length >= limit * PART_OVERFETCH);
+};
+
+searchDocument.spec = {
+  name: 'search-document',
+  effect: 'read' as const,
+  description: 'Search documents (PDF, Word, text) by what their text is about, using semantic similarity',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'what the documents should be about' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'within', type: 'path' as const, description: 'rank only among the documents in this JSON array of file ids (what `search` writes)' },
+    { name: 'not-within', type: 'path' as const, description: 'leave out the documents under this directory; may be given more than once (how `search` leaves out staging)' },
+    { name: 'l', type: 'number' as const, description: 'Max results (default 10)' },
+  ],
+  examples: [
+    "search-document 'ett protokoll från styrelsemötet' -l 10",
+  ],
+  returns: 'matching documents, best first, each with its path and score.',
+};
+
+export default searchDocument;

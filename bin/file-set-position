@@ -1,0 +1,129 @@
+#!ts
+/**
+ * file-set-position — set a manual location override on a file, or clear its location.
+ *
+ * Stores `positionManual` {lat,lng} and (re)writes the child `position` node so
+ * proximity search and the map see the corrected position, overriding the
+ * pipeline-derived GPS.
+ *
+ *   file-set-position <file>... --lat=57.685 --lng=11.944
+ *   file-set-position <file> <lat> <lng>
+ *   file-set-position <file>... --clear
+ *
+ * `--clear` takes away everything that places a file: `positionManual`, the `position` child,
+ * whether the GPS or a person wrote it, and the `location` link. The GPS is read once, at import,
+ * so the file stays unplaced.
+ *
+ * With the coordinates as flags every positional is a file, so a selection of pictures takes
+ * one place in one call; a file that fails is reported and the rest are still set.
+ *
+ * The flag form is the one that works everywhere. A western or southern
+ * coordinate cannot be a positional — parseArgs reads the leading `-` of
+ * `-122.3493` as the next flag, so the point never arrives, and correcting a
+ * photo taken in the Americas was simply not expressible. See
+ * wow/notes/negative-argument-values.md.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
+
+/** Takes away a file's manual point, its `position` child and its `location` link. */
+const clearPosition = async (cmd: Command, path: string): Promise<void> => {
+  await cmd.sys.vfs.update(cmd.access, path, { attrs: { positionManual: null } });
+  for (const child of [POSITION_CHILD, LOCATION_LINK_NAME]) {
+    const childPath = `${path}/${child}`;
+    if (await cmd.sys.vfs.exists(cmd.access, childPath, { follow: false })) {
+      await cmd.sys.vfs.unlink(cmd.access, childPath, path, { follow: false, recursive: true });
+    }
+  }
+};
+
+const fileSetPosition = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['lat', 'lng'],
+    boolean: ['clear'],
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  if (flags.clear) {
+    if (flags._.length === 0 || flags.lat !== undefined || flags.lng !== undefined) {
+      await cmd.writeError('file-set-position: usage: file-set-position <file>... --clear\n');
+      return 1;
+    }
+    let failed = 0;
+    for (const target of flags._.map(String)) {
+      const path = resolve(cmd.cwd, target);
+      try {
+        await clearPosition(cmd, path);
+        if (!cmd.json) await cmd.writeLn(`Cleared the location of ${path}`);
+      } catch (error) {
+        failed++;
+        await cmd.writeError(`file-set-position: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    }
+    if (failed > 0) return 1;
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    return 0;
+  }
+
+  // Flags win over positionals, and are the only form a negative coordinate survives. With both
+  // flags every positional is a file; without them the positionals are <file> <lat> <lng>.
+  const flagForm = flags.lat !== undefined && flags.lng !== undefined;
+  const targets = (flagForm ? flags._ : flags._.slice(0, 1)).map(String);
+  const latArg = flags.lat ?? flags._[1];
+  const lngArg = flags.lng ?? flags._[2];
+  const lat = Number(latArg);
+  const lng = Number(lngArg);
+  if (targets.length === 0 || latArg === undefined || lngArg === undefined || Number.isNaN(lat) || Number.isNaN(lng)) {
+    await cmd.writeError('file-set-position: usage: file-set-position <file>... --lat=<n> --lng=<n>\n');
+    return 1;
+  }
+
+  let failed = 0;
+  for (const target of targets) {
+    const path = resolve(cmd.cwd, target);
+    try {
+      await cmd.sys.vfs.update(cmd.access, path, { attrs: { positionManual: { lat, lng } } });
+      await cmd.sys.vfs.ensure(cmd.access, 'position', path, 'position');
+      const handle = await cmd.sys.vfs.open(cmd.access, `${path}/position`, { mode: 'w' });
+      try {
+        await handle.write(new TextEncoder().encode(JSON.stringify({ lat, lng })));
+      } finally {
+        await handle.close();
+      }
+      if (!cmd.json) await cmd.writeLn(`Set location ${lat},${lng} on ${path}`);
+    } catch (error) {
+      failed++;
+      await cmd.writeError(`file-set-position: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+  if (failed > 0) return 1;
+  if (cmd.json) await cmd.writeJSON({ ok: true });
+  return 0;
+};
+
+fileSetPosition.spec = {
+  name: 'file-set-position',
+  effect: 'write' as const,
+  description: 'Set a manual location override (positionManual + child position node) on a file, or clear its location',
+  args: [
+    { name: 'file', type: 'path' as const, variadic: true, description: 'VFS paths to file nodes (several with --lat/--lng)' },
+    { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
+    { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
+  ],
+  flags: [
+    { name: 'lat', type: 'string' as const, description: 'latitude, as --lat=<n> — required form for a negative coordinate' },
+    { name: 'lng', type: 'string' as const, description: 'longitude, as --lng=<n> — required form for a negative coordinate' },
+    { name: 'clear', type: 'bool' as const, description: 'take away the position and the location link instead of setting one' },
+  ],
+  examples: [
+    'file-set-position /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg 59.0000 18.0000',
+  ],
+  returns: 'nothing; a manual location is written onto the file, or its location is taken away.',
+};
+
+export default fileSetPosition;

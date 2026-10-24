@@ -1,0 +1,31 @@
+name: staging-organize
+description: Organize a staging category's suggested groups again, planning only what changed since the last run
+
+# `staging.category.changed` names a category directory (`/home/<user>/staging/files/<category>`):
+# a staged file in it arrived, left, moved, was read (its capture time, its faces, its camera, its
+# duplicate finding) or got a GPS fix, or someone asked for a run by writing the category's
+# request (`albums/<category>/.request`, as `staging organize --queue` does). The organizer reads
+# what changed from the audit trail itself, so the fact says only which category.
+trigger:
+  on: staging.category.changed
+
+steps:
+  organize:
+    command: staging organize $NODE_PATH
+    description: Plan the category's groups again where its files changed, and write what differs
+    pool: media
+    kind: organize
+    priority: 15
+    requires:
+      cpu: 1
+
+options:
+  # An upload announces its category once per file and once per step that reads it: the hold
+  # lets a burst arrive before the job is claimed, and a fact landing while a run is live folds
+  # into one further run, which reads the trail from where the first stopped. The organizer writes
+  # only under the category's `albums/` directory, and the bridge announces nothing there but a
+  # request, which the organizer never writes.
+  coalesce: rerun
+  debounceMs: 120000
+  maxAttempts: 2
+  priority: 0

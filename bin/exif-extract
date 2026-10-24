@@ -1,0 +1,576 @@
+#!ts
+import { basename, resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, refineMimeByName, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
+import { type ExifDateParts, parseExifDate, pickCaptureDate } from '@archive/media/exif-date';
+import { resolveTime, stampedSources, timeAttrs } from '@archive/media/capture-resolve';
+import { clockForFile, offsetAt } from '@archive/device/device-zone';
+import { stepExitCode } from '@ems/client';
+import { resolveMediaFacts, UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { angleFromExifRaster, angleFromHeifRotation, angleFromVideoRotation, isAnamorphic, isHeifMimetype, pictureDims, sarFromExifRaw } from '@archive/media/orientation';
+import { videoCodecFromExifRaw } from '@archive/media/video-codec';
+import { probeFile, streamProbeOf } from '@archive/media/exif-service';
+import { reportUnwritable } from '@archive/media/writable';
+import type { DuplicateFinding, ExifExtractAnswer } from '@archive/media/api';
+import { isIndexableMedia } from '@archive/media/event-rules';
+import { checkArrival, DUPLICATE_ATTR, findingOf, inboxOf, sameFinding, undeferred } from '@archive/staging/duplicates';
+import { categoryTimeRules, timeStamps } from '@archive/staging/category';
+import { readSidecar, sidecarPoint, sidecarTime, writePosition } from '@archive/media/paired-sidecar';
+
+function get(raw: Record<string, unknown>, key: string): string {
+  const val = raw[key];
+  if (val === null || val === undefined) return '';
+  return String(val);
+}
+
+function getNum(raw: Record<string, unknown>, key: string): number | undefined {
+  const val = raw[key];
+  if (val === null || val === undefined) return undefined;
+  const n = Number(val);
+  return isNaN(n) ? undefined : n;
+}
+
+const exifExtract = async (cmd: Command): CmdReturn => {
+  // The path is the first positional, so `exif-extract -f <path>` works as well as
+  // the trailing form — a step command reads better with its flags up front.
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+
+  if (!inputPath) {
+    await cmd.writeError('exif-extract: missing input path\n');
+    return 1;
+  }
+
+  // Validate directly through the VFS. Shelling through `info` here and again
+  // for the marker made two process/shell round trips precede every ExifTool
+  // request on the hottest pipeline entry point.
+  let node;
+  try {
+    node = await cmd.sys.vfs.get(cmd.access, inputPath);
+  } catch (error) {
+    await cmd.writeError(`exif-extract: ${inputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (node.type !== 'file') {
+    await cmd.writeError(`exif-extract: ${inputPath}: not a file node (is ${node.type})\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, node)) return 1;
+
+  // Skip if already indexed, unless forced. The skip cannot be unconditional: media-reindex
+  // runs this exact command for "the bytes changed under an existing index", where exif
+  // *does* exist and must be rebuilt — so that pipeline passes -f, and so does a repair
+  // pass rewriting files indexed by an older, wronger version of this command.
+  if (!force) {
+    if (await cmd.sys.vfs.exists(cmd.access, `${inputPath}/metadata/exif`)) {
+      if (verbose) await cmd.writeLn('Already indexed, skipping (use -f to force)');
+      return 0;
+    }
+  }
+
+  // A file whose bytes never went through the VFS carries no `sha256`: the legacy import
+  // symlinks the old bytes into the file store and takes `size` off the dump, and an external
+  // tool writing a host path is only reconciled where somebody remembered `file-sync`. The
+  // write path hashes as it writes (SizeTrackingHandle), so this is what is left over.
+  //
+  // Measured here because this is the one step that reads a file exactly once per index, and
+  // because everything that wants the hash is downstream of it: the staged duplicate check
+  // below, `sourceSha256` (without which media-reindex can never fire), `duplicates` exact mode,
+  // and the ETag on `GET /file/<path>`. `statX` streams the bytes and hashes them — one full read,
+  // ~37ms of main-thread CPU per 64MB on top of the exiftool run that opens the same file.
+  //
+  // Only when absent. A hash the write path produced is this content's hash, and re-measuring
+  // it would put a full read on every forced re-index. `size` rides along because it comes out
+  // of that same read, and the importer's copy of it is the dump's claim rather than a
+  // measurement of the bytes on disk.
+  const knownSha256 = typeof node.attrs.sha256 === 'string' ? node.attrs.sha256 : undefined;
+  let measured: { size: number; sha256: string } | undefined;
+  if (knownSha256 === undefined) {
+    try {
+      const stat = await cmd.sys.vfs.statX(cmd.access, inputPath) as { size?: number; sha256?: string };
+      if (typeof stat.sha256 === 'string' && typeof stat.size === 'number') {
+        measured = { size: stat.size, sha256: stat.sha256 };
+        if (verbose) await cmd.writeLn(`Hashed bytes: ${stat.sha256}`);
+      }
+    } catch (error) {
+      // Not fatal: the exif this command came here to extract is still worth writing, and a file
+      // whose bytes cannot be read at all fails the probe below.
+      await cmd.writeError(
+        `exif-extract: ${inputPath}: could not hash bytes: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+  }
+  const sha256 = knownSha256 ?? measured?.sha256;
+
+  // A staged file's hash is stored now, before the probe, rather than with the facts below: the
+  // duplicate check of a byte twin staged at the same moment finds this file only by it. The
+  // discovery the bridge derives from this write meets this file's running ingest, or its exif
+  // once written, and starts nothing.
+  const staged = inboxOf(inputPath) !== undefined;
+  if (measured && staged) await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { sha256: measured.sha256, size: measured.size } });
+
+  // A staged media original is checked against its byte twins before it is probed: an exact copy
+  // of a file its owner can read is not indexed. It is recorded `deferred`, with its original, and
+  // nothing is read from it, so nothing downstream ever starts (the bridge's deferral gate); `-f`
+  // indexes it anyway. Any other file's finding is decided again right before its update below, as
+  // a twin's check may change it while this one probes. A check that fails leaves it to that one.
+  const stored = findingOf(node.attrs);
+  const arrival = { id: node.id, path: inputPath, attrs: { ...node.attrs, ...(measured ?? {}) } };
+  if (staged && !force && isIndexableMedia({ id: node.id, type: node.type, attrs: arrival.attrs })) {
+    let deferred: DuplicateFinding | undefined;
+    try {
+      await checkArrival(cmd, inputPath, arrival, async (decided) => {
+        if (decided?.kind === undefined) return;
+        const finding: DuplicateFinding = { ...decided, deferred: true };
+        if (!sameFinding(stored, finding)) await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { [DUPLICATE_ATTR]: finding } });
+        deferred = finding;
+      });
+    } catch (error) {
+      await cmd.writeError(`exif-extract: ${inputPath}: duplicate check failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+    if (deferred) {
+      if (cmd.json) await cmd.writeJSON({ deferred: true, of: deferred.of! } satisfies ExifExtractAnswer);
+      else await cmd.writeLn(`Not indexed: ${inputPath} is an exact copy of ${deferred.of}`);
+      return 0;
+    }
+  }
+
+  if (verbose) await cmd.writeLn(`Probing ${inputPath}...`);
+
+  // One call to EMS: exiftool's dump, and for a video or a recording ffprobe's stream facts too.
+  let probed;
+  try {
+    probed = await probeFile(cmd, inputPath);
+  } catch (error) {
+    await cmd.writeError(`exif-extract: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+  const raw: Record<string, unknown> = probed.raw.exiftool ?? {};
+
+  if (verbose) await cmd.writeLn('Parsing EXIF data...');
+
+  // Device info
+  const model = get(raw, 'Model') || get(raw, 'DeviceModelName');
+  const make = get(raw, 'Make') || get(raw, 'DeviceManufacturer');
+  const serial = get(raw, 'SerialNumber') || get(raw, 'InternalSerialNumber') || get(raw, 'DeviceSerialNo');
+
+  // File info
+  const width = getNum(raw, 'ImageWidth');
+  const height = getNum(raw, 'ImageHeight');
+  const fps = getNum(raw, 'FrameRate') ?? getNum(raw, 'VideoFrameRate');
+  const iso = getNum(raw, 'ISO');
+  const exposure = get(raw, 'ExposureTime');
+  const frames = getNum(raw, 'FrameCount') ?? getNum(raw, 'LtcChangeTableLtcChangeFrameCount');
+  const exifDuration = getNum(raw, 'Duration');
+
+  // Geolocation
+  const gpsDop = getNum(raw, 'GPSDOP');
+  const gpsLon = getNum(raw, 'GPSLongitude');
+  const gpsLat = getNum(raw, 'GPSLatitude');
+  const gpsAlt = getNum(raw, 'GPSAltitude');
+  const country = get(raw, 'Country');
+  const state = get(raw, 'State');
+  const city = get(raw, 'City');
+
+  // Temporal sources
+  const gpsDt = get(raw, 'GPSDateTime');
+  // exiftool tells some RAW formats from TIFF only by the file's extension, which the probe
+  // does not hand it (an uncompressed NEF reads as `image/tiff`), so a RAW name decides.
+  const mimetype = refineMimeByName(get(raw, 'MIMEType'), basename(inputPath));
+
+  // Container rotation — video only, and the gate is load-bearing.
+  //
+  // MP4/MOV keep rotation in the track display matrix rather than in an EXIF tag, which
+  // exiftool reports as the Composite `Rotation` tag in degrees. But `raw` is an ungrouped
+  // dump, and on stills two maker notes write that same key with other meanings. Measured
+  // across the corpus with `exiftool -G1`:
+  //
+  //   [Panasonic] Rotation  1 / 6 / 8 / 3       EXIF *orientation codes*  ~11,200 files
+  //   [Canon]     Rotation  0 / 90 / 270        degrees                    ~1,300 files
+  //   [Composite] Rotation  0 / 90 / 180 / 270  degrees, from the matrix   ~1,400 files
+  //
+  // P1090014.JPG carries `[Panasonic] Rotation: 6` beside `[IFD0] Orientation: 6`, so reading
+  // this key for stills would turn an orientation code into 6 degrees on every Panasonic file
+  // in the library. Orientation already covers those; only video needs the matrix.
+  const rotation = mimetype.startsWith('video/') ? getNum(raw, 'Rotation') : undefined;
+
+  // A HEIF's rotation lives in the container's `irot` box, which exiftool reports under that same
+  // overloaded `Rotation` key — a fifth meaning, in quarter turns rather than degrees. Same gate
+  // for the same reason: only a HEIF may read it this way. An iPhone writes the `irot` and an EXIF
+  // Orientation that agrees with it, so this changes nothing for the corpus; it is the file that
+  // carries only the `irot` that was previously indexed as upright and displayed sideways.
+  const heifRotation = isHeifMimetype(mimetype) ? getNum(raw, 'Rotation') : undefined;
+
+  // The shape of one pixel, which is not always 1 and is not always in the dump.
+  //
+  // A video stream's picture is its coded raster *times* a sample aspect ratio, and `width` /
+  // `height` above are whatever exiftool named: the display frame for a QuickTime container,
+  // which reads the ratio out of the track header, and the coded frame for an `.MTS`, an MPEG
+  // program stream or DV in an AVI, where it reads no ratio at all. `sarFromExifRaw` answers
+  // for the first family — and answers 1, because there the shape is already in `width` — and
+  // returns undefined for the second, which is the signal to spend a probe.
+  //
+  // Video-gated for the same reason `Rotation` is: `SourceImageWidth` is an EXIF tag on stills
+  // with an unrelated meaning. A still has square pixels in any case.
+  const isVideo = mimetype.startsWith('video/');
+  const sarFromDump = isVideo ? sarFromExifRaw(raw, width, height) : undefined;
+  const unmeasuredRaster = isVideo && sarFromDump === undefined && width !== undefined && height !== undefined ? { width, height } : undefined;
+
+  // exiftool remains authoritative when it has a valid duration. Audio already needs ffprobe
+  // for normalized stream facts; video only pays for a probe when the dump left a question
+  // open — an absent or invalid duration (notably MPEG-1/2 program streams), or the pixel
+  // shape above.
+  const media = resolveMediaFacts(streamProbeOf(probed), mimetype, exifDuration, unmeasuredRaster);
+  const duration = media.duration;
+
+  // One number either way, and only when it is not 1: an absent `sar` means square pixels,
+  // which is what the whole still corpus and most of the video corpus has.
+  const sar = sarFromDump ?? media.sar;
+
+  // The picture codec, and the reason it does not cost a probe of its own.
+  //
+  // EMS's `video.transcode` opens on a full-VRAM attempt that a source NVDEC has no decoder for
+  // cannot win — a quarter of the corpus is MJPEG, DV or ProRes — and knowing the codec up front
+  // is what lets it start one stage down instead of spending a doomed ffmpeg. Adding an ffprobe
+  // here to learn that would put a spawn on the videos that decode to save one on those that do
+  // not, so it comes out of the exiftool run above (@media/video-codec).
+  //
+  // ffprobe wins when it ran anyway: it names the decoder rather than mapping a fourcc, and it
+  // is the audio path's only source. A video reaches it when exiftool had no duration — and now
+  // also when the dump could not name the pixel shape, which is the same container families
+  // (`.MTS`, MPEG program streams, DV and MJPEG in an AVI) the fourcc map serves worst.
+  const codec = media.codec ?? videoCodecFromExifRaw(raw);
+
+  // Build deviceinfo
+  const deviceinfo: Record<string, string> = {};
+  if (model) deviceinfo.model = model;
+  if (make) deviceinfo.make = make;
+
+  // Build fileinfo
+  const fileinfo: Record<string, number | string> = {};
+  if (width !== undefined) fileinfo.width = width;
+  if (height !== undefined) fileinfo.height = height;
+  if (fps !== undefined) fileinfo.fps = fps;
+  if (iso !== undefined) fileinfo.iso = iso;
+  if (exposure) fileinfo.exposure = exposure;
+  if (frames !== undefined) fileinfo.frames = frames;
+  if (duration !== undefined) fileinfo.duration = duration;
+  if (media.bitrate !== undefined) fileinfo.bitrate = media.bitrate;
+  if (media.sampleRate !== undefined) fileinfo.sampleRate = media.sampleRate;
+  if (media.channels !== undefined) fileinfo.channels = media.channels;
+  if (codec) fileinfo.codec = codec;
+  if (isAnamorphic(sar)) fileinfo.sar = sar;
+
+  // Build geolocation (where)
+  let where: Record<string, unknown> | null = null;
+  if (gpsLon !== undefined && gpsLat !== undefined && gpsDop !== 0) {
+    const gps: Record<string, unknown> = { longitude: gpsLon, latitude: gpsLat };
+    if (gpsAlt !== undefined) gps.altitude = gpsAlt;
+    if (country) gps.country = country;
+    if (state) gps.state = state;
+    if (city) gps.city = city;
+    where = { gps };
+  }
+
+  // Build temporal (when). Zero-clock sentinels are rejected by parseExifDate for every
+  // source, so only the GPS-specific condition is left here: a fix with DOP 0 has no fix.
+  let gpsDate: ExifDateParts | null = null;
+  if (gpsDt && gpsDop !== 0) {
+    gpsDate = parseExifDate(gpsDt);
+  }
+
+  // Which tag is a capture time is @media/exif-date's call: a scanner and an editor both
+  // write CreateDate and neither of them took the picture.
+  const captured = pickCaptureDate(raw);
+  const deviceDate = captured?.parts ?? null;
+  if (verbose) {
+    await cmd.writeLn(captured ? `Capture time from ${captured.source}` : 'No capture time in exif');
+  }
+
+  const when: Record<string, ExifDateParts> = {};
+  if (deviceDate) when.device = deviceDate;
+  if (gpsDate) when.gps = gpsDate;
+
+  // Orientation angle — from the HEIF `irot` if there is one, else the EXIF tag under the
+  // conservative raster-shape policy in `angleFromExifRaster`.
+  //
+  // Neither the mappings nor the portrait exceptions are this command's: they live in
+  // `@archive/media/orientation`, and EMS subtracts the HEIF one back out to work out what a decoder
+  // has already done — the two have to cancel exactly.
+  let angle: number | undefined;
+  // The `irot` first, and with no portrait gate: it is not a tag an editor can leave behind but the
+  // transform libheif itself applies, so a file carrying one is turned whatever its shape. Only
+  // when there is none does a HEIF fall through to the EXIF tag below, which no reader acts on and
+  // which therefore needs the same wary treatment as any other still's.
+  if (heifRotation !== undefined) {
+    const fromIrot = angleFromHeifRotation(heifRotation);
+    if (fromIrot !== 0) angle = fromIrot;
+  }
+  if (angle === undefined) {
+    const fromTag = angleFromExifRaster(raw, width, height);
+    if (fromTag !== 0) angle = fromTag;
+  }
+
+  // A video's angle comes from the display matrix instead, and takes no portrait gate.
+  //
+  // The gate above exists because a stills Orientation tag is often stale — an editor rotated
+  // the pixels and left it behind (ein/core#12).
+  // A container matrix has no such failure mode: it is the instruction every player acts on, so
+  // a portrait source that says "turn me" means it.
+  //
+  // The mapping itself is `@archive/media/orientation`'s, shared with `promote-exif-attrs` and the legacy
+  // importer — all three have to read the matrix the same way or a file's angle changes with
+  // whichever of them touched it last.
+  if (rotation !== undefined) {
+    const fromMatrix = angleFromVideoRotation(rotation);
+    if (fromMatrix !== undefined) angle = fromMatrix;
+  }
+
+  const indexedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+  // Device matching is device-link's job (the media-device pipeline): exif is a
+  // fixed property of the file, but the device registry grows over time.
+
+  if (verbose) await cmd.writeLn('Creating exif node...');
+
+  // Create the exif node under metadata/ and write all its attrs in one update,
+  // instead of a mknode + ~7 sequential `attrs` shell round-trips. This is the
+  // first pipeline step, so it anchors the metadata/ directory the later steps
+  // (transcribe-file, compute-fingerprint) also write into.
+  await cmd.sys.vfs.ensure(cmd.access, 'directory', inputPath, 'metadata');
+  const metadataPath = `${inputPath}/metadata`;
+  const exifPath = `${metadataPath}/exif`;
+  await cmd.sys.vfs.ensure(cmd.access, 'exif', metadataPath, 'exif');
+
+  // Hot attrs land on the file node FIRST, and the exif node's own update comes after.
+  //
+  // The order is load-bearing, not cosmetic: `media.metadata.extracted` — the fact the whole
+  // fan-out hangs off — is derived from the *exif node* carrying `indexedAt`
+  // (@media/event-rules `deriveForExif`). Writing the exif node first therefore lets
+  // generate-derivatives and detect-faces start against a file that has no `angle` yet, and
+  // both then work in the raw frame: on a fast machine the rotated fixture's rendition came
+  // out landscape, and a face box would be measured in a frame nothing else uses.
+  //
+  // Every fact derived here is written **even when absent**, as null. `vfs.update` merges, so
+  // a key left out survives from the previous index — and this command runs against an existing
+  // index whenever the bytes changed under it (media-reindex passes `-f`) or a repair pass
+  // rewrites it. A file replaced by one with no GPS kept its `where` and its `position` child,
+  // a video replaced by a still kept its `duration` and `codec`, and so on for every attr below
+  // (ein/core#75). Null removes the key
+  // (`NodeAttrsUpdate`), which is exactly the state a first index would have left.
+  //
+  // `mimetype` is the one exception: the write path sets it from the upload, and an exiftool
+  // dump with no `MIMEType` is not a statement that the file has none.
+  const fileAttrs: Record<string, unknown> = {};
+  if (mimetype) fileAttrs.mimetype = mimetype;
+  fileAttrs.width = width ?? null;
+  fileAttrs.height = height ?? null;
+  // Promoted like width/height: the album grid's duration badge reads the file node's attrs
+  // (one `ls -l`), and reaching into the exif child per tile would be a round trip each.
+  fileAttrs.duration = duration ?? null;
+  // Promoted for one reader: `generate-derivatives` already reads these attrs before asking
+  // EMS for a transcode, so passing the codec on from here as a hint costs nothing at all,
+  // where reading the exif child would be a round trip per rendition. Video only — an audio
+  // codec has no hardware stage to decide.
+  fileAttrs.codec = isVideo && codec ? codec : null;
+  // Whether anything can decode this file at all, for the video and audio containers where
+  // the question is answerable. `resolveMediaFacts` says so when ffprobe refused the file
+  // outright — a MOV truncated before its `moov` atom was written is the corpus case, and
+  // every decoder downstream then fails the same way forever. Promoted here so the
+  // media-stills / media-transcode / media-fingerprint / media-transcribe triggers can skip on
+  // it (`skipIfAttr`) instead of counting three attempts of the same permanent answer as a
+  // transient failure.
+  //
+  // Always written for a/v, never for images: null clears it, so a re-index of a file that
+  // has since been replaced with intact bytes takes the mark back off by itself. An image is
+  // left alone because nothing here probed one — absent means unknown, not readable.
+  if (mimetype.startsWith('video/') || mimetype.startsWith('audio/')) {
+    fileAttrs[UNDECODABLE_ATTR] = media.undecodable ?? null;
+    if (media.undecodable && verbose) await cmd.writeLn(`Container is unreadable: ${media.undecodable}`);
+  }
+  // The pixel shape, promoted beside `width`/`height` because it is half of the same fact: the
+  // grid lays a tile out from the file node's attrs alone (one `ls -l`), and `displayAspect`
+  // there paints an anamorphic clip at the raster's ratio without this — 4:3 for a 16:9 `.MTS`,
+  // corrected only once the tile's own picture has decoded and measured itself.
+  //
+  // Video only, and null when square: an absent attr already means square pixels, so writing
+  // the common case would be noise on every video in the library, and clearing it is what
+  // repairs a file whose ratio this command once got wrong.
+  if (isVideo) fileAttrs.sar = isAnamorphic(sar) ? sar : null;
+  // A manual rotation override (`angleManual`, written by `file-set-orientation` and the legacy
+  // import) always wins: with one present this command does not touch `angle` at all, whatever
+  // the new bytes say. Without one the angle is this command's to derive, and "no Orientation
+  // tag" clears an angle the old bytes had — an upright file replaced under a turned index would
+  // otherwise stay turned.
+  if (node.attrs.angleManual === undefined) fileAttrs.angle = angle ?? null;
+  // The capture time — `takenAt`, `takenAtUtc` and `takenAtSource` — is `@archive/media/resolve-time`'s
+  // call, not this command's. What lands here is a *resolution* of everything the archive
+  // knows: the file's own manual time first, then a sidecar's, the GPS fix, the camera clock and
+  // the name, each turned into a wall clock and an instant. Extraction only supplies the exif half.
+  //
+  // The device's clock settings come from the registry, which is why this reads the node's
+  // `devicePath` rather than the match it has not made yet: on a first index there is no link
+  // and the offset is unknown, and `device-link` re-resolves the moment there is one.
+  //
+  // Written even when nothing resolves: nulls clear the attrs, so re-extracting a file whose
+  // date this command once believed (a zero-clock sentinel, before those were rejected) is
+  // what repairs it.
+  //
+  // A staged file is dated by its category's time rules, stamped on it in this same write
+  // (`digitized`, `whenName`): a scan's clocks are the scan's, and a name may spell the date.
+  // Anywhere else the stamps it already carries stand, so a file filed from staging keeps them.
+  //
+  // A paired sidecar (`<file>/sidecar`, a Takeout JSON or an XMP packet) is one more source: a
+  // date a person gave in an editor or in Google Photos, and the instant Google read off the camera.
+  const devicePath = typeof node.attrs.devicePath === 'string' ? node.attrs.devicePath : undefined;
+  const deviceClock = await clockForFile(cmd, devicePath);
+  const rules = staged ? await categoryTimeRules(cmd.sys.vfs, cmd.access, inputPath) : undefined;
+  const stamps = rules ? timeStamps(rules, basename(inputPath)) : undefined;
+  if (stamps) Object.assign(fileAttrs, stamps);
+  const sidecar = await readSidecar(cmd.sys.vfs, cmd.access, inputPath);
+  const sidecarTimes = sidecarTime(sidecar);
+  const resolved = resolveTime({
+    manual: typeof node.attrs.whenManual === 'string' ? node.attrs.whenManual : undefined,
+    gps: gpsDate ?? undefined,
+    device: deviceDate ?? undefined,
+    digitizer: deviceClock.digitizer,
+    quicktimeUtc: deviceClock.quicktimeUtc,
+    deviceOffsetAt: (wallClock) => offsetAt(deviceClock, wallClock, SYSTEM_TIME_ZONE),
+    archiveZone: SYSTEM_TIME_ZONE,
+    ...stampedSources(stamps ?? node.attrs),
+    ...(sidecarTimes ? { sidecar: sidecarTimes } : {}),
+  });
+  Object.assign(fileAttrs, timeAttrs(resolved));
+  if (verbose) {
+    await cmd.writeLn(resolved ? `Capture time ${resolved.takenAt} (${resolved.takenAtSource}) = ${resolved.takenAtUtc}` : 'No capture time');
+  }
+  // Same write as the rest of the file's content facts, so the hash never lands without the
+  // size it was measured with. Written only when this run measured them — a hash the write
+  // path already produced describes the same bytes and is left exactly as it is — and a staged
+  // file's were written before the probe.
+  if (measured && !staged) {
+    fileAttrs.sha256 = measured.sha256;
+    fileAttrs.size = measured.size;
+  }
+  // When the metadata was read, on the file as on its exif node: a marker an aggregate over files
+  // can count (`staging status`'s "indexing"), which a child's attrs are not.
+  fileAttrs.indexedAt = indexedAt;
+  // A staged media original's duplicate finding rides on this write, its byte twins in the inbox
+  // decided just before it, without `deferred`: this file is indexed. A finding left on a file no
+  // longer staged is taken off. A failed check is reported once the file is written, and leaves the
+  // finding to `staging duplicates --refresh`: the metadata is still worth writing.
+  let written = false;
+  try {
+    await checkArrival(cmd, inputPath, { ...arrival, attrs: { ...arrival.attrs, ...(mimetype ? { mimetype } : {}) } }, async (decided) => {
+      const finding = decided ? undeferred(decided) : decided;
+      if (finding === null || (finding !== undefined && !sameFinding(stored, finding))) fileAttrs[DUPLICATE_ATTR] = finding;
+      await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: fileAttrs });
+      written = true;
+    });
+  } catch (error) {
+    if (!written) throw error;
+    await cmd.writeError(`exif-extract: ${inputPath}: duplicate check failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+
+  const exifAttrs: Record<string, unknown> = { raw, indexedAt };
+  // The content hash this index was built from. Re-indexing a changed file is
+  // detected by comparing it to the file's current sha256 — timestamps can't be
+  // used, because the steps below bump the file node's modtime themselves.
+  if (sha256 !== undefined) exifAttrs.sourceSha256 = sha256;
+  // Null when absent, for the same reason as the file attrs above: this is a re-extract as often
+  // as a first one, and a merge that skips a key keeps the previous bytes' answer.
+  exifAttrs.deviceinfo = Object.keys(deviceinfo).length > 0 ? deviceinfo : null;
+  exifAttrs.deviceSerialNumber = serial || null;
+  exifAttrs.fileinfo = Object.keys(fileinfo).length > 0 ? fileinfo : null;
+  exifAttrs.where = where;
+  // An **empty object**, not null, when nothing parsed — and the difference is load-bearing.
+  //
+  // A null attr write *removes the key* (see `NodeAttrsUpdate`), which would make "this file was
+  // examined and has no capture date" indistinguishable from "this exif node predates the `when`
+  // attr entirely". `whenFromExifAttrs` reads the first as a positive statement it may act on and
+  // the second as silence it must not, so re-resolving a corpus (`media-resolve-time`) can clear a
+  // date that is now known to be wrong without also clearing every date it simply cannot see.
+  exifAttrs.when = when;
+  exifAttrs.angle = angle ?? null;
+  await cmd.sys.vfs.update(cmd.access, exifPath, { attrs: exifAttrs });
+
+  // The `position` child follows `where`: written from the GPS fix, else from the paired
+  // sidecar's place where it is believed (`sidecarPoint`: not a digitized copy's Google location,
+  // unless a person set it), removed when neither gives one — the map and proximity search read
+  // the child, not the exif attr, so clearing one without the other would leave the file on the
+  // map at a position nothing else believes. A digitized copy's GPS fix is where it was scanned.
+  //
+  // Unless the position is a person's. `file-set-position` writes `positionManual` beside the
+  // same child (and the legacy import writes the child for an old override), and that override
+  // outranks anything in the bytes exactly as `angleManual` does above: with it present this
+  // command neither rewrites nor removes the child.
+  const positionPath = `${inputPath}/position`;
+  const digitized = (stamps ? stamps.digitized : node.attrs.digitized) === true;
+  const point = where && !digitized ? { lat: gpsLat!, lng: gpsLon! } : sidecarPoint(sidecar, digitized);
+  if (node.attrs.positionManual !== undefined) {
+    if (verbose) await cmd.writeLn('Location is a manual override, leaving it');
+  } else if (point) {
+    if (verbose) await cmd.writeLn('Creating position node...');
+    await writePosition(cmd.sys.vfs, cmd.access, inputPath, point);
+    if (verbose) await cmd.writeLn('Created position node');
+  } else if (await cmd.sys.vfs.exists(cmd.access, positionPath)) {
+    if (verbose) await cmd.writeLn('No place in the new bytes or a sidecar, removing the position node');
+    await cmd.sys.vfs.unlink(cmd.access, positionPath, inputPath, { recursive: true });
+  }
+
+  // Output
+  if (cmd.json) {
+    await cmd.writeJSON(
+      {
+        indexedAt,
+        ...(width !== undefined ? { width } : {}),
+        ...(height !== undefined ? { height } : {}),
+        ...(isAnamorphic(sar) ? { sar } : {}),
+        ...(angle !== undefined ? { angle } : {}),
+        ...(media.undecodable ? { undecodable: media.undecodable } : {}),
+      } satisfies ExifExtractAnswer,
+    );
+  } else {
+    await cmd.writeLn(`Extracted EXIF for ${inputPath}`);
+    if (width !== undefined && height !== undefined) {
+      const picture = pictureDims(width, height, angle, sar);
+      const shape = picture.width === width && picture.height === height ? '' : ` (picture ${picture.width}x${picture.height})`;
+      await cmd.writeLn(`  Dimensions: ${width}x${height}${shape}`);
+    }
+    if (make || model) await cmd.writeLn(`  Device: ${make} ${model}`);
+    if (media.undecodable) await cmd.writeLn(`  Undecodable: ${media.undecodable}`);
+  }
+
+  return 0;
+};
+
+exifExtract.spec = {
+  name: 'exif-extract',
+  effect: 'write' as const,
+  description:
+    "Extract EXIF metadata from file and create exif/position nodes; the file's paired sidecar (<file>/sidecar) dates and places it too, a staged file is dated by its category's time rules, and its exact copies among its inbox's files are recorded with it. A staged exact copy of a file its owner can read is recorded and not indexed (duplicate.deferred) unless forced",
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to file' },
+  ],
+  flags: [
+    { name: 'f', type: 'bool' as const, description: 'Re-extract even when metadata/exif already exists, and index a staged exact copy' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: [
+    'exif-extract /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'nothing; exif and position nodes are written under the file, and its duplicate finding on a staged file; for a deferred copy only that finding.',
+};
+
+export default exifExtract;

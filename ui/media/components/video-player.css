@@ -1,0 +1,260 @@
+/* The lightbox's video player (VideoPlayer.tsx). Its parts are placed over the player's box. */
+
+.mrx-video-player {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* A long press on a phone would select or offer to save what is under the finger. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/*
+ * Hidden controls fade and stop taking the pointer, so a tap on the picture reaches it. Never
+ * `visibility`: the lightbox hides the whole box with it while the picture flies in from its tile,
+ * and a part that set its own would show through.
+ */
+.mrx-video-bar,
+.mrx-video-centre {
+  position: absolute;
+  z-index: 3;
+  transition: opacity var(--mrx-dur-base) var(--mrx-ease);
+}
+
+.mrx-video-bar[data-hidden],
+.mrx-video-centre[data-hidden] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mrx-video-bar {
+  left: 0;
+  right: 0;
+  padding: 0 12px 4px;
+  color: white;
+}
+
+/* Over the picture, a shade behind the controls so they read on a bright scene. */
+.mrx-video-bar[data-placement='overlay'] {
+  padding-top: 20px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+}
+
+/* Clear of the screen's edges, where a phone's own back gesture starts. */
+.mrx-video-bar[data-compact] {
+  padding: 0 24px 4px;
+}
+
+.mrx-video-bar[data-compact][data-placement='overlay'] {
+  padding-top: 20px;
+}
+
+.mrx-video-scrubber {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 18px;
+}
+
+.mrx-video-bar[data-compact] .mrx-video-scrubber {
+  height: 28px;
+}
+
+.mrx-video-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+  transition: height var(--mrx-dur-fast) var(--mrx-ease);
+}
+
+.mrx-video-played {
+  position: absolute;
+  inset: 0;
+  background: var(--mrx-accent);
+  transform-origin: left center;
+}
+
+/* A chapter: a piece of the timeline, a gap before the next, filled as the playhead crosses it. */
+.mrx-video-segment {
+  position: absolute;
+  top: 50%;
+  height: 4px;
+  margin-top: -2px;
+  border-right: 2px solid transparent;
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: padding-box;
+  overflow: hidden;
+  transition: height var(--mrx-dur-fast) var(--mrx-ease), margin-top var(--mrx-dur-fast) var(--mrx-ease);
+}
+
+.mrx-video-bar[data-compact] .mrx-video-segment {
+  border-right-width: 3px;
+}
+
+/* Too many chapters to draw apart: a mark where each starts. */
+.mrx-video-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.mrx-video-thumb {
+  position: absolute;
+  top: 50%;
+  left: calc(var(--progress, 0) * 100%);
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: var(--mrx-accent);
+  pointer-events: none;
+}
+
+/* The volume: a short track beside the mute button, the timeline's look at its size. */
+.mrx-video-volume {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 64px;
+  height: 18px;
+  margin: 0 6px 0 2px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.mrx-video-volume-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  overflow: hidden;
+}
+
+.mrx-video-volume .mrx-video-thumb {
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+}
+
+@media (hover: hover) {
+  .mrx-video-scrubber:hover .mrx-video-track {
+    height: 6px;
+  }
+
+  .mrx-video-scrubber:hover .mrx-video-segment {
+    height: 6px;
+    margin-top: -3px;
+  }
+}
+
+.mrx-video-scrubber:focus-visible .mrx-video-track {
+  height: 6px;
+}
+
+.mrx-video-scrubber:focus-visible .mrx-video-segment {
+  height: 6px;
+  margin-top: -3px;
+}
+
+/*
+ * The lightbox hides the focus ring on its buttons, which are driven by keys and gestures. The
+ * player's controls are the one part of it meant to be tabbed through, so the ring is back here.
+ */
+[data-lightbox-media-path] [data-video-controls] button:focus-visible,
+[data-lightbox-media-path] button[data-video-controls]:focus-visible,
+[data-lightbox-media-path] [data-video-controls] [role='slider']:focus-visible,
+[data-lightbox-media-path] [data-video-controls] [role^='menuitem']:focus-visible {
+  outline: 2px solid var(--mrx-accent);
+  outline-offset: 2px;
+}
+
+.mrx-video-big-play,
+.mrx-video-wait,
+.mrx-video-failure {
+  position: absolute;
+  z-index: 3;
+}
+
+.mrx-video-big-play {
+  opacity: 0.85;
+}
+
+/* The frame and the time over the timeline, under the pointer or the finger. */
+.mrx-video-preview {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+
+.mrx-video-preview-frame {
+  border-radius: 4px;
+  outline: 1px solid rgba(255, 255, 255, 0.5);
+  background-color: black;
+}
+
+.mrx-video-preview-time {
+  padding: 1px 6px;
+  white-space: nowrap;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: var(--mantine-font-size-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A wait shorter than this is not worth a spinner. */
+.mrx-video-wait {
+  pointer-events: none;
+  animation: mrx-video-wait-in var(--mrx-dur-fast) var(--mrx-ease) 400ms both;
+}
+
+@keyframes mrx-video-wait-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.mrx-video-failure {
+  max-width: 80%;
+  padding: 8px 14px;
+  border-radius: var(--mantine-radius-md);
+  background: rgba(0, 0, 0, 0.7);
+  text-align: center;
+  pointer-events: none;
+}
+
+.mrx-video-subtitles {
+  position: absolute;
+  z-index: 3;
+  width: max-content;
+  transform: translateX(-50%);
+  text-align: center;
+  line-height: 1.35;
+  pointer-events: none;
+  transition: bottom var(--mrx-dur-base) var(--mrx-ease);
+}
+
+/* A box per line, not one around the whole block, as broadcast subtitles are drawn. */
+.mrx-video-subtitles > span {
+  padding: 0.1em 0.4em;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}

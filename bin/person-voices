@@ -1,0 +1,134 @@
+#!ts
+/**
+ * person-voices — every recording a person is heard in, and where to hear them.
+ *
+ * The voice counterpart of `person-faces`, and the read behind "let me check these are all
+ * the same person" before someone commits a cluster to a real name. Recognition from voice
+ * mints people the same way recognition from faces does, so the same doubt applies and the
+ * same evidence has to be reviewable.
+ *
+ * One entry per recording voice that is the person (a speaker node). What comes back is not a
+ * clip: a face has a crop to look at, a voice has a recording, so each entry carries the file
+ * and its longest turn (`start`, `end`), and the UI opens the player there. That keeps the voice
+ * in the context it came from — which for a voice is most of what makes it recognisable — and
+ * needs no second copy of the audio.
+ *
+ * Two VFS calls whatever the count, like `person-faces`: one `get` for the person, one query
+ * for the voices. Chronological order adds one batched read for the recordings' times.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { type PersonNodeAttrs, personPathOf, voicesOf, type VoiceView, voiceView, withRecordings } from '@archive/people/person';
+import type { VoiceListResult } from '@archive/people/api';
+
+const personVoices = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit', 'offset', 'sort'],
+    alias: { l: 'limit' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [personArg] = flags._ as string[];
+  if (!personArg) {
+    await cmd.writeError('person-voices: usage: person-voices <person>\n');
+    return 1;
+  }
+  const personPath = personPathOf(personArg, cmd.cwd);
+
+  const offset = flags.offset ? Number(flags.offset) : 0;
+  // No default limit: the point of this command is that it returns all of them.
+  const limit = flags.limit === undefined ? undefined : Number(flags.limit);
+  // Most spoken first by default. For a voice that is the review order that matters — a voice
+  // heard for minutes is the one someone can actually recognise, and an "mm" proves nothing.
+  const sort = flags.sort ?? 'duration';
+
+  for (const [name, v] of [['offset', offset], ['limit', limit]] as const) {
+    if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+      await cmd.writeError(`person-voices: --${name} must be a non-negative number\n`);
+      return 1;
+    }
+  }
+  if (sort !== 'duration' && sort !== 'file' && sort !== 'date') {
+    await cmd.writeError("person-voices: --sort must be 'duration', 'file', or 'date'\n");
+    return 1;
+  }
+
+  try {
+    const node = await cmd.sys.vfs.get<PersonNodeAttrs>(cmd.access, personPath, { follow: false });
+    if (node.type !== 'person') throw new Error(`${personPath}: not a person node (is ${node.type})`);
+
+    const rows = await voicesOf(cmd.sys.vfs, cmd.access, node.id);
+    const voices: VoiceView[] = rows.map(voiceView);
+
+    // The recordings themselves: their kind for a player, their date for the sort.
+    await withRecordings(cmd.sys.vfs, cmd.access, voices);
+
+    voices.sort((a, b) => {
+      if (sort === 'file') {
+        return (a.filePath ?? a.voicePath).localeCompare(b.filePath ?? b.voicePath) || a.start - b.start;
+      }
+      if (sort === 'duration') return b.talkSeconds - a.talkSeconds || a.voicePath.localeCompare(b.voicePath);
+      // On the instant, not the wall clock — same reason person-faces sorts that way.
+      if (a.takenAtUtc === b.takenAtUtc) return a.start - b.start;
+      if (!a.takenAtUtc) return 1;
+      if (!b.takenAtUtc) return -1;
+      return a.takenAtUtc.localeCompare(b.takenAtUtc);
+    });
+
+    const page = limit === undefined ? voices.slice(offset) : voices.slice(offset, offset + limit);
+    const attrs = node.attrs as PersonNodeAttrs;
+    const heard = new Set(voices.map((voice) => voice.filePath).filter(Boolean)).size;
+    const result = {
+      person: {
+        id: node.id,
+        path: personPath,
+        name: attrs.name ?? personPath.split('/').pop() ?? '',
+        unnamed: !!attrs.unnamed,
+        voiceCount: voices.length,
+        /** Recordings this person is heard in, which is the number a reader cares about. */
+        recordingCount: heard,
+      },
+      total: voices.length,
+      offset,
+      voices: page,
+    };
+
+    if (cmd.json) {
+      await cmd.writeJSON(result satisfies VoiceListResult);
+      return 0;
+    }
+    await cmd.writeLn(
+      `${result.person.name}: heard in ${heard} recording${heard === 1 ? '' : 's'}`,
+    );
+    for (const voice of page) {
+      await cmd.writeLn(`  ${voice.talkSeconds.toFixed(0)}s in ${voice.turnCount} turns, longest at ${voice.start.toFixed(1)}  ${voice.filePath ?? voice.voicePath}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`person-voices: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+personVoices.spec = {
+  name: 'person-voices',
+  effect: 'read' as const,
+  description: 'Every recording a person is heard in, with how long they speak and a moment to hear them',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+  ],
+  flags: [
+    { name: 'limit', type: 'string' as const, description: 'max voices to return (default: all)' },
+    { name: 'offset', type: 'string' as const, description: 'skip this many (default 0)' },
+    { name: 'sort', type: 'string' as const, description: "'duration' (most spoken first, default), 'file', or chronological 'date'" },
+  ],
+  examples: [
+    'person-voices /archive/people/Anna_Exempel',
+  ],
+  returns: 'every recording voice assigned to the person, with its talk time and the moment to play.',
+};
+
+export default personVoices;

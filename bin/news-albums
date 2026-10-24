@@ -1,0 +1,5 @@
+#!ts
+/** news-albums — recently created albums as news entries. The command is `newsAlbums` in [lib](../lib/news-albums.ts), where its spec says the rest. */
+import { newsAlbums } from '@archive/news-albums';
+
+export default newsAlbums;

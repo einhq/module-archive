@@ -1,0 +1,35 @@
+name: media-voiceprint
+description: Find the voices of a recording — who speaks when — with one voiceprint per voice
+
+# Triggered by the transcript: its turns are what the voices are cut from, and the fact carries the
+# file as its subject.
+#
+# The guard is a marker on the file node, the same shape and for the same reason as `facesAt`:
+# `speakers/` is a directory someone else could have written, `speakersAt` says the diarizer
+# ran. `media.speakers.missing` is the reconciler's gap for a recording with speech and no
+# voices.
+#
+# `voiceprint-file` itself does nothing when the transcript says there is no speech, so the
+# trigger does not have to encode it.
+triggers:
+  - on: media.transcript.generated
+    skipIfAttr: speakersAt
+
+  - on: media.speakers.missing
+    skipIfAttr: speakersAt
+
+steps:
+  voiceprint-file:
+    command: voiceprint-file $NODE_PATH
+    description: Sortformer turns stitched into voices, a TitaNet voiceprint for each, and the faces seen speaking
+    pool: media
+    kind: diarize
+    # Below the describe kinds rather than beside them: nothing waits on a voiceprint the way
+    # assignment waits on a detected face, so this is the work that should yield.
+    priority: 30
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 2
+  priority: 40

@@ -1,0 +1,104 @@
+#!ts
+/**
+ * track-append — append coordinate points to a track.
+ *
+ *   track-append <device> --lat=57.7 --lng=11.97 [--ts <iso>] [--alt=<m>] [--speed=<m/s>]
+ *   track-append <device> 57.7 11.97 [--ts <iso>]
+ *   track-append <device> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
+ *
+ * `<device>` is a device's slug or path, standing for its track, or a track's path.
+ *
+ * The flag form is the one that works everywhere. A western or southern
+ * coordinate cannot be a positional — parseArgs reads the leading `-` of
+ * `-122.3493` as the next flag — and the same goes for an altitude below sea
+ * level, which is why `--alt=-5` is written joined too. See
+ * wow/notes/negative-argument-values.md.
+ *
+ * A point is keyed by its timestamp, so appending out of order is fine and
+ * re-appending the same fix is a no-op rather than a duplicate.
+ */
+import { openTrack, toPoint, type TrackPoint } from '@archive/location/track';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+
+const trackAppend = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['ts', 'alt', 'speed', 'course', 'json', 'lat', 'lng'],
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+
+  if (!target) {
+    await cmd.writeError('track-append: usage: track-append <device> <lat> <lng> [--ts <iso>] | --json <points>\n');
+    return 1;
+  }
+
+  let points: TrackPoint[];
+  try {
+    if (flags.json !== undefined) {
+      const parsed = JSON.parse(flags.json);
+      const raw = Array.isArray(parsed) ? parsed : [parsed];
+      points = raw.map((p) => toPoint(p));
+    } else {
+      points = [toPoint({
+        // Flags win over positionals, and are the only form a negative coordinate survives.
+        lat: flags.lat ?? flags._[1],
+        lng: flags.lng ?? flags._[2],
+        ts: flags.ts,
+        alt: flags.alt,
+        speed: flags.speed,
+        course: flags.course,
+      })];
+    }
+  } catch (error) {
+    await cmd.writeError(`track-append: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  try {
+    const { handle } = await openTrack(cmd, target, 'a');
+    let appended: number;
+    try {
+      appended = await handle.appendPoints(points);
+    } finally {
+      await handle.close();
+    }
+
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ appended, skipped: points.length - appended }));
+    } else {
+      await cmd.writeLn(`Appended ${appended} point(s)`);
+    }
+  } catch (error) {
+    await cmd.writeError(`track-append: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  return 0;
+};
+
+trackAppend.spec = {
+  name: 'track-append',
+  effect: 'write' as const,
+  description: "Append coordinate points to a device's track",
+  args: [
+    { name: 'device', type: 'path' as const, description: "the device (slug or path) whose track takes the points, or a track's path" },
+    { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
+    { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
+  ],
+  flags: [
+    { name: 'lat', type: 'string' as const, description: 'latitude, as --lat=<n> — required form for a negative coordinate' },
+    { name: 'lng', type: 'string' as const, description: 'longitude, as --lng=<n> — required form for a negative coordinate' },
+    { name: 'ts', type: 'string' as const, description: 'ISO timestamp of the fix (default: now)' },
+    { name: 'alt', type: 'string' as const, description: 'altitude in meters' },
+    { name: 'speed', type: 'string' as const, description: 'speed in m/s' },
+    { name: 'course', type: 'string' as const, description: 'course over ground in degrees' },
+    { name: 'json', type: 'string' as const, description: 'JSON point or array of points (batch mode)' },
+  ],
+};
+
+export default trackAppend;

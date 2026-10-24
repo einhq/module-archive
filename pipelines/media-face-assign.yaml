@@ -1,0 +1,38 @@
+name: media-face-assign
+description: Attach a detected face to a person
+
+# One instance per face. Assignment itself works on the whole file, because a
+# person cannot be two faces in one photo — but keying on the face means a face
+# detected later still gets its own trigger, and a failure retries one face
+# rather than re-running detection.
+#
+# Pure database work (a kNN over every known face). It used to run inside
+# detect-faces, holding a model slot for work that never calls EMS.
+#
+# `exclusive` is load-bearing: two faces of the same new person assigned at the
+# same time would each mint a person. Nothing but the worker's concurrency
+# prevented that before, and only by accident.
+trigger:
+  on: media.face.detected
+  skipIfAttr: personId
+
+steps:
+  assign:
+    command: assign-faces $EVENT_FILE_PATH
+    description: kNN vote against known faces, minting an unnamed person if needed
+    pool: media
+    kind: face-assign
+    priority: 40
+    exclusive: person-mint
+    requires:
+      cpu: 1
+  cover:
+    command: person-cover --file $EVENT_FILE_PATH
+    description: Give a named person in this image their own face crop as cover, if they have none
+    # A no-op read per person once they have one — the cover is never replaced while it
+    # still shows them. Unnamed people are skipped, so a fresh cluster costs nothing.
+    dependsOn: [assign]
+
+options:
+  maxAttempts: 2
+  priority: 5

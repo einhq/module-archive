@@ -1,0 +1,135 @@
+#!ts
+/**
+ * person-cover — give a named person without a cover the crop of one of their own faces.
+ *
+ * The person-side sibling of `album-cover`. The pick and the rules for when a cover may be
+ * replaced live in `@archive/people/cover`. Three ways in: person paths (a one-off), `--file` (the
+ * `media-face-assign` pipeline, which knows the image whose faces it just placed and not whose
+ * they are), and `--all` (the `person-covers` sweep, for faces that moved by hand — a name, a
+ * merge, a split — which no pipeline sees).
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { type PersonCoverResult, writePersonCover } from '@archive/people/cover';
+import type { FaceNodeAttrs } from '@archive/people/person';
+
+/** How many person nodes one `--all` page pulls. */
+const SCAN_PAGE = 200;
+
+/** Every named person, paged by id. Unnamed ones are skipped by `writePersonCover` anyway. */
+async function* allPeople(cmd: Command): AsyncGenerator<string> {
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { types: ['person'], where: [{ ref: 'unnamed', op: 'ne', value: true }], after, limit: SCAN_PAGE });
+    if (rows.length === 0) return;
+    for (const row of rows) yield row.absPath;
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+}
+
+/**
+ * The people an image's regions are assigned to.
+ *
+ * Every region, not only the face whose fact started the run: `assign-faces` places a whole
+ * image at once, so the instances for its other faces are skipped on their `personId` guard.
+ */
+const peopleInFile = async (cmd: Command, filePath: string): Promise<string[]> => {
+  let faces;
+  try {
+    faces = await cmd.sys.vfs.children<FaceNodeAttrs>(cmd.access, `${filePath}/regions`);
+  } catch {
+    return [];
+  }
+  const ids = [...new Set(faces.map((face) => face.node.attrs.personId).filter((id): id is string => typeof id === 'string' && id.length > 0))];
+  if (ids.length === 0) return [];
+  const paths = await cmd.sys.vfs.resolveIdPaths(cmd.access, ids);
+  return ids.map((id) => paths.get(id)?.[0]).filter((path): path is string => !!path);
+};
+
+const personCover = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'repick', 'verbose'],
+    string: ['file', 'limit'],
+    alias: { v: 'verbose', l: 'limit' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if (paths.length === 0 && !flags.all && !flags.file) {
+    await cmd.writeError('person-cover: give one or more person paths, --file <image>, or --all\n');
+    return 1;
+  }
+
+  const limit = flags.limit !== undefined ? Number(flags.limit) : Infinity;
+  if (Number.isNaN(limit) || limit <= 0) {
+    await cmd.writeError(`person-cover: invalid --limit '${flags.limit}'\n`);
+    return 1;
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  const people: PersonCoverResult[] = [];
+
+  const handle = async (path: string): Promise<void> => {
+    scanned++;
+    const result = await writePersonCover(cmd.sys.vfs, cmd.access, path, { repick: !!flags.repick });
+    if (!result) return;
+    updated++;
+    people.push(result);
+    if (flags.verbose && !cmd.json) await cmd.writeLn(`${path}  ${result.cover}`);
+  };
+
+  try {
+    if (flags.file) paths.push(...await peopleInFile(cmd, resolve(cmd.cwd, flags.file)));
+    if (flags.all) {
+      for await (const path of allPeople(cmd)) {
+        if (scanned >= limit) break;
+        await handle(path);
+      }
+    } else {
+      for (const path of paths) {
+        if (scanned >= limit) break;
+        await handle(path);
+      }
+    }
+  } catch (error) {
+    await cmd.writeError(`person-cover: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ scanned, updated, skipped: scanned - updated, people });
+    return 0;
+  }
+  await cmd.writeLn(`person-cover: ${scanned} scanned / ${updated} updated / ${scanned - updated} skipped`);
+  return 0;
+};
+
+personCover.spec = {
+  name: 'person-cover',
+  effect: 'write' as const,
+  description: 'Give a named person without a cover the crop of one of their own faces (coverPhoto softlink)',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'person path (repeatable)' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'every named person' },
+    { name: 'file', type: 'path' as const, description: 'the people whose faces are in this image' },
+    { name: 'repick', type: 'bool' as const, description: 'choose again over a cover this command picked earlier; never over one somebody set' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many people' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each person as it is written' },
+  ],
+  examples: [
+    'person-cover /archive/people/Anna_Exempel',
+    'person-cover --file /archive/media/2019/IMG_0001.jpg',
+    'person-cover --all --limit 50',
+    'person-cover --all --repick',
+  ],
+  returns: 'nothing; a coverPhoto softlink to a face crop is written for each named person that had no usable cover.',
+};
+
+export default personCover;

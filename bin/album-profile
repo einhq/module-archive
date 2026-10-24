@@ -1,0 +1,167 @@
+#!ts
+/**
+ * album-profile — keep the profiles staging matches its suggested groups against, one per library
+ * album (`@archive/media/album-profile`).
+ *
+ * Named albums are profiled as they are; one that is not a library album (a staging suggestion,
+ * anything outside the albums root) is passed over, so the `media-album` pipeline can run it for
+ * every album whose members changed. `--all` profiles every library album a page at a time;
+ * with `--stale`, only those with no profile or one not checked for a week, since a person named
+ * on a face or a position arriving raises no fact an album hears. A profile whose members are as
+ * they were is not written again, only marked checked.
+ */
+import { dirname, resolve } from '@std/path';
+import { type CmdReturn, type Command, NodeNotFoundError, parseArgs } from '@ein/client';
+import type { AlbumProfile, AlbumProfileResult } from '@archive/media/api';
+import { isProfiled, markChecked, PROFILE_ATTR, PROFILE_NAME, PROFILE_TYPE, profileAlbums, type ProfiledAlbum } from '@archive/media/album-profile';
+import { ALBUMS_ROOT } from '@archive/paths';
+import { AUTO_ORIGIN } from '@archive/staging/auto-album';
+
+/** Albums one `--all` page reads. */
+const PAGE = 200;
+/** A profile checked longer ago than this is stale. */
+const STALE_MS = 7 * 86_400_000;
+
+type AlbumAttrs = { origin?: string; mediaCount?: number };
+
+/** The profile's check time of every library album that has one, by album path: one query a page. */
+const checkedAtByAlbum = async (cmd: Command): Promise<Map<string, string>> => {
+  const out = new Map<string, string>();
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { types: [PROFILE_TYPE], ...(after ? { after } : {}), limit: 1000 });
+    for (const row of rows) {
+      const profile = row.node.attrs[PROFILE_ATTR] as AlbumProfile | undefined;
+      if (profile?.checkedAt) out.set(dirname(row.absPath), profile.checkedAt);
+    }
+    if (rows.length < 1000) return out;
+    after = { value: rows[rows.length - 1].sortValue, id: rows[rows.length - 1].id };
+  }
+};
+
+/** Every library album, a page of album nodes at a time: those under the albums root that staging did not suggest. */
+async function* libraryAlbums(cmd: Command): AsyncGenerator<ProfiledAlbum[]> {
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['album'],
+      where: [{ ref: 'origin', op: 'ne', value: AUTO_ORIGIN }],
+      ...(after ? { after } : {}),
+      limit: PAGE,
+    });
+    if (rows.length === 0) return;
+    yield rows.filter((row) => row.absPath.startsWith(`${ALBUMS_ROOT}/`)).map((row) => ({
+      path: row.absPath,
+      id: row.id,
+      props: { uid: row.node.props.uid, gid: row.node.props.gid, mode: row.node.props.mode },
+      ...(typeof (row.node.attrs as AlbumAttrs).mediaCount === 'number' ? { mediaCount: (row.node.attrs as AlbumAttrs).mediaCount } : {}),
+    }));
+    after = { value: rows[rows.length - 1].sortValue, id: rows[rows.length - 1].id };
+  }
+}
+
+const albumProfile = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { boolean: ['all', 'stale', 'force'] });
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if ((paths.length === 0) === !flags.all) {
+    await cmd.writeError('album-profile: give one or more albums, or --all\n');
+    return 1;
+  }
+  if (flags.stale && !flags.all) {
+    await cmd.writeError('album-profile: --stale is for --all\n');
+    return 1;
+  }
+  const started = Date.now();
+  const result: AlbumProfileResult = { ok: true, albums: 0, written: 0, unchanged: 0, skipped: 0, failed: [], durationMs: 0 };
+  const options = { force: Boolean(flags.force), write: true };
+
+  const tally = async (albums: ProfiledAlbum[], markUnchanged: boolean): Promise<void> => {
+    if (albums.length === 0) return;
+    result.albums += albums.length;
+    const outcomes = await profileAlbums(cmd, albums, options);
+    const unchanged: { path: string; profile: AlbumProfile }[] = [];
+    for (const outcome of outcomes) {
+      if (outcome.status === 'written') result.written++;
+      else if (outcome.status === 'unchanged') {
+        result.unchanged++;
+        if (outcome.profile) unchanged.push({ path: `${outcome.album.path}/${PROFILE_NAME}`, profile: outcome.profile });
+      } else {
+        result.failed.push(outcome.album.path);
+        await cmd.writeError(`album-profile: ${outcome.album.path}: ${outcome.error}\n`);
+      }
+    }
+    if (markUnchanged) await markChecked(cmd.sys.vfs, cmd.access, unchanged);
+  };
+
+  try {
+    if (flags.all) {
+      const checked = flags.stale ? await checkedAtByAlbum(cmd) : new Map<string, string>();
+      const staleBefore = new Date(Date.now() - STALE_MS).toISOString();
+      for await (const page of libraryAlbums(cmd)) {
+        const due = flags.stale ? page.filter((album) => (checked.get(album.path) ?? '') < staleBefore) : page;
+        result.skipped += page.length - due.length;
+        await tally(due, Boolean(flags.stale));
+      }
+    } else {
+      const albums: ProfiledAlbum[] = [];
+      for (const path of paths) {
+        let node;
+        try {
+          node = await cmd.sys.vfs.get<AlbumAttrs>(cmd.access, path);
+        } catch (error) {
+          if (!(error instanceof NodeNotFoundError)) throw error;
+          result.failed.push(path);
+          await cmd.writeError(`album-profile: ${path}: not found\n`);
+          continue;
+        }
+        if (!isProfiled(node, path, ALBUMS_ROOT)) {
+          result.skipped++;
+          continue;
+        }
+        albums.push({
+          path,
+          id: node.id,
+          props: { uid: node.props.uid, gid: node.props.gid, mode: node.props.mode },
+          ...(typeof node.attrs.mediaCount === 'number' ? { mediaCount: node.attrs.mediaCount } : {}),
+        });
+      }
+      await tally(albums, false);
+    }
+  } catch (error) {
+    await cmd.writeError(`album-profile: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  result.durationMs = Date.now() - started;
+
+  if (cmd.json) await cmd.writeJSON(result satisfies AlbumProfileResult);
+  else {
+    await cmd.writeLn(
+      `album-profile: ${result.albums} albums, ${result.written} written, ${result.unchanged} unchanged, ${result.skipped} skipped, ${result.failed.length} failed in ${result.durationMs} ms`,
+    );
+  }
+  return result.failed.length > 0 ? 1 : 0;
+};
+
+albumProfile.spec = {
+  name: 'album-profile',
+  effect: 'write' as const,
+  description:
+    "Build the profile staging matches suggested groups against, beside each library album as its .profile: its members' times, days, places and people, and the pictures that stand for it",
+  args: [
+    { name: 'album', type: 'path' as const, variadic: true, description: 'library albums to profile; anything else is passed over' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'every library album, a page at a time' },
+    { name: 'stale', type: 'bool' as const, description: 'with --all: only albums with no profile, or one not checked for a week' },
+    { name: 'force', type: 'bool' as const, description: 'build again even when the members are as they were' },
+  ],
+  examples: [
+    'album-profile /archive/albums/Exempelalbum_2019',
+    'album-profile --all',
+    'album-profile --all --stale',
+  ],
+  returns:
+    'how many albums were looked at, how many profiles were written, already current and passed over, how long it took, and the albums that failed (AlbumProfileResult).',
+};
+
+export default albumProfile;

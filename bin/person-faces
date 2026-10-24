@@ -1,0 +1,219 @@
+#!ts
+/**
+ * person-faces — every region assigned to one person, with its crop and the photo
+ * it was cut from. A region is a detected face or a tag a human drew; `hasFace`
+ * says which.
+ *
+ * `person-unknown` deliberately returns a handful of crops per person, which is
+ * a preview and not evidence: a cluster with three hundred faces can hold a
+ * stranger that four thumbnails will never show. This is the read behind
+ * "show me all of them" before someone commits the grouping to a real name.
+ *
+ * Three VFS calls, whatever the face count: one `get` for the person, one query
+ * for the regions, one batched child lookup for which of the page's are faces. A page with
+ * doubtful faces adds two batched reads for who they look like and where they are. Chronological order adds one batched node read for the source
+ * photos' capture times — and, from the same read, their type and size, which is
+ * what opening one in the lightbox needs; it never becomes one read per face.
+ *
+ * JSON callers get a page, not the lot: a person with twelve thousand faces is more
+ * than the API shell's 4 MiB capture cap. Every face is still sorted, which costs
+ * nothing extra, and only the page's rows carry the photo-derived fields. A page is
+ * also held under a byte budget, so long paths shorten the page rather than fail it;
+ * `nextOffset` says where the next one starts.
+ *
+ * `--doubtful` lists only the faces `face-audit` found looking like somebody else, and
+ * `--sort doubt` puts the clearest cases first; every answer says how many there are.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { faceCropSize, faceEmbeddingsOf, type FaceView, faceView, type PersonNodeAttrs, personPathOf, regionsOf } from '@archive/people/person';
+import { type FaceDoubt, liveDoubt, type RegionAttrs } from '@archive/media/regions';
+import type { FaceListResult } from '@archive/people/api';
+
+/** Faces per JSON page when the caller names no `--limit`. */
+const DEFAULT_JSON_LIMIT = 500;
+
+/** Half the API shell's capture cap, as `search --layout` keeps to. */
+const MAX_JSON_BYTES = 2 * 1024 * 1024;
+
+const personFaces = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit', 'offset', 'sort'],
+    boolean: ['doubtful'],
+    alias: { l: 'limit' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [personArg] = flags._ as string[];
+  if (!personArg) {
+    await cmd.writeError('person-faces: usage: person-faces <person>\n');
+    return 1;
+  }
+  const personPath = personPathOf(personArg, cmd.cwd);
+
+  const offset = flags.offset ? Number(flags.offset) : 0;
+  // Text lists them all; JSON pages, since its reader is a UI behind a capture cap.
+  const limit = flags.limit === undefined ? (cmd.json ? DEFAULT_JSON_LIMIT : undefined) : Number(flags.limit);
+  const sort = flags.sort ?? 'confidence';
+
+  for (const [name, v] of [['offset', offset], ['limit', limit]] as const) {
+    if (v !== undefined && (!Number.isFinite(v) || v < 0)) {
+      await cmd.writeError(`person-faces: --${name} must be a non-negative number\n`);
+      return 1;
+    }
+  }
+  if (sort !== 'confidence' && sort !== 'file' && sort !== 'date' && sort !== 'doubt') {
+    await cmd.writeError("person-faces: --sort must be 'confidence', 'file', 'date' or 'doubt'\n");
+    return 1;
+  }
+
+  try {
+    const node = await cmd.sys.vfs.get<PersonNodeAttrs>(cmd.access, personPath, { follow: false });
+    if (node.type !== 'person') throw new Error(`${personPath}: not a person node (is ${node.type})`);
+
+    const regions = await regionsOf(cmd.sys.vfs, cmd.access, node.id);
+    const doubtOf = new Map<string, FaceDoubt>();
+    for (const row of regions) {
+      const doubt = liveDoubt(row.node.attrs as RegionAttrs);
+      if (doubt) doubtOf.set(row.id, doubt);
+    }
+    const rows = flags.doubtful ? regions.filter((row) => doubtOf.has(row.id)) : regions;
+
+    // `hasFace` is settled for the page only, below.
+    const faces: FaceView[] = rows.map((row) => faceView(row, false));
+    const boxes = new Map(rows.map((row, index) => [faces[index], (row.node.attrs as { faceBox?: FaceBox }).faceBox]));
+    const regionIds = new Map(rows.map((row, index) => [faces[index], row.id]));
+    const files = sort === 'date' ? await sourceFiles(cmd, faces) : undefined;
+    if (files) {
+      for (const face of faces) {
+        const takenAtUtc = face.fileId ? files.get(face.fileId)?.attrs?.takenAtUtc : undefined;
+        if (typeof takenAtUtc === 'string') face.takenAtUtc = takenAtUtc;
+      }
+    }
+
+    const margin = (face: FaceView) => {
+      const doubt = doubtOf.get(regionIds.get(face)!);
+      return doubt ? doubt.similarity - doubt.ownSimilarity : -Infinity;
+    };
+    faces.sort((a, b) => {
+      if (sort === 'doubt') return margin(b) - margin(a) || a.facePath.localeCompare(b.facePath);
+      if (sort === 'file') return (a.filePath ?? a.facePath).localeCompare(b.filePath ?? b.facePath);
+      if (sort === 'confidence') return b.confidence - a.confidence || a.facePath.localeCompare(b.facePath);
+      // On the instant, not the wall clock: a set of faces spanning a holiday abroad would
+      // otherwise interleave with the ones taken at home.
+      if (a.takenAtUtc === b.takenAtUtc) return a.facePath.localeCompare(b.facePath);
+      if (!a.takenAtUtc) return 1;
+      if (!b.takenAtUtc) return -1;
+      return a.takenAtUtc.localeCompare(b.takenAtUtc);
+    });
+
+    let page = limit === undefined ? faces.slice(offset) : faces.slice(offset, offset + limit);
+    const embeddings = await faceEmbeddingsOf(cmd.sys.vfs, cmd.access, page.map((face) => regionIds.get(face)!));
+    for (const face of page) face.hasFace = embeddings.has(regionIds.get(face)!);
+    const pageDoubts = page.map((face) => doubtOf.get(regionIds.get(face)!));
+    const likeIds = [...new Set(pageDoubts.filter((doubt) => doubt !== undefined).map((doubt) => doubt.likePersonId))];
+    const [likes, likePaths] = likeIds.length > 0
+      ? await Promise.all([cmd.sys.vfs.getNodesByIds<PersonNodeAttrs>(cmd.access, likeIds), cmd.sys.vfs.resolveIdPaths(cmd.access, likeIds)])
+      : [new Map(), new Map<string, string[]>()];
+    page.forEach((face, index) => {
+      const doubt = pageDoubts[index];
+      if (!doubt) return;
+      const like = likes.get(doubt.likePersonId);
+      face.doubt = {
+        likePersonId: doubt.likePersonId,
+        likeName: like?.attrs.name ?? doubt.likePersonId,
+        ...(likePaths.get(doubt.likePersonId)?.[0] ? { likePath: likePaths.get(doubt.likePersonId)![0] } : {}),
+        similarity: doubt.similarity,
+        ownSimilarity: doubt.ownSimilarity,
+      };
+    });
+    if (files) {
+      for (const face of page) {
+        if (!face.fileId) continue;
+        const attrs = files.get(face.fileId)?.attrs;
+        const crop = faceCropSize(boxes.get(face), attrs);
+        if (crop) {
+          face.cropWidth = crop.width;
+          face.cropHeight = crop.height;
+        }
+        if (typeof attrs?.takenAt === 'string') face.takenAt = attrs.takenAt;
+        if (typeof attrs?.mimetype === 'string') face.mimetype = attrs.mimetype;
+        if (typeof attrs?.width === 'number') face.width = attrs.width;
+        if (typeof attrs?.height === 'number') face.height = attrs.height;
+        // Some importers stored the EXIF rotation as a string.
+        const angle = Number(attrs?.angle);
+        if (attrs?.angle !== undefined && Number.isFinite(angle)) face.angle = angle;
+      }
+    }
+
+    const attrs = node.attrs as PersonNodeAttrs;
+    const envelope = (faces_: FaceView[]): FaceListResult => {
+      const end = offset + faces_.length;
+      return {
+        person: {
+          id: node.id,
+          path: personPath,
+          name: attrs.name ?? personPath.split('/').pop() ?? '',
+          unnamed: !!attrs.unnamed,
+          faceCount: regions.length,
+        },
+        total: faces.length,
+        doubtful: doubtOf.size,
+        offset,
+        ...(end < faces.length ? { nextOffset: end } : {}),
+        faces: faces_,
+      };
+    };
+    // Halving is coarse but cheap, and a page that fits is all the next request needs.
+    while (cmd.json && page.length > 1 && new TextEncoder().encode(JSON.stringify(envelope(page))).length > MAX_JSON_BYTES) {
+      page = page.slice(0, Math.ceil(page.length / 2));
+    }
+    const result = envelope(page);
+
+    if (cmd.json) {
+      await cmd.writeJSON(result);
+      return 0;
+    }
+    await cmd.writeLn(`${result.person.name}: ${faces.length} face${faces.length === 1 ? '' : 's'}`);
+    for (const face of page) {
+      const doubt = face.doubt ? `  (looks like ${face.doubt.likeName}: ${face.doubt.similarity.toFixed(3)} > ${face.doubt.ownSimilarity.toFixed(3)})` : '';
+      await cmd.writeLn(`  ${face.confidence.toFixed(3)}  ${face.filePath ?? face.facePath}${face.hasFace ? '' : '  (tag)'}${doubt}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`person-faces: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+type FaceBox = { x: number; y: number; width: number; height: number };
+
+/** The source photos of the faces, in one batched read. */
+const sourceFiles = (cmd: Command, faces: FaceView[]) =>
+  cmd.sys.vfs.getNodesByIds(cmd.access, [...new Set(faces.map((face) => face.fileId).filter((id): id is string => !!id))]);
+
+personFaces.spec = {
+  name: 'person-faces',
+  effect: 'read' as const,
+  description: 'Every face and tag assigned to a person, with the photo each came from',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+  ],
+  flags: [
+    { name: 'limit', type: 'string' as const, description: `max faces to return (default: all as text, ${DEFAULT_JSON_LIMIT} as JSON)` },
+    { name: 'offset', type: 'string' as const, description: 'skip this many (default 0)' },
+    { name: 'sort', type: 'string' as const, description: "'confidence' (default), 'file', chronological 'date', or 'doubt' (clearest doubts first)" },
+    { name: 'doubtful', type: 'bool' as const, description: 'only the faces face-audit found looking like somebody else' },
+  ],
+  examples: [
+    'person-faces /archive/people/Anna_Exempel',
+    'person-faces --limit 20 --sort date /archive/people/Anna_Exempel',
+    'person-faces --doubtful --sort doubt /archive/people/Anna_Exempel',
+  ],
+  returns: 'the faces assigned to the person, with the photo each came from; JSON pages, and nextOffset starts the next page.',
+};
+
+export default personFaces;

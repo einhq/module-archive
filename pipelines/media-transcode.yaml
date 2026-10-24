@@ -1,0 +1,73 @@
+name: media-transcode
+description: Re-encode video and audio to web-playable renditions — a video's 1080p and hover clip, its storyboard and its chapters, an audio file's normalised track
+
+# The still pictures of the same files are media-stills'. The transcode is
+# minutes of ffmpeg per file, and the heaviest thing on the box — it asks for two
+# CPU slots, so a transcode and a face assignment cannot both run on a two-slot
+# worker. The storyboard and the chapters are made from the 1080p rendition, so
+# they follow the transcode here. EMS decodes the storyboard on the card and this
+# side only waits, so it takes one slot of the stills kind; the chapters are
+# TransNetV2's in EMS, a model request like the others, so one models slot.
+
+# A crawl must keep skipping files that already have a rendition, so the step
+# carries no `-f` of its own; the trigger that needs a re-encode sets FORCE.
+vars:
+  FORCE: ''
+
+triggers:
+  - on: media.metadata.extracted
+    match:
+      mimetype: [video/*, audio/*]
+    # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
+    # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
+    # three attempts of the same permanent answer only make a corrupt original look like a
+    # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
+    skipIfAttr: undecodable
+
+  # A video turned or flipped by hand: its renditions show the old orientation. Forced, so the
+  # old rendition stays playable (turned the old way) until the new one replaces it.
+  - on: media.file.turned
+    match:
+      mimetype: 'video/*'
+    skipIfAttr: undecodable
+    vars:
+      FORCE: -f
+
+steps:
+  transcode:
+    command: generate-derivatives $NODE_PATH --only transcode $FORCE
+    description: 1080p video + its hover-preview clip / normalised audio rendition
+    pool: media
+    kind: transcode
+    priority: 10
+    requires:
+      cpu: 2
+  storyboard:
+    command: generate-derivatives $NODE_PATH --only storyboard $FORCE
+    description: The video's frames tiled into one sheet, for the player's timeline
+    dependsOn: [transcode]
+    # A pipeline started by hand carries no event, so no mimetype: let it through, and the
+    # command itself has no storyboard to make of anything but a video.
+    condition: |
+      case "${EVENT_MIMETYPE:-video/}" in video/*) ;; *) exit 1;; esac
+    pool: media
+    kind: stills
+    priority: 60
+    requires:
+      cpu: 1
+  chapters:
+    # Not forced with the transcode: turning a video moves no cut in time.
+    command: detect-chapters $NODE_PATH
+    description: The video's cuts, as the chapters its player marks
+    dependsOn: [transcode]
+    condition: |
+      case "${EVENT_MIMETYPE:-video/}" in video/*) ;; *) exit 1;; esac
+    pool: media
+    kind: shots
+    priority: 50
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 2
+  priority: 5

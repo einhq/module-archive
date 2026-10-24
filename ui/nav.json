@@ -1,0 +1,206 @@
+{
+  "sidebar": [
+    {
+      "id": "archive.media",
+      "section": "main",
+      "label": "Media",
+      "icon": "photo-search",
+      "to": "/media",
+      "order": 30
+    },
+    {
+      "id": "archive.staging",
+      "section": "main",
+      "label": "Staging",
+      "icon": "inbox",
+      "to": "/staging",
+      "order": 40,
+      "signedIn": true
+    },
+    {
+      "id": "archive.year",
+      "section": "explore",
+      "label": "Year",
+      "icon": "calendar-search",
+      "to": "/year",
+      "order": 20
+    },
+    {
+      "id": "archive.map",
+      "section": "explore",
+      "label": "Map",
+      "icon": "map",
+      "to": "/map",
+      "order": 30
+    },
+    {
+      "id": "archive.people",
+      "section": "browse",
+      "label": "People",
+      "icon": "users",
+      "to": "/people",
+      "order": 20
+    },
+    {
+      "id": "archive.locations",
+      "section": "browse",
+      "label": "Locations",
+      "icon": "map-pin",
+      "to": "/locations",
+      "order": 30
+    },
+    {
+      "id": "archive.devices",
+      "section": "browse",
+      "label": "Devices",
+      "icon": "device-camera-phone",
+      "to": "/devices",
+      "order": 50
+    },
+    {
+      "id": "archive.albums",
+      "section": "browse",
+      "label": "Albums",
+      "icon": "photo",
+      "to": "/albums",
+      "order": 10
+    }
+  ],
+  "topbar": [
+    {
+      "id": "archive.import",
+      "parent": "ui.create",
+      "title": "Import media",
+      "icon": "cloud-upload",
+      "color": "indigo",
+      "action": {
+        "dialog": "/staging/import"
+      },
+      "order": 5,
+      "signedIn": true
+    },
+    {
+      "id": "archive.create-person",
+      "parent": "ui.create",
+      "title": "Person",
+      "icon": "user",
+      "color": "grape",
+      "action": {
+        "dialog": "/people/new"
+      },
+      "order": 20
+    },
+    {
+      "id": "archive.create-location",
+      "parent": "ui.create",
+      "title": "Location",
+      "icon": "map-pin",
+      "color": "teal",
+      "action": {
+        "dialog": "/locations/new"
+      },
+      "order": 30
+    },
+    {
+      "id": "archive.create-device",
+      "parent": "ui.create",
+      "title": "Device",
+      "icon": "device-camera-phone",
+      "color": "orange",
+      "action": {
+        "dialog": "/devices/new"
+      },
+      "order": 40
+    },
+    {
+      "id": "archive.create-album",
+      "parent": "ui.create",
+      "title": "Album",
+      "icon": "photo",
+      "color": "blue",
+      "action": {
+        "dialog": "/albums/new"
+      },
+      "order": 10
+    },
+    {
+      "id": "archive.favourites",
+      "parent": "ui.account",
+      "title": "Favourites",
+      "icon": "heart",
+      "action": {
+        "navigate": "/favourites"
+      },
+      "order": 10
+    },
+    {
+      "id": "archive.random-album",
+      "title": "Random album",
+      "icon": "arrows-shuffle",
+      "place": "search",
+      "shortcut": "alt+R",
+      "action": {
+        "run": "album-random",
+        "navigate": "/albums/{path}"
+      },
+      "order": 30
+    }
+  ],
+  "panels": [
+    {
+      "id": "archive.duplicates",
+      "slot": "nodes.tools",
+      "label": "Duplicates",
+      "icon": "copy",
+      "route": "/duplicates?path={path}"
+    },
+    {
+      "id": "archive.life-events",
+      "slot": "stats.sections",
+      "label": "Events",
+      "route": "/stats/life-events"
+    },
+    {
+      "id": "archive.start-upload",
+      "signedIn": true,
+      "slot": "home.start",
+      "label": "Import media",
+      "route": "/start/upload"
+    },
+    {
+      "id": "archive.explore-people",
+      "slot": "search.explore",
+      "label": "People",
+      "route": "/explore/people",
+      "order": 10
+    },
+    {
+      "id": "archive.explore-locations",
+      "slot": "search.explore",
+      "label": "Locations",
+      "route": "/explore/locations",
+      "order": 20
+    },
+    {
+      "id": "archive.explore-years",
+      "slot": "search.explore",
+      "label": "Years",
+      "route": "/explore/years",
+      "order": 30
+    },
+    {
+      "id": "archive.explore-labels",
+      "slot": "search.explore",
+      "label": "Labels",
+      "route": "/explore/labels",
+      "order": 40
+    },
+    {
+      "id": "archive.looks-like",
+      "signedIn": true,
+      "slot": "search.label",
+      "label": "Looks like",
+      "route": "/looks-like?path={path}"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+#!ts
+/**
+ * track-list — the devices that have a track, with what the track registry says
+ * of each: point count, span and extent, read for all of them at once, so no
+ * track is opened.
+ */
+import { DEVICES_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import type { TrackEntry } from '@archive/location/api';
+import { listTracks } from '@archive/location/track';
+
+const trackList = async (cmd: Command): CmdReturn => {
+  const root = typeof cmd.args[0] === 'string' ? cmd.args[0] : DEVICES_ROOT;
+
+  let tracks: TrackEntry[];
+  try {
+    tracks = await listTracks(cmd, root);
+  } catch (error) {
+    await cmd.writeError(`track-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON(tracks satisfies TrackEntry[]);
+    return 0;
+  }
+  for (const track of tracks) {
+    await cmd.writeLn(`${track.path} ${track.points} points${track.firstTs ? ` ${track.firstTs.slice(0, 10)}–${(track.lastTs ?? track.firstTs).slice(0, 10)}` : ''}`);
+  }
+  return 0;
+};
+
+trackList.spec = {
+  name: 'track-list',
+  effect: 'read' as const,
+  description: 'List the devices that have a track, with its point count, span and extent',
+  args: [{ name: 'root', type: 'path' as const, description: `Device directory (default: ${DEVICES_ROOT})` }],
+  flags: [],
+  returns: 'one row per device with a track.',
+};
+
+export default trackList;

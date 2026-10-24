@@ -1,0 +1,120 @@
+#!ts
+/**
+ * location-update — change what is written about a location.
+ *
+ * The location-side counterpart of `person-update` and `device-update`: one
+ * vocabulary for editing a location rather than `attrs -s` on its node. Its
+ * position is not here — `position-set <location>/position` writes the shape — and neither is
+ * anything geocoding derives (`displayName`, `geocode*`).
+ *
+ * An edited address needs nothing further: `archive-bridge` announces the
+ * change and `location-upkeep` looks the location up again, leaving a shape set by
+ * hand alone (see `location-locate`).
+ *
+ * Clearing is explicit, as in `device-update`: `--clear city` removes the attr,
+ * an empty `--city ''` is refused.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { NODE_TYPE_LOCATION } from '@archive/location/types';
+
+const FIELDS = ['name', 'address', 'description', 'city', 'country'] as const;
+type Field = typeof FIELDS[number];
+
+const isField = (value: string): value is Field => (FIELDS as readonly string[]).includes(value);
+
+const locationUpdate = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: [...FIELDS], collect: ['clear'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('location-update: missing location path\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+
+  const patch: Record<string, string | null> = {};
+  for (const field of FIELDS) {
+    const value = flags[field] as string | undefined;
+    if (value === undefined) continue;
+    if (value.trim() === '') {
+      await cmd.writeError(`location-update: --${field} is empty (use --clear ${field} to remove it)\n`);
+      return 1;
+    }
+    patch[field] = value.trim();
+  }
+  for (const field of (flags.clear ?? []) as string[]) {
+    if (!isField(field)) {
+      await cmd.writeError(`location-update: unknown field '${field}' (expected: ${FIELDS.join(', ')})\n`);
+      return 1;
+    }
+    if (field === 'name') {
+      await cmd.writeError('location-update: a location needs a name; it cannot be cleared\n');
+      return 1;
+    }
+    // Set and cleared in one call is a caller bug, not something to resolve by order.
+    if (field in patch) {
+      await cmd.writeError(`location-update: '${field}' is both set and cleared\n`);
+      return 1;
+    }
+    patch[field] = null;
+  }
+  if (Object.keys(patch).length === 0) {
+    await cmd.writeError(`location-update: nothing to change (pass --${FIELDS.join(', --')}, or --clear <field>)\n`);
+    return 1;
+  }
+
+  let node;
+  try {
+    node = await cmd.sys.vfs.get(cmd.access, path);
+  } catch {
+    await cmd.writeError(`location-update: ${path}: not found\n`);
+    return 1;
+  }
+  if (node.type !== NODE_TYPE_LOCATION) {
+    await cmd.writeError(`location-update: ${path}: not a location (${node.type})\n`);
+    return 1;
+  }
+
+  try {
+    // A null deletes the attr.
+    await cmd.sys.vfs.update(cmd.access, path, { attrs: patch });
+  } catch (err) {
+    await cmd.writeError(`location-update: ${path}: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, changed: Object.keys(patch) });
+  } else {
+    await cmd.writeLn(`Updated ${Object.keys(patch).join(', ')} on ${path}`);
+  }
+  return 0;
+};
+
+locationUpdate.spec = {
+  name: 'location-update',
+  effect: 'write' as const,
+  description: "Change a location's name, address, description, city or country",
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to location node' },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'what the location is called' },
+    { name: 'address', type: 'string' as const, description: 'the written address; a change is geocoded again by location-upkeep' },
+    { name: 'description', type: 'string' as const, description: 'free text about the location' },
+    { name: 'city', type: 'string' as const, description: 'city' },
+    { name: 'country', type: 'string' as const, description: 'country' },
+    { name: 'clear', type: 'string' as const, description: 'remove a field (repeatable): address, description, city or country' },
+  ],
+  examples: [
+    "location-update /archive/locations/ekbacksvagen --address 'Ekbacksvägen 4, 123 45 Exempelby'",
+    'location-update /archive/locations/ekbacksvagen --clear description',
+  ],
+  returns: 'which fields changed.',
+};
+
+export default locationUpdate;

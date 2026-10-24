@@ -1,0 +1,92 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, createRelationPair, makeCtx, PARENTS_DIR, readRelationDir, wouldCreateCycle } from '@archive/people/genealogy';
+
+const KINDS = ['blood', 'adoptive', 'step', 'foster'];
+
+/** Free link name in owner/dir; undefined if target already linked. */
+async function linkName(cmd: Command, owner: string, dir: string, target: string): Promise<string | undefined> {
+  const entries = await readRelationDir(cmd.sys.vfs, cmd.access, owner, dir);
+  if (entries.some((e) => e.target === target)) return undefined;
+  const used = new Set(entries.map((e) => e.name));
+  const base = basename(target);
+  let name = base;
+  for (let i = 2; used.has(name); i++) name = `${base}-${i}`;
+  return name;
+}
+
+const personSetParent = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const kindIdx = cmd.args.indexOf('--kind');
+  const kind = kindIdx >= 0 ? cmd.args[kindIdx + 1] : 'blood';
+  const [childArg, parentArg] = rest;
+
+  if (!childArg || !parentArg) {
+    await cmd.writeError('person-set-parent: usage: person set-parent <child> <parent> [--kind blood|adoptive|step|foster]\n');
+    return 1;
+  }
+  if (!KINDS.includes(kind)) {
+    await cmd.writeError(`person-set-parent: invalid --kind '${kind}' (${KINDS.join('|')})\n`);
+    return 1;
+  }
+
+  const child = resolve(cmd.cwd, childArg);
+  const parent = resolve(cmd.cwd, parentArg);
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, child);
+    await cmd.sys.vfs.get(cmd.access, parent);
+
+    const ctx = makeCtx(cmd.sys.vfs, cmd.access);
+    if (await wouldCreateCycle(ctx, child, parent)) {
+      await cmd.writeError(`person-set-parent: refusing to add parent: ${basename(parent)} is a descendant of ${basename(child)}\n`);
+      return 1;
+    }
+
+    const childSide = await linkName(cmd, child, PARENTS_DIR, parent);
+    const parentSide = await linkName(cmd, parent, CHILDREN_DIR, child);
+    if (!childSide || !parentSide) {
+      await cmd.writeError(`person-set-parent: ${basename(parent)} is already a parent of ${basename(child)}\n`);
+      return 1;
+    }
+
+    await createRelationPair(cmd.sys.vfs, cmd.access, {
+      aLink: `${child}/${PARENTS_DIR}/${childSide}`,
+      aTarget: parent,
+      bLink: `${parent}/${CHILDREN_DIR}/${parentSide}`,
+      bTarget: child,
+      kind: kind !== 'blood' ? kind : undefined,
+    });
+    if (cmd.json) {
+      await cmd.writeJSON({ ok: true, child, parent, kind });
+    } else {
+      await cmd.writeLn(`${basename(parent)} is now ${kind === 'blood' ? '' : `${kind} `}parent of ${basename(child)}`);
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-set-parent: ${message}\n`);
+    return 1;
+  }
+};
+
+personSetParent.spec = {
+  name: 'person-set-parent',
+  effect: 'write' as const,
+  description: 'Add a parent relationship (parents/ ↔ children/)',
+  args: [
+    { name: 'child', type: 'path' as const, description: 'VFS path of the child person' },
+    { name: 'parent', type: 'path' as const, description: 'VFS path of the parent person' },
+  ],
+  flags: [
+    { name: 'kind', type: 'string' as const, description: 'blood (default) | adoptive | step | foster' },
+  ],
+  examples: [
+    'person-set-parent /archive/people/Cecilia_Exempel /archive/people/Anna_Exempel',
+    'person-set-parent --kind adoptive /archive/people/Disa_Exempel /archive/people/Bo_Exempel',
+  ],
+  returns: 'nothing; the link is written.',
+};
+
+export default personSetParent;

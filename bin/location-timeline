@@ -1,0 +1,105 @@
+#!ts
+/**
+ * location-timeline — what happened at one location, as a chronological feed.
+ *
+ * The location-side counterpart of `person-timeline`: the people who moved in and
+ * out, the stories written on the location itself, and the albums holding pictures
+ * taken there. It lives with the people module because a residence does — both
+ * halves of the pair are written by `lib/residence.ts`.
+ *
+ * Unpaged for the same reason a life is: a location sees tens of moves and albums,
+ * not thousands. The corpus-wide `timeline --location` answers a similar question
+ * by scanning everything and filtering, which gives up after a bounded scan and
+ * misses a location whose history is older than that.
+ *
+ * A move here points at the person rather than the location, the opposite of the
+ * person-side entry: on a location's page the location is where the reader already is,
+ * and who came and went is what there is to open.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { readRelationDir } from '@archive/people/genealogy';
+import { RESIDENTS_DIR } from '@archive/people/residence';
+import type { LocationTimeline } from '@archive/people/api';
+import { albumEntries, attrsOf, coverOf, mapLimited, nameOf, newestFirst, ownEventEntries, type TimelineEntry, writeFeed } from '@archive/people/feed';
+
+/**
+ * Each resident moving in and moving out, one entry each.
+ *
+ * Read from the location-side half of each residence, which carries the same
+ * `relation.{from,to}` as the person's. A residence with neither date says
+ * nothing about when; it is on the residents tab instead.
+ */
+async function residentEntries(cmd: Command, location: string, locationName: string): Promise<TimelineEntry[]> {
+  const residents = await readRelationDir(cmd.sys.vfs, cmd.access, location, RESIDENTS_DIR);
+
+  const nested = await mapLimited(residents.filter((resident) => resident.target && (resident.from || resident.to)), async (resident) => {
+    const person = resident.target;
+    const [personName, cover] = await Promise.all([nameOf(cmd, person), coverOf(cmd, person)]);
+    const common = { kind: 'move' as const, path: person, ownerPath: person, people: [person], ...(cover ? { cover } : {}) };
+
+    const entries: TimelineEntry[] = [];
+    if (resident.from) {
+      entries.push({ ...common, key: `${resident.linkPath}#moved-in`, date: resident.from, title: `${personName} moved to ${locationName}`, eventType: 'moved-in' });
+    }
+    if (resident.to) {
+      entries.push({ ...common, key: `${resident.linkPath}#moved-out`, date: resident.to, title: `${personName} left ${locationName}`, eventType: 'moved-out' });
+    }
+    return entries;
+  });
+
+  return nested.flat();
+}
+
+const locationTimeline = async (cmd: Command): CmdReturn => {
+  const targetArg = cmd.args.filter((a) => !a.startsWith('-'))[0];
+  // As on a person: the albums are the slow half, so a page can ask for the
+  // rest first and fill them in.
+  const withAlbums = !cmd.args.includes('--no-albums');
+  if (!targetArg) {
+    await cmd.writeError('location-timeline: missing location path\n');
+    return 1;
+  }
+  const location = resolve(cmd.cwd, targetArg);
+
+  const attrs = await attrsOf(cmd, location);
+  if (!attrs) {
+    await cmd.writeError(`location-timeline: ${location}: not found\n`);
+    return 1;
+  }
+
+  const locationName = (attrs.name as string | undefined) ?? basename(location);
+  const [residents, events, albums] = await Promise.all([
+    residentEntries(cmd, location, locationName),
+    ownEventEntries(cmd, location),
+    withAlbums ? albumEntries(cmd, `location:${location}`) : Promise.resolve([]),
+  ]);
+
+  const entries = [...residents, ...events, ...albums].sort(newestFirst);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ location, name: locationName, entries } satisfies LocationTimeline);
+    return 0;
+  }
+
+  await writeFeed(cmd, entries);
+  return 0;
+};
+
+locationTimeline.spec = {
+  name: 'location-timeline',
+  effect: 'read' as const,
+  description: 'What happened at one location as a chronological feed: residents moving in and out, its events and the albums with photos from it',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to location node' },
+  ],
+  flags: [
+    { name: 'no-albums', type: 'bool' as const, description: 'skip the albums, which are most of the cost' },
+  ],
+  examples: [
+    'location-timeline /archive/locations/ekbacksvagen',
+  ],
+  returns: "the location's history in order: moves in and out, its events and the albums with photos taken there.",
+};
+
+export default locationTimeline;

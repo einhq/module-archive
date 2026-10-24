@@ -1,0 +1,109 @@
+#!ts
+/**
+ * file-set-text — write the text in a picture by hand, for good.
+ *
+ * Replaces the picture's extracted text (`<file>/metadata/content`) with a person's own words and
+ * embeds it, so search finds them. The read lines (`lines`) go with the reading they came from.
+ * The file is marked `textManual`, which `read-text` leaves alone, and loses `ocrBy`, since no
+ * engine's reading is kept any more. Empty text removes the text, and the mark keeps it removed.
+ *
+ * `--text-base64` is what the UI uses, as for `file-set-description`: the text is arbitrary
+ * multi-line text on its way into a shell command string.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { clearExtractedText, storeExtractedText } from '@archive/media/extracted-text';
+import { reportUnwritable } from '@archive/media/writable';
+import { decodeBase64 } from '@std/encoding/base64';
+import { resolve } from '@std/path';
+
+const USAGE = 'file-set-text: usage: file-set-text <file> [--text <s> | --text-base64 <b64>]';
+
+const fileSetText = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['text', 'text-base64'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  let given: string;
+  if (flags['text-base64'] !== undefined) {
+    try {
+      given = new TextDecoder().decode(decodeBase64(flags['text-base64']));
+    } catch {
+      await cmd.writeError('file-set-text: --text-base64: not valid base64\n');
+      return 1;
+    }
+  } else if (flags.text !== undefined) {
+    given = flags.text;
+  } else {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  let node;
+  try {
+    node = await cmd.sys.vfs.get<{ mimetype?: unknown; textIndexedAt?: unknown }>(cmd.access, path);
+  } catch (error) {
+    await cmd.writeError(`file-set-text: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const mimetype = typeof node.attrs.mimetype === 'string' ? node.attrs.mimetype : '';
+  if (node.type !== 'file' || !mimetype.startsWith('image/')) {
+    await cmd.writeError(`file-set-text: ${path}: not a picture (${mimetype || node.type})\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, path, node)) return 1;
+
+  const text = given.trim();
+  const wordCount = text ? text.split(/\s+/).length : 0;
+  let unembedded: string | undefined;
+  try {
+    if (text) unembedded = await storeExtractedText(cmd, path, text, { lines: null });
+    else await clearExtractedText(cmd, path);
+    await cmd.sys.vfs.update(cmd.access, path, {
+      attrs: {
+        textManual: true,
+        ocrBy: null,
+        wordCount: wordCount || null,
+        // Counts as read, so the picture is not queued for a reading the mark would refuse.
+        ...(typeof node.attrs.textIndexedAt === 'string' && node.attrs.textIndexedAt ? {} : { textIndexedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z') }),
+      },
+    });
+  } catch (error) {
+    await cmd.writeError(`file-set-text: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (unembedded) await cmd.writeError(`file-set-text: ${path}: saved, but not yet searchable: ${unembedded}\n`);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path, wordCount });
+  } else {
+    await cmd.writeLn(text ? `Set the text in ${path}` : `Cleared the text in ${path}`);
+  }
+  return 0;
+};
+
+fileSetText.spec = {
+  name: 'file-set-text',
+  effect: 'write' as const,
+  description: 'Write the text in a picture by hand, in place of what was read from it',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to a picture' },
+  ],
+  flags: [
+    { name: 'text', type: 'string' as const, description: 'the text; empty removes it' },
+    { name: 'text-base64', type: 'string' as const, description: 'the text, base64-encoded (for multi-line text)' },
+  ],
+  examples: [
+    "file-set-text /archive/albums/Exempelalbum_2019/files/brev.jpg --text 'Kära Anna'",
+  ],
+  returns: 'nothing; the text is written and the picture is not read again.',
+};
+
+export default fileSetText;

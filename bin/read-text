@@ -1,0 +1,156 @@
+#!ts
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
+import { EmsError, ocrGeneration, readText, type ReadTextResult, stepExitCode } from '@ems/client';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { normalizeAngle, normalizeMirror } from '@archive/media/orientation';
+import { clearExtractedText, storeExtractedText } from '@archive/media/extracted-text';
+import { reportUnwritable } from '@archive/media/writable';
+
+/**
+ * Read the text written in a picture — a sign, a shop front, a photographed page — with EMS
+ * `ocr.read` (PP-OCRv6), and keep it as the file's extracted text, `<file>/metadata/content`, with
+ * its lines (`lines`: each line's words, corners as fractions of the picture, and score) on that
+ * node for the lightbox to mark where a match stands.
+ *
+ * The original is read, in its display frame: the text is often a small part of the picture, and
+ * the 800 px rendition the picture vector is made from would lose it.
+ *
+ * The language the text is in goes on that node too: `ocrLanguage` (ISO 639-1) and
+ * `ocrLanguageConfidence`, as EMS tells it from the reading, which picks the transcriber for its
+ * handwriting; none when there is too little text to tell. A language a person set on the file
+ * (`ocrLanguageManual`, `file-set-text-language`) is given to EMS instead, and stored with no
+ * confidence.
+ *
+ * The file is stamped with `ocrBy`, the engine that read it, and `textIndexedAt`, whether there was
+ * text or not. A file read by another engine than EMS runs now is read again
+ * (`media.ocr.stale`, `-f`); a reading that finds no text then removes the old one.
+ *
+ * A picture whose text a person wrote (`textManual`, `file-set-text`) is never read, not even with
+ * `-f`.
+ *
+ * ein/core#352, ein/core#670.
+ */
+const readTextCommand = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  if (!inputPath) {
+    await cmd.writeError('read-text: missing file path\n');
+    return 1;
+  }
+
+  const phase = stepPhase(cmd, 'read-text', verbose);
+  const node = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  await phase('read file node');
+  if (!node) {
+    await cmd.writeError(`read-text: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (node.type !== 'file') {
+    await cmd.writeError(`read-text: ${inputPath}: not a file node (is ${node.type})\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, inputPath, node)) return 1;
+
+  const attrs = node.attrs;
+  const mimetype = typeof attrs.mimetype === 'string' ? attrs.mimetype : '';
+  if (!mimetype.startsWith('image/')) {
+    await cmd.writeError(`read-text: ${inputPath}: not a picture (${mimetype || 'no mimetype'})\n`);
+    return 1;
+  }
+  if (!force && typeof attrs.textIndexedAt === 'string' && attrs.textIndexedAt) {
+    if (verbose) await cmd.writeLn('Already read, skipping (use -f to force)');
+    return 0;
+  }
+  // A person's own words (`file-set-text`) are kept over any reading, forced or not.
+  if (attrs.textManual === true) {
+    if (verbose) await cmd.writeLn('Text written by hand, skipping');
+    return 0;
+  }
+
+  const indexedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const undecodable = attrs[UNDECODABLE_ATTR];
+  let result: ReadTextResult | undefined;
+  // The engine the file counts as read by. A picture EMS cannot read is read by the engine that
+  // tried, so the next scan does not announce it again; a new engine tries it once more.
+  let readBy: string | null = null;
+  if (typeof undecodable === 'string' && undecodable.length > 0) {
+    // Nothing can decode the bytes, so there is no text to read and never will be.
+    if (verbose) await cmd.writeLn(`${inputPath}: source cannot be decoded (${undecodable}), marking`);
+  } else {
+    try {
+      await phase('asking ems');
+      const language = typeof attrs.ocrLanguageManual === 'string' && attrs.ocrLanguageManual ? attrs.ocrLanguageManual : undefined;
+      result = await readText(cmd, inputPath, { angle: normalizeAngle(attrs.angle), mirror: normalizeMirror(attrs.mirror), mimetype, language });
+      readBy = result.producer;
+      await phase('ems answered');
+    } catch (error) {
+      if (!(error instanceof EmsError && error.permanent)) {
+        await cmd.writeError(`read-text: ${inputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+        return stepExitCode(error);
+      }
+      // The bytes are the problem: retrying cannot change the answer, so it is "no text".
+      if (verbose) await cmd.writeLn(`Not readable, marking: ${error.message}`);
+      readBy = await ocrGeneration(cmd);
+    }
+  }
+
+  const text = result?.text.trim() ?? '';
+  const wordCount = text ? text.split(/\s+/).length : 0;
+  if (text) {
+    let unstored: string | undefined;
+    try {
+      const language = result!.language;
+      unstored = await storeExtractedText(cmd, inputPath, text, {
+        lines: result!.lines,
+        ocrLanguage: language?.code ?? null,
+        ocrLanguageConfidence: language?.confidence ?? null,
+      }, { textIndexedAt: indexedAt });
+    } catch (error) {
+      await cmd.writeError(`read-text: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+    if (unstored) await cmd.writeError(`read-text: ${inputPath}: text saved but not embedded: ${unstored}\n`);
+    await phase('stored text and embedding');
+  } else {
+    await clearExtractedText(cmd, inputPath);
+  }
+
+  // Last, so an interrupted run leaves a file the trigger reads again.
+  await cmd.sys.vfs.update(cmd.access, inputPath, {
+    attrs: { textIndexedAt: indexedAt, ocrBy: readBy, wordCount: wordCount || null },
+  });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ textIndexedAt: indexedAt, ocrBy: readBy, lines: result?.lines.length ?? 0, wordCount, language: text ? result?.language?.code ?? null : null });
+  } else if (verbose || text) {
+    const language = text && result?.language ? `, in ${result.language.code}` : '';
+    await cmd.writeLn(`${inputPath}: ${result?.lines.length ?? 0} line(s), ${wordCount} word(s)${language}${result ? `, ${result.producer}` : ''}`);
+  }
+  return 0;
+};
+
+readTextCommand.spec = {
+  name: 'read-text',
+  effect: 'write' as const,
+  description: 'Read the text written in a picture and keep it for search',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to a picture' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Read again even if already read' },
+  ],
+};
+
+export default readTextCommand;

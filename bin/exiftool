@@ -1,0 +1,56 @@
+#!ts
+/**
+ * exiftool — a file's metadata as exiftool reads it, through EMS.
+ *
+ * The values are exiftool's numeric ones (`-n`): EMS's probe extracts every tag that way, so
+ * what is printed is what `exif-extract` indexes. `-n` is accepted for the callers written
+ * against the old wrapper and changes nothing. JSON mode prints the one-element array
+ * `exiftool -n -j` writes; text mode prints `Tag: value` lines.
+ */
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { extractExif } from '@archive/media/exif-service';
+
+const exiftool = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['n'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const filename = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!filename) {
+    await cmd.writeError('exiftool: missing filename\n');
+    return 1;
+  }
+
+  let tags: Record<string, unknown>[];
+  try {
+    tags = await extractExif(cmd, filename);
+  } catch (error) {
+    await cmd.writeError(`exiftool: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON(tags);
+    return 0;
+  }
+  for (const [tag, value] of Object.entries(tags[0] ?? {})) {
+    await cmd.writeLn(`${tag}: ${typeof value === 'string' ? value : JSON.stringify(value)}`);
+  }
+  return 0;
+};
+
+exiftool.spec = {
+  name: 'exiftool',
+  effect: 'read' as const,
+  description: 'Extract metadata from a file, as exiftool reads it (through the media service)',
+  args: [{ name: 'filename', type: 'path' as const, description: 'VFS path to file' }],
+  flags: [{ name: 'n', type: 'bool' as const, description: 'Numeric values (always the case now; accepted for compatibility)' }],
+  examples: [
+    'exiftool /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: "the file's metadata exactly as exiftool reads it.",
+};
+
+export default exiftool;

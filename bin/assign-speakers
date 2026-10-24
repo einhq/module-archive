@@ -1,0 +1,124 @@
+#!ts
+/**
+ * assign-speakers — give every voice of a recording a person.
+ *
+ * Searches each undecided speaker's voiceprint against every other recording's speakers: a
+ * clear match to one that already belongs to someone reuses that person, otherwise a voice that
+ * spoke long enough mints a new unnamed person under /people/unknown. The voice counterpart of
+ * `assign-faces`, run once per recording by `media-speaker-assign` when its voices are written.
+ *
+ * Standalone rather than folded into `voiceprint-file` so it can be re-run on one recording,
+ * and so a failure here never fails detection. The decision logic lives in
+ * @archive/media/speaker-assign, where it is unit-testable and holds the process-wide lock.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { resolve } from '@std/path';
+import { assignSpeakersForFile, DEFAULT_SPEAKER_ASSIGN_OPTIONS, type SpeakerAssignOptions } from '@archive/media/speaker-assign';
+
+/** Flag, else env, else the shared default. */
+const num = (flag: string | undefined, env: string | undefined, fallback: number): number => {
+  const raw = flag ?? env;
+  if (raw === undefined || raw === '') return fallback;
+  return Number(raw);
+};
+
+const assignSpeakers = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['vote-threshold', 'attach-threshold', 'person-threshold', 'asd-person-threshold', 'margin', 'k', 'min-create-seconds', 'asd-vote-weight', 'asd-min-score'],
+    boolean: ['no-create', 'reassign', 'dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+  });
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('assign-speakers: usage: assign-speakers <file>\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+  const verbose = !!flags.verbose;
+
+  const opts: SpeakerAssignOptions = {
+    voteThreshold: num(flags['vote-threshold'], cmd.env.CFG_VOICE_VOTE_THRESHOLD, DEFAULT_SPEAKER_ASSIGN_OPTIONS.voteThreshold),
+    attachThreshold: num(flags['attach-threshold'], cmd.env.CFG_VOICE_ATTACH_THRESHOLD, DEFAULT_SPEAKER_ASSIGN_OPTIONS.attachThreshold),
+    personThreshold: num(flags['person-threshold'], cmd.env.CFG_VOICE_PERSON_THRESHOLD, DEFAULT_SPEAKER_ASSIGN_OPTIONS.personThreshold),
+    asdPersonThreshold: num(flags['asd-person-threshold'], cmd.env.CFG_VOICE_ASD_PERSON_THRESHOLD, DEFAULT_SPEAKER_ASSIGN_OPTIONS.asdPersonThreshold),
+    margin: num(flags.margin, cmd.env.CFG_VOICE_MARGIN, DEFAULT_SPEAKER_ASSIGN_OPTIONS.margin),
+    k: num(flags.k, cmd.env.CFG_VOICE_K, DEFAULT_SPEAKER_ASSIGN_OPTIONS.k),
+    create: !flags['no-create'],
+    minCreateSeconds: num(flags['min-create-seconds'], cmd.env.CFG_VOICE_MIN_CREATE_SECONDS, DEFAULT_SPEAKER_ASSIGN_OPTIONS.minCreateSeconds),
+    reassign: !!flags.reassign,
+    asdVoteWeight: num(flags['asd-vote-weight'], cmd.env.CFG_VOICE_ASD_VOTE_WEIGHT, DEFAULT_SPEAKER_ASSIGN_OPTIONS.asdVoteWeight),
+    asdMinScore: num(flags['asd-min-score'], cmd.env.CFG_VOICE_ASD_MIN_SCORE, DEFAULT_SPEAKER_ASSIGN_OPTIONS.asdMinScore),
+    dryRun: !!flags['dry-run'],
+  };
+
+  for (const [name, v] of Object.entries(opts)) {
+    if (typeof v === 'number' && !Number.isFinite(v)) {
+      await cmd.writeError(`assign-speakers: --${name} must be a number\n`);
+      return 1;
+    }
+  }
+
+  let results;
+  try {
+    results = await assignSpeakersForFile(cmd.sys.vfs, cmd.access, path, opts);
+  } catch (error) {
+    await cmd.writeError(`assign-speakers: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const attached = results.filter((r) => r.reason === 'attached').length;
+  const created = results.filter((r) => r.reason === 'created').length;
+  const skipped = results.length - attached - created;
+
+  if (verbose) {
+    for (const r of results) {
+      await cmd.writeLn(`${r.reason} ${r.speakerPath}${r.personId ? ` -> ${r.personId}` : ''}`);
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ file: path, speakers: results.length, attached, created, skipped, dryRun: opts.dryRun, results });
+    return 0;
+  }
+  await cmd.writeLn(
+    `Speakers ${results.length}: attached ${attached}, created ${created}, skipped ${skipped}${opts.dryRun ? ' (dry run)' : ''}`,
+  );
+  return 0;
+};
+
+assignSpeakers.spec = {
+  name: 'assign-speakers',
+  effect: 'write' as const,
+  description: "Match a recording's voices to existing people, creating unnamed people for the rest",
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to the audio or video file' },
+  ],
+  flags: [
+    { name: 'vote-threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
+    { name: 'attach-threshold', type: 'string' as const, description: 'min winning vote weight to attach to a person (default 0.55)' },
+    { name: 'person-threshold', type: 'string' as const, description: "min cosine similarity to the mean of the winner's voices (default 0.7)" },
+    {
+      name: 'asd-person-threshold',
+      type: 'string' as const,
+      description: 'the same, for the person a confident lip-sync match names (default 0.5)',
+    },
+    { name: 'margin', type: 'string' as const, description: 'winner must beat runner-up by this factor (default 1.2)' },
+    { name: 'k', type: 'string' as const, description: 'neighbours to consider per voice (default 24)' },
+    { name: 'min-create-seconds', type: 'string' as const, description: 'min seconds a voice spoke in all to seed a new person (default 10)' },
+    { name: 'asd-vote-weight', type: 'string' as const, description: 'weight of a lip-sync match, as a similarity (default 0.9)' },
+    { name: 'asd-min-score', type: 'string' as const, description: 'ignore a lip-sync match weaker than this (default 0.6)' },
+    { name: 'no-create', type: 'bool' as const, description: 'attach only; never create an unnamed person' },
+    { name: 'reassign', type: 'bool' as const, description: 'also re-decide voices a previous automatic run assigned' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without writing' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each voice' },
+  ],
+  examples: [
+    'assign-speakers /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+    'assign-speakers --dry-run /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+  ],
+  returns: 'each voice with the person it was matched to and the score.',
+};
+
+export default assignSpeakers;

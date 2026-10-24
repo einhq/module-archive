@@ -1,0 +1,210 @@
+#!ts
+/**
+ * media-resolve-time — re-resolve media originals' capture times from what is already stored.
+ *
+ * The repair pass for files dated under other rules than the current ones. It reads each
+ * original's `whenManual` and its exif child's normalized `when`, runs
+ * `@archive/media/capture-resolve` over them, and writes `takenAt` / `takenAtUtc` /
+ * `takenAtSource` where they differ from what the rules give:
+ *
+ * - an offset reaches `takenAt` only where one can be established, since a range query compares
+ *   the attr as bytes;
+ * - a file with both a GPS fix and a camera date takes the receiver's instant, and the camera's
+ *   wall clock stamped with the offset between them;
+ * - a stale GPS fix is disbelieved, and counted;
+ * - a file with no `takenAtUtc` gets one.
+ *
+ * **No exiftool and no file reads.** `metadata/exif` already holds the normalized `when` block —
+ * that is what it is for — so a whole-corpus pass is one query walk plus two node reads per
+ * file, where `media-reindex` would read every file again (ein/core#118).
+ *
+ * `--dry-run` reports the delta and writes nothing.
+ *
+ * `--device <path>` narrows it to one device's files. That is how a device change reaches the
+ * dates: `device-relink` links files to a device and `device-update` changes its clock, and both
+ * then run this, because the rules are media's and the device module cannot import them.
+ *
+ * `--under <path>` narrows it to the originals in the tree under a directory or album (a `within`
+ * query), or to one file.
+ */
+import type { AttrCondition, CmdReturn, Command, NodeAttrs, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
+import { collectUnknownFlags, NOT_DERIVED, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
+import type { MediaResolveTimeResult } from '@archive/media/api';
+import { isValidGpsDate, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { clockForFile, type DeviceClock, NO_DEVICE_CLOCK, offsetAt } from '@archive/device/device-zone';
+import { resolve } from '@std/path';
+
+const PAGE = 500;
+
+const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
+
+const mediaResolveTime = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['dry-run', 'verbose'],
+    string: ['under', 'device'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const dry = Boolean(flags['dry-run']);
+  const verbose = Boolean(flags.verbose);
+  const under = typeof flags.under === 'string' ? resolve(cmd.cwd, flags.under) : undefined;
+  const device = typeof flags.device === 'string' ? resolve(cmd.cwd, flags.device) : undefined;
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  // One clock per device, not per file. A device's configuration is a property of the device,
+  // and re-reading its log for each of the thousands of photographs it took would put two node
+  // reads on every row of a corpus-sized walk.
+  const clocks = new Map<string, DeviceClock>();
+  const clockFor = async (devicePath: string | undefined): Promise<DeviceClock> => {
+    if (!devicePath) return NO_DEVICE_CLOCK;
+    const cached = clocks.get(devicePath);
+    if (cached) return cached;
+    const clock = await clockForFile(cmd, devicePath);
+    clocks.set(devicePath, clock);
+    return clock;
+  };
+
+  let scanned = 0;
+  let changed = 0;
+  let cleared = 0;
+  let untouched = 0;
+  let staleGps = 0;
+  const bySource = new Map<string, number>();
+
+  const resolveOne = async (row: NodeQueryEntry): Promise<void> => {
+    const attrs = row.node.attrs as NodeAttrs;
+    // Renditions and face crops are never dated in their own right.
+    if (attrs.sourceId != null) return;
+    scanned++;
+
+    let when;
+    try {
+      const exif = await vfs.get(access, `${row.absPath}/metadata/exif`);
+      when = whenFromExifAttrs(exif.attrs as Record<string, unknown>);
+    } catch {
+      // Not indexed yet. A manual time still resolves: a file whose date somebody typed is dated
+      // before its bytes are read.
+      when = {};
+    }
+
+    // An exif node with no normalized `when` at all predates that attr and says nothing about
+    // this file's date. Leaving it alone is the only safe reading; clearing would throw away a
+    // date this pass cannot re-derive.
+    if (when === undefined) {
+      untouched++;
+      return;
+    }
+
+    const clock = await clockFor(str(attrs.devicePath));
+
+    // Counted and named here rather than left to `resolveTime`, which silently falls through
+    // to the camera clock. A fix this pass throws away is worth seeing: it is a receiver
+    // reporting a lock it held too long.
+    const gpsVerdict = when.gps ? isValidGpsDate(when.gps, when.device) : undefined;
+    if (gpsVerdict && !gpsVerdict.ok) {
+      staleGps++;
+      if (verbose) await cmd.writeLn(`${row.absPath}: ${gpsVerdict.reason}`);
+    }
+
+    const resolved = resolveTime({
+      manual: str(attrs.whenManual),
+      gps: when.gps,
+      device: when.device,
+      digitizer: clock.digitizer,
+      quicktimeUtc: clock.quicktimeUtc,
+      deviceOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
+      archiveZone: SYSTEM_TIME_ZONE,
+      ...stampedSources(attrs),
+    });
+
+    if (
+      str(attrs.takenAt) === resolved?.takenAt && str(attrs.takenAtUtc) === resolved?.takenAtUtc && str(attrs.takenAtSource) === resolved?.takenAtSource
+    ) {
+      untouched++;
+      return;
+    }
+
+    if (resolved) bySource.set(resolved.takenAtSource, (bySource.get(resolved.takenAtSource) ?? 0) + 1);
+    else if (attrs.takenAt !== undefined) cleared++;
+    changed++;
+
+    if (verbose) {
+      await cmd.writeLn(
+        `${row.absPath}: ${str(attrs.takenAt) ?? '-'} -> ${resolved?.takenAt ?? '-'}` +
+          (resolved ? ` (${resolved.takenAtSource}, ${resolved.takenAtUtc})` : ''),
+      );
+    }
+
+    if (!dry) await vfs.update(access, row.absPath, { attrs: timeAttrs(resolved) });
+  };
+
+  // Renditions are left out in the store. `--device`: the files linked to one device, which the
+  // store answers from its devicePath index — what `device-relink` asks for after linking, or
+  // after a clock setting changed.
+  const where: AttrCondition[] = [NOT_DERIVED, ...(device ? [{ ref: 'devicePath', op: 'eq' as const, value: device }] : [])];
+  const underNode = under === undefined ? undefined : await vfs.get(access, under);
+  if (underNode?.type === 'file') {
+    if (!device || underNode.attrs.devicePath === device) await resolveOne({ id: underNode.id, absPath: under!, node: underNode, sortValue: null });
+  } else {
+    let after: NodeQueryCursor | undefined;
+    for (;;) {
+      const rows: NodeQueryEntry[] = await vfs.query(access, { types: ['file'], ...(under ? { within: under } : {}), where, after, limit: PAGE });
+      for (const row of rows) await resolveOne(row);
+      // Fewer than a page means none are left.
+      if (rows.length < PAGE) break;
+      after = { value: null, id: rows[rows.length - 1].id };
+    }
+  }
+
+  const result = {
+    ok: true as const,
+    dryRun: dry,
+    scanned,
+    changed,
+    cleared,
+    untouched,
+    staleGps,
+    bySource: Object.fromEntries(bySource),
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies MediaResolveTimeResult);
+    return 0;
+  }
+
+  await cmd.writeLn(
+    `${dry ? 'Would resolve' : 'Resolved'} ${changed} of ${scanned} file(s); ` +
+      `${untouched} already current, ${cleared} cleared, ${staleGps} gps fix(es) disbelieved`,
+  );
+  for (const [source, count] of [...bySource].sort((a, b) => b[1] - a[1])) {
+    await cmd.writeLn(`  ${source}: ${count}`);
+  }
+  return 0;
+};
+
+mediaResolveTime.spec = {
+  name: 'media-resolve-time',
+  effect: 'write' as const,
+  description: "Re-resolve media originals' capture times from their stored exif and manual sources",
+  args: [],
+  flags: [
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would change, write nothing' },
+    { name: 'under', type: 'path' as const, description: 'only the files in the tree under this directory or album, or this one file' },
+    { name: 'device', type: 'path' as const, description: 'only files linked to this device (its devicePath)' },
+    { name: 'v', type: 'bool' as const, description: 'print every file that changes' },
+  ],
+  examples: [
+    'media-resolve-time --dry-run',
+    'media-resolve-time --under /archive/albums/Exempelalbum_2019',
+    'media-resolve-time --device /archive/devices/Exempelkamera --dry-run',
+  ],
+  returns: 'how many files had their capture time re-resolved, and from which source.',
+};
+
+export default mediaResolveTime;

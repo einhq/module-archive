@@ -1,0 +1,129 @@
+#!ts
+/**
+ * person-relatives — who a kin phrase reaches from one person, through the family tree.
+ *
+ * "Min moster", "mammas syster", "my father's brother", "barnbarn": the phrase is taken in the
+ * user's own words and walked through the graph in code (`@archive/people/kin`), up to a parent, down to
+ * a child, across to a sibling or a partner, each step filtered by the gender the word implies.
+ * What each person reached actually IS to the one asked about is computed back from the graph —
+ * "syskon" may come back as "syster" — rather than echoed from the phrase.
+ *
+ * WHY A COMMAND. The assistant has done this for a year as a private tool, because a model that
+ * guessed at kinship guessed wrong. As a command it is the same walk for the shell, the UI and
+ * any agent that calls the archive's commands directly: measured in production 2026-09-23, a model given
+ * only the commands answered "vem är min moster" by walking person-info and person-children
+ * by hand, and "min dotter när hon var 6 år" by searching for a person named "dotter". This is
+ * the one step it had no command for.
+ *
+ * `--age` answers "när hon var 6 år" the same way: the span of capture dates in which each
+ * relative was that age, worked out from their recorded birth date — as coarse as that date is —
+ * ready for `search --from … --to …`. A model is never asked to do that arithmetic.
+ */
+
+import { type CmdReturn, type Command, parseArgs } from '@ein/client';
+import { PEOPLE_ROOT } from '@archive/paths';
+import { resolve } from '@std/path';
+import { makeCtx } from '@archive/people/genealogy';
+import { ageSpan, KIN_WORDS, parseKin, walkKin } from '@archive/people/kin';
+
+/**
+ * A person as a path, a slug, or a path relative to the working directory.
+ *
+ * A slug alone is what an agent usually has — `search-people` hands one back, and the drawer's
+ * context names the user by one — so it is looked up under the people root before being taken
+ * as a relative path.
+ */
+const personPath = async (cmd: Command, arg: string): Promise<string | undefined> => {
+  const candidates = arg.startsWith('/') ? [arg] : [`${PEOPLE_ROOT}/${arg}`, resolve(cmd.cwd, arg)];
+  for (const path of candidates) {
+    try {
+      await cmd.sys.vfs.get(cmd.access, path);
+      return path;
+    } catch {
+      // Not here; try the next reading of the argument.
+    }
+  }
+  return undefined;
+};
+
+const personRelatives = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { string: ['relation', 'age'] });
+  const [target] = flags._.map(String);
+  const phrase = typeof flags.relation === 'string' ? flags.relation.trim() : '';
+
+  if (!target || !phrase) {
+    await cmd.writeError('person-relatives: usage: person-relatives <person> --relation <kin phrase> [--age <years>]\n');
+    return 1;
+  }
+
+  const terms = parseKin(phrase);
+  if (!terms) {
+    const sample = ['mamma', 'dotter', 'moster', 'farfar', 'kusin', 'fru', 'mammas syster', 'grandfather'];
+    await cmd.writeError(
+      `person-relatives: ${JSON.stringify(phrase)} is not a kin phrase; use Swedish or English kin words, e.g. ${sample.join(', ')} ` +
+        `(${KIN_WORDS.length} words are known)\n`,
+    );
+    return 1;
+  }
+
+  const path = await personPath(cmd, target);
+  if (!path) {
+    await cmd.writeError(`person-relatives: no person at ${target}\n`);
+    return 1;
+  }
+
+  const age = flags.age === undefined ? undefined : Number(flags.age);
+  if (age !== undefined && (!Number.isInteger(age) || age < 0 || age > 130)) {
+    await cmd.writeError(`person-relatives: --age must be a whole number of years, not ${JSON.stringify(flags.age)}\n`);
+    return 1;
+  }
+
+  const found = await walkKin(makeCtx(cmd.sys.vfs, cmd.access), path, terms);
+  const relatives = found.map((relative) => {
+    const span = age !== undefined && relative.born ? ageSpan(relative.born, age) : undefined;
+    return {
+      ...relative,
+      // Absent rather than wrong when there is no birth date: a span guessed from nothing would
+      // send a search to the wrong decade with every appearance of confidence.
+      ...(age !== undefined ? { age, ...(span ? { taken: span } : { taken: null }) } : {}),
+    };
+  });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ of: path, relation: phrase, relatives });
+    return 0;
+  }
+
+  if (relatives.length === 0) {
+    await cmd.writeLn(`no ${phrase} is recorded for ${path} in the family tree`);
+    return 0;
+  }
+  for (const relative of relatives) {
+    const dates = [relative.born, relative.died].filter(Boolean).join(' – ');
+    const span = 'taken' in relative && relative.taken ? `  aged ${age}: ${relative.taken.from} to ${relative.taken.to}` : '';
+    await cmd.writeLn(`${relative.name}  (${relative.relation.sv} / ${relative.relation.en})${dates ? `  ${dates}` : ''}  ${relative.path}${span}`);
+  }
+  return 0;
+};
+
+personRelatives.spec = {
+  name: 'person-relatives',
+  effect: 'read' as const,
+  description: "Who a kin phrase reaches from a person through the family tree: 'moster', 'mammas syster', 'barn', 'my father's brother'",
+  args: [
+    { name: 'person', type: 'path' as const, description: 'the person to start from: a VFS path, or a slug under the people root' },
+  ],
+  flags: [
+    { name: 'relation', type: 'string' as const, description: 'kin word or chain in Swedish or English, as the user said it' },
+    { name: 'age', type: 'number' as const, description: 'also give the capture-date span in which each relative was this many years old' },
+  ],
+  examples: [
+    'person-relatives /archive/people/Anna_Exempel --relation moster',
+    "person-relatives Anna_Exempel --relation 'mammas syster'",
+    'person-relatives Anna_Exempel --relation dotter --age 6',
+  ],
+  returns:
+    'each relative the phrase reaches, with their path, name, birth and death dates and what they are to the person in Swedish and English; with --age, the capture-date span to search in.',
+};
+
+export default personRelatives;

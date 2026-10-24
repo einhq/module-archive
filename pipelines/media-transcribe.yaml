@@ -1,0 +1,46 @@
+# What is said in a video or a recording: a timed transcript, read in the sidebar and searched by
+# its chunks (`transcribe-file`). Every audio and video file gets the node, a silent one an empty
+# cue list, so "nothing said" and "never transcribed" stay apart.
+#
+# The voices (`media-voiceprint`) start from the transcript this writes.
+name: media-transcribe
+description: Transcribe a video or a recording and embed its chunks for search
+
+vars:
+  FORCE: ''
+
+# Below faces (100), so face detection drains first.
+triggers:
+  - on: media.metadata.extracted
+    match:
+      mimetype: 'audio/*'
+    skipIfExists: $NODE_PATH/metadata/transcript
+    skipIfAttr: undecodable
+
+  - on: media.metadata.extracted
+    match:
+      mimetype: 'video/*'
+    skipIfExists: $NODE_PATH/metadata/transcript
+    skipIfAttr: undecodable
+
+  # Emitted by the scan for a transcript made with other whisper settings than EMS runs now, or
+  # left without `transcribedAt`. The fact is the guard, so there is no skipIfExists; the backfill
+  # priority keeps it behind newly imported media.
+  - on: media.transcript.stale
+    skipIfAttr: undecodable
+    vars:
+      FORCE: -f
+    priority: 10
+
+steps:
+  transcribe-file:
+    command: transcribe-file $FORCE $NODE_PATH
+    description: Transcribe what is said, and embed it in chunks
+    pool: media
+    kind: transcribe
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 2
+  priority: 50

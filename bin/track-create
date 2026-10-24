@@ -1,0 +1,72 @@
+#!ts
+/**
+ * track-create — give a device a track: the route it recorded, kept as the
+ * device's child `track`.
+ *
+ *   track-create <device> [--description <text>] [--routing-key <key>]
+ *
+ * A track holds coordinate points {lat, lng, ts, alt?, speed?} in the track
+ * registry, indexed spatially and by time. Points are appended via
+ * track-append / track-import / POST /track/<path>.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { trackOf } from '@archive/location/track';
+
+const trackCreate = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['description', 'routing-key'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+
+  if (!target) {
+    await cmd.writeError('track-create: usage: track-create <device> [--description <text>] [--routing-key <key>]\n');
+    return 1;
+  }
+
+  let path: string;
+  try {
+    const track = await trackOf(cmd, target);
+    path = track.path;
+
+    if (await cmd.sys.vfs.exists(cmd.access, path)) {
+      await cmd.writeError(`track-create: ${path} already exists\n`);
+      return 1;
+    }
+
+    const attrs: Record<string, unknown> = {};
+    if (flags.description) attrs.description = flags.description;
+    if (flags['routing-key']) attrs.routingKeys = [flags['routing-key']];
+
+    await cmd.sys.vfs.create(cmd.access, 'track', track.device, 'track', { attrs });
+  } catch (error) {
+    await cmd.writeError(`track-create: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ path }));
+  } else {
+    await cmd.writeLn(`Created track ${path}`);
+  }
+  return 0;
+};
+
+trackCreate.spec = {
+  name: 'track-create',
+  effect: 'write' as const,
+  description: "Give a device a track for the coordinate points it recorded (the device's child track)",
+  args: [
+    { name: 'device', type: 'string' as const, description: 'the device: its slug under the devices root, or its path' },
+  ],
+  flags: [
+    { name: 'description', type: 'string' as const, description: 'track description' },
+    { name: 'routing-key', type: 'string' as const, description: 'relay routing key to append live fixes from' },
+  ],
+  examples: ['track-create garmin-etrex --description "Hiking GPS"'],
+  returns: "the track's path.",
+};
+
+export default trackCreate;

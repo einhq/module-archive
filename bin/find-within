@@ -1,0 +1,5 @@
+#!ts
+/** find-within — what lies inside a region of the map. The command is `findWithin` in [lib](../lib/), where its spec says the rest. */
+import { findWithin } from '@archive/find-within';
+
+export default findWithin;

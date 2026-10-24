@@ -1,0 +1,5 @@
+{
+  "description": "Keeps each album's photo stacks, denormalized time span and cover current",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

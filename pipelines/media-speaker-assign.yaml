@@ -1,0 +1,31 @@
+name: media-speaker-assign
+description: Decide which person each voice of a recording is
+
+# Once per recording, when its voices are written: `voiceprint-file` writes `speakersAt` last,
+# and that is the fact. Who each voice is gets decided for the recording as a whole — two
+# voices of one recording are never the same person automatically, which only a pass over all
+# of them at once can hold to.
+#
+# Pure database work — a kNN over every known voice — so it belongs on the CPU pool and never
+# holds a model slot for work that never calls EMS.
+#
+# `exclusive` is load-bearing and is deliberately the *same key faces use*: two recordings of
+# one new speaker decided at the same time would each mint a person, and so would a face-mint
+# racing a voice-mint. Both write under /people/unknown, so they serialise against each other.
+trigger:
+  on: media.speakers.detected
+
+steps:
+  assign:
+    command: assign-speakers $NODE_PATH
+    description: kNN vote against known voices, minting an unnamed person if needed
+    pool: media
+    kind: speaker-assign
+    priority: 40
+    exclusive: person-mint
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 2
+  priority: 5

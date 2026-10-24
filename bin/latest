@@ -1,0 +1,61 @@
+#!ts
+/**
+ * latest — the most recently captured media: one query on the `takenAtUtc` index, newest first.
+ * Originals only; a thumbnail or transcode carries its source's time and would repeat it. A view of
+ * the library, so nothing in an unlisted tree (staging) is among them.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, unlistedRoots } from '@ein/client';
+import { datedMediaOf, NOT_A_DERIVATIVE } from '@archive/media/on-this-day';
+import type { DatedMedia } from '@archive/media/api';
+
+const DEFAULT_COUNT = 10;
+const MAX_COUNT = 500;
+
+const latest = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const raw = flags._[0] as string | undefined;
+  const n = raw === undefined ? DEFAULT_COUNT : Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    await cmd.writeError(`latest: expected a count of at least 1, got '${raw}'\n`);
+    return 1;
+  }
+
+  const rows = await cmd.sys.vfs.query(cmd.access, {
+    types: ['file'],
+    where: [NOT_A_DERIVATIVE],
+    notWithin: [...await unlistedRoots(cmd.sys.vfs)],
+    orderBy: { ref: 'takenAtUtc', dir: 'desc' },
+    limit: Math.min(n, MAX_COUNT),
+  });
+  const media: DatedMedia[] = rows.map((row) => datedMediaOf(row, ''));
+
+  if (cmd.json) {
+    await cmd.writeJSON(media);
+  } else {
+    for (const item of media) await cmd.writeLn(`${item.takenAt ?? item.takenAtUtc}  ${item.path}`);
+  }
+  return 0;
+};
+
+latest.spec = {
+  name: 'latest',
+  effect: 'read' as const,
+  description: 'List the most recently captured media, newest first',
+  args: [
+    { name: 'count', type: 'number' as const, description: `number of results (default ${DEFAULT_COUNT}, max ${MAX_COUNT})` },
+  ],
+  flags: [],
+  examples: [
+    'latest',
+    'latest 20',
+  ],
+  returns: 'the most recently captured media, newest first, with capture time and dimensions.',
+};
+
+export default latest;

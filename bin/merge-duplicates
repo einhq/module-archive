@@ -1,0 +1,81 @@
+#!ts
+/**
+ * merge-duplicates — keep one file of a set of duplicates and drop the others into the trash.
+ *
+ *   merge-duplicates <keep> <drop>... [--batch [<id>]] [--label <text>] [--dry-run]
+ *
+ * The kept file is first filled in, never overwritten, with what a person said about a dropped
+ * copy: its description, hand-typed time, place, labels and the caller's star, the people named
+ * in its boxes and `people/` tags, its comments, and the library albums it was in
+ * (`@archive/media/merge-duplicates`). Staged drops then leave their suggested albums, and the
+ * drops go to the trash as one batch, the one `--batch` names or a new one, which
+ * `trash restore <batch>` brings back. Works on any files, staged or in the library.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import type { MergeDuplicatesResult } from '@archive/media/api';
+import { mergeDuplicates } from '@archive/media/merge-duplicates';
+
+const USAGE = 'merge-duplicates: usage: merge-duplicates <keep> <drop>... [--batch [<id>]] [--label <text>] [--dry-run]';
+
+/** A trash batch id, as `trash put --batch` makes them; anything else after `--batch` is a path. */
+const isBatchId = (value: string): boolean => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(value);
+
+const mergeDuplicatesCmd = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['batch', 'label'], boolean: ['dry-run'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  // `--batch` takes an id when one follows; what follows otherwise is a path.
+  const batchFlag = typeof flags.batch === 'string' ? flags.batch : undefined;
+  const batch = batchFlag !== undefined && isBatchId(batchFlag) ? batchFlag : undefined;
+  const args = [...(batchFlag && !batch ? [batchFlag] : []), ...flags._.map(String)];
+  const [keep, ...drops] = args.map((arg) => resolve(cmd.cwd, arg));
+  if (!keep || drops.length === 0) {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  let result: MergeDuplicatesResult;
+  try {
+    result = await mergeDuplicates(cmd, keep, drops, {
+      ...(batch ? { batch } : {}),
+      ...(typeof flags.label === 'string' && flags.label ? { label: flags.label } : {}),
+      dryRun: Boolean(flags['dry-run']),
+    });
+  } catch (error) {
+    await cmd.writeError(`merge-duplicates: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) await cmd.writeJSON(result satisfies MergeDuplicatesResult);
+  else {
+    const filled = result.merged.length > 0 ? `filled in ${result.merged.join(', ')}` : 'nothing to fill in';
+    if (result.dryRun) await cmd.writeLn(`Would keep ${result.keep} (${filled}) and trash ${result.trashed}`);
+    else await cmd.writeLn(`Kept ${result.keep} (${filled}); trashed ${result.trashed}, undone by: trash restore ${result.batches.join(' ')}`);
+  }
+  return 0;
+};
+
+mergeDuplicatesCmd.spec = {
+  name: 'merge-duplicates',
+  effect: 'write' as const,
+  description: 'Keep one file of a set of duplicates, fill it in from the others, and move them to the trash as one batch',
+  args: [
+    { name: 'keep', type: 'path' as const, description: 'the file kept' },
+    { name: 'drop', type: 'path' as const, variadic: true, description: 'the duplicates dropped into the trash' },
+  ],
+  flags: [
+    { name: 'batch', type: 'string' as const, description: 'trash into this batch (an id from trash put --batch), or with no id a new one' },
+    { name: 'label', type: 'string' as const, description: 'what the batch is called in the trash' },
+    { name: 'dry-run', type: 'bool' as const, dryRun: true, description: 'say what would be filled in and trashed, changing nothing' },
+  ],
+  examples: [
+    'merge-duplicates /archive/albums/Exempelalbum/files/IMG_0001.jpg /home/anna/staging/files/inbox/IMG_0001.jpg',
+    "merge-duplicates --label 'Copies of a sailboat' /archive/albums/Exempelalbum/files/IMG_0002.jpg /home/anna/staging/files/inbox/IMG_0002.jpg --dry-run",
+  ],
+  returns: 'MergeDuplicatesResult: the fields filled in, how many were trashed, and the batch that trash restore takes back.',
+};
+
+export default mergeDuplicatesCmd;

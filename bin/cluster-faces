@@ -1,0 +1,327 @@
+#!ts
+/**
+ * cluster-faces — recognize untagged faces as existing people by propagating
+ * person labels across the face-embedding similarity graph, and group the
+ * leftover untagged faces into candidate clusters.
+ *
+ * Approach (the duplicates.ts pattern, for identity):
+ *   1. load every face — a region with an embedding (@media/regions) — with its
+ *      person, file and path; votes are keyed by embedding id, writes go to the region
+ *   2. EmbeddingRegistry.findAllPairs('face', k, threshold) → near-neighbour edges
+ *   3. @media/face-cluster propagateLabels: an untagged face is recognized only
+ *      when its tagged neighbours agree clearly (margin over runner-up) and are
+ *      similar enough (threshold); otherwise it stays untagged
+ *   4. write personId on recognized faces (matching an EXISTING person)
+ *   5. with --create-people, mint one unnamed person per leftover cluster, so a
+ *      recurring stranger becomes a nameable identity instead of staying inert
+ *
+ * Writes are gated: --dry-run previews. Cluster creation is off by default and
+ * fenced by --max-cluster, because clusters are single-link connected
+ * components: at a loose threshold one weak edge chains two people together,
+ * and a person built from a chained component cannot be split afterwards. Run
+ * --dry-run first and read the clusterSizes histogram.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { type FaceEdge, mutualEdges, propagateLabels } from '@archive/media/face-cluster';
+import { allRegions, FACE_EMBEDDING_TYPE } from '@archive/media/regions';
+import { createUnnamedPerson } from '@archive/people/person';
+
+const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
+
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+/** Bucketed cluster sizes — the number to read before allowing creation. */
+const histogram = (sizes: number[]): Record<string, number> => {
+  const buckets: Record<string, number> = {};
+  for (const s of sizes) {
+    const key = s < 3 ? String(s) : s < 5 ? '3-4' : s < 10 ? '5-9' : s < 25 ? '10-24' : s < 60 ? '25-59' : s < 200 ? '60-199' : '200+';
+    buckets[key] = (buckets[key] ?? 0) + 1;
+  }
+  return buckets;
+};
+
+const clusterFaces = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['threshold', 'margin', 'min-votes', 'k', 'min-cluster', 'cluster-threshold', 'max-cluster', 'max-people'],
+    boolean: ['dry-run', 'verbose', 'create-people', 'mutual', 'no-mutual'],
+    alias: { n: 'dry-run', v: 'verbose' },
+  });
+  const threshold = flags.threshold ? Number(flags.threshold) : 0.5;
+  const margin = flags.margin ? Number(flags.margin) : 1.2;
+  const minVotes = flags['min-votes'] ? Number(flags['min-votes']) : 0.5;
+  const k = flags.k ? Number(flags.k) : 8;
+  const minCluster = flags['min-cluster'] ? Number(flags['min-cluster']) : 3;
+  const clusterThreshold = flags['cluster-threshold'] ? Number(flags['cluster-threshold']) : 0.6;
+  const maxCluster = flags['max-cluster'] ? Number(flags['max-cluster']) : 60;
+  const maxPeople = flags['max-people'] ? Number(flags['max-people']) : 500;
+  const createPeople = !!flags['create-people'];
+  // Mutual-kNN defaults on whenever people are being created: it is the cheap
+  // guard against a hub face chaining two people into one component.
+  const mutual = flags['no-mutual'] ? false : (flags.mutual || createPeople);
+  const dryRun = !!flags['dry-run'];
+  const verbose = !!flags.verbose;
+
+  for (
+    const [name, v] of [
+      ['threshold', threshold],
+      ['margin', margin],
+      ['min-votes', minVotes],
+      ['k', k],
+      ['min-cluster', minCluster],
+      ['cluster-threshold', clusterThreshold],
+      ['max-cluster', maxCluster],
+      ['max-people', maxPeople],
+    ] as const
+  ) {
+    if (!Number.isFinite(v)) {
+      await cmd.writeError(`cluster-faces: --${name} must be a number\n`);
+      return 1;
+    }
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  // 1. Load every face and tag. Faces are keyed by embedding id, which is what findAllPairs
+  // returns; the path is the region's, which is where the person is written.
+  const { faces, tags } = await allRegions(vfs, access);
+  const labeledPerson = new Map<string, string>();
+  const facePathById = new Map<string, string>();
+  const regionIdByFace = new Map<string, string>();
+  const fileIdByFace = new Map<string, string>();
+  const confidenceByFace = new Map<string, number>();
+  const lockedFaces = new Set<string>();
+  const rejected = new Map<string, Set<string>>();
+  for (const f of faces) {
+    const id = f.embeddingId;
+    facePathById.set(id, f.regionPath);
+    regionIdByFace.set(id, f.regionId);
+    const attrs = f.attrs as { personId?: unknown; fileId?: unknown; confidence?: unknown; assignLocked?: unknown; rejectedPersonIds?: unknown };
+    if (occ(attrs.personId)) labeledPerson.set(id, attrs.personId);
+    if (occ(attrs.fileId)) fileIdByFace.set(id, attrs.fileId);
+    confidenceByFace.set(id, typeof attrs.confidence === 'number' ? attrs.confidence : 0);
+    // A face a human has explicitly untagged must never be re-tagged.
+    if (attrs.assignLocked === true) lockedFaces.add(id);
+    // ...and one taken off a person with "let recognition re-match" must not go back to them.
+    if (Array.isArray(attrs.rejectedPersonIds)) rejected.set(id, new Set(attrs.rejectedPersonIds.filter(occ)));
+  }
+  const labeledCount = labeledPerson.size;
+  const untaggedCount = faces.length - labeledCount;
+
+  // 2. Near-neighbour edges among all faces (VFS fan-out across mounts).
+  let edges: FaceEdge[] = [];
+  try {
+    const pairs = await vfs.findAllPairs(access, FACE_EMBEDDING_TYPE, k, threshold);
+    edges = pairs.map((p) => ({ a: p.a, b: p.b, sim: p.similarity }));
+  } catch (error) {
+    await cmd.writeError(`cluster-faces: findAllPairs failed (${error instanceof Error ? error.message : String(error)})\n`);
+    return 1;
+  }
+  const rawEdgeCount = edges.length;
+  if (mutual) edges = mutualEdges(edges);
+
+  // 3. Propagate.
+  const { assignments, clusters } = propagateLabels(edges, labeledPerson, { threshold, minMargin: margin, minVotes, clusterThreshold, rejected });
+  const suggestions = clusters.filter((c) => c.size >= minCluster);
+
+  const write = async (path: string, attrs: Record<string, unknown>): Promise<boolean> => {
+    try {
+      await vfs.update(access, path, { attrs });
+      return true;
+    } catch (error) {
+      await cmd.writeError(`cluster-faces: failed to tag ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return false;
+    }
+  };
+
+  // 4. Write recognized personIds (existing people only).
+  //
+  // One person cannot be two faces in the same photo, so an assignment onto an
+  // image that already shows that person is dropped rather than written.
+  // A tag counts too: a person a human boxed is already in that photo.
+  const takenByFile = new Map<string, Set<string>>();
+  const take = (fileId: string | undefined, personId: string) => {
+    if (!fileId) return;
+    const taken = takenByFile.get(fileId) ?? new Set<string>();
+    takenByFile.set(fileId, taken);
+    taken.add(personId);
+  };
+  for (const [faceId, personId] of labeledPerson) take(fileIdByFace.get(faceId), personId);
+  for (const tag of tags) if (occ(tag.attrs.personId)) take(tag.attrs.fileId, tag.attrs.personId);
+
+  let written = 0, sameFileConflicts = 0, lockedSkipped = 0;
+  for (const a of assignments) {
+    const path = facePathById.get(a.faceId);
+    if (!path) continue;
+    if (lockedFaces.has(a.faceId)) {
+      lockedSkipped++;
+      continue;
+    }
+    const fileId = fileIdByFace.get(a.faceId);
+    if (fileId && takenByFile.get(fileId)?.has(a.personId)) {
+      sameFileConflicts++;
+      if (verbose) await cmd.writeLn(`conflict ${path}: ${a.personId} is already another face of this image`);
+      continue;
+    }
+
+    if (dryRun) {
+      written++;
+      if (verbose) await cmd.writeLn(`would tag ${path} -> ${a.personId} (${(a.confidence * 100).toFixed(0)}%, ${a.votes} votes)`);
+      continue;
+    }
+    const ok = await write(path, {
+      personId: a.personId,
+      personSource: 'cluster',
+      personConfidence: a.confidence,
+      personAssignedAt: nowIso(),
+    });
+    if (!ok) continue;
+    written++;
+    if (fileId) {
+      const taken = takenByFile.get(fileId) ?? new Set<string>();
+      takenByFile.set(fileId, taken);
+      taken.add(a.personId);
+    }
+    if (verbose) await cmd.writeLn(`tag ${path} -> ${a.personId} (${(a.confidence * 100).toFixed(0)}%, ${a.votes} votes)`);
+  }
+
+  // 5. Mint an unnamed person per leftover cluster.
+  let created = 0, clusterTagged = 0, sameFileSkipped = 0;
+  const oversized: { size: number; sample: string[] }[] = [];
+  const eligible: typeof suggestions = [];
+  for (const c of suggestions) {
+    if (c.size > maxCluster) {
+      // Almost certainly a chained component rather than one person. Report it
+      // so the threshold can be raised; never turn it into a person.
+      oversized.push({ size: c.size, sample: c.members.slice(0, 5).map((m) => facePathById.get(m) ?? m) });
+      continue;
+    }
+    eligible.push(c);
+  }
+
+  if (createPeople) {
+    for (const c of eligible) {
+      if (created >= maxPeople) break;
+
+      // A cluster spanning several faces of one image cannot be one person for
+      // all of them; keep the most confident face per image.
+      const bestPerFile = new Map<string, string>();
+      const members: string[] = [];
+      for (const faceId of c.members) {
+        if (lockedFaces.has(faceId)) {
+          lockedSkipped++;
+          continue;
+        }
+        const fileId = fileIdByFace.get(faceId);
+        if (!fileId) {
+          members.push(faceId);
+          continue;
+        }
+        const incumbent = bestPerFile.get(fileId);
+        if (incumbent === undefined) {
+          bestPerFile.set(fileId, faceId);
+          continue;
+        }
+        sameFileSkipped++;
+        if ((confidenceByFace.get(faceId) ?? 0) > (confidenceByFace.get(incumbent) ?? 0)) bestPerFile.set(fileId, faceId);
+      }
+      const keep = [...members, ...bestPerFile.values()];
+      if (keep.length < minCluster) continue;
+
+      if (dryRun) {
+        created++;
+        clusterTagged += keep.length;
+        if (verbose) await cmd.writeLn(`would create an unnamed person for ${keep.length} faces`);
+        continue;
+      }
+
+      const representative = keep.reduce((best, f) => (confidenceByFace.get(f) ?? 0) > (confidenceByFace.get(best) ?? 0) ? f : best, keep[0]);
+      let person;
+      try {
+        person = await createUnnamedPerson(vfs, access, { createdBy: 'cluster-faces', representativeFaceId: regionIdByFace.get(representative) });
+      } catch (error) {
+        await cmd.writeError(`cluster-faces: failed to create person: ${error instanceof Error ? error.message : String(error)}\n`);
+        continue;
+      }
+      created++;
+
+      const assignedAt = nowIso();
+      for (const faceId of keep) {
+        const path = facePathById.get(faceId);
+        if (!path) continue;
+        if (await write(path, { personId: person.id, personSource: 'cluster', personConfidence: null, personAssignedAt: assignedAt })) clusterTagged++;
+      }
+      if (verbose) await cmd.writeLn(`created ${person.path} for ${keep.length} faces`);
+    }
+  }
+
+  const summary = {
+    faces: faces.length,
+    tagged: labeledCount,
+    untagged: untaggedCount,
+    edges: edges.length,
+    edgesBeforeMutual: rawEdgeCount,
+    mutual,
+    recognized: assignments.length,
+    written,
+    sameFileConflicts,
+    lockedSkipped,
+    suggestionClusters: suggestions.length,
+    suggestionFaces: suggestions.reduce((s, c) => s + c.size, 0),
+    clusterSizes: histogram(clusters.map((c) => c.size)),
+    largestCluster: clusters[0]?.size ?? 0,
+    oversized: oversized.length,
+    created,
+    clusterTagged,
+    sameFileSkipped,
+    createPeople,
+    dryRun,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ...summary, oversizedClusters: oversized.slice(0, 20), suggestions: suggestions.slice(0, 100) });
+    return 0;
+  }
+  await cmd.writeLn(
+    `Faces ${summary.faces} (${summary.tagged} tagged, ${summary.untagged} untagged): ` +
+      `recognized ${summary.recognized}` + (dryRun ? ' (dry run)' : `, wrote ${written}`) +
+      `; ${summary.suggestionClusters} new-person cluster${summary.suggestionClusters === 1 ? '' : 's'} (${summary.suggestionFaces} faces)`,
+  );
+  await cmd.writeLn(`  cluster sizes: ${Object.entries(summary.clusterSizes).map(([k2, v]) => `${k2}:${v}`).join(' ') || 'none'} (largest ${summary.largestCluster})`);
+  if (oversized.length > 0) {
+    await cmd.writeLn(`  ${oversized.length} cluster(s) over --max-cluster ${maxCluster} skipped — raise --cluster-threshold if this is high`);
+  }
+  if (createPeople) {
+    await cmd.writeLn(`  created ${created} unnamed ${created === 1 ? 'person' : 'people'} covering ${clusterTagged} faces${dryRun ? ' (dry run)' : ''}`);
+  }
+  return 0;
+};
+
+clusterFaces.spec = {
+  name: 'cluster-faces',
+  effect: 'write' as const,
+  description: 'Recognize untagged faces as existing people (label propagation) + optionally create unnamed people for leftover clusters',
+  args: [],
+  flags: [
+    { name: 'threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
+    { name: 'margin', type: 'string' as const, description: 'winning person must beat runner-up by this factor (default 1.2)' },
+    { name: 'min-votes', type: 'string' as const, description: 'min winning vote weight to assign (default 0.5)' },
+    { name: 'k', type: 'string' as const, description: 'nearest neighbours per face (default 8)' },
+    { name: 'min-cluster', type: 'string' as const, description: 'min faces in a new-person cluster (default 3)' },
+    { name: 'cluster-threshold', type: 'string' as const, description: 'stricter min similarity to group two untagged faces (default 0.6)' },
+    { name: 'max-cluster', type: 'string' as const, description: 'skip clusters larger than this as likely chained (default 60)' },
+    { name: 'max-people', type: 'string' as const, description: 'max unnamed people to create per run (default 500)' },
+    { name: 'create-people', type: 'bool' as const, description: 'create an unnamed person per leftover cluster (off by default)' },
+    { name: 'mutual', type: 'bool' as const, description: 'keep only mutual nearest-neighbour edges (on with --create-people)' },
+    { name: 'no-mutual', type: 'bool' as const, description: 'disable the mutual-neighbour filter' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report recognitions without writing personId' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each recognition' },
+  ],
+  examples: [
+    'cluster-faces --create-people --min-cluster 4',
+  ],
+  returns: 'how many faces were recognised as existing people and how many clusters became new unnamed people.',
+};
+
+export default clusterFaces;

@@ -1,0 +1,65 @@
+[
+  {
+    "name": "family",
+    "route": "/family",
+    "description": "A family tree under the answer, for a question about family: someone's relatives, or how two people are related. Give the person it is drawn around and the people the results named, by path — or, for how two people are related, the other one as to.",
+    "params": {
+      "type": "object",
+      "properties": {
+        "person": {
+          "type": "string",
+          "format": "path",
+          "description": "The person the tree is drawn around."
+        },
+        "people": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "path"
+          },
+          "description": "The people the answer is about, as the results named them."
+        },
+        "to": {
+          "type": "string",
+          "format": "path",
+          "description": "For how two people are related: the other one; the tree is the line of relations between them."
+        }
+      },
+      "required": [
+        "person"
+      ]
+    }
+  },
+  {
+    "name": "map",
+    "route": "/map/pins",
+    "description": "A map under the answer, only when the user asks where something is or for a map. Name the locations and pictures a result gave you by path, and the areas location-region looked up by the name you gave it; name nothing to pin the pictures the answer shows. The app pins each one where the archive has it: never write coordinates.",
+    "params": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "A short title, in the language of the reply."
+        },
+        "paths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "path"
+          },
+          "description": "Locations or pictures a result named."
+        },
+        "areas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Areas location-region looked up this turn: a city, a country."
+        }
+      }
+    },
+    "fill": {
+      "paths": "pictures"
+    }
+  }
+]

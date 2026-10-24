@@ -1,0 +1,5 @@
+#!ts
+/** timeline — the archive as one dated feed. The command is `timeline` in [lib](../lib/), where its spec says the rest. */
+import { timeline } from '@archive/timeline';
+
+export default timeline;

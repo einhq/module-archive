@@ -1,0 +1,39 @@
+name: staging-unzip
+description: Expand a zip that lands in a staging category beside it, then remove the zip
+
+# A zip in a category, at any depth, is expanded into the folder it lies in, so the parts of one
+# Takeout fill one tree, and removed once every entry is there. `unzip -n` leaves a file already
+# there at its entry's size, so a run cut off goes on where it was on the next attempt; an entry
+# it cannot write, a refused archive (an entry outside the folder, too little free space) or a
+# failed attempt keeps the zip, and the step's error says why.
+#
+# Only a zip whose upload has ended is expanded. An upload or an SFTP put records the file's size,
+# sha256 and mimetype once its last byte is written, and that write is the `updated` event matched
+# here; an `updated` event while the bytes are still arriving (a mode or time set over SFTP) finds
+# no sha256 yet, as a write that starts from an empty file stores none before it ends, and starts
+# nothing. Expanded and removed under a running upload, the zip would fail it.
+trigger:
+  event: updated
+  nodeType: file
+  match:
+    # `*` is one name, `**` crosses `/`: a category is a folder under `files/`.
+    nodePath: '/home/*/staging/files/*/**'
+    mimetype: application/zip
+  filter: JSON_OUTPUT=1 attrs "$NODE_PATH" | jq -e .sha256 > /dev/null
+
+steps:
+  expand:
+    command: unzip -n -d "$(dirname $NODE_PATH)" $NODE_PATH && rm $NODE_PATH
+    description: Expand the zip beside it and remove it
+    pool: media
+    kind: unzip
+    # As ingest: what it writes is what the rest of the media work starts from.
+    priority: 100
+    requires:
+      cpu: 1
+    # One expansion at a time: each checks the free space alone, and two would each count on it.
+    exclusive: unzip
+
+options:
+  maxAttempts: 2
+  priority: 0

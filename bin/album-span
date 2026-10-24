@@ -1,0 +1,182 @@
+#!ts
+/**
+ * album-span — denormalize an album's time span onto the album node.
+ *
+ * An album's date is a property of the media it holds, which means it lives one
+ * listing away from the node. That is fine for one album and useless for a
+ * timeline: ordering albums by time would need a child listing per album before
+ * the first row could be emitted. So the span is written back as top-level
+ * attrs — `timeStart`, `timeEnd`, `mediaCount` — where `vfs.query` can order and
+ * page on it.
+ *
+ * This command is the one writer of those attrs, for curated and auto albums
+ * alike, and it always lists the members. An auto album's `attrs.autoAlbum`
+ * span is the clusterer's record of what it grouped, and stops describing the
+ * album once a member is retimed (ein/core#292).
+ *
+ * The span reaches out to `spanStart` / `spanEnd`, the days it was set by hand to start and end on
+ * (`album set`), while those lie beyond the media; once a capture reaches one, it is dropped here
+ * (`@archive/media/album-span`).
+ *
+ * An album whose media are all undated, and that has no span set by hand, gets no `timeStart` and is therefore
+ * absent from any time-ordered query. That is the intended outcome, not a gap to
+ * paper over — `orderBy` excludes rows without the ordering attr.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, type Command, parseArgs } from '@ein/client';
+import { NODE_TYPE_ALBUM } from '@archive/media/types';
+import { albumSpan as spanOf, mediaSpan } from '@archive/media/album-span';
+import type { AlbumSpanAnswer, AlbumSpanRow } from '@archive/media/api';
+import { AUTO_ORIGIN } from '@archive/staging/auto-album';
+
+/** How many album nodes one `--all` page pulls. */
+const SCAN_PAGE = 200;
+
+/** The attrs this command writes, and the hand-set ends it drops once the media reach them. */
+const WRITTEN = ['timeStart', 'timeEnd', 'mediaCount', 'spanStart', 'spanEnd'] as const;
+
+/** True when the node's stored span already matches what was just computed. */
+const isCurrent = (attrs: Record<string, unknown>, span: Omit<AlbumSpanRow, 'path'>): boolean => WRITTEN.every((key) => attrs[key] === span[key]);
+
+/**
+ * One album's span, written unless `dryRun`. Undefined for a node that is not an album, and for
+ * one whose span is already current — unless `dryRun`, which answers every album it reads.
+ */
+const writeAlbumSpan = async (cmd: Command, path: string, dryRun: boolean): Promise<AlbumSpanRow | undefined> => {
+  const node = await cmd.sys.vfs.get(cmd.access, path);
+  if (node.type !== NODE_TYPE_ALBUM) return undefined;
+
+  const attrs = node.attrs as Record<string, unknown>;
+  const span = spanOf(await mediaSpan(cmd, path), attrs);
+  if (dryRun) return { path, ...span };
+  if (isCurrent(attrs, span)) return undefined;
+
+  await cmd.sys.vfs.update(cmd.access, path, {
+    attrs: Object.fromEntries(WRITTEN.map((key) => [key, span[key] ?? null])),
+  });
+  return { path, ...span };
+};
+
+/**
+ * Every album node but the staging suggestions, paged by id (the default order when `orderBy` is
+ * omitted). A suggestion's members change with every organizer run, and `media-album` keeps its
+ * span current as they do.
+ */
+async function* allAlbums(cmd: Command): AsyncGenerator<{ path: string; attrs: Record<string, unknown> }> {
+  let after: { value: string | null; id: string } | undefined;
+
+  while (true) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: [NODE_TYPE_ALBUM],
+      where: [{ ref: 'origin', op: 'ne', value: AUTO_ORIGIN }],
+      after,
+      limit: SCAN_PAGE,
+    });
+    if (rows.length === 0) return;
+
+    for (const row of rows) {
+      yield { path: row.absPath, attrs: row.node.attrs as Record<string, unknown> };
+    }
+
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+  }
+}
+
+const albumSpan = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'stale', 'verbose', 'dry-run'],
+    string: ['limit'],
+    alias: { v: 'verbose', l: 'limit', n: 'dry-run' },
+  });
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if (paths.length === 0 && !flags.all) {
+    await cmd.writeError('album-span: give one or more album paths, or --all\n');
+    return 1;
+  }
+
+  const limit = flags.limit !== undefined ? Number(flags.limit) : Infinity;
+  if (Number.isNaN(limit) || limit <= 0) {
+    await cmd.writeError(`album-span: invalid --limit '${flags.limit}'\n`);
+    return 1;
+  }
+
+  let scanned = 0;
+  let updated = 0;
+  let skipped = 0;
+  const dryRun = Boolean(flags['dry-run']);
+  const albums: AlbumSpanRow[] = [];
+
+  const handle = async (path: string, attrs?: Record<string, unknown>): Promise<void> => {
+    // `--stale` is what makes a sweep cheap: an album that already has a span is
+    // not re-listed, so the repeat cost is one query page per 200 albums.
+    if (flags.stale && attrs && attrs.timeStart !== undefined && attrs.timeStart !== null) {
+      skipped++;
+      return;
+    }
+    scanned++;
+    const span = await writeAlbumSpan(cmd, path, dryRun);
+    if (!span) {
+      skipped++;
+      return;
+    }
+    if (!dryRun) updated++;
+    albums.push(span);
+    if ((flags.verbose || dryRun) && !cmd.json) {
+      await cmd.writeLn(`${path}  ${span.timeStart ?? '-'} .. ${span.timeEnd ?? '-'}  (${span.mediaCount})`);
+    }
+  };
+
+  try {
+    if (flags.all) {
+      for await (const album of allAlbums(cmd)) {
+        if (scanned >= limit) break;
+        await handle(album.path, album.attrs);
+      }
+    } else {
+      for (const path of paths) {
+        if (scanned >= limit) break;
+        await handle(path);
+      }
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`album-span: ${message}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ scanned, updated, skipped, albums } satisfies AlbumSpanAnswer);
+    return 0;
+  }
+
+  await cmd.writeLn(`album-span: ${scanned} scanned / ${updated} updated / ${skipped} skipped`);
+  return 0;
+};
+
+albumSpan.spec = {
+  name: 'album-span',
+  effect: 'write' as const,
+  description: "Write an album's time span (timeStart/timeEnd/mediaCount) onto the album node: its media's, widened to the days set by hand (spanStart/spanEnd)",
+  args: [
+    { name: 'album', type: 'path' as const, description: 'album path (repeatable)' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'every album in the tree but the staging suggestions' },
+    { name: 'stale', type: 'bool' as const, description: 'only albums that have no span yet' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many albums' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each album as it is written' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: "answer each album's span and its media's without writing" },
+  ],
+  examples: [
+    'album-span /archive/albums/Exempelalbum_2019',
+    'album-span --all --stale',
+    'album-span --dry-run /archive/albums/Exempelalbum_2019',
+  ],
+  returns:
+    'how many albums were scanned and updated, and each written album (each scanned one with --dry-run): its span, media count, first and last capture, and the hand-set ends still in force.',
+};
+
+export default albumSpan;

@@ -1,0 +1,24 @@
+name: media-fingerprint
+description: Compute the fingerprints duplicate detection and photo stacks compare
+
+trigger:
+  on: media.metadata.extracted
+  # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
+  # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
+  # three attempts of the same permanent answer only make a corrupt original look like a
+  # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
+  skipIfAttr: undecodable
+
+steps:
+  fingerprint:
+    command: compute-fingerprint $NODE_PATH
+    description: SSCD for image / video keyframes, chromaprint for audio
+    pool: media
+    kind: fingerprint
+    priority: 30
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 3
+  priority: 10

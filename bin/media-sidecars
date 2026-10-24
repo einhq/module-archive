@@ -1,0 +1,70 @@
+#!ts
+/**
+ * media-sidecars — pair the sidecars in a folder with the files they describe.
+ *
+ *   media-sidecars [<folder>] [--dry-run]
+ *
+ * Within the folder (the working directory by default), every unpaired Google Photos Takeout JSON
+ * and XMP file is matched with a file beside it by its name and moved under it as
+ * `<file>/sidecar`, where `exif-extract` and the time resolver read it; an edited copy and a Live
+ * Photo's video share their original's. A Takeout album's `metadata.json` gives its folder a
+ * `title`. A caption becomes the file's description where it has none, a Google Photos favourite a
+ * star for the inbox's owner, and a file already indexed is dated again (`@archive/media/sidecars`).
+ * A sidecar already paired is not looked at again, so a second run does nothing.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import type { MediaSidecarsAnswer } from '@archive/media/api';
+import { pairSidecars } from '@archive/media/sidecars';
+
+const mediaSidecars = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['dry-run'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags._.length > 1) {
+    await cmd.writeError('media-sidecars: usage: media-sidecars [<folder>] [--dry-run]\n');
+    return 1;
+  }
+  const folder = resolve(cmd.cwd, flags._.length > 0 ? String(flags._[0]) : '.');
+
+  let answer: MediaSidecarsAnswer;
+  try {
+    answer = await pairSidecars(cmd, folder, Boolean(flags['dry-run']));
+  } catch (error) {
+    await cmd.writeError(`media-sidecars: ${folder}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) await cmd.writeJSON(answer satisfies MediaSidecarsAnswer);
+  else {
+    await cmd.writeLn(
+      `${answer.dryRun ? 'Would pair' : 'Paired'} ${answer.paired} of ${answer.found} sidecar(s), ${answer.shared} shared, ${answer.albums} album(s), ` +
+        `${answer.duplicates} duplicate(s) removed, ${answer.unmatched} unmatched, ${answer.other} not sidecars; ` +
+        `${answer.described} described, ${answer.starred} starred, ${answer.retimed} dated again, ${answer.positioned} placed`,
+    );
+    for (const path of answer.unmatchedPaths) await cmd.writeLn(`unmatched: ${path}`);
+  }
+  for (const failure of answer.failed) await cmd.writeError(`media-sidecars: ${failure.path}: ${failure.error}\n`);
+  return answer.ok ? 0 : 1;
+};
+
+mediaSidecars.spec = {
+  name: 'media-sidecars',
+  effect: 'write' as const,
+  description:
+    'Pair the Google Photos Takeout JSON and XMP sidecars in a folder with their files, as <file>/sidecar, and carry over their dates, places, captions and favourites',
+  args: [
+    { name: 'folder', type: 'path' as const, description: 'the folder whose sidecars are paired, at any depth; the working directory when none is given' },
+  ],
+  flags: [
+    { name: 'dry-run', type: 'bool' as const, dryRun: true, description: 'count what would be paired and carried over, changing nothing' },
+  ],
+  examples: [
+    'media-sidecars /home/anna/staging/files/google-photos/upload-2026-10-18',
+    "media-sidecars '/home/anna/staging/files/google-photos/Takeout/Google Photos/Sommar i Exempelstad' --dry-run",
+  ],
+  returns: 'MediaSidecarsAnswer: the sidecars found, paired, shared and unmatched, and what the files were given.',
+};
+
+export default mediaSidecars;

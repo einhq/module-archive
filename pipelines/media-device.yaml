@@ -1,0 +1,20 @@
+name: media-device
+description: Link a file to the device that produced it
+
+# Re-runnable on its own: registering a camera later re-links its photos without
+# re-running exiftool over them.
+trigger:
+  on: media.metadata.extracted
+  match:
+    # Any device information at all, not the serial alone: most phones write no
+    # serial, and matching on it left every one of them unlinked.
+    deviceKey: '?*'
+
+steps:
+  device-link:
+    command: device-link $NODE_PATH
+    description: Match exif device info against the device registry
+
+options:
+  maxAttempts: 2
+  priority: 5

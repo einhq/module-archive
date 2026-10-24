@@ -1,0 +1,87 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, type Ctx, getChildren, getParents, makeCtx, PARENTS_DIR } from '@archive/people/genealogy';
+import type { PersonAttrs } from '@archive/people/types';
+
+async function label(cmd: Command, path: string): Promise<string> {
+  try {
+    const node = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, path);
+    const name = node.attrs.name ?? basename(path);
+    const y = (d?: string | null) => (d ? d.slice(0, 4) : '');
+    const span = node.attrs.born || node.attrs.died ? ` (${y(node.attrs.born)}–${y(node.attrs.died)})` : '';
+    return `${name}${span}`;
+  } catch {
+    return basename(path);
+  }
+}
+
+async function walk(cmd: Command, ctx: Ctx, person: string, dir: string, depth: number, indent: string, seen: Set<string>): Promise<void> {
+  if (depth <= 0 || seen.has(person)) return;
+  seen.add(person);
+  const entries = dir === PARENTS_DIR ? await getParents(ctx, person) : await getChildren(ctx, person);
+  for (const { path } of entries) {
+    await cmd.writeLn(`${indent}${dir === PARENTS_DIR ? '▲ ' : '▼ '}${await label(cmd, path)}`);
+    await walk(cmd, ctx, path, dir, depth - 1, `${indent}  `, seen);
+  }
+}
+
+const flagInt = (args: string[], name: string, dflt: number): number => {
+  const i = args.indexOf(name);
+  const n = i >= 0 ? parseInt(args[i + 1], 10) : NaN;
+  return Number.isFinite(n) ? n : dflt;
+};
+
+const personFamilyTree = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const targetArg = rest[0];
+  if (!targetArg) {
+    await cmd.writeError('person-family-tree: missing person path\n');
+    return 1;
+  }
+  const person = resolve(cmd.cwd, targetArg);
+  const up = flagInt(cmd.args, '--up', 3);
+  const down = flagInt(cmd.args, '--down', 2);
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, person);
+    const ctx = makeCtx(cmd.sys.vfs, cmd.access);
+    await cmd.writeLn(await label(cmd, person));
+    if (up > 0) {
+      await cmd.writeLn('Ancestors:');
+      await walk(cmd, ctx, person, PARENTS_DIR, up, '  ', new Set());
+    }
+    if (down > 0) {
+      await cmd.writeLn('Descendants:');
+      await walk(cmd, ctx, person, CHILDREN_DIR, down, '  ', new Set());
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-family-tree: ${message}\n`);
+    return 1;
+  }
+};
+
+personFamilyTree.spec = {
+  name: 'person-family-tree',
+  effect: 'read' as const,
+  // An indented tree drawn for a terminal, with no structured form to degrade
+  // to. `person-graph` is the machine-readable answer to the same question, so
+  // this one is exempt rather than given a second output mode.
+  json: false,
+  description: 'Display ancestors and descendants of a person',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [
+    { name: 'up', type: 'number' as const, description: 'ancestor generations (default 3)' },
+    { name: 'down', type: 'number' as const, description: 'descendant generations (default 2)' },
+  ],
+  examples: [
+    'person-family-tree --up 2 --down 2 /archive/people/Anna_Exempel',
+  ],
+  returns: "the person's ancestors and descendants to the given depth.",
+};
+
+export default personFamilyTree;

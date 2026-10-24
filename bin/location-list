@@ -1,0 +1,97 @@
+#!ts
+/**
+ * location-list — the compact listing the Locations grid needs.
+ *
+ * `find-within` is deliberately a media-map command: after its geometry scan it
+ * classifies media, reads their dates, sorts them and resolves their paths.  A
+ * Locations grid needs none of that.  It lists `/locations` with each location's child
+ * edges, and joins the id of its `position` child with the registry coordinates.
+ */
+import { LOCATIONS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import type { LocationEntry } from '@archive/location/api';
+import { POSITION_CHILD } from '@archive/location/location-link';
+
+const DEFAULT_ROOT = LOCATIONS_ROOT;
+/** A whole-archive registry scan; location entries themselves are normally few. */
+const SCAN_LIMIT = 200000;
+const WORLD = { north: 90, south: -90, east: 180, west: -180 };
+
+type LocationListAttrs = {
+  name?: unknown;
+  address?: unknown;
+  displayName?: unknown;
+  geocodeStatus?: unknown;
+  locationSource?: unknown;
+  locationPoints?: unknown;
+  geocodeCandidates?: unknown;
+};
+
+/** Only the states a location's geocoding can be in; anything else was never written by `geocode-location`. */
+const geocodeStatusOf = (value: unknown): LocationEntry['geocodeStatus'] => value === 'applied' || value === 'review' || value === 'none' ? value : undefined;
+
+/** Where a location's position came from; anything else is not a source this module writes. */
+const locationSourceOf = (value: unknown): LocationEntry['locationSource'] => value === 'media-centroid' || value === 'nominatim' || value === 'manual' ? value : undefined;
+
+const string = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
+
+const locationList = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { boolean: ['without-coordinates'] });
+  const root = typeof flags._[0] === 'string' ? flags._[0] : DEFAULT_ROOT;
+  const withCoordinates = !flags['without-coordinates'];
+
+  try {
+    // These two independent reads are the complete query. In particular, do
+    // not route this through `find-within`: its media/path work is why opening
+    // the Locations grid used to take seconds on a large archive.
+    const [children, hits] = await Promise.all([
+      cmd.sys.vfs.children<LocationListAttrs>(cmd.access, root, { childLinks: withCoordinates }),
+      withCoordinates ? cmd.sys.vfs.findWithin(cmd.access, WORLD, SCAN_LIMIT) : Promise.resolve([]),
+    ]);
+    const points = new Map(hits.map((hit) => [hit.id, { lat: hit.lat, lng: hit.lng }]));
+
+    const locations = children
+      .filter((entry) => entry.node.type === 'location')
+      .map((entry) => {
+        const attrs = entry.node.attrs;
+        const shape = entry.children?.find((child) => child.name === POSITION_CHILD);
+        const point = shape ? points.get(shape.id) : undefined;
+        const candidates = Array.isArray(attrs.geocodeCandidates) ? attrs.geocodeCandidates.length : 0;
+        return {
+          id: entry.name,
+          name: string(attrs.name) ?? string(attrs.displayName) ?? entry.name,
+          address: string(attrs.address),
+          displayName: string(attrs.displayName),
+          geocodeStatus: geocodeStatusOf(attrs.geocodeStatus),
+          locationSource: locationSourceOf(attrs.locationSource),
+          locationPoints: typeof attrs.locationPoints === 'number' ? attrs.locationPoints : undefined,
+          candidateCount: candidates,
+          lat: point?.lat,
+          lng: point?.lng,
+        };
+      });
+
+    if (cmd.json) {
+      await cmd.writeJSON(locations satisfies LocationEntry[]);
+    } else {
+      for (const location of locations) {
+        await cmd.writeLn(`${location.lat === undefined ? 'unplaced' : `${location.lat},${location.lng}`} ${location.name}`);
+      }
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`location-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+locationList.spec = {
+  name: 'location-list',
+  effect: 'read' as const,
+  description: 'List locations with their saved coordinates',
+  args: [{ name: 'root', type: 'path' as const, description: `Location directory (default: ${DEFAULT_ROOT})` }],
+  flags: [{ name: 'without-coordinates', type: 'bool' as const, description: 'skip the position-registry scan' }],
+};
+
+export default locationList;

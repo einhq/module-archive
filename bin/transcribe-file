@@ -1,0 +1,239 @@
+#!ts
+/**
+ * transcribe-file — a media file's timed transcript and its chunk embeddings.
+ *
+ * The transcript is a WebVTT node at `metadata/transcript`, beside the `metadata/content`
+ * that `index-document` writes and following the same shape and the same guards. WebVTT
+ * rather than a JSON of segments because it is the format `<video>` already understands:
+ * the node serves straight out of `/file/<path>/metadata/transcript` with the right
+ * Content-Type, and the subtitle track needs no route, no converter and no second copy.
+ *
+ * Chunks are why search can find a moment: the transcript is embedded in windows of
+ * `CHUNK_TARGET_SECONDS`, each chunk node *named for its start second*, so a vector hit carries
+ * its own seek target. `search-media` resolves a hit to a path and nothing else, and reading an
+ * attr per hit would put a node read back on the search path.
+ *
+ * `transcribedAt` is written once the cues are, and marks the transcript done: the skip below,
+ * the scan's gaps and `media.transcript.generated` all read it.
+ */
+
+import { resolve } from '@std/path';
+import { toText } from '@std/streams/to-text';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { stepExitCode, transcribe, type TranscribeResult } from '@ems/client';
+import { CHUNK_TARGET_SECONDS, chunkSegments, chunkVectors, parseVtt, segmentsToVtt, transcriptText } from '@archive/media/transcript';
+import { storeCurrentChunks } from '@ems/text-embedding';
+import { reportUnwritable } from '@archive/media/writable';
+
+/**
+ * Run whisper over the file. EMS extracts the sound itself, once per file and shared with the
+ * diarization and voiceprints that follow, so the media file is handed over as it stands.
+ *
+ * Plenty of the archive is silent phone clips, so "no audio" is a normal outcome and must
+ * not look like a failure: EMS says `audio: false` for a file with no sound track, which is
+ * `undefined` here — the same answer the demux used to give — as distinct from a track that
+ * carries no speech.
+ */
+const runWhisper = async (cmd: Command, inputPath: string, _mimetype: string): Promise<TranscribeResult | undefined> => {
+  const result = await transcribe(cmd, inputPath);
+  return result.audio ? result : undefined;
+};
+
+/** Create a node if it is not there. `mknode` fails on an existing one, which -f must survive. */
+const ensureNode = async (cmd: Command, path: string, spec: string): Promise<boolean> => {
+  if ((await cmd.execute(`info ${shq(path)}`)).code === 0) return true;
+  return (await cmd.execute(`mknode ${spec} ${shq(path)}`)).code === 0;
+};
+
+/** Write bytes through the VFS, so text with newlines and quotes survives. */
+const writeNode = async (cmd: Command, path: string, body: string): Promise<void> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
+  try {
+    await handle.write(new TextEncoder().encode(body));
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * What a transcript that is already written says.
+ *
+ * The node is the only record of the timings, so this parses them back rather than keeping
+ * a second flat copy that could drift from the cues a player actually shows.
+ */
+const readExisting = async (cmd: Command, transcriptPath: string, attrs: Record<string, unknown>): Promise<{
+  text: string;
+  speech: boolean;
+  segmentCount: number;
+  language?: string;
+  model?: string;
+}> => {
+  let vtt = '';
+  try {
+    const handle = await cmd.sys.vfs.open(cmd.access, transcriptPath, { mode: 'r' });
+    try {
+      vtt = await toText(handle.readable);
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { text: '', speech: false, segmentCount: 0 };
+  }
+
+  const segments = parseVtt(vtt);
+  return {
+    text: transcriptText(segments),
+    speech: segments.length > 0,
+    segmentCount: segments.length,
+    ...(typeof attrs.language === 'string' ? { language: attrs.language } : {}),
+    ...(typeof attrs.transcribedBy === 'string' ? { model: attrs.transcribedBy } : {}),
+  };
+};
+
+const transcribeFile = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+
+  if (!inputPath) {
+    await cmd.writeError('transcribe-file: missing file path\n');
+    return 1;
+  }
+
+  const infoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(inputPath)}`);
+  if (infoResult.code !== 0) {
+    await cmd.writeError(`transcribe-file: ${inputPath}: ${infoResult.stderr}\n`);
+    return 1;
+  }
+  if (JSON.parse(infoResult.stdout).type !== 'file') {
+    await cmd.writeError(`transcribe-file: ${inputPath}: not a file node\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, await cmd.sys.vfs.get(cmd.access, inputPath))) return 1;
+
+  const attrsResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(inputPath)}`);
+  if (attrsResult.code !== 0) {
+    await cmd.writeError(`transcribe-file: ${inputPath}: failed to read attrs\n`);
+    return 1;
+  }
+  const mimetype = JSON.parse(attrsResult.stdout).mimetype || '';
+  if (!mimetype.startsWith('audio/') && !mimetype.startsWith('video/')) {
+    await cmd.writeError(`transcribe-file: ${inputPath}: not audio or video (${mimetype})\n`);
+    return 1;
+  }
+
+  const transcriptPath = `${inputPath}/metadata/transcript`;
+
+  // Checked before the demux: for a video this saves an ffmpeg pass and a whisper run, and
+  // in a sweep most files have been here before. A node without `transcribedAt` is one an
+  // interrupted run left, and is transcribed again. A skip answers with the transcript it found.
+  const transcriptAttrs = (await cmd.sys.vfs.get(cmd.access, transcriptPath).catch(() => undefined))?.attrs as Record<string, unknown> | undefined;
+  if (!force && typeof transcriptAttrs?.transcribedAt === 'string') {
+    if (verbose) await cmd.writeLn('Already transcribed, skipping (use -f to force)');
+    const existing = await readExisting(cmd, transcriptPath, transcriptAttrs);
+    if (cmd.json) await cmd.writeJSON({ ...existing, path: inputPath, skipped: true });
+    else await cmd.writeLn(existing.text || 'No speech detected');
+    return 0;
+  }
+
+  let result: TranscribeResult | undefined;
+  try {
+    result = await runWhisper(cmd, inputPath, mimetype);
+  } catch (error) {
+    await cmd.writeError(`transcribe-file: ${inputPath}: transcription failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+
+  const segments = result?.segments ?? [];
+  const text = transcriptText(segments);
+
+  // A file with nothing said in it still gets its node, holding an empty cue list. That is
+  // what makes "we looked and there was no speech" distinguishable from "we never looked",
+  // which is the difference between the skip above working and a silent clip being
+  // re-transcribed on every sweep.
+  const transcribedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  await cmd.execute(`mkdir -p ${shq(`${inputPath}/metadata`)}`);
+  if (!await ensureNode(cmd, transcriptPath, '-t file --as "mimetype=text/vtt" --tier db')) {
+    await cmd.writeError(`transcribe-file: failed to create ${transcriptPath}\n`);
+    return 1;
+  }
+  await writeNode(cmd, transcriptPath, segmentsToVtt(segments));
+
+  await cmd.sys.vfs.update(cmd.access, transcriptPath, {
+    attrs: {
+      mimetype: 'text/vtt',
+      transcribedAt,
+      transcribedBy: result?.model ?? null,
+      // The decode settings behind this transcript. `media-scan` compares it with what EMS
+      // would write now, and transcribes the file again when they differ — which is how a
+      // tuning change reaches transcripts that already exist. Null when whisper never
+      // ran (no audio track), as `transcribedBy` is: there is nothing to redo, and deriveGaps
+      // only compares a transcript that names a model, so such a file is not re-announced on
+      // every scan.
+      transcribedWith: result?.signature ?? null,
+      language: result?.language ?? null,
+      languageProbability: result?.languageProbability ?? null,
+      duration: result?.duration ?? null,
+      segmentCount: segments.length,
+      speech: segments.length > 0,
+    },
+  });
+
+  // One vector per chunk of speech, as a set that replaces the last one. Not embedded is not a
+  // failure: the transcript and the subtitles are written and worth keeping, and `media-reembed`
+  // embeds the chunks later.
+  const chunks = chunkSegments(segments);
+  const unstored = await storeCurrentChunks(cmd, transcriptPath, chunkVectors(chunks), { transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS });
+  if (unstored) await cmd.writeError(`transcribe-file: ${inputPath}: chunks not embedded: ${unstored}\n`);
+  const chunkCount = unstored ? 0 : chunks.length;
+
+  if (verbose) {
+    await cmd.writeLn(`${inputPath}: ${segments.length} segments, ${chunkCount} chunks, language ${result?.language ?? 'none'}`);
+  }
+
+  const output = {
+    path: inputPath,
+    text,
+    language: result?.language,
+    languageProbability: result?.languageProbability,
+    duration: result?.duration,
+    model: result?.model,
+    speech: segments.length > 0,
+    segmentCount: segments.length,
+    chunkCount,
+  };
+
+  if (cmd.json) await cmd.writeJSON(output);
+  else await cmd.writeLn(text || 'No speech detected');
+
+  return 0;
+};
+
+transcribeFile.spec = {
+  name: 'transcribe-file',
+  effect: 'write' as const,
+  description: 'Transcribe audio or video into a timed WebVTT node with chunk embeddings',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to an audio or video file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Force re-transcription even if a transcript exists' },
+  ],
+  examples: [
+    'transcribe-file /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+  ],
+  returns: 'nothing; a timed WebVTT transcript with chunk embeddings is written under the file.',
+};
+
+export default transcribeFile;

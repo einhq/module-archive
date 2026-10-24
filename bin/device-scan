@@ -1,0 +1,187 @@
+#!ts
+/**
+ * device-scan — which devices the archive has seen but nobody has registered.
+ *
+ * Answered from two **aggregate** queries rather than a walk over media. The
+ * obvious implementation — page through every `exif` node and tally what it
+ * says — is not affordable: an exif node carries the whole exiftool dump in
+ * `raw`, so reading 126k of them to look at two fields moves gigabytes to
+ * examine kilobytes. Grouping in the store instead moves one row per distinct
+ * camera.
+ *
+ * The split between the two queries mirrors `matchDevice`: a serial identifies
+ * one body and is the registry's strong key, so serials are counted on their
+ * own; files with no serial can only ever be identified by their model line,
+ * and are counted separately so a camera that writes a serial is not proposed
+ * twice.
+ *
+ * Read-only. Linking a newly registered device's existing media is
+ * `device-relink`.
+ */
+import type { AggregateBucket, CmdReturn, Command, NodeAttrs } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { type DeviceEntry, type DeviceFingerprint, listDevices, matchDevice } from '@archive/device/device';
+import type { DeviceProposal, ScanResult } from '@archive/device/api';
+
+const NODE_TYPE_EXIF = 'exif';
+const DEFAULT_LIMIT = 100;
+
+type DeviceInfoAttr = { make?: string; model?: string };
+
+const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
+
+/** `deviceinfo` reaches an aggregate key as JSON text — the same shape `->>` yields. */
+const parseDeviceInfo = (key: string): DeviceInfoAttr => {
+  try {
+    const parsed = JSON.parse(key) as DeviceInfoAttr;
+    return { make: str(parsed.make), model: str(parsed.model) };
+  } catch {
+    return {};
+  }
+};
+
+/** What to call a camera the archive only knows by its exif. */
+const suggestName = (fingerprint: DeviceFingerprint): string => {
+  const { make, model, serialNumber } = fingerprint;
+  // A model usually already carries the make ("Canon EOS 5D Mark III"), so
+  // prefixing it unconditionally produces "Canon Canon EOS 5D Mark III".
+  if (model) return make && !model.toLowerCase().startsWith(make.toLowerCase()) ? `${make} ${model}` : model;
+  if (make) return make;
+  return `Unknown device ${serialNumber ?? ''}`.trim();
+};
+
+const byFiles = (a: DeviceProposal, b: DeviceProposal): number => b.files - a.files;
+
+/** Loose enough to see through punctuation and case, strict enough not to merge two cameras. */
+const nameKey = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** Point a proposal at the registered device of the same name, if there is one. */
+const withExisting = (proposal: DeviceProposal, devices: DeviceEntry[]): DeviceProposal => {
+  const key = nameKey(proposal.suggestedName);
+  const match = devices.find((device) => nameKey(device.name) === key) ??
+    // A model on its own also identifies the device named after it, which is how
+    // `Canon DIGITAL IXUS 750` finds `/devices/Canon_DIGITAL_IXUS_750`.
+    (proposal.model ? devices.find((device) => nameKey(device.name) === nameKey(proposal.model!)) : undefined);
+
+  return match ? { ...proposal, existingPath: match.path, existingName: match.name, existingOwnership: match.ownership } : proposal;
+};
+
+const deviceScan = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { string: ['limit'] });
+  const limit = Math.max(parseInt((flags.limit as string) ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT, 1);
+
+  let devices;
+  try {
+    devices = await listDevices(cmd);
+  } catch (error) {
+    await cmd.writeError(`device-scan: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  const [serialBuckets, modelBuckets]: [AggregateBucket[], AggregateBucket[]] = await Promise.all([
+    vfs.aggregate(access, { types: [NODE_TYPE_EXIF], group: [{ ref: 'deviceSerialNumber' }] }),
+    vfs.aggregate(access, {
+      types: [NODE_TYPE_EXIF],
+      where: [{ ref: 'deviceSerialNumber', op: 'missing' }],
+      group: [{ ref: 'deviceinfo' }],
+    }),
+  ]);
+
+  const proposals: DeviceProposal[] = [];
+  let known = 0;
+
+  // Serial-carrying cameras. The make and model are not in the bucket key, so
+  // one sample row per *unregistered* serial fills them in — bounded by how
+  // many unknown cameras there are, not by how many files they took.
+  const unknownSerials: AggregateBucket[] = [];
+  for (const bucket of serialBuckets) {
+    if (devices.some((device) => device.serialNumber === bucket.key[0])) {
+      known += bucket.count;
+      continue;
+    }
+    unknownSerials.push(bucket);
+  }
+  unknownSerials.sort((a, b) => b.count - a.count);
+
+  for (const bucket of unknownSerials.slice(0, limit)) {
+    const sample = await vfs.query(access, {
+      types: [NODE_TYPE_EXIF],
+      where: [{ ref: 'deviceSerialNumber', op: 'eq', value: bucket.key[0] }],
+      limit: 1,
+    });
+    const info = (sample[0]?.node.attrs as NodeAttrs | undefined)?.deviceinfo as DeviceInfoAttr | undefined;
+    const fingerprint: DeviceFingerprint = {
+      serialNumber: bucket.key[0],
+      make: str(info?.make),
+      model: str(info?.model),
+    };
+
+    // An unregistered serial on a registered model line is already linked by
+    // the make+model fallback, so proposing it would ask the user to register
+    // a camera whose photos are not actually loose.
+    if (matchDevice(devices, fingerprint)) {
+      known += bucket.count;
+      continue;
+    }
+
+    proposals.push(withExisting({ ...fingerprint, files: bucket.count, suggestedName: suggestName(fingerprint) }, devices));
+  }
+
+  // Cameras that write no serial: the model line is the only identity there is.
+  for (const bucket of modelBuckets) {
+    const fingerprint = parseDeviceInfo(bucket.key[0]);
+    if (!fingerprint.model && !fingerprint.make) continue;
+    if (matchDevice(devices, fingerprint)) {
+      known += bucket.count;
+      continue;
+    }
+    proposals.push(withExisting({ ...fingerprint, files: bucket.count, suggestedName: suggestName(fingerprint) }, devices));
+  }
+
+  proposals.sort(byFiles);
+  const truncated = unknownSerials.length > limit;
+  const result = {
+    registered: devices.length,
+    proposals: proposals.slice(0, limit),
+    /** Files whose camera is already registered — the other side of the tally. */
+    matched: known,
+    truncated,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies ScanResult);
+    return 0;
+  }
+
+  if (result.proposals.length === 0) {
+    await cmd.writeLn(`No unregistered devices (${devices.length} registered, ${known} files matched)`);
+    return 0;
+  }
+
+  await cmd.writeLn(`${result.proposals.length} unregistered device(s):`);
+  for (const proposal of result.proposals) {
+    const parts = [proposal.suggestedName];
+    if (proposal.serialNumber) parts.push(`[${proposal.serialNumber}]`);
+    parts.push(`${proposal.files} file${proposal.files === 1 ? '' : 's'}`);
+    if (proposal.existingPath) parts.push(`-> ${proposal.existingPath} (registered, missing this fingerprint)`);
+    await cmd.writeLn(`  ${parts.join(' ')}`);
+  }
+  if (truncated) await cmd.writeLn(`(more than ${limit} unknown serials; raise --limit to see them)`);
+
+  return 0;
+};
+
+deviceScan.spec = {
+  name: 'device-scan',
+  effect: 'read' as const,
+  description: 'Propose devices seen in media but not registered',
+  args: [],
+  flags: [
+    { name: 'limit', type: 'string' as const, description: `max proposals to report (default ${DEFAULT_LIMIT})` },
+  ],
+};
+
+export default deviceScan;

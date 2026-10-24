@@ -1,0 +1,5 @@
+{
+  "description": "Gives every named person without a cover the crop of one of their own faces",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

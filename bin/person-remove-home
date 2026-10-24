@@ -1,0 +1,61 @@
+#!ts
+/**
+ * person-remove-home — remove a person↔location residence relation (both halves).
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { homeLink, removeResidence } from '@archive/people/residence';
+
+const personRemoveHome = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const personArg = flags._[0] as string | undefined;
+  const locationArg = flags._[1] as string | undefined;
+
+  if (!personArg || !locationArg) {
+    await cmd.writeError('person-remove-home: usage: person-remove-home <person> <location>\n');
+    return 1;
+  }
+
+  const person = resolve(cmd.cwd, personArg);
+  const location = resolve(cmd.cwd, locationArg);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  const link = homeLink(person, location);
+  if (!(await vfs.exists(access, link, { follow: false }))) {
+    await cmd.writeError(`person-remove-home: ${link} not found\n`);
+    return 1;
+  }
+
+  // Both halves, tolerating relations-guard having raced us to the peer. The
+  // span's flat projection lives on the link, so it goes with it.
+  await removeResidence(vfs, access, person, location);
+
+  // A side effect with no stdout of its own: `{ok:true}` under JSON_OUTPUT,
+  // which is how the UI calls it, and a sentence otherwise.
+  if (cmd.json) await cmd.writeJSON({ ok: true, link });
+  else await cmd.writeLn(`Removed ${basename(person)} home ${basename(location)}`);
+  return 0;
+};
+
+personRemoveHome.spec = {
+  name: 'person-remove-home',
+  effect: 'write' as const,
+  description: 'Remove a person↔location residence relation (both halves)',
+  args: [
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node' },
+    { name: 'location', type: 'path' as const, description: 'VFS path to a location' },
+  ],
+  flags: [],
+  examples: [
+    'person-remove-home /archive/people/Anna_Exempel /archive/locations/Exempelstad',
+  ],
+  returns: 'nothing; the residence relation is removed from both sides.',
+};
+
+export default personRemoveHome;

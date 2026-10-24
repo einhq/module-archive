@@ -1,0 +1,83 @@
+#!ts
+/**
+ * location-region — a location as the user names it, turned into a region search can filter on.
+ *
+ * "Göteborg", "Italien", "Toscana": a person names locations, and this archive has no location node
+ * for most of them — where a picture was taken is a geocoded location with a city and a
+ * country, not a link to `/locations/<slug>`. So `search --subject location:Göteborg` answers "no such location",
+ * and measured in production 2026-09-23 a model given the archive's commands hit exactly that on every
+ * "hur många gånger har vi varit i …" question: thirty failed search lines out of thirty-six.
+ *
+ * The assistant's own tool has always solved this privately, by geocoding the name to a
+ * bounding box. This is that step as a command, answering with the box in the form `search
+ * --bbox=` takes, so the two compose:
+ *
+ *   search --bbox=$(location-region Göteborg --bbox-only) --group-by album
+ *
+ * Forward geocoding goes to Nominatim (`NOMINATIM_SEARCH_URL`), as `geocode-location` does.
+ */
+
+import { type CmdReturn, type Command, parseArgs } from '@ein/client';
+import { boundsOf, nominatimSearch } from '@archive/location/geocode';
+
+const locationRegion = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, { string: ['countrycodes'], boolean: ['bbox-only'] });
+  const name = flags._.map(String).join(' ').trim();
+  if (!name) {
+    await cmd.writeError('location-region: usage: location-region <location name> [--countrycodes se,no] [--bbox-only]\n');
+    return 1;
+  }
+
+  let results;
+  try {
+    results = await nominatimSearch(name, {
+      limit: 1,
+      countrycodes: typeof flags.countrycodes === 'string' ? flags.countrycodes : '',
+      baseUrl: cmd.env.NOMINATIM_SEARCH_URL || undefined,
+    });
+  } catch (error) {
+    await cmd.writeError(`location-region: geocoding failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const found = results[0];
+  const bounds = found ? boundsOf(found) : undefined;
+  if (!found || !bounds) {
+    await cmd.writeError(`location-region: no location called ${JSON.stringify(name)} was found\n`);
+    return 1;
+  }
+
+  // The order `search --bbox` reads: north, south, east, west.
+  const bbox = [bounds.north, bounds.south, bounds.east, bounds.west].join(',');
+
+  if (flags['bbox-only']) {
+    await cmd.write(bbox);
+    return 0;
+  }
+  if (cmd.json) {
+    await cmd.writeJSON({ name, display: found.display_name ?? name, bbox, ...bounds });
+    return 0;
+  }
+  await cmd.writeLn(`${found.display_name ?? name}\n--bbox=${bbox}`);
+  return 0;
+};
+
+locationRegion.spec = {
+  name: 'location-region',
+  effect: 'read' as const,
+  description: 'Turn a location name (a city, a country, an area) into the region search --bbox filters on',
+  args: [
+    { name: 'name', type: 'string' as const, description: 'the location as the user named it, in any language', variadic: true },
+  ],
+  flags: [
+    { name: 'countrycodes', type: 'string' as const, description: 'limit the match to these countries, comma-separated ISO codes (se,no)' },
+    { name: 'bbox-only', type: 'bool' as const, description: 'print only the box, for search --bbox=$(…)' },
+  ],
+  examples: [
+    'location-region Exempelstad',
+    'search --bbox=$(location-region Exempelstad --bbox-only) --group-by album',
+  ],
+  returns: "the location's full name and its bounding box as north,south,east,west — the form search --bbox= takes.",
+};
+
+export default locationRegion;

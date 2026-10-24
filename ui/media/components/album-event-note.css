@@ -1,0 +1,27 @@
+/* An album's dated text between its pictures, marked by a rule down its left edge. */
+.mrx-album-event {
+  position: relative;
+  border-left: 3px solid var(--mantine-color-marine-5);
+  background: color-mix(in srgb, var(--mrx-surface-raised) 70%, transparent);
+}
+
+/* The pen appears on hover, the way a tile's checkbox does, so reading is not cluttered with it. */
+.mrx-album-event-edit {
+  position: absolute;
+  top: var(--mantine-spacing-xs);
+  right: var(--mantine-spacing-xs);
+  opacity: 0;
+  transition: opacity var(--mrx-dur-fast) var(--mrx-ease);
+}
+
+.mrx-album-event:hover .mrx-album-event-edit,
+.mrx-album-event:focus-within .mrx-album-event-edit {
+  opacity: 1;
+}
+
+/* No hover on a touch screen, so the pen would never appear. */
+@media (hover: none) {
+  .mrx-album-event-edit {
+    opacity: 1;
+  }
+}

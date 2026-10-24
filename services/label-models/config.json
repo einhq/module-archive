@@ -1,0 +1,5 @@
+{
+  "description": "Keeps every label's model, and every vocabulary word's, trained for label suggestions",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

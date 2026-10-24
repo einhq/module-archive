@@ -1,0 +1,74 @@
+#!ts
+/**
+ * file-set-text-language — say which language the text in a picture is written in, for good.
+ *
+ * Writes `ocrLanguageManual` (ISO 639-1) on the file. `read-text` gives it to EMS instead of letting
+ * EMS tell the language from the reading, and the language picks the transcriber that writes the
+ * picture's handwriting; `auto` removes it, and the language is told from the reading again. The
+ * write is the `media.text.language-set` fact, on which `media-ocr` reads the picture again (`-f`).
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+
+const fileSetTextLanguage = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [target, given] = flags._.map(String);
+  if (!target || !given) {
+    await cmd.writeError('file-set-text-language: usage: file-set-text-language <file> <language|auto>\n');
+    return 1;
+  }
+  const language = given.toLowerCase() === 'auto' ? null : given.toLowerCase();
+  if (language !== null && !/^[a-z]{2}$/.test(language)) {
+    await cmd.writeError(`file-set-text-language: ${given}: not a two-letter ISO 639-1 code (sv, en, de, …) or auto\n`);
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  let node;
+  try {
+    node = await cmd.sys.vfs.get<{ mimetype?: unknown; ocrLanguageManual?: unknown }>(cmd.access, path);
+  } catch (error) {
+    await cmd.writeError(`file-set-text-language: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const mimetype = typeof node.attrs.mimetype === 'string' ? node.attrs.mimetype : '';
+  if (node.type !== 'file' || !mimetype.startsWith('image/')) {
+    await cmd.writeError(`file-set-text-language: ${path}: not a picture (${mimetype || node.type})\n`);
+    return 1;
+  }
+
+  const before = typeof node.attrs.ocrLanguageManual === 'string' ? node.attrs.ocrLanguageManual : null;
+  const changed = before !== language;
+  if (changed) await cmd.sys.vfs.update(cmd.access, path, { attrs: { ocrLanguageManual: language } });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path, language, changed });
+  } else if (!changed) {
+    await cmd.writeLn(`${path}: language already ${language ?? 'told from the text'}`);
+  } else {
+    await cmd.writeLn(`${path}: language ${language ?? 'told from the text'}, read again on the media pool`);
+  }
+  return 0;
+};
+
+fileSetTextLanguage.spec = {
+  name: 'file-set-text-language',
+  effect: 'write' as const,
+  description: 'Set the language the text in a picture is written in (or auto), and read the picture again in it',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to a picture' },
+    { name: 'language', type: 'string' as const, description: 'ISO 639-1 code (sv, en, de, …), or auto to tell it from the text' },
+  ],
+  flags: [],
+  examples: [
+    'file-set-text-language /archive/albums/Exempelalbum_2019/files/brev.jpg en',
+    'file-set-text-language /archive/albums/Exempelalbum_2019/files/brev.jpg auto',
+  ],
+  returns: 'nothing; the language is set and the picture read again on the media pool.',
+};
+
+export default fileSetTextLanguage;

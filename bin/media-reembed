@@ -1,0 +1,422 @@
+#!ts
+/**
+ * media-reembed — embed the text already stored with EMS's current text embedder.
+ *
+ * Every text the archive holds is embedded as it is written; this embeds what is missing or was
+ * made by another model, from the stored text alone — no transcript or OCR is made again. It walks
+ * the text nodes:
+ *
+ *   <file>/metadata/content        extracted text      → metadata/content/<type>, or in parts
+ *   <file>/metadata/transcript     a transcript (VTT)  → metadata/transcript/<type>/t<second>
+ *
+ * and then every file with a hand-written description (`attrs.description` → metadata/authored/
+ * <type>), found by its attr. Its vector carries a hash of the text, so an edited description is
+ * embedded again.
+ *
+ * An extracted text longer than CURRENT_TEXT_CHARS is embedded in parts (`contentParts`), and one
+ * that still has a single vector of its opening is redone that way. A transcript is chunked again
+ * from its WebVTT with the chunking transcribe-file uses, and a set cut at another length than
+ * CHUNK_TARGET_SECONDS (its `chunkSeconds`) is cut again. What the current embedder already made
+ * (`embeddedBy` equal to EMS's `text_embed`) is skipped, so a run resumes where the last stopped
+ * and a model change redoes everything. Nothing but the vector is written: a text's provenance is
+ * on its text node.
+ *
+ * Given paths, it does the same for those files only, and walks nothing: the step behind
+ * `media.text-embedding.stale`, which `media-scan` announces for a file whose texts lack a current
+ * vector.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_TEMPORARY, verifyAccess } from '@ein/client';
+import { ETC_PATH, VAR_PATH } from '@ein/paths';
+import { stepExitCode, textEmbedGeneration } from '@ems/client';
+import { resolve } from '@std/path';
+import {
+  authoredHash,
+  authoredParent,
+  authoredStale,
+  CURRENT_TEXT_CHARS,
+  currentTextOf,
+  embedForStore,
+  storeCurrentChunks,
+  storeCurrentContent,
+  textEmbeddingType,
+  writeTextVector,
+} from '@ems/text-embedding';
+import { CHUNK_TARGET_SECONDS, chunkSegments, chunkVectors, parseVtt } from '@archive/media/transcript';
+
+/** Legacy vectors looked at per store page. */
+const PAGE = 500;
+/** Texts per embed request. */
+const BATCH = 32;
+/**
+ * Reads in flight at once. Each text costs about six VFS operations (is it done, read the text,
+ * write the vector node); one at a time that was ~3 texts a second in production while the card embedded a
+ * batch of 32 in 0.3 s.
+ */
+const READS = 16;
+/**
+ * Vector writes in flight at once — far fewer. A write creates its node in a transaction and then
+ * registers the vector on a second pooled connection, so N writes can hold N connections while
+ * waiting for N more: at 16 the pool ran dry in production (2026-09-30) and every transaction waited on
+ * every other, freezing EiN's shell and web server until a restart
+ * (ein/core#350). The picture backfill runs 4.
+ */
+const WRITES = 4;
+
+/** Run `fn` over `items`, `width` at a time. */
+const pool = async <T>(items: T[], width: number, fn: (item: T) => Promise<void>): Promise<void> => {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, async () => {
+    while (next < items.length) await fn(items[next++]);
+  }));
+};
+
+/** A text node, by what it holds: `[path, owner, kind]`. */
+const TEXT_NODE = /^((.*)\/metadata\/(content|transcript))$/;
+const TEXT_KINDS = ['content', 'transcript'] as const;
+type TextKind = typeof TEXT_KINDS[number];
+
+/** A text node to embed, and this model's vector (or set of vectors) for it when it has one. */
+type TextItem = {
+  owner: string;
+  kind: TextKind;
+  attrs: Record<string, unknown>;
+  current?: { type: string; attrs: Record<string, unknown> };
+};
+
+/**
+ * Trees that hold the system's own files, never the archive's text: a job log that
+ * document-index once indexed (`/var/logs/jobs/…/stdout.log/metadata/content`) timed the embedder
+ * out for 30 minutes on every pass.
+ */
+const SYSTEM_TREES = [VAR_PATH, ETC_PATH, '/tmp', '/dev'];
+const inSystemTree = (path: string): boolean => SYSTEM_TREES.some((root) => path.startsWith(`${root}/`));
+
+type Pending = { owner: string; text: string };
+
+const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
+const readText = async (cmd: Command, path: string): Promise<string> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+  try {
+    return await new Response(handle.readable).text();
+  } finally {
+    await handle.close();
+  }
+};
+
+const mediaReembed = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    string: ['limit'],
+    alias: { v: 'verbose', f: 'force', l: 'limit' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  const limit = flags.limit === undefined ? Infinity : Number(flags.limit);
+  const paths = flags._.map((arg) => resolve(cmd.cwd, String(arg)));
+  if (!(limit > 0)) {
+    await cmd.writeError('media-reembed: --limit must be a positive number\n');
+    return 1;
+  }
+
+  // A minute, not the interactive five seconds: right after an EMS restart the worker is loading its
+  // models and answers capabilities slowly, and a backfill has time to wait.
+  const generation = await textEmbedGeneration(cmd, 60);
+  const vectorType = generation ? textEmbeddingType(generation) : undefined;
+  if (!generation || !vectorType) {
+    await cmd.writeError(`media-reembed: EMS has no current text embedder this knows (${generation ?? 'not answering, or older than 2.1'})\n`);
+    return generation ? 1 : STEP_EXIT_TEMPORARY;
+  }
+
+  const counts = { embedded: 0, transcripts: 0, authored: 0, skipped: 0, refused: 0, failed: 0, other: 0 };
+  /** The exit code of the first failure: EMS's moment is temporary, anything else 1. */
+  let failure = 0;
+  const fail = async (count: number, what: string, error: unknown) => {
+    counts.failed += count;
+    failure ||= stepExitCode(error);
+    await cmd.writeError(`media-reembed: ${what}: ${messageOf(error)}\n`);
+  };
+  /** Texts and transcripts that needed embedding, which is what `--limit` counts. */
+  let work = 0;
+
+  const flush = async (batch: Pending[]) => {
+    if (batch.length === 0) return;
+    try {
+      const { vectors, type, producer } = await embedForStore(cmd, batch.map((item) => item.text));
+      const embeddedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+      await pool([...batch.entries()], WRITES, async ([index, item]) => {
+        // An extracted text's vector carries its words, as `storeCurrentContent` writes it.
+        await writeTextVector(cmd, item.owner, type, type, vectors[index], { text: item.text, embeddedBy: producer, embeddedAt });
+        counts.embedded++;
+      });
+    } catch (error) {
+      await fail(batch.length, `${batch.length} text(s) from ${batch[0].owner}`, error);
+    }
+  };
+
+  /** Embed what `items` lack: a transcript's chunk set, or one vector (or parts) per text. */
+  const embedTexts = async (items: TextItem[]) => {
+    for (const text of items.filter((item) => item.kind === 'transcript')) {
+      const transcript = text.owner;
+      // Done only when cut at today's length: a set stamped with another `chunkSeconds`, or with
+      // none (cut at 30 s before the length was stamped), is chunked again.
+      if (text.current?.attrs.chunkSeconds === CHUNK_TARGET_SECONDS) {
+        counts.skipped++;
+        continue;
+      }
+      work++;
+      try {
+        const chunks = chunkSegments(parseVtt(await readText(cmd, transcript)));
+        if (chunks.length === 0) {
+          // Nothing was said: an empty set, stamped, so the next pass knows it is done rather than
+          // reading the transcript again (463 silent recordings in production, every pass).
+          await storeCurrentChunks(cmd, transcript, []);
+          await cmd.sys.vfs.createTree(cmd.access, transcript, [{
+            type: 'directory',
+            name: vectorType,
+            attrs: { embeddedBy: generation, transcribedAt: text.attrs.transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS },
+          }]);
+          counts.skipped++;
+          continue;
+        }
+        const why = await storeCurrentChunks(cmd, transcript, chunkVectors(chunks), { transcribedAt: text.attrs.transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS });
+        if (why) throw new Error(why);
+        counts.transcripts++;
+        if (verbose) await cmd.writeLn(`${transcript}: ${chunks.length} chunk(s)`);
+      } catch (error) {
+        await fail(1, transcript, error);
+      }
+    }
+
+    const ready: Pending[] = [];
+    await pool(items.filter((item) => item.kind !== 'transcript'), READS, async (text) => {
+      const { owner, kind, current: existing } = text;
+
+      if (kind === 'content') {
+        // Embedded in parts is done whatever the length. One vector is done only for a text that
+        // fits it: a longer one was embedded by its opening before parts existed, and is redone.
+        // The node's byte size settles most without a read — a text of at most CURRENT_TEXT_CHARS
+        // bytes cannot have more characters than that.
+        if (existing?.type === 'directory') {
+          counts.skipped++;
+          return;
+        }
+        const size = typeof text.attrs.size === 'number' ? text.attrs.size : undefined;
+        if (existing && size !== undefined && size <= CURRENT_TEXT_CHARS) {
+          counts.skipped++;
+          return;
+        }
+        let body: string;
+        try {
+          body = (await readText(cmd, owner)).trim();
+        } catch (error) {
+          await fail(1, owner, error);
+          return;
+        }
+        if (body.length > CURRENT_TEXT_CHARS) {
+          work++;
+          const why = await storeCurrentContent(cmd, owner, body);
+          if (why) await fail(1, owner, new Error(why));
+          else counts.embedded++;
+          return;
+        }
+      }
+      if (existing) {
+        counts.skipped++;
+        return;
+      }
+      work++;
+      let body: string;
+      try {
+        body = currentTextOf(await readText(cmd, owner));
+      } catch (error) {
+        await fail(1, owner, error);
+        return;
+      }
+      if (!body) {
+        counts.other++;
+        return;
+      }
+      ready.push({ owner, text: body });
+    });
+    for (let at = 0; at < ready.length; at += BATCH) await flush(ready.slice(at, at + BATCH));
+  };
+
+  /** Embed hand-written descriptions, `text` being a file's `attrs.description`, trimmed. */
+  const embedAuthored = async (items: { file: string; text: string }[]) => {
+    for (let at = 0; at < items.length; at += BATCH) {
+      const batch = items.slice(at, at + BATCH);
+      try {
+        const { vectors, type, producer } = await embedForStore(cmd, batch.map((item) => currentTextOf(item.text)));
+        const embeddedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+        await pool([...batch.entries()], WRITES, async ([index, item]) => {
+          const parent = authoredParent(item.file);
+          const made = await cmd.execute(`mkdir -p ${shq(parent)}`);
+          if (made.code !== 0) throw new Error(`cannot create ${parent}: ${made.stderr.trim()}`);
+          await writeTextVector(cmd, parent, type, type, vectors[index], { authoredHash: await authoredHash(item.text), embeddedBy: producer, embeddedAt });
+          counts.authored++;
+        });
+      } catch (error) {
+        await fail(batch.length, `${batch.length} description(s) from ${batch[0].file}`, error);
+      }
+    }
+  };
+
+  /** Whether a holder's hand-written description needs embedding, counting it as work if so. */
+  const authoredDue = async (file: string, text: string): Promise<boolean> => {
+    if (!force && !await authoredStale(cmd, file, text, generation, vectorType)) {
+      counts.skipped++;
+      return false;
+    }
+    work++;
+    return true;
+  };
+
+  let complete = true;
+
+  if (paths.length > 0) {
+    // The named files only: their text nodes, then their hand-written description.
+    for (const path of paths) {
+      const node = await cmd.sys.vfs.get(cmd.access, path).catch(() => undefined);
+      if (!node) {
+        await fail(1, path, new Error('not found or unreadable'));
+        continue;
+      }
+      // EMS embeds before the vectors are written, so what the caller may not write is refused first.
+      if (!verifyAccess(cmd.access, node.props, 'w')) {
+        counts.refused++;
+        await cmd.writeError(`media-reembed: ${path}: permission denied\n`);
+        continue;
+      }
+      const items: TextItem[] = [];
+      for (const kind of TEXT_KINDS) {
+        const owner = `${path}/metadata/${kind}`;
+        const text = await cmd.sys.vfs.get(cmd.access, owner).catch(() => undefined);
+        if (text?.type !== 'file') continue;
+        const vector = force ? undefined : await cmd.sys.vfs.get(cmd.access, `${owner}/${vectorType}`).catch(() => undefined);
+        const attrs = text.attrs as Record<string, unknown>;
+        items.push({ owner, kind, attrs, current: vector?.attrs.embeddedBy === generation ? vector as TextItem['current'] : undefined });
+      }
+      await embedTexts(items);
+      const authored = String(node.attrs.description ?? '').trim();
+      if (node.type === 'file' && authored && await authoredDue(path, authored)) await embedAuthored([{ file: path, text: authored }]);
+    }
+  }
+
+  // The limit counts work, not rows looked at: a resumed run walks past what is done for free. It is
+  // checked per page, so a run may go up to a page past it.
+  let after: { value: string | null; id: string } | undefined;
+  while (paths.length === 0) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      where: [{ ref: 'mimetype', op: 'in', value: ['text/plain', 'text/vtt'] }],
+      // Ordered by mimetype so a page is a range on the media module's `mime` index. Unordered,
+      // each page scanned the node table in id order until it had found 500 text nodes: 2.7 s a
+      // page and most of an hour for a pass that found everything done (production, 2026-10-04).
+      orderBy: { ref: 'mimetype', dir: 'asc' },
+      after,
+      limit: PAGE,
+    });
+    if (rows.length === 0) break;
+
+    // A plain-text document is a file too; only the text nodes under a file's `metadata/` are what
+    // this embeds, and only those the caller may write the vectors under.
+    const texts = rows.flatMap((row) => {
+      const match = inSystemTree(row.absPath) ? null : TEXT_NODE.exec(row.absPath);
+      if (!match) return [];
+      if (!verifyAccess(cmd.access, row.node.props, 'w')) {
+        counts.refused++;
+        return [];
+      }
+      return [{ id: row.id, owner: match[1], kind: match[3] as TextKind, attrs: row.node.attrs as Record<string, unknown> }];
+    });
+
+    // What each text already has, two batched reads a page: the text nodes' children, then the
+    // vector nodes among them. A lookup by path per text was a recursive query each, and a pass
+    // that found everything done took over an hour in production (2026-10-03).
+    const children = texts.length === 0 ? new Map() : await cmd.sys.vfs.getChildLinksByIds(cmd.access, texts.map((text) => text.id));
+    const vectorIdOf = (text: { id: string; owner: string }) => ((children.get(text.id) ?? []) as { id: string; name: string }[]).find((link) => link.name === vectorType)?.id;
+    const vectorIds = texts.map(vectorIdOf).filter((id): id is string => id !== undefined);
+    const vectors = force || vectorIds.length === 0 ? new Map() : await cmd.sys.vfs.getNodesByIds(cmd.access, vectorIds);
+    /** This model's vector (or set of vectors) for a text, when it has one. */
+    const current = (text: { id: string; owner: string }) => {
+      const id = vectorIdOf(text);
+      const node = id === undefined ? undefined : vectors.get(id) as { type: string; attrs: Record<string, unknown> } | undefined;
+      return node?.attrs.embeddedBy === generation ? node : undefined;
+    };
+
+    await embedTexts(texts.map((text) => ({ owner: text.owner, kind: text.kind, attrs: text.attrs, current: current(text) })));
+
+    const last = rows[rows.length - 1];
+    after = { value: last.sortValue, id: last.id };
+    if (work >= limit) {
+      complete = false;
+      break;
+    }
+  }
+
+  // Hand-written descriptions, once the stored texts are through.
+  let fileAfter: { value: string | null; id: string } | undefined;
+  while (paths.length === 0 && complete) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      where: [{ ref: 'description', op: 'exists' }],
+      after: fileAfter,
+      limit: PAGE,
+    });
+    if (rows.length === 0) break;
+
+    const ready: { file: string; text: string }[] = [];
+    await pool(rows, READS, async (row) => {
+      const text = String(row.node.attrs.description ?? '').trim();
+      if (!text) return;
+      if (!verifyAccess(cmd.access, row.node.props, 'w')) {
+        counts.refused++;
+        return;
+      }
+      if (await authoredDue(row.absPath, text)) ready.push({ file: row.absPath, text });
+    });
+    await embedAuthored(ready);
+
+    const last = rows[rows.length - 1];
+    fileAfter = { value: last.sortValue, id: last.id };
+    if (work >= limit) {
+      complete = false;
+      break;
+    }
+  }
+
+  const summary = { model: generation, ...counts, complete };
+  if (cmd.json) await cmd.writeJSON(summary);
+  else {
+    await cmd.writeLn(
+      `media-reembed (${generation}): ${counts.embedded} text(s), ${counts.transcripts} transcript(s) and ${counts.authored} description(s) embedded, ${counts.skipped} already done, ` +
+        `${counts.refused} refused, ${counts.failed} failed, ${counts.other} without a text to read${
+          summary.complete ? ' — pass complete' : ' — limit reached, run again to continue'
+        }`,
+    );
+  }
+  return failure || (counts.refused > 0 ? 1 : 0);
+};
+
+mediaReembed.spec = {
+  name: 'media-reembed',
+  effect: 'write' as const,
+  description: 'Embed the extracted texts, transcripts and hand-written descriptions already stored into the current text space, from the stored text alone',
+  args: [
+    { name: 'path', type: 'path' as const, variadic: true, description: 'files to embed the texts of (default: every text the archive holds)' },
+  ],
+  flags: [
+    { name: 'l', type: 'number' as const, description: 'stop after this many texts or transcripts (default: all); a run resumes where the last stopped' },
+    { name: 'f', type: 'bool' as const, description: 'embed again even what the current embedder already made' },
+    { name: 'v', type: 'bool' as const, description: 'name each transcript as it is done' },
+  ],
+  examples: ['media-reembed', 'media-reembed -l 5000', 'media-reembed /archive/albums/Exempelalbum_2019/files/IMG_0001.jpg'],
+  returns: 'how many texts, transcripts and descriptions were embedded, skipped and failed; `pass complete` once nothing is left.',
+};
+
+export default mediaReembed;

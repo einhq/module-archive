@@ -1,0 +1,247 @@
+#!ts
+/**
+ * person-graph — a slice of the family graph around one person, for drawing.
+ *
+ * `person-family-tree` answers the same question as indented text for a
+ * terminal; this answers it as nodes and edges for a UI that lays them out.
+ *
+ * The slice is deliberately shallow and expanded on demand: the client asks for
+ * two generations each way, and clicking a card asks again rooted *there* and
+ * merges the answer into what it already holds. That keeps the command
+ * stateless — there is no expanded-set to carry — and keeps a graph reaching
+ * back to the 1600s from arriving in one payload nobody can read.
+ *
+ * Two invariants the drawing depends on:
+ *
+ *   - `parents`/`children` name only people who are themselves in `nodes`, so
+ *     every edge has two ends to draw between.
+ *   - `parentCount`/`childCount` are the *real* totals, counted a level past
+ *     where the walk stopped. `parentCount > parents.length` is therefore
+ *     exactly the test for "there is more up there", which is what puts an
+ *     expand button on a card.
+ *
+ * Partners are pulled in so a couple can be drawn side by side, but are not
+ * walked through — a spouse's own ancestry is a different tree, and it arrives
+ * if someone expands them.
+ *
+ * `--only` and `--to` draw a chosen few instead of a walk: the person, the people
+ * named, and everyone on the line of relations from the person to each `--to`
+ * (how two people are related). No generations and no partners are added.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationEntry, relationshipPath } from '@archive/people/genealogy';
+import type { PersonAttrs, PersonGender } from '@archive/people/types';
+import type { GraphResponse } from '@archive/people/api';
+
+/** Deeper than this and no layout is readable anyway; the client pages in instead. */
+const MAX_DEPTH = 8;
+const DEFAULT_UP = 2;
+const DEFAULT_DOWN = 2;
+
+type PartnerRef = { path: string; kind?: string; from?: string; to?: string };
+
+type GraphNode = {
+  path: string;
+  name: string;
+  fullname?: string;
+  gender?: PersonGender;
+  born?: string;
+  died?: string;
+  /** Drawn parents — a subset of the real ones, see `parentCount`. */
+  parents: string[];
+  children: string[];
+  partners: PartnerRef[];
+  /** Every parent, including those outside the slice. */
+  parentCount: number;
+  childCount: number;
+};
+
+type Relations = { parents: RelationEntry[]; children: RelationEntry[]; partners: RelationEntry[] };
+
+/**
+ * All three relation dirs of one person, read once.
+ *
+ * The walk revisits a person from several directions — a grandparent is reached
+ * once per grandchild — and each visit would otherwise be three listings.
+ */
+async function relationsOf(cmd: Command, path: string, cache: Map<string, Relations>): Promise<Relations> {
+  const cached = cache.get(path);
+  if (cached) return cached;
+
+  const [parents, children, partners] = await Promise.all([
+    readRelationDir(cmd.sys.vfs, cmd.access, path, PARENTS_DIR),
+    readRelationDir(cmd.sys.vfs, cmd.access, path, CHILDREN_DIR),
+    readRelationDir(cmd.sys.vfs, cmd.access, path, PARTNERS_DIR),
+  ]);
+
+  const relations: Relations = { parents, children, partners };
+  cache.set(path, relations);
+  return relations;
+}
+
+async function personAttrs(cmd: Command, path: string): Promise<PersonAttrs | null> {
+  try {
+    return (await cmd.sys.vfs.get<PersonAttrs>(cmd.access, path)).attrs;
+  } catch {
+    return null;
+  }
+}
+
+const targets = (entries: RelationEntry[]): string[] => entries.map((e) => e.target).filter(Boolean);
+
+const clampDepth = (raw: string | undefined, fallback: number): number => {
+  const value = raw === undefined ? fallback : parseInt(raw, 10);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(value, 0), MAX_DEPTH);
+};
+
+/** Everyone within `depth` generations of `root` in one direction. */
+async function walk(cmd: Command, root: string, dir: 'parents' | 'children', depth: number, cache: Map<string, Relations>): Promise<Set<string>> {
+  const reached = new Set<string>();
+  const seen = new Set<string>([root]);
+  let frontier = [root];
+
+  for (let generation = 0; generation < depth && frontier.length > 0; generation++) {
+    const next: string[] = [];
+    for (const person of frontier) {
+      const relations = await relationsOf(cmd, person, cache);
+      for (const target of targets(dir === 'parents' ? relations.parents : relations.children)) {
+        // A person reachable by two routes — cousins who married — is walked
+        // once, which is also what keeps a cyclic-looking graph finite.
+        if (seen.has(target)) continue;
+        seen.add(target);
+        reached.add(target);
+        next.push(target);
+      }
+    }
+    frontier = next;
+  }
+
+  return reached;
+}
+
+const personGraph = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['up', 'down', 'only', 'to'], collect: ['only', 'to'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const targetArg = flags._[0] as string | undefined;
+
+  if (!targetArg) {
+    await cmd.writeError('person-graph: missing person path\n');
+    return 1;
+  }
+
+  const root = resolve(cmd.cwd, targetArg);
+  const up = clampDepth(flags.up, DEFAULT_UP);
+  const down = clampDepth(flags.down, DEFAULT_DOWN);
+
+  const cache = new Map<string, Relations>();
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, root);
+
+    const included = new Set<string>([root]);
+    const only = (flags.only as string[] | undefined ?? []).map((path) => resolve(cmd.cwd, path));
+    const to = (flags.to as string[] | undefined ?? []).map((path) => resolve(cmd.cwd, path));
+    if (only.length > 0 || to.length > 0) {
+      for (const path of only) included.add(path);
+      const ctx = makeCtx(cmd.sys.vfs, cmd.access);
+      for (const other of to) {
+        for (const path of await relationshipPath(ctx, root, other) ?? [other]) included.add(path);
+      }
+    } else {
+      for (const path of await walk(cmd, root, 'parents', up, cache)) included.add(path);
+      for (const path of await walk(cmd, root, 'children', down, cache)) included.add(path);
+
+      // Partners of everyone in the slice, so a couple draws as a couple. Added
+      // after the walks so they are never walked *through*.
+      for (const person of [...included]) {
+        for (const target of targets((await relationsOf(cmd, person, cache)).partners)) included.add(target);
+      }
+    }
+
+    // Pass one builds the records; pass two trims the edges. An unreadable
+    // person is dropped, and an edge pointing at a dropped person would leave
+    // the drawing with a line to nowhere.
+    const nodes: Record<string, GraphNode> = {};
+    for (const person of included) {
+      const attrs = await personAttrs(cmd, person);
+      if (!attrs) continue;
+      const relations = await relationsOf(cmd, person, cache);
+
+      nodes[person] = {
+        path: person,
+        name: attrs.name ?? basename(person),
+        ...(attrs.fullname ? { fullname: attrs.fullname } : {}),
+        ...(attrs.gender ? { gender: attrs.gender } : {}),
+        ...(attrs.born ? { born: attrs.born } : {}),
+        ...(attrs.died ? { died: attrs.died } : {}),
+        parents: targets(relations.parents),
+        children: targets(relations.children),
+        partners: relations.partners.filter((e) => e.target).map((e) => ({
+          path: e.target,
+          ...(e.kind ? { kind: e.kind } : {}),
+          ...(e.from ? { from: e.from } : {}),
+          ...(e.to ? { to: e.to } : {}),
+        })),
+        // Counted before trimming: these are what say whether expanding does
+        // anything.
+        parentCount: targets(relations.parents).length,
+        childCount: targets(relations.children).length,
+      };
+    }
+
+    const drawn = (path: string): boolean => nodes[path] !== undefined;
+    for (const node of Object.values(nodes)) {
+      node.parents = node.parents.filter(drawn);
+      node.children = node.children.filter(drawn);
+      node.partners = node.partners.filter((partner) => drawn(partner.path));
+    }
+
+    if (cmd.json) {
+      await cmd.writeJSON({ root, nodes } satisfies GraphResponse);
+      return 0;
+    }
+
+    for (const node of Object.values(nodes)) {
+      const span = node.born || node.died ? ` (${node.born?.slice(0, 4) ?? ''}–${node.died?.slice(0, 4) ?? ''})` : '';
+      const more = [
+        node.parentCount > node.parents.length ? `+${node.parentCount - node.parents.length}↑` : '',
+        node.childCount > node.children.length ? `+${node.childCount - node.children.length}↓` : '',
+      ].filter(Boolean).join(' ');
+      await cmd.writeLn(`${node.name}${span}${more ? `  [${more}]` : ''}  ${node.path}`);
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-graph: ${message}\n`);
+    return 1;
+  }
+};
+
+personGraph.spec = {
+  name: 'person-graph',
+  effect: 'read' as const,
+  description: 'Family graph around a person as nodes and edges, for drawing a tree',
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [
+    { name: 'up', type: 'number' as const, description: `ancestor generations (default ${DEFAULT_UP}, max ${MAX_DEPTH})` },
+    { name: 'down', type: 'number' as const, description: `descendant generations (default ${DEFAULT_DOWN}, max ${MAX_DEPTH})` },
+    { name: 'only', type: 'path' as const, repeatable: true, description: 'draw only the person and these people, no walk (repeatable)' },
+    { name: 'to', type: 'path' as const, repeatable: true, description: 'draw the line of relations from the person to this one: how the two are related (repeatable)' },
+  ],
+  examples: [
+    'person-graph --up 2 --down 2 /archive/people/Anna_Exempel',
+    'person-graph /archive/people/Anna_Exempel --only /archive/people/Bo_Exempel --only /archive/people/Cecilia_Exempel',
+    'person-graph /archive/people/Anna_Exempel --to /archive/people/Bo_Exempel',
+  ],
+  returns: 'the family graph around the person as nodes and edges, for drawing.',
+};
+
+export default personGraph;

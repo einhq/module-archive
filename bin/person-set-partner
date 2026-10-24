@@ -1,0 +1,110 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { comparableDate, createRelationPair, PARTNERS_DIR, readRelationDir, type RelationAttrs, validDate } from '@archive/people/genealogy';
+
+const flagValue = (args: string[], name: string): string | undefined => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+
+const personSetPartner = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const [firstArg, secondArg] = rest;
+  const kind = flagValue(cmd.args, '--kind') ?? 'partner';
+  const from = flagValue(cmd.args, '--from');
+  const to = flagValue(cmd.args, '--to');
+
+  if (!firstArg || !secondArg) {
+    await cmd.writeError('person-set-partner: usage: person set-partner <a> <b> [--kind partner|married] [--from D] [--to D]\n');
+    return 1;
+  }
+  for (const [n, v] of [['from', from], ['to', to]] as const) {
+    if (v !== undefined && !validDate(v)) {
+      await cmd.writeError(`person-set-partner: invalid ${n} date '${v}' (YYYY[-MM[-DD]])\n`);
+      return 1;
+    }
+  }
+  if (from && to && comparableDate(to) < comparableDate(from)) {
+    await cmd.writeError('person-set-partner: partnership end is before start\n');
+    return 1;
+  }
+
+  const a = resolve(cmd.cwd, firstArg);
+  const b = resolve(cmd.cwd, secondArg);
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, a);
+    await cmd.sys.vfs.get(cmd.access, b);
+
+    const existing = (await readRelationDir(cmd.sys.vfs, cmd.access, a, PARTNERS_DIR)).find((e) => e.target === b);
+    if (existing) {
+      if (from === undefined && to === undefined) {
+        await cmd.writeError(`person-set-partner: ${basename(a)} and ${basename(b)} are already partners\n`);
+        return 1;
+      }
+      await patchDates(cmd, existing.linkPath, from, to);
+      if (cmd.json) {
+        await cmd.writeJSON({ ok: true, a, b, updated: true });
+      } else {
+        await cmd.writeLn(`Updated partnership ${basename(a)} <-> ${basename(b)}`);
+      }
+      return 0;
+    }
+
+    await createRelationPair(cmd.sys.vfs, cmd.access, {
+      aLink: `${a}/${PARTNERS_DIR}/${basename(b)}`,
+      aTarget: b,
+      bLink: `${b}/${PARTNERS_DIR}/${basename(a)}`,
+      bTarget: a,
+      kind: kind !== 'partner' ? kind : undefined,
+      from,
+      to,
+    });
+    if (cmd.json) {
+      await cmd.writeJSON({ ok: true, a, b, kind });
+    } else {
+      await cmd.writeLn(`${basename(a)} and ${basename(b)} are now partners`);
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-set-partner: ${message}\n`);
+    return 1;
+  }
+};
+
+/** Merge from/to into both links of the partnership. */
+async function patchDates(cmd: Command, linkPath: string, from?: string, to?: string): Promise<void> {
+  const node = await cmd.sys.vfs.get<RelationAttrs>(cmd.access, linkPath, { follow: false });
+  const peer = node.attrs.relation?.peerLink;
+  for (const lp of [linkPath, peer]) {
+    if (!lp) continue;
+    const n = await cmd.sys.vfs.get<RelationAttrs>(cmd.access, lp, { follow: false });
+    const relation = { ...n.attrs.relation! };
+    if (from !== undefined) relation.from = from;
+    if (to !== undefined) relation.to = to;
+    await cmd.sys.vfs.update(cmd.access, lp, { attrs: { relation }, follow: false });
+  }
+}
+
+personSetPartner.spec = {
+  name: 'person-set-partner',
+  effect: 'write' as const,
+  description: 'Add or update a partner relationship (partners/, both directions)',
+  args: [
+    { name: 'a', type: 'path' as const, description: 'VFS path of first person' },
+    { name: 'b', type: 'path' as const, description: 'VFS path of second person' },
+  ],
+  flags: [
+    { name: 'kind', type: 'string' as const, description: 'partner (default) | married' },
+    { name: 'from', type: 'string' as const, description: 'partnership start date' },
+    { name: 'to', type: 'string' as const, description: 'partnership end date' },
+  ],
+  examples: [
+    'person-set-partner --kind married --from 2001-01-01 /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+  ],
+  returns: 'nothing; the link is written in both directions.',
+};
+
+export default personSetPartner;

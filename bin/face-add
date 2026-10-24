@@ -1,0 +1,153 @@
+#!ts
+/** Add one human-drawn box to an image as a manual region, and give it a new unnamed person. */
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
+import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
+import { LIGHTBOX_MANUAL_DETECTOR, nextManualName, REGION_TYPE, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
+import { clampBox, type FracBox, roundBox } from '@archive/media/orientation';
+import { createUnnamedPerson, UNKNOWN_ROOT } from '@archive/people/person';
+import type { FaceAddResult } from '@archive/media/api';
+
+type Result = {
+  faceId: string;
+  facePath: string;
+  personId: string;
+  personPath: string;
+  personName: string;
+  box: FracBox;
+  cropWritten: boolean;
+  cropError?: string;
+};
+
+const parseBox = (value: string | undefined): FracBox | undefined => {
+  if (!value) return undefined;
+  const parts = value.split(',').map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return undefined;
+  return clampBox({ x: parts[0], y: parts[1], width: parts[2], height: parts[3] });
+};
+
+const faceAdd = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['box'],
+    boolean: ['no-crop'],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!inputPath) {
+    await cmd.writeError('face-add: missing file path\n');
+    return 1;
+  }
+
+  const box = parseBox(flags.box);
+  if (!box) {
+    await cmd.writeError('face-add: --box must be x,y,width,height fractions with positive area inside the image\n');
+    return 1;
+  }
+  const storedBox = roundBox(box);
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const file = await vfs.get(access, inputPath).catch(() => undefined);
+  if (!file) {
+    await cmd.writeError(`face-add: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (file.type !== 'file') {
+    await cmd.writeError(`face-add: ${inputPath}: not a file node (is ${file.type})\n`);
+    return 1;
+  }
+  const mimetype = typeof file.attrs.mimetype === 'string' ? file.attrs.mimetype : '';
+  if (!mimetype.startsWith('image/')) {
+    await cmd.writeError(`face-add: ${inputPath}: not an image (is ${mimetype || 'unknown'})\n`);
+    return 1;
+  }
+
+  // A drawn box has no vector: it is a tag, and recognition never votes with it.
+  const facesPath = regionsPathOf(inputPath);
+  await vfs.ensure(access, 'directory', inputPath, REGIONS_DIR);
+  const faceName = nextManualName((await vfs.children(access, facesPath, { follow: false })).map((entry) => entry.name));
+  const facePath = `${facesPath}/${faceName}`;
+  const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const face = await vfs.create(access, REGION_TYPE, facesPath, faceName, {
+    attrs: {
+      fileId: file.id,
+      faceBox: storedBox,
+      landmarks: null,
+      confidence: 1,
+      detectedAt,
+      detectedBy: LIGHTBOX_MANUAL_DETECTOR,
+      personId: null,
+    },
+  });
+
+  let person;
+  try {
+    person = await createUnnamedPerson(vfs, access, { createdBy: 'face-add', representativeFaceId: face.id });
+    await vfs.update(access, facePath, {
+      attrs: {
+        personId: person.id,
+        personSource: 'manual',
+        personAssignedAt: detectedAt,
+      },
+    });
+  } catch (error) {
+    // Do not leave a box that cannot be reached by the unknown-person tools.
+    await vfs.unlink(access, facePath, facesPath, { recursive: true }).catch(() => undefined);
+    if (person) await vfs.unlink(access, person.path, UNKNOWN_ROOT, { recursive: true }).catch(() => undefined);
+    await cmd.writeError(`face-add: failed to create unknown person: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const cropPath = `${facePath}/${FACE_CROP_NAME}`;
+  let cropError: string | undefined;
+  try {
+    await vfs.create(access, 'file', facePath, FACE_CROP_NAME, {
+      attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: file.id },
+    });
+    if (!flags['no-crop']) cropError = (await writeFaceCrop(cmd, inputPath, cropPath, storedBox, file.attrs)) ?? undefined;
+  } catch (error) {
+    cropError = error instanceof Error ? error.message : String(error);
+  }
+
+  const result: Result = {
+    faceId: face.id,
+    facePath,
+    personId: person.id,
+    personPath: person.path,
+    personName: person.name,
+    box: storedBox,
+    cropWritten: !flags['no-crop'] && !cropError,
+    ...(cropError ? { cropError } : {}),
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies FaceAddResult);
+  } else {
+    await cmd.writeLn(`Created ${facePath} as ${person.name}`);
+    if (flags['no-crop']) await cmd.writeLn(`Crop left for regeneration: ${cropPath}`);
+    else if (cropError) await cmd.writeError(`face-add: crop will need regeneration: ${cropError}\n`);
+  }
+  return 0;
+};
+
+faceAdd.spec = {
+  name: 'face-add',
+  effect: 'write' as const,
+  description: 'Add a human-drawn face box to an image as a new unidentified person',
+  args: [{ name: 'input', type: 'path' as const, description: 'VFS path to an image file' }],
+  flags: [
+    { name: 'box', type: 'string' as const, description: 'display-frame fractions: x,y,width,height' },
+    { name: 'no-crop', type: 'bool' as const, description: 'create the crop node without rendering it' },
+  ],
+  examples: [
+    'face-add --box 0.1,0.2,0.3,0.4 /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'the new face and the unidentified person created for it.',
+};
+
+export default faceAdd;

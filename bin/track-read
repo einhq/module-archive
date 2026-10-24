@@ -1,0 +1,88 @@
+#!ts
+/**
+ * track-read — read a track as drawable segments.
+ *
+ *   track-read <device> [--from <iso>] [--to <iso>] [--limit <n>]
+ *   track-read <device> --bbox=57.8,57.6,12.1,11.8 --tolerance 0.0002
+ *
+ * `<device>` is a device's slug or path, standing for its track, or a track's path.
+ *
+ * Output: {"segments":[{day, points:[{lat,lng,ts,...}]}], "points": n, "truncated": bool}.
+ *
+ * The filtering, the thinning and the cutting all happen in the registry, where
+ * the spatial and time indexes are. `--tolerance` is the level of detail: about
+ * the size of one screen pixel in degrees, so a zoomed-out read never ships the
+ * vertices that could not be seen anyway. Segments are already cut on day
+ * boundaries and on pauses, so a caller draws each one as its own line and never
+ * joins across a hole the track did not travel.
+ */
+import { openTrack, parseBounds, type TrackReadOptions } from '@archive/location/track';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { TrackRead } from '@archive/location/api';
+
+const trackRead = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from', 'to', 'limit', 'tolerance', 'bbox', 'margin'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+
+  if (!target) {
+    await cmd.writeError('track-read: usage: track-read <device> [--bbox <n,s,e,w>] [--from <iso>] [--to <iso>] [--tolerance <deg>] [--limit <n>]\n');
+    return 1;
+  }
+
+  const numeric = (name: 'limit' | 'tolerance' | 'margin'): number | undefined => {
+    if (flags[name] === undefined) return undefined;
+    const value = Number(flags[name]);
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`invalid --${name} '${flags[name]}'`);
+    }
+    return value;
+  };
+
+  try {
+    const opts: TrackReadOptions = {
+      from: flags.from,
+      to: flags.to,
+      limit: numeric('limit'),
+      tolerance: numeric('tolerance'),
+      margin: numeric('margin'),
+      bounds: flags.bbox !== undefined ? parseBounds(flags.bbox) : undefined,
+    };
+
+    const { handle } = await openTrack(cmd, target, 'r');
+
+    try {
+      await cmd.writeLn(JSON.stringify((await handle.readPoints(opts)) satisfies TrackRead));
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    await cmd.writeError(`track-read: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  return 0;
+};
+
+trackRead.spec = {
+  name: 'track-read',
+  effect: 'read' as const,
+  description: "Read a device's track as drawable segments ({segments, points, truncated})",
+  args: [
+    { name: 'device', type: 'path' as const, description: "the device (slug or path) whose track to read, or a track's path" },
+  ],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },
+    { name: 'to', type: 'string' as const, description: 'only fixes before this ISO timestamp' },
+    { name: 'bbox', type: 'string' as const, description: 'only points near north,south,east,west' },
+    { name: 'margin', type: 'string' as const, description: 'how far outside --bbox to read, as a fraction of it (default 0.25)' },
+    { name: 'tolerance', type: 'string' as const, description: 'simplification tolerance in degrees (level of detail)' },
+    { name: 'limit', type: 'string' as const, description: 'max points to return' },
+  ],
+};
+
+export default trackRead;

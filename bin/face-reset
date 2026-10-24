@@ -1,0 +1,127 @@
+#!ts
+/**
+ * face-reset — undo an automatic face→person run.
+ *
+ * Every automatic assignment records how it was made (personSource), which is
+ * what makes this precise: resetting `cluster` leaves the legacy manual tags,
+ * the transferred anchors and every human correction untouched. Without that
+ * provenance a bad run could only be undone by wiping all identity.
+ *
+ * A reset face is indistinguishable from a freshly detected one — the
+ * assignment attrs are removed, not set to a falsy value — so the next
+ * assign-faces or cluster-faces run reconsiders it from scratch.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { REGION_TYPE } from '@archive/media/regions';
+
+const QUERY_LIMIT = 500000;
+const SOURCES = ['auto', 'cluster', 'transfer'];
+
+const faceReset = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['source'],
+    boolean: ['delete-unnamed', 'dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const source = flags.source;
+  if (!source) {
+    await cmd.writeError(`face-reset: missing --source (${[...SOURCES, 'all'].join('|')})\n`);
+    return 1;
+  }
+  if (source !== 'all' && !SOURCES.includes(source)) {
+    await cmd.writeError(`face-reset: --source must be one of ${[...SOURCES, 'all'].join(', ')}\n`);
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const dryRun = !!flags['dry-run'];
+  const verbose = !!flags.verbose;
+  const wanted = source === 'all' ? SOURCES : [source];
+
+  // `personSource` is never 'manual' here, so a human's decision always survives.
+  const faces = await vfs.query(access, {
+    types: [REGION_TYPE],
+    where: [{ ref: 'personSource', op: 'in', value: wanted }],
+    limit: QUERY_LIMIT,
+  });
+
+  let cleared = 0;
+  for (const face of faces) {
+    if (dryRun) {
+      cleared++;
+      if (verbose) await cmd.writeLn(`would clear ${face.absPath}`);
+      continue;
+    }
+    try {
+      // null removes the key: the face goes back to looking undecided.
+      await vfs.update(access, face.absPath, {
+        attrs: { personId: null, personSource: null, personConfidence: null, personAssignedAt: null },
+      });
+      cleared++;
+      if (verbose) await cmd.writeLn(`cleared ${face.absPath}`);
+    } catch (error) {
+      await cmd.writeError(`face-reset: ${face.absPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+
+  let peopleDeleted = 0;
+  if (flags['delete-unnamed']) {
+    const people = await vfs.query(access, {
+      types: ['person'],
+      where: [{ ref: 'unnamed', op: 'exists' }],
+      limit: QUERY_LIMIT,
+    });
+    for (const person of people) {
+      if (dryRun) {
+        peopleDeleted++;
+        continue;
+      }
+      try {
+        const parent = person.absPath.slice(0, person.absPath.lastIndexOf('/')) || '/';
+        await vfs.unlink(access, person.absPath, parent, { recursive: true });
+        peopleDeleted++;
+        if (verbose) await cmd.writeLn(`deleted ${person.absPath}`);
+      } catch (error) {
+        await cmd.writeError(`face-reset: ${person.absPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    }
+  }
+
+  const summary = { source, cleared, peopleDeleted, dryRun };
+  if (cmd.json) {
+    await cmd.writeJSON(summary);
+    return 0;
+  }
+  await cmd.writeLn(
+    `Cleared ${cleared} face assignment${cleared === 1 ? '' : 's'} from ${source}` +
+      (flags['delete-unnamed'] ? `, deleted ${peopleDeleted} unnamed ${peopleDeleted === 1 ? 'person' : 'people'}` : '') +
+      (dryRun ? ' (dry run)' : ''),
+  );
+  return 0;
+};
+
+faceReset.spec = {
+  name: 'face-reset',
+  effect: 'write' as const,
+  description: 'Undo automatic face→person assignments by provenance, leaving manual ones intact',
+  args: [],
+  flags: [
+    { name: 'source', type: 'string' as const, description: 'auto | cluster | transfer | all (required)' },
+    { name: 'delete-unnamed', type: 'bool' as const, description: 'also delete every unnamed person' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without changing anything' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each face' },
+  ],
+  examples: [
+    'face-reset --source cluster-faces --dry-run',
+  ],
+  returns: 'how many automatic assignments would be undone, by provenance.',
+};
+
+export default faceReset;

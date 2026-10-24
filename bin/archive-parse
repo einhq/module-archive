@@ -1,0 +1,57 @@
+#!ts
+/**
+ * archive-parse — a written search, turned into search filters.
+ *
+ * "Bilder från Italien 2011 när Olof och Stina var där" becomes photos, 2011, Olof and Stina,
+ * and Italy's box, which the media page applies to its visible controls before searching. The
+ * model writes into the filter controls, never straight into a result set, so an interpretation
+ * can be seen, corrected and linked to. Core's `parse-search` asks it, as the command
+ * `CFG_SEARCH_PARSER` names (set in archive's `etc/config`), for the search box and for whatever
+ * else reads a search — the chat's fast path among them.
+ *
+ * It is NOT named `search-*`. `search` treats every `search-*` command on PATH as a text
+ * provider and would call this one as part of every text search.
+ *
+ * It never fails to produce a parse: without the model, `--rules` or not, the rules pass still
+ * finds years and kinds.
+ */
+
+import type { SearchParse } from '@ein/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { parseSearch, toSearchParse } from '@archive/search/parse';
+
+const archiveParse = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['rules'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const query = (flags._ as string[]).join(' ').trim();
+  if (!query) {
+    await cmd.writeError('archive-parse: missing query\n');
+    return 1;
+  }
+
+  const parsed = await parseSearch(cmd, query, { rules: flags.rules === true });
+  // Core's `parse-search` hands this on as the search's reading.
+  if (cmd.json) await cmd.writeJSON(toSearchParse(parsed) satisfies SearchParse);
+  else await cmd.writeYAML(toSearchParse(parsed));
+  return 0;
+};
+
+archiveParse.spec = {
+  name: 'archive-parse',
+  effect: 'read' as const,
+  description: 'Turn a written search into search filters (kinds, years, people and locations as subjects, an area, what the pictures show)',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'the search as written, a sentence or a few words' },
+  ],
+  flags: [
+    { name: 'rules', type: 'bool' as const, description: 'only the deterministic pass: years and kinds, no model and no name lookups' },
+  ],
+  examples: ["archive-parse 'Anna Andersson Göteborg 2019'", "archive-parse --rules 'filmer från 2010'"],
+  returns:
+    'text, kinds, from, to, people (with slug when one person), locations (a location node or an area), region, unresolved, source (llm or rules) and a one-line explain.',
+};
+
+export default archiveParse;

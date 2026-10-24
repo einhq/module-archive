@@ -1,0 +1,377 @@
+#!ts
+/**
+ * person-timeline — one life as a chronological feed.
+ *
+ * The core `timeline` command answers "what happened", over everything; this
+ * answers "what happened to *them*", which is a different question with a
+ * different set of sources — a person's homes and their children's births
+ * belong on their page and nowhere else.
+ *
+ * Unpaged, deliberately. A life is tens to low hundreds of entries even for a
+ * well-documented person, so a cursor would be machinery for nothing; the
+ * corpus-wide feed needs one because it is walking everyone at once.
+ *
+ * Entries use the core feed's wire shape and its kinds, so the UI draws them
+ * with the same card and the same icon map it already has. A move is a `move`,
+ * the same kind core emits from the residence links themselves — the titles are
+ * composed identically on both sides, so the same move reads the same whether it
+ * is met here or in the corpus-wide feed.
+ *
+ * The reads it shares with `location-timeline` are in `lib/feed.ts`.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, PARTNERS_DIR, readRelationDir } from '@archive/people/genealogy';
+import type { PersonAttrs } from '@archive/people/types';
+import type { PersonTimeline } from '@archive/people/api';
+import { albumEntries, attrsOf, coverOf, mapLimited, nameOf, newestFirst, readBody, type TimelineCover, type TimelineEntry, writeFeed } from '@archive/people/feed';
+
+const EVENTS_DIR = 'events';
+const HOMES_DIR = 'homes';
+
+/** Birth and death, from the attrs — the values everyone has, event file or not. */
+function lifeEntries(person: string, attrs: PersonAttrs, cover?: TimelineCover): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  if (attrs.born) {
+    entries.push({ kind: 'birth', key: `${person}#birth`, date: attrs.born, path: person, title: `${attrs.name} was born`, people: [person], cover });
+  }
+  if (attrs.died) {
+    entries.push({ kind: 'death', key: `${person}#death`, date: attrs.died, path: person, title: `${attrs.name} died`, people: [person], cover });
+  }
+  return entries;
+}
+
+/**
+ * The event files under the person.
+ *
+ * A birth or death event is normally the *same* fact the attrs already produced
+ * an entry for, written down a second time — so its body and its more precise
+ * date fold onto that entry rather than arriving beside it, the way core's
+ * enrichment does it. When there is no attr to fold into, the event stands as
+ * the entry itself; see the comment where that happens.
+ */
+async function eventEntries(cmd: Command, person: string, personName: string, life: TimelineEntry[], cover?: TimelineCover): Promise<TimelineEntry[]> {
+  let children;
+  try {
+    children = await cmd.sys.vfs.children(cmd.access, `${person}/${EVENTS_DIR}`);
+  } catch {
+    return [];
+  }
+
+  const entries: TimelineEntry[] = [];
+  // The body read and the position probe of each event, issued together rather
+  // than a file at a time.
+  const details = await mapLimited([...children], async (child) => {
+    const attrs = child.node.attrs as Record<string, unknown>;
+    const path = `${person}/${EVENTS_DIR}/${child.name}`;
+    const size = typeof attrs.size === 'number' ? attrs.size : 0;
+    return await Promise.all([
+      size > 0 ? readBody(cmd, path) : Promise.resolve(undefined),
+      cmd.sys.vfs.exists(cmd.access, `${path}/position`).then((has) => has ? `${path}/position` : undefined).catch(() => undefined),
+    ]);
+  });
+
+  for (const [index, child] of children.entries()) {
+    const attrs = child.node.attrs as Record<string, unknown>;
+    const eventType = (attrs.eventType as string | undefined) ?? 'generic';
+    const path = `${person}/${EVENTS_DIR}/${child.name}`;
+    const date = attrs.date as string | undefined;
+
+    const [description, location] = details[index];
+
+    if (eventType === 'birth' || eventType === 'death') {
+      const target = life.find((entry) => entry.kind === eventType);
+      if (target) {
+        if (description) target.description = description;
+        if (location) target.location = location;
+        // Only ever a refinement — `1815` becoming `1815-03-04`. A date that
+        // disagrees is data to fix, not a display to switch.
+        if (date && date !== target.date && date.startsWith(target.date)) target.exactDate = date;
+        continue;
+      }
+
+      // No attr to fold into: the fact is recorded only as an event, so the
+      // event *is* the entry. The corpus-wide feed drops these to avoid
+      // doubling everyone (ein/core#290), but
+      // silently losing someone's death from their own page is a worse trade
+      // than the one that guard was making.
+      if (!date) continue;
+      entries.push({
+        kind: eventType,
+        key: `${path}#${eventType}`,
+        date,
+        path: person,
+        title: eventType === 'birth' ? `${personName} was born` : `${personName} died`,
+        people: [person],
+        ...(description ? { description } : {}),
+        ...(location ? { location } : {}),
+        ...(cover ? { cover } : {}),
+      });
+      continue;
+    }
+
+    if (!date) continue; // nothing to order it by
+
+    entries.push({
+      kind: 'event',
+      key: `${path}#event`,
+      date,
+      path,
+      title: (attrs.name as string | undefined) || child.name,
+      ownerPath: person,
+      people: [person],
+      eventType,
+      ...(description ? { description } : {}),
+      ...(location ? { location } : {}),
+      ...(cover ? { cover } : {}),
+    });
+  }
+  return entries;
+}
+
+/**
+ * Moving in and moving out, one entry each.
+ *
+ * A residence is a span, and a feed is moments — so the span becomes its two
+ * ends. A home with neither date says nothing about when and is left out; it is
+ * on the header instead.
+ */
+async function homeEntries(cmd: Command, person: string, personName: string, cover?: TimelineCover): Promise<TimelineEntry[]> {
+  const homes = await readRelationDir(cmd.sys.vfs, cmd.access, person, HOMES_DIR);
+
+  const nested = await mapLimited(homes.filter((home) => home.target), async (home) => {
+    const entries: TimelineEntry[] = [];
+    const locationName = await nameOf(cmd, home.target);
+
+    if (home.from) {
+      entries.push({
+        kind: 'move',
+        key: `${home.linkPath}#moved-in`,
+        date: home.from,
+        path: home.target,
+        title: `${personName} moved to ${locationName}`,
+        ownerPath: person,
+        people: [person],
+        eventType: 'moved-in',
+        ...(cover ? { cover } : {}),
+      });
+    }
+    if (home.to) {
+      entries.push({
+        kind: 'move',
+        key: `${home.linkPath}#moved-out`,
+        date: home.to,
+        path: home.target,
+        title: `${personName} left ${locationName}`,
+        ownerPath: person,
+        people: [person],
+        eventType: 'moved-out',
+        ...(cover ? { cover } : {}),
+      });
+    }
+
+    return entries;
+  });
+
+  return nested.flat();
+}
+
+/** The relation `kind` each partnership event type establishes; see the importer's `datePartnerships`. */
+const PARTNERSHIP_EVENT_TYPES: Record<string, string> = { marriage: 'married', engagement: 'engaged' };
+
+/** How a dated partnership reads when it is the entry itself. */
+const partnershipTitle = (kind: string | undefined, personName: string, partnerName: string): string => {
+  const couple = `${personName} and ${partnerName}`;
+  if (kind === 'married') return `${couple} married`;
+  if (kind === 'engaged') return `${couple} got engaged`;
+  return `${couple} became partners`;
+};
+
+/** The event type a dated partnership stands in for, so the card draws the same icon. */
+const partnershipEventType = (kind: string | undefined): string =>
+  Object.entries(PARTNERSHIP_EVENT_TYPES).find(([, relationKind]) => relationKind === kind)?.[0] ?? 'partnership';
+
+/**
+ * A partnership's start and end, when the relation carries dates.
+ *
+ * Few do. `import-relations` dates the partnerships a marriage or engagement
+ * event names — 38 of 236 on the real corpus — and nothing dates an end, so the
+ * rest are undated ties that this contributes nothing for.
+ *
+ * The relation is the half of a wedding that reaches *both* spouses' pages: the
+ * event file sits under one of the two and nothing puts it on the other's. On
+ * the spouse who does have it, the two are the same day written down twice, and
+ * `foldPartnerships` drops the derived one.
+ */
+async function partnerEntries(cmd: Command, person: string, personName: string): Promise<TimelineEntry[]> {
+  const partners = await readRelationDir(cmd.sys.vfs, cmd.access, person, PARTNERS_DIR);
+
+  const nested = await mapLimited(partners.filter((partner) => partner.target), async (partner) => {
+    const entries: TimelineEntry[] = [];
+    const [partnerName, cover] = await Promise.all([nameOf(cmd, partner.target), coverOf(cmd, partner.target)]);
+
+    if (partner.from) {
+      entries.push({
+        kind: 'event',
+        key: `${partner.linkPath}#together`,
+        date: partner.from,
+        path: partner.target,
+        title: partnershipTitle(partner.kind, personName, partnerName),
+        ownerPath: person,
+        people: [person, partner.target],
+        eventType: partnershipEventType(partner.kind),
+        ...(cover ? { cover } : {}),
+      });
+    }
+    if (partner.to) {
+      entries.push({
+        kind: 'event',
+        key: `${partner.linkPath}#parted`,
+        date: partner.to,
+        path: partner.target,
+        title: `${personName} and ${partnerName} parted`,
+        ownerPath: person,
+        people: [person, partner.target],
+        eventType: 'separation',
+        ...(cover ? { cover } : {}),
+      });
+    }
+
+    return entries;
+  });
+
+  return nested.flat();
+}
+
+/**
+ * The wedding, once, when the relation and an event file both record it.
+ *
+ * On a spouse who has the event file, both halves are on the page: the file
+ * says "Giftermål" with a body and a location, and the dated relation says "A and
+ * B married". They are the same day written down twice — the importer read one
+ * to date the other (`datePartnerships`) — so one of them has to go.
+ *
+ * The event survives, because it is a real node with a story in it and a page
+ * to open. What it gains from the relation is the second person: an event file
+ * names only its owner, and the relation is where the archive says who the
+ * other half of the couple was.
+ *
+ * The match is a day and a partnership, not a title. Dates are compared on the
+ * day and by prefix, because the two need not agree on precision — a relation
+ * dated `1972` against an event on `1972-05-20` is the same wedding recorded
+ * twice, once coarsely.
+ *
+ * Deliberately narrow: a `generic` story about the same day is left alone. Two
+ * authored nodes with different bodies are two things somebody wrote, and
+ * silently hiding one of them is a worse answer than showing both.
+ */
+function foldPartnerships(events: TimelineEntry[], partners: TimelineEntry[]): TimelineEntry[] {
+  const weddings = events.filter((entry) => entry.eventType !== undefined && entry.eventType in PARTNERSHIP_EVENT_TYPES);
+  if (weddings.length === 0) return partners;
+
+  const sameDay = (a: string, b: string): boolean => {
+    const [x, y] = [a.slice(0, 10), b.slice(0, 10)];
+    return x.startsWith(y) || y.startsWith(x);
+  };
+
+  return partners.filter((partner) => {
+    const covered = weddings.find((wedding) => sameDay(wedding.date, partner.date));
+    if (!covered) return true;
+
+    // The people the relation named, minus the ones the event already knew.
+    covered.people = [...new Set([...(covered.people ?? []), ...(partner.people ?? [])])];
+    return false;
+  });
+}
+
+/**
+ * Each child's birth, owned by the child.
+ *
+ * A `birth` entry pointing at the child, not the parent — so the card carries
+ * the child's face and links to their page, which is what someone reading a
+ * parent's life wants to click.
+ */
+async function childEntries(cmd: Command, person: string, personName: string): Promise<TimelineEntry[]> {
+  const children = await readRelationDir(cmd.sys.vfs, cmd.access, person, CHILDREN_DIR);
+
+  const entries = await mapLimited(children.filter((child) => child.target), async (child): Promise<TimelineEntry | undefined> => {
+    const attrs = await attrsOf(cmd, child.target);
+    const born = attrs?.born as string | undefined;
+    if (!born) return undefined;
+
+    const childName = (attrs?.name as string | undefined) ?? basename(child.target);
+    return {
+      kind: 'birth',
+      key: `${child.target}#birth`,
+      date: born,
+      path: child.target,
+      title: `${childName} was born`,
+      description: `Child of ${personName}`,
+      people: [child.target, person],
+      ...(await coverOf(cmd, child.target).then((cover) => cover ? { cover } : {})),
+    };
+  });
+
+  return entries.filter((entry): entry is TimelineEntry => entry !== undefined);
+}
+
+const personTimeline = async (cmd: Command): CmdReturn => {
+  const targetArg = cmd.args.filter((a) => !a.startsWith('-'))[0];
+  // The album half is the slow half — it materializes the person's whole media
+  // set and then reads a cover per album — and it is also the half a reader can
+  // wait a moment for. Skipping it answers the life itself in a few round trips,
+  // so a page can draw that and fill the rest in.
+  const withAlbums = !cmd.args.includes('--no-albums');
+  if (!targetArg) {
+    await cmd.writeError('person-timeline: missing person path\n');
+    return 1;
+  }
+  const person = resolve(cmd.cwd, targetArg);
+
+  const attrs = (await attrsOf(cmd, person)) as PersonAttrs | null;
+  if (!attrs) {
+    await cmd.writeError(`person-timeline: ${person}: not found\n`);
+    return 1;
+  }
+
+  const personName = attrs.name ?? basename(person);
+  const cover = await coverOf(cmd, person);
+
+  // The life entries are built first because the event files fold into them.
+  const life = lifeEntries(person, attrs, cover);
+  const [events, homes, partners, children, albums] = await Promise.all([
+    eventEntries(cmd, person, personName, life, cover),
+    homeEntries(cmd, person, personName, cover),
+    partnerEntries(cmd, person, personName),
+    childEntries(cmd, person, personName),
+    withAlbums ? albumEntries(cmd, `person:${person}`) : Promise.resolve([]),
+  ]);
+
+  const entries = [...life, ...events, ...homes, ...foldPartnerships(events, partners), ...children, ...albums].sort(newestFirst);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ person, name: personName, entries } satisfies PersonTimeline);
+    return 0;
+  }
+
+  await writeFeed(cmd, entries);
+  return 0;
+};
+
+personTimeline.spec = {
+  name: 'person-timeline',
+  effect: 'read' as const,
+  description: "One person's life as a chronological feed: events, homes, partnerships, children and albums",
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [
+    { name: 'no-albums', type: 'bool' as const, description: 'skip the albums, which are most of the cost — the life itself in a few round trips' },
+  ],
+  examples: [
+    'person-timeline /archive/people/Anna_Exempel',
+  ],
+  returns: "the person's life in order: events, homes, partnerships, children and the albums they appear in.",
+};
+
+export default personTimeline;

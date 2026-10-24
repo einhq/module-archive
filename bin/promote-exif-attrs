@@ -1,0 +1,212 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { angleFromVideoRotation } from '@archive/media/orientation';
+import { videoCodecFromExifRaw } from '@archive/media/video-codec';
+
+/**
+ * Copy the "hot" facts from a file's exif node onto the file node itself.
+ *
+ * `exif-extract` promotes `width`, `height` and `duration` alongside the exif node so a
+ * grid listing needs one `ls -l` rather than a read per tile — but it only started doing
+ * that partway through the corpus. Everything indexed before then has them solely under
+ * `<file>/metadata/exif` in `fileinfo`, which is why the media grid shows a video's play
+ * icon with no running time, and why the justified layout has to lay those files out at a
+ * guessed 3:2 and correct itself once the picture decodes.
+ *
+ * Re-running `exif-extract -f` would fix it too and costs a full exiftool run per file.
+ * This is two reads and a write.
+ *
+ * **`takenAt` is deliberately not promoted**, and neither is a still's `angle`. Both have
+ * manual overrides (`angleManual`, `takenAtManual`) that a blind sweep would quietly paper
+ * over, and a still's `angle` additionally carries the portrait heuristic recorded in
+ * ein/core#12 — re-deriving it here would
+ * spread that bug rather than leave it in one place.
+ *
+ * `--codec` is the same shape of sweep for a different fact: the picture codec, which
+ * `generate-derivatives` hands EMS so it can skip the full-VRAM stage NVDEC cannot run. `exif-extract`
+ * only started writing it on 2026-08-28, so the corpus indexed before then has the fourcc
+ * sitting in `raw` and no `codec` on the node, and every MJPEG, DV and ProRes file in it still
+ * spends a doomed ffmpeg per rendition. Deriving it here is a read and a write; re-running
+ * `exif-extract -f` is an exiftool run per file.
+ *
+ * **`sar` is not promotable at all**, and the reason is worth stating: for the containers where
+ * the pixel shape matters — `.MTS`, MPEG program streams, DV — the exiftool dump this sweep
+ * reads carries no ratio of any kind, so there is nothing to copy. QuickTime dumps do carry one,
+ * and there the answer is always 1 because exiftool already applied it to `ImageWidth`. Measuring
+ * it needs an ffprobe per file, which is `exif-extract -f`'s job; see
+ * ein/core#273.
+ *
+ * A **video's** `angle` is the exception, and `--angle` asks for it. It comes from the
+ * container display matrix (`raw.Rotation`), which involves no heuristic and no guess: it is
+ * the instruction every player already acts on. `exif-extract` only learned to read it on
+ * 2026-08-23, so everything indexed before then has the rotation sitting in `raw` and no
+ * `angle` on the node, which left the poster frame rotated and the transcode landscape. The
+ * override is still respected — a file with `angleManual` is left alone.
+ */
+
+type FileInfo = { width?: number; height?: number; duration?: number; codec?: string };
+
+/** Attrs to copy, and which media types are expected to carry each. */
+const PROMOTED = [
+  { name: 'width', kinds: ['image', 'video'] },
+  { name: 'height', kinds: ['image', 'video'] },
+  { name: 'duration', kinds: ['video', 'audio'] },
+] as const;
+
+const mediaKindOf = (mimetype: string): 'image' | 'video' | 'audio' | undefined =>
+  mimetype.startsWith('image/') ? 'image' : mimetype.startsWith('video/') ? 'video' : mimetype.startsWith('audio/') ? 'audio' : undefined;
+
+const promoteExifAttrs = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'dry-run', 'angle', 'codec'],
+    alias: { v: 'verbose', n: 'dry-run' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const verbose = Boolean(flags.verbose);
+  const dryRun = Boolean(flags['dry-run']);
+  const withAngle = Boolean(flags.angle);
+  const withCodec = Boolean(flags.codec);
+  const targetPath = flags._.length > 0 ? String(flags._[0]) : '.';
+
+  const infoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(targetPath)}`);
+  if (infoResult.code !== 0) {
+    await cmd.writeError(`promote-exif-attrs: ${targetPath}: ${infoResult.stderr}\n`);
+    return 1;
+  }
+
+  const nodeType = JSON.parse(infoResult.stdout).type;
+
+  let paths: string[];
+  if (nodeType === 'file') {
+    paths = [targetPath];
+  } else {
+    const findResult = await cmd.execute(`JSON_OUTPUT=1 find ${shq(targetPath)} -type f`);
+    if (findResult.code !== 0) {
+      await cmd.writeError(`promote-exif-attrs: ${targetPath}: ${findResult.stderr}\n`);
+      return 1;
+    }
+    // `find` in JSON mode emits {path, type, name} per hit, not bare paths.
+    paths = (JSON.parse(findResult.stdout) as { path: string }[]).map((e) => e.path);
+  }
+
+  let updated = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const path of paths) {
+    const attrsResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(path)}`);
+    if (attrsResult.code !== 0) {
+      failed++;
+      continue;
+    }
+    const fileAttrs = JSON.parse(attrsResult.stdout);
+
+    // A rendition's own dimensions are not the original's, and nothing reads them.
+    if (fileAttrs.sourceId) continue;
+
+    const kind = mediaKindOf(String(fileAttrs.mimetype ?? ''));
+    if (!kind) continue;
+
+    const wanted = PROMOTED.filter((p) => (p.kinds as readonly string[]).includes(kind));
+    const missing = wanted.filter((p) => !Number.isFinite(Number(fileAttrs[p.name])));
+
+    // Whether this file might still need an angle off the container matrix. The value lives in
+    // the exif node, so the answer is only final after the read below — but a file that already
+    // has an angle, or a manual one, is decided here and costs no read.
+    const angleWanted = withAngle && kind === 'video' &&
+      fileAttrs.angle === undefined && fileAttrs.angleManual === undefined;
+
+    // Same shape: only a video has a codec worth promoting (whether NVDEC can decode it is a
+    // video question), and only one that has none yet needs the read.
+    const codecWanted = withCodec && kind === 'video' && fileAttrs.codec === undefined;
+
+    if (missing.length === 0 && !angleWanted && !codecWanted) {
+      skipped++;
+      continue;
+    }
+
+    const exifResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(`${path}/metadata/exif`)}`);
+    if (exifResult.code !== 0) {
+      // Not indexed at all — discovery's job, not this sweep's.
+      skipped++;
+      continue;
+    }
+    const exifAttrs = JSON.parse(exifResult.stdout);
+    const fileinfo = (exifAttrs.fileinfo ?? {}) as FileInfo;
+
+    // -J, not -s: `attrs -s` stores the value as a string, and both the duration badge and
+    // the layout's aspect do arithmetic on what they read back.
+    const sets = missing
+      .map((p) => ({ name: p.name, value: Number(fileinfo[p.name]) }))
+      .filter(({ value }) => Number.isFinite(value) && value > 0)
+      .map(({ name, value }) => `-J ${name}=${value}`);
+
+    if (angleWanted) {
+      // `kind === 'video'` above is this call's gate, not a filter: in an ungrouped dump the
+      // `Rotation` key belongs to a maker note on stills. See `angleFromVideoRotation`.
+      const angle = angleFromVideoRotation((exifAttrs.raw ?? {}).Rotation);
+      if (angle !== undefined) sets.push(`-J angle=${angle}`);
+    }
+
+    if (codecWanted) {
+      // `fileinfo.codec` first: an index new enough to have written it used ffprobe's own
+      // decoder name where it had one, which beats mapping the container's fourcc back.
+      const codec = typeof fileinfo.codec === 'string' ? fileinfo.codec : videoCodecFromExifRaw((exifAttrs.raw ?? {}) as Record<string, unknown>);
+      // -s, not -J: a codec name is a string, and `-J h264` is not valid JSON.
+      if (codec) sets.push(`-s codec=${codec}`);
+    }
+
+    if (sets.length === 0) {
+      skipped++;
+      continue;
+    }
+
+    if (verbose || dryRun) await cmd.writeLn(`${dryRun ? 'would set' : 'setting'} ${sets.join(' ')} on ${path}`);
+    if (dryRun) {
+      updated++;
+      continue;
+    }
+
+    const setResult = await cmd.execute(`attrs ${shq(path)} ${sets.join(' ')}`);
+    if (setResult.code !== 0) {
+      await cmd.writeError(`promote-exif-attrs: ${path}: ${setResult.stderr}\n`);
+      failed++;
+      continue;
+    }
+    updated++;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ updated, skipped, failed, dryRun });
+  } else {
+    await cmd.writeLn(`Promoted attrs on ${updated} file(s), ${skipped} already complete${failed ? `, ${failed} failed` : ''}`);
+  }
+
+  return failed > 0 ? 1 : 0;
+};
+
+promoteExifAttrs.spec = {
+  name: 'promote-exif-attrs',
+  effect: 'write' as const,
+  description: "Copy width/height/duration from a file's exif node onto the file node",
+  args: [
+    { name: 'path', type: 'path' as const, description: 'VFS path to a media file or a directory to walk' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — report what would be set, write nothing' },
+    { name: 'angle', type: 'bool' as const, description: "Also promote a video's container rotation to `angle` (never a still's, never over angleManual)" },
+    { name: 'codec', type: 'bool' as const, description: "Also promote a video's picture codec to `codec` (the hint EMS skips its VRAM stage on)" },
+  ],
+  examples: [
+    'promote-exif-attrs /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'nothing; width, height and duration are copied from the exif node onto the file.',
+};
+
+export default promoteExifAttrs;

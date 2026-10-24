@@ -1,0 +1,5 @@
+#!ts
+/** timeline-facets — what the timeline could be narrowed by. The command is `timelineFacets` in [lib](../lib/), where its spec says the rest. */
+import { timelineFacets } from '@archive/timeline/facets';
+
+export default timelineFacets;

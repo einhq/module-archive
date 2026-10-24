@@ -1,0 +1,83 @@
+#!ts
+/**
+ * onthisday-media — the years the archive has pictures from one calendar day, as `onthisday`
+ * entries: archive's part of the home page's On this day. One entry a year, newest first, drawn by
+ * archive's `/onthisday/media` route as a ring round the year's first picture, opening that year's
+ * story. The walk is `onThisDay` in [lib](../lib/media/on-this-day.ts).
+ */
+
+import type { OnThisDayEntry, Provided } from '@ein/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { onThisDay } from '@archive/media/on-this-day';
+
+const DEFAULT_LIMIT = 8;
+
+/** The route that draws one entry. */
+const ENTRY_ROUTE = '/onthisday/media';
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+const count = (raw: string | undefined, fallback: number): number | undefined => {
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return raw.trim() !== '' && Number.isInteger(value) && value >= 0 ? value : undefined;
+};
+
+const onthisdayMedia = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['limit'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const monthDay = (flags._[0] as string | undefined) ?? new Date().toISOString().slice(5, 10);
+  // 2000 was a leap year, so 02-29 is a day to ask about and 02-30 is not.
+  if (!/^\d{2}-\d{2}$/.test(monthDay) || new Date(`2000-${monthDay}T00:00:00Z`).toISOString().slice(5, 10) !== monthDay) {
+    await cmd.writeError(`onthisday-media: expected the day as MM-DD, got '${monthDay}'\n`);
+    return 1;
+  }
+
+  const limit = count(flags.limit, DEFAULT_LIMIT);
+  if (limit === undefined) {
+    await cmd.writeError('onthisday-media: --limit must be a non-negative whole number\n');
+    return 1;
+  }
+
+  const day = limit > 0 ? await onThisDay(cmd, { monthDay, years: limit, perYear: 1 }) : { monthDay, years: [] };
+  const [month, dayOfMonth] = monthDay.split('-').map(Number);
+  const entries: Provided<OnThisDayEntry>[] = day.years
+    .filter((year) => year.items.length > 0)
+    .map(({ year, items }) => ({
+      year,
+      title: `Pictures taken on ${dayOfMonth} ${MONTHS[month - 1]} ${year}`,
+      path: items[0].path,
+      route: `${ENTRY_ROUTE}?${new URLSearchParams({ day: monthDay, year: String(year), cover: items[0].path })}`,
+    }));
+
+  if (cmd.json) {
+    await cmd.writeJSON(entries satisfies Provided<OnThisDayEntry>[]);
+    return 0;
+  }
+  for (const entry of entries) await cmd.writeLn(`${entry.year}  ${entry.title}`);
+  return 0;
+};
+
+onthisdayMedia.spec = {
+  name: 'onthisday-media',
+  effect: 'read' as const,
+  description: 'The years with pictures taken on a day (MM-DD, default today), as onthisday entries (core onthisday gathers them)',
+  args: [
+    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today, UTC)' },
+  ],
+  flags: [
+    { name: 'limit', type: 'number' as const, description: `years returned, newest first (default ${DEFAULT_LIMIT})` },
+  ],
+  examples: [
+    'onthisday-media',
+    'onthisday-media 06-21 --limit 20',
+  ],
+  returns:
+    "one onthisday entry per year with pictures taken on that day, newest year first: the year, a title, the year's first picture, and the route that draws it as a ring.",
+};
+
+export default onthisdayMedia;

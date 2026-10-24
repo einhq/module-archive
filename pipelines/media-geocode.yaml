@@ -1,0 +1,16 @@
+name: media-geocode
+description: Reverse geocode a file's GPS coordinates
+
+# Subject is the file's position node, so $NODE_PATH is what geocode-position wants.
+trigger:
+  on: media.position.available
+  skipIfAttr: geocodedAt
+
+steps:
+  geocode:
+    command: geocode-position $NODE_PATH
+    description: Reverse geocode via Nominatim
+
+options:
+  maxAttempts: 3
+  priority: 5

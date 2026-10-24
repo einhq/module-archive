@@ -1,0 +1,236 @@
+#!ts
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_INPUT, stepPhase } from '@ein/client';
+import { stepExitCode } from '@ems/client';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { computeFingerprints, type FingerprintResult } from '@archive/media/fingerprint-service';
+import { fingerprintDone } from '@archive/media/fingerprints';
+import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@archive/media/chromaprint';
+import { reportUnwritable } from '@archive/media/writable';
+import { recordPaths } from '@archive/staging/duplicates';
+
+/**
+ * Decide the duplicate findings a file's fingerprints landing may change, as `duplicates --record`
+ * does: a staged file's look-alikes, and a library file's staged copies and look-alikes. Run here
+ * rather than announced, so a file costs no instance of its own. A failure is reported and leaves
+ * the prints standing; `staging duplicates --refresh` finds a staged finding older than its prints.
+ */
+const recordFindings = async (cmd: Command, path: string): Promise<void> => {
+  try {
+    await recordPaths(cmd, [path]);
+  } catch (error) {
+    await cmd.writeError(`compute-fingerprint: ${path}: duplicate check failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+};
+
+const computeFingerprint = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+
+  if (!inputPath) {
+    await cmd.writeError('compute-fingerprint: missing file path\n');
+    return 1;
+  }
+
+  // Where the time goes, for a step that runs out of it. See @ein/client stepPhase.
+  const phase = stepPhase(cmd, 'compute-fingerprint', verbose);
+
+  // Validate it's a file node
+  const nodeInfo = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  await phase('read file node');
+  if (!nodeInfo) {
+    await cmd.writeError(`compute-fingerprint: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (nodeInfo.type !== 'file') {
+    await cmd.writeError(`compute-fingerprint: ${inputPath}: not a file node (is ${nodeInfo.type})\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, nodeInfo)) return 1;
+
+  // Already fingerprinted (unless --force): a print under `metadata/`, or for a recording too
+  // short to have one, `fingerprintedAt`. See @archive/media/fingerprints.
+  if (!force) {
+    const names = await cmd.sys.vfs.children(cmd.access, `${inputPath}/metadata`).then((entries) => entries.map((e) => e.name)).catch(() => []);
+    if (fingerprintDone(String(nodeInfo.attrs.mimetype ?? ''), nodeInfo.attrs.fingerprintedAt, names)) {
+      if (verbose) await cmd.writeLn('Already fingerprinted, skipping (use -f to force)');
+      return 0;
+    }
+  }
+
+  // Get mimetype
+  const fileAttrs = nodeInfo.attrs;
+  const mimetype = typeof fileAttrs.mimetype === 'string' ? fileAttrs.mimetype : '';
+
+  if (!mimetype.startsWith('image/') && !mimetype.startsWith('video/') && !mimetype.startsWith('audio/')) {
+    await cmd.writeError(`compute-fingerprint: ${inputPath}: unsupported mimetype ${mimetype}\n`);
+    return STEP_EXIT_INPUT;
+  }
+
+  // Same answer the media-fingerprint trigger gives, repeated here for the callers that come in
+  // below it (a hand-run, a sweep). ffmpeg cannot extract a keyframe from a container with no
+  // frame table, so there is no fingerprint to compute and never will be. `-f` goes ahead, for
+  // bytes that have since been replaced.
+  const undecodable = fileAttrs[UNDECODABLE_ATTR];
+  if (typeof undecodable === 'string' && undecodable.length > 0 && !force) {
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ count: 0, fingerprints: [], undecodable }));
+    } else {
+      await cmd.writeLn(`${inputPath}: source cannot be decoded (${undecodable}), no fingerprint is possible`);
+    }
+    return 0;
+  }
+
+  if (verbose) await cmd.writeLn(`Computing fingerprint for ${mimetype}...`);
+
+  let output: FingerprintResult;
+  try {
+    await phase('asking ems');
+    output = await computeFingerprints(cmd, inputPath, fileAttrs);
+    await phase('ems answered');
+  } catch (error) {
+    await cmd.writeError(`compute-fingerprint: fingerprint computation failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+
+  const computedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+  // Nothing to write is a valid answer, not a failure. Chromaprint needs about two and a half
+  // seconds of audio before it emits anything at all — below that a voice memo has no acoustic
+  // fingerprint and never will, so EMS answers an empty list. The marker records that answer,
+  // so neither the gap scan nor a re-run asks EMS again.
+  if (!output.fingerprints || output.fingerprints.length === 0) {
+    await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { fingerprintedAt: computedAt } });
+    await recordFindings(cmd, inputPath);
+    await phase('duplicates decided');
+    if (verbose) await cmd.writeLn('No fingerprint produced (source too short)');
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ count: 0, fingerprints: [] }));
+    }
+    return 0;
+  }
+
+  if (verbose) await cmd.writeLn(`Got ${output.fingerprints.length} fingerprint(s)`);
+
+  // Create metadata directory (shared with exif/description). `--under` keeps
+  // this to the one level it means: the file itself is the caller's premise, not
+  // something to rebuild if the file was deleted while the pipeline ran.
+  await cmd.execute(`mkdir -p --under ${shq(inputPath)} ${shq(`${inputPath}/metadata`)}`);
+  await phase('metadata directory ready');
+
+  const created: string[] = [];
+  let failed = false;
+
+  for (const fp of output.fingerprints) {
+    // Node name: type for primary, type-label for keyframes
+    const nodeName = fp.label === 'primary' ? fp.type : `${fp.type}-${fp.label}`;
+    const nodePath = `${inputPath}/metadata/${nodeName}`;
+
+    // A chromaprint is no vector: its values are the bytes of a db-tier file node, found by its
+    // mimetype. The provenance goes on last, because writing it is what announces the print.
+    if (fp.type === 'chromaprint') {
+      if (!await cmd.sys.vfs.exists(cmd.access, nodePath)) {
+        const mkResult = await cmd.execute(`mknode -t file ${shq(nodePath)} --as "mimetype=${CHROMAPRINT_MIMETYPE}" --tier db`);
+        if (mkResult.code !== 0) {
+          await cmd.writeError(`compute-fingerprint: failed to create ${nodePath}\n`);
+          failed = true;
+          continue;
+        }
+      }
+      const handle = await cmd.sys.vfs.open(cmd.access, nodePath, { mode: 'w' });
+      try {
+        await handle.write(encodeChromaprint(fp.fingerprint));
+      } finally {
+        await handle.close();
+      }
+      await cmd.sys.vfs.update(cmd.access, nodePath, {
+        attrs: { computedAt, computedBy: 'chromaprint', label: fp.label, values: fp.fingerprint.length },
+      });
+      await phase(`wrote ${nodeName}`);
+      if (verbose) await cmd.writeLn(`  Created ${nodePath}`);
+      created.push(nodePath);
+      continue;
+    }
+
+    // Create the embedding node, or update the one already there. `mknode` fails on an existing
+    // node, so an unguarded create made `-f` useless on exactly the files it exists for — every
+    // already-fingerprinted one.
+    if (!await cmd.sys.vfs.exists(cmd.access, nodePath)) {
+      const mkResult = await cmd.execute(
+        `mknode -t embedding ${shq(nodePath)} --as "embeddingType=${fp.type}" --an "capacity=${fp.dimension}" --as "computedAt=${computedAt}" --as ${
+          shq(`computedBy=${output.producer}`)
+        } --as "label=${fp.label}"`,
+      );
+      if (mkResult.code !== 0) {
+        await cmd.writeError(`compute-fingerprint: failed to create ${nodePath}\n`);
+        failed = true;
+        continue;
+      }
+    } else {
+      await cmd.sys.vfs.update(cmd.access, nodePath, {
+        attrs: { embeddingType: fp.type, capacity: fp.dimension, computedAt, computedBy: output.producer, label: fp.label },
+      });
+    }
+
+    // Write vector to embedding node
+    const handle = await cmd.sys.vfs.open(cmd.access, nodePath, { mode: 'w' });
+    try {
+      const vectorJson = JSON.stringify(fp.vector);
+      await handle.write(new TextEncoder().encode(vectorJson));
+    } finally {
+      await handle.close();
+    }
+
+    await phase(`wrote ${nodeName}`);
+    if (verbose) await cmd.writeLn(`  Created ${nodePath}`);
+    created.push(nodePath);
+  }
+
+  // The marker goes on only once every print is written: a file missing one is still a gap.
+  if (failed) return 1;
+  await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { fingerprintedAt: computedAt } });
+  await recordFindings(cmd, inputPath);
+  await phase('duplicates decided');
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ count: created.length, fingerprints: created }));
+  } else {
+    await cmd.writeLn(`Created ${created.length} fingerprint(s)`);
+    for (const p of created) {
+      await cmd.writeLn(`  ${p}`);
+    }
+  }
+
+  return 0;
+};
+
+computeFingerprint.spec = {
+  name: 'compute-fingerprint',
+  effect: 'write' as const,
+  description: 'Compute the fingerprints that find copies of a media file: SSCD for pictures and video keyframes, chromaprint for sound',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to media file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Force recompute even if already fingerprinted' },
+  ],
+  examples: [
+    'compute-fingerprint /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'nothing; the fingerprints are written under the file, and `fingerprintedAt` on it, and the duplicate findings they change are decided.',
+};
+
+export default computeFingerprint;

@@ -1,0 +1,213 @@
+#!ts
+/**
+ * location-link-media — link geotagged files to the location whose shape contains
+ * them, as a `<file>/location` softlink marked `linkSource: 'shape'`.
+ *
+ * Three scopes, one decision per file:
+ *
+ *   location-link-media                    every geotagged file under --root
+ *   location-link-media --location <location>    the files inside one location's shape, and
+ *                                       the ones it shape-linked that no longer are
+ *   location-link-media --point <file>/position
+ *                                       one file, after its GPS point was written
+ *
+ * The two narrow forms are what the `location-upkeep` and `location-link-point`
+ * pipelines run when a location moves or a photo gets a position.
+ *
+ * A link a person made — by hand, or the legacy import — is never replaced
+ * without --force, and never removed. A shape link follows the shapes: it moves
+ * to whichever location now contains the point (the nearest, when several do) and
+ * goes away when none does. See @location/location-link for why the marker matters.
+ */
+import { ALBUMS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command, Node } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import { isShapeLink, LOCATION_LINK_NAME, POSITION_CHILD, SHAPE_LINK_SOURCE } from '@archive/location/location-link';
+
+const SCAN_LIMIT = 100000;
+const WORLD = { north: 90, south: -90, east: 180, west: -180 };
+const METERS_PER_DEGREE = 111_320;
+
+type Point = { lat: number; lng: number };
+type Shape = Point & { radius?: number; polygon?: Point[] };
+type Outcome = 'linked' | 'relinked' | 'unlinked' | 'kept' | 'manual' | 'unmatched';
+
+/** The stored shape, or undefined when the node has none or is gone. */
+const readShape = async (cmd: Command, path: string): Promise<Shape | undefined> => {
+  try {
+    const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+    try {
+      const data = await handle.read(1 << 20);
+      if (data.length === 0) return undefined;
+      const json = JSON.parse(new TextDecoder().decode(data));
+      return typeof json?.lat === 'number' && typeof json?.lng === 'number' ? json : undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+};
+
+/** The box a shape can contain points in; undefined for a shape that contains nothing. */
+const boundsOf = (shape: Shape) => {
+  if (shape.polygon && shape.polygon.length >= 3) {
+    const lats = shape.polygon.map((p) => p.lat);
+    const lngs = shape.polygon.map((p) => p.lng);
+    return { north: Math.max(...lats), south: Math.min(...lats), east: Math.max(...lngs), west: Math.min(...lngs) };
+  }
+  // A bare point contains nothing — the registry's findContaining wants radius > 0 too.
+  if (!shape.radius || shape.radius <= 0) return undefined;
+  const dLat = shape.radius / METERS_PER_DEGREE;
+  const dLng = shape.radius / (METERS_PER_DEGREE * Math.max(Math.cos((shape.lat * Math.PI) / 180), 0.01));
+  return { north: shape.lat + dLat, south: shape.lat - dLat, east: shape.lng + dLng, west: shape.lng - dLng };
+};
+
+const locationLinkMedia = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['dry-run', 'force', 'verbose'],
+    string: ['root', 'location', 'point'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const root = (flags.root as string | undefined) ?? ALBUMS_ROOT;
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const dryRun = Boolean(flags['dry-run']);
+  const force = Boolean(flags.force);
+
+  if (flags.location !== undefined && flags.point !== undefined) {
+    await cmd.writeError('location-link-media: --location and --point are separate scopes, give one\n');
+    return 1;
+  }
+
+  /** The nearest location whose shape (`<location>/position`) covers the point. */
+  const containingLocation = async (point: Point): Promise<string | undefined> => {
+    const matches = await vfs.findContaining(access, point.lat, point.lng, 5);
+    if (matches.length === 0) return undefined;
+    const paths = await vfs.resolveIdPaths(access, matches.map((match) => match.id));
+    for (const match of matches) {
+      const shape = paths.get(match.id)?.find((path) => path.endsWith(`/${POSITION_CHILD}`) && dirname(dirname(path)) === LOCATIONS_ROOT);
+      if (shape) return dirname(shape);
+    }
+    return undefined;
+  };
+
+  /** One file: where its link should point, and making it so. */
+  const settle = async (filePath: string, point: Point | undefined): Promise<Outcome> => {
+    const linkPath = `${filePath}/${LOCATION_LINK_NAME}`;
+    let existing: Node | undefined;
+    try {
+      existing = await vfs.get(access, linkPath, { follow: false, readlink: true });
+    } catch {
+      existing = undefined;
+    }
+
+    const shapeMade = existing !== undefined && isShapeLink(existing);
+    if (existing && !shapeMade && !force) return 'manual';
+
+    const target = point ? await containingLocation(point) : undefined;
+    if (existing && shapeMade && existing.props.softlink === target) return 'kept';
+
+    if (!target) {
+      if (!existing || !shapeMade) return 'unmatched';
+      if (!dryRun) await vfs.unlink(access, linkPath, filePath, { readlink: true });
+      if (flags.verbose) await cmd.writeLn(`${filePath} -x ${existing.props.softlink}`);
+      return 'unlinked';
+    }
+
+    if (flags.verbose) await cmd.writeLn(`${filePath} -> ${target}`);
+    if (!dryRun) {
+      if (existing) await vfs.unlink(access, linkPath, filePath, { readlink: true });
+      await vfs.create(access, 'softlink', filePath, LOCATION_LINK_NAME, {
+        props: { uid: access.uid, gid: access.gid, mode: 0o777, softlink: target },
+        attrs: { linkSource: SHAPE_LINK_SOURCE },
+      });
+    }
+    return existing ? 'relinked' : 'linked';
+  };
+
+  /** File path -> its GPS point, for every media position id given. */
+  const filePoints = async (hits: { id: string; lat: number; lng: number }[]): Promise<Map<string, Point>> => {
+    const files = new Map<string, Point>();
+    const paths = await vfs.resolveIdPaths(access, hits.map((hit) => hit.id));
+    for (const hit of hits) {
+      const positionPath = paths.get(hit.id)?.find((path) => path.startsWith(`${root}/`) && path.endsWith(`/${POSITION_CHILD}`));
+      if (positionPath) files.set(dirname(positionPath), { lat: hit.lat, lng: hit.lng });
+    }
+    return files;
+  };
+
+  const counts: Record<Outcome, number> = { linked: 0, relinked: 0, unlinked: 0, kept: 0, manual: 0, unmatched: 0 };
+
+  try {
+    let work: Map<string, Point | undefined>;
+
+    if (flags.point !== undefined) {
+      const positionPath = resolve(cmd.cwd, flags.point as string);
+      if (!positionPath.endsWith(`/${POSITION_CHILD}`)) {
+        await cmd.writeError(`location-link-media: ${positionPath}: not a <file>/${POSITION_CHILD} node\n`);
+        return 1;
+      }
+      // A removed or cleared point is still worth settling: its shape link has to go.
+      work = new Map([[dirname(positionPath), await readShape(cmd, positionPath)]]);
+    } else if (flags.location !== undefined) {
+      const locationPath = resolve(cmd.cwd, flags.location as string);
+      const shape = await readShape(cmd, `${locationPath}/${POSITION_CHILD}`);
+      const bounds = shape ? boundsOf(shape) : undefined;
+      work = new Map(bounds ? await filePoints(await vfs.findWithin(access, bounds, SCAN_LIMIT)) : []);
+
+      // The files it shape-linked earlier, which the new shape may no longer cover.
+      for (const link of await vfs.findLinks(access, locationPath, SCAN_LIMIT)) {
+        if (!link.absPath.endsWith(`/${LOCATION_LINK_NAME}`) || !isShapeLink(link.node)) continue;
+        const filePath = dirname(link.absPath);
+        if (!work.has(filePath)) work.set(filePath, await readShape(cmd, `${filePath}/${POSITION_CHILD}`));
+      }
+    } else {
+      work = await filePoints(await vfs.findWithin(access, WORLD, SCAN_LIMIT));
+    }
+
+    for (const [filePath, point] of work) counts[await settle(filePath, point)]++;
+  } catch (error) {
+    await cmd.writeError(`location-link-media: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const linked = counts.linked + counts.relinked;
+  const skipped = counts.kept + counts.manual;
+  if (cmd.json) {
+    await cmd.writeJSON({ linked, unlinked: counts.unlinked, skipped, unmatched: counts.unmatched });
+  } else if (flags.verbose || flags.location === undefined && flags.point === undefined || linked + counts.unlinked > 0) {
+    await cmd.writeLn(
+      `Linked ${linked}, unlinked ${counts.unlinked}, skipped ${skipped} (${counts.manual} linked by hand), ${counts.unmatched} outside any location shape`,
+    );
+  }
+  return 0;
+};
+
+locationLinkMedia.spec = {
+  name: 'location-link-media',
+  effect: 'write' as const,
+  description: 'Link geotagged media files to the location whose shape contains them (<file>/location softlink)',
+  args: [],
+  flags: [
+    { name: 'location', type: 'path' as const, description: "only the files inside this location's shape, and those it no longer covers" },
+    { name: 'point', type: 'path' as const, description: 'only the file owning this <file>/position node' },
+    { name: 'root', type: 'string' as const, description: `media root to scan (default: ${ALBUMS_ROOT})` },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without creating or removing links' },
+    { name: 'force', type: 'bool' as const, description: 'replace links made by hand or by the import too' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each link' },
+  ],
+  examples: [
+    'location-link-media',
+    `location-link-media --location ${LOCATIONS_ROOT}/Exempelparken`,
+  ],
+  returns: 'how many files were linked, unlinked, skipped and left outside every location.',
+};
+
+export default locationLinkMedia;

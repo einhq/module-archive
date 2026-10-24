@@ -1,0 +1,5 @@
+{
+  "description": "Asks for the staging organizer runs something waits for, and matches the groups due a match",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

@@ -1,0 +1,166 @@
+#!ts
+/**
+ * label-model — learn labels from their pictures, so they can suggest where else they belong.
+ *
+ * A label's model is a direction in the picture space with a floor (`@archive/labels/label-model`),
+ * kept on its tag directory. `search --like /archive/tags/<label>` ranks by it; this command
+ * trains it, reports how well it measured, and keeps the files and albums someone said are not
+ * the label. `train --all` also gives every word of the vocabulary in the archive's language
+ * (`CFG_LANGUAGE`) a model, so a label can be suggested before anyone has used it.
+ */
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
+import { TAGS_ROOT } from '@ein/paths';
+import type { LabelModelSummary, LabelTrainResult } from '@archive/labels/api';
+import { dropStaleWords, readLabelModel, setRejected, trainLabel } from '@archive/labels/label-model';
+import { vocabularyFor } from '@archive/labels/vocabulary';
+
+const USAGE = 'Usage: label-model <train|show|list|reject|unreject> [<label>] [<path>...] [--all] [--if-stale]';
+
+/** The labels in use: every tag directory that links to something. */
+const labelsInUse = async (cmd: Command): Promise<string[]> => {
+  try {
+    return (await cmd.sys.vfs.children(cmd.access, TAGS_ROOT)).filter((entry) => entry.childCount > 0).map((entry) => entry.name).sort();
+  } catch {
+    return [];
+  }
+};
+
+/** Every tag directory that keeps a model. */
+const labelsWithModels = async (cmd: Command): Promise<string[]> => {
+  try {
+    return (await cmd.sys.vfs.children(cmd.access, TAGS_ROOT)).filter((entry) => entry.node.attrs.model !== undefined).map((entry) => entry.name).sort();
+  } catch {
+    return [];
+  }
+};
+
+const describe = (summary: LabelModelSummary): string => {
+  const quality = summary.measured
+    ? `auc ${summary.measured.auc.toFixed(3)}, recall ${summary.measured.recall.toFixed(2)} over ${summary.measured.folds} folds`
+    : 'not measured';
+  const matches = `${summary.matches}${summary.matchesCapped ? '+' : ''} matches`;
+  const state = summary.source === 'vocabulary' ? `asked by its words, "${summary.prompt}"` : summary.learnable ? 'learnable' : `not learnable (${summary.reason})`;
+  return `${summary.label}: ${summary.pictures} pictures from ${summary.groups} files and albums; ${quality}; ${state}; floor ${summary.floor}; ${matches}${
+    summary.rejected ? `; ${summary.rejected} rejected` : ''
+  }${summary.stale ? '; stale' : ''}`;
+};
+
+const trainCmd = async (cmd: Command, labels: string[], prompts: Map<string, string>, ifStale: boolean, verbose: boolean): Promise<number> => {
+  const results: LabelTrainResult[] = [];
+  let failed = 0;
+  for (const label of labels) {
+    try {
+      if (ifStale) {
+        const kept = await readLabelModel(cmd, label);
+        if (kept && !kept.summary.stale) {
+          results.push({ ...kept.summary, trained: false });
+          if (!cmd.json) await cmd.writeLn(`${describe(kept.summary)} (up to date)`);
+          continue;
+        }
+      }
+      const outcome = await trainLabel(cmd, label, prompts.get(label), stepPhase(cmd, `label-model ${label}`, verbose));
+      const result: LabelTrainResult = 'reason' in outcome ? { label, trained: false, reason: outcome.reason } : { ...outcome.summary, trained: true };
+      results.push(result);
+      if (!cmd.json) await cmd.writeLn('reason' in outcome ? `${label}: nothing to learn from (${outcome.reason})` : describe(outcome.summary));
+    } catch (error) {
+      failed++;
+      await cmd.writeError(`label-model: ${label}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
+  }
+  if (cmd.json) await cmd.writeJSON(results satisfies LabelTrainResult[]);
+  return failed > 0 ? 1 : 0;
+};
+
+const labelModel = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['all', 'if-stale', 'verbose'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [sub, ...rest] = (flags._ as unknown[]).map(String);
+  try {
+    switch (sub) {
+      case 'train': {
+        if (rest.length === 0 && !flags.all) break;
+        const prompts = new Map(vocabularyFor(cmd.env.CFG_LANGUAGE || 'en').map((word) => [word.label, word.prompt]));
+        if (flags.all) {
+          for (const label of await dropStaleWords(cmd, new Set(prompts.keys()))) {
+            if (!cmd.json) await cmd.writeLn(`${label}: no longer a word of the vocabulary, dropped`);
+          }
+        }
+        const labels = flags.all ? [...new Set([...await labelsInUse(cmd), ...prompts.keys()])].sort() : rest;
+        return await trainCmd(cmd, labels, prompts, Boolean(flags['if-stale']), Boolean(flags.verbose));
+      }
+      case 'show': {
+        if (rest.length !== 1) break;
+        const kept = await readLabelModel(cmd, rest[0]);
+        if (!kept) {
+          await cmd.writeError(`label-model: label '${rest[0]}' has no model; run label-model train ${rest[0]}\n`);
+          return 1;
+        }
+        if (cmd.json) await cmd.writeJSON(kept.summary satisfies LabelModelSummary);
+        else await cmd.writeLn(describe(kept.summary));
+        return 0;
+      }
+      case 'list': {
+        const summaries: LabelModelSummary[] = [];
+        for (const label of await labelsWithModels(cmd)) {
+          const kept = await readLabelModel(cmd, label);
+          if (kept) summaries.push(kept.summary);
+        }
+        if (cmd.json) await cmd.writeJSON(summaries satisfies LabelModelSummary[]);
+        else for (const summary of summaries) await cmd.writeLn(describe(summary));
+        return 0;
+      }
+      case 'reject':
+      case 'unreject': {
+        const [label, ...paths] = rest;
+        if (!label || paths.length === 0) break;
+        const rejected = await setRejected(cmd, label, paths.map((path) => resolve(cmd.cwd, path)), sub === 'reject');
+        if (cmd.json) await cmd.writeJSON({ ok: true, rejected });
+        else await cmd.writeLn(`${label}: ${rejected} rejected`);
+        return 0;
+      }
+    }
+  } catch (error) {
+    await cmd.writeError(`label-model: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  await cmd.writeError(`${USAGE}\n`);
+  return 1;
+};
+
+labelModel.spec = {
+  name: 'label-model',
+  effect: 'read' as const,
+  description: 'Learn labels from their pictures, so search --like /archive/tags/<label> can suggest where else they belong',
+  args: [
+    { name: 'subcommand', type: 'string' as const, writes: ['train', 'reject', 'unreject'], description: 'train | show | list | reject | unreject' },
+    { name: 'label', type: 'string' as const, description: 'the label (train takes several)' },
+    { name: 'paths', type: 'path' as const, variadic: true, description: 'reject, unreject: files or albums that are not the label' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: "train: every label in use, and every word of the vocabulary in the archive's language" },
+    { name: 'v', type: 'bool' as const, description: 'train: report how long each phase took' },
+    {
+      name: 'if-stale',
+      type: 'bool' as const,
+      description: 'train: only labels whose members or rejections changed since they were trained, or that were trained more than a week ago',
+    },
+  ],
+  examples: [
+    'label-model train exempeletikett',
+    'label-model train --all --if-stale',
+    'label-model reject exempeletikett /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+    'search --like /archive/tags/exempeletikett --kind photo,video',
+  ],
+  returns:
+    "for `train`, each label's LabelTrainResult; for `show`, the LabelModelSummary; for `list`, every kept model's LabelModelSummary; for `reject` and `unreject`, how many the label has rejected.",
+};
+
+export default labelModel;

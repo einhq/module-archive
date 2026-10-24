@@ -1,0 +1,55 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { ALBUMS_ROOT } from '@archive/paths';
+
+/**
+ * One album somebody made, at random — the top bar's shuffle button runs this and opens what
+ * it answers. Anything the caller may not read is left out: listing a directory checks the directory, not each child, so a name drawn from it is
+ * confirmed before it is answered.
+ */
+const albumRandom = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['help'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags.help) {
+    await cmd.writeLn('usage: album-random\nThe path of one album somebody made, at random; `null` when there is none to read.');
+    return 0;
+  }
+
+  const candidates = (await cmd.sys.vfs.children(cmd.access, ALBUMS_ROOT))
+    .filter((child) => (child.node.type === 'album' || child.node.type === 'directory'))
+    .map((child) => `${ALBUMS_ROOT}/${child.name}`);
+
+  let path: string | null = null;
+  while (candidates.length > 0 && path === null) {
+    const [drawn] = candidates.splice(Math.floor(Math.random() * candidates.length), 1);
+    try {
+      await cmd.sys.vfs.get(cmd.access, drawn);
+      path = drawn;
+    } catch {
+      // Not this reader's to open; draw again.
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ path });
+    return 0;
+  }
+  if (path === null) {
+    await cmd.writeError('album-random: no album to choose from\n');
+    return 1;
+  }
+  await cmd.writeLn(path);
+  return 0;
+};
+
+albumRandom.spec = {
+  name: 'album-random',
+  effect: 'read' as const,
+  description: 'The path of one album somebody made, at random',
+  args: [],
+  flags: [],
+};
+
+export default albumRandom;

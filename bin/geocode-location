@@ -1,0 +1,327 @@
+#!ts
+/**
+ * geocode-location — resolve a location's written address to coordinates.
+ *
+ * The forward counterpart of media's geocode-position (which goes the other
+ * way, from a file's GPS point to an address). A location with a free-text address
+ * and nothing else has no shape (`<location>/position`) without this, never
+ * matches find-containing, and location-link-media can never attach media to it.
+ *
+ * Only a hit that is pinned to a building *and* corroborated by the house
+ * number or postcode already in the address is applied; anything less certain
+ * is parked in attrs.geocodeCandidates for someone to pick from in the UI. See
+ * @location/geocode for the rule.
+ *
+ * One lookup is up to four requests — Sweden-first, worldwide, the street line
+ * on its own, then that street line with its abbreviations spelled out —
+ * because the corpus defeats free-text search in several ways; see the comments
+ * on each attempt below. `nominatimSearch` paces them.
+ *
+ * A location is looked up again when its address changed since the last attempt
+ * (`geocodeInput` records what that attempt read), and one that was placed from
+ * an address which no longer resolves with confidence loses its shape.
+ *
+ * Prefer `location-locate`, which tries a location's own media before its address.
+ */
+import { LOCATIONS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { resolve } from '@std/path';
+import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
+import { decideGeocode, expandAbbreviations, type GeocodeDecision, type NominatimResult, nominatimSearch, normalizeQuery, streetLineOf } from '@archive/location/geocode';
+
+/** A geocoded street address points at a building, so the circle stays tight. */
+const DEFAULT_RADIUS_M = 50;
+
+/** A location's shape node. */
+const shapeOf = (location: string): string => `${location}/position`;
+
+/** Reads a location's stored shape, or undefined when it has none. */
+const readShape = async (cmd: Command, location: string): Promise<{ lat: number; lng: number } | undefined> => {
+  let handle;
+  try {
+    handle = await cmd.sys.vfs.open(cmd.access, shapeOf(location), { mode: 'r' });
+  } catch {
+    return undefined;
+  }
+  try {
+    const data = await handle.read(8192);
+    if (data.length === 0) return undefined;
+    const json = JSON.parse(new TextDecoder().decode(data));
+    return typeof json?.lat === 'number' && typeof json?.lng === 'number' ? json : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+};
+
+export const geocodeLocation = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['force', 'dry-run', 'verbose', 'drawn'],
+    string: ['radius', 'countrycodes', 'query', 'accept'],
+    alias: { f: 'force', n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('geocode-location: missing location path\n');
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  const radius = flags.radius !== undefined ? Number(flags.radius) : DEFAULT_RADIUS_M;
+  if (!Number.isFinite(radius) || radius < 0) {
+    await cmd.writeError('geocode-location: invalid --radius, must be a non-negative number of meters\n');
+    return 1;
+  }
+
+  const report = async (result: Record<string, unknown>, human: string): Promise<number> => {
+    if (cmd.json) {
+      await cmd.writeJSON({ path, ...result });
+    } else if (flags.verbose || result.status !== 'skipped') {
+      await cmd.writeLn(human);
+    }
+    return 0;
+  };
+
+  try {
+    const node = await cmd.sys.vfs.get(cmd.access, path);
+    if (node.type !== NODE_TYPE_LOCATION) {
+      await cmd.writeError(`geocode-location: ${path}: not a location (a location node, is ${node.type})\n`);
+      return 1;
+    }
+
+    const attrs = node.attrs as LocationAttrs;
+
+    // The two answers a person gives to the question the geocoder asks, written here so the rule
+    // for what they mean lives with the geocoder rather than in a page. The geocoding timestamps
+    // survive both: `geocodeAttemptedAt` keeps a later sweep from asking again about a location a
+    // human has settled.
+    if (flags.drawn) {
+      // A hand-drawn shape replaces whatever the geocoder or the media said, so the provenance
+      // moves with it, and any pending review is answered: the shape is the answer now.
+      await cmd.sys.vfs.update(cmd.access, path, { attrs: { locationSource: 'manual', geocodeStatus: null, geocodeCandidates: null } });
+      return await report({ status: 'drawn' }, `${path}: drawn by hand`);
+    }
+    if (flags.accept !== undefined) {
+      const candidates = attrs.geocodeCandidates ?? [];
+      const candidate = candidates[Number(flags.accept)];
+      if (!candidate) {
+        await cmd.writeError(`geocode-location: ${path} has no suggestion ${flags.accept} (it has ${candidates.length})\n`);
+        return 1;
+      }
+      const placed = await cmd.execute(`position-set ${shq(shapeOf(path))} --lat=${candidate.lat} --lng=${candidate.lng} --radius=${radius}`);
+      if (placed.code !== 0) {
+        await cmd.writeError(`geocode-location: ${placed.stderr}`);
+        return 1;
+      }
+      // Picking a suggestion also answers the review: the others are stale, and the position came
+      // from Nominatim by way of a person.
+      await cmd.sys.vfs.update(cmd.access, path, {
+        attrs: {
+          geocodeStatus: 'applied',
+          locationSource: 'nominatim',
+          geocodedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+          displayName: candidate.displayName,
+          geocodeCandidates: null,
+        },
+      });
+      return await report({ status: 'applied', lat: candidate.lat, lng: candidate.lng }, `${path}: ${candidate.displayName}`);
+    }
+
+    // The legacy importer parked the written address in displayName, which the
+    // reverse geocoder overwrites with whatever it resolved. Migrate it across
+    // on the way past, so the input survives being geocoded.
+    const legacyAddress = attrs.address ?? (attrs.geocodedAt ? undefined : attrs.displayName);
+    const raw = (flags.query as string | undefined) ?? legacyAddress ?? attrs.name;
+    const query = raw ? normalizeQuery(raw) : '';
+
+    /**
+     * Whether the last attempt read this same address. An attempt from before
+     * `geocodeInput` existed is judged by the query it searched, which is the
+     * normalised input unless it had to fall back to the street line — then this
+     * answers no, and costs that location one repeat lookup, once.
+     */
+    const sameInput = attrs.geocodeInput !== undefined ? attrs.geocodeInput === raw : attrs.geocodeQuery !== undefined && attrs.geocodeQuery === query;
+    const shape = await readShape(cmd, path);
+    /** Placed from an address that has since been edited: the position is stale. */
+    const staleAddress = shape !== undefined && attrs.locationSource === 'nominatim' && !sameInput;
+
+    if (!flags.force) {
+      if (shape && !staleAddress) return await report({ status: 'skipped', reason: 'already has a shape' }, `${path}: already placed`);
+      if (!shape && (attrs.geocodedAt || attrs.geocodeAttemptedAt) && sameInput) {
+        return await report({ status: 'skipped', reason: 'already attempted' }, `${path}: already attempted (use --force)`);
+      }
+    }
+    /** Nothing but a name to go on — `Amsterdam`, `Oslo`, `Matterhorn`. */
+    const bareName = flags.query === undefined && !legacyAddress && Boolean(attrs.name);
+
+    if (!query) {
+      return await report({ status: 'none', reason: 'no address to geocode', query: '' }, `${path}: no address`);
+    }
+
+    if (flags['dry-run']) {
+      return await report({ status: 'dry-run', query }, `${path}: would geocode "${query}"`);
+    }
+
+    /**
+     * The country restriction is a tie-breaker, not a filter.
+     *
+     * Legacy addresses are Swedish and unqualified ("Exempelgatan 27"), and
+     * without `se` the wrong country wins — but the same corpus holds one US
+     * address and 42 locations carrying only a name, a third of them abroad
+     * (Amsterdam, Oslo, Seattle, Innsbruck). Restricting those to Sweden answers
+     * confidently and wrongly. So: a bare name is never restricted, and a
+     * restricted address that finds nothing is retried worldwide rather than
+     * written off. The retry costs a request only when the first found none.
+     */
+    const explicitCountries = flags.countrycodes as string | undefined;
+    const countrycodes = explicitCountries ?? (bareName ? '' : 'se');
+
+    /**
+     * Last resort: the street line on its own.
+     *
+     * A legacy address qualifies its street with a district Nominatim cannot
+     * match ("Söderby", where OSM files the street under Norrhamn), an
+     * apartment number or an old internal code, and free-text search answers
+     * *nothing* rather than something weaker. Of 29 addresses that found no hit
+     * at all, 22 are real streets that resolve the moment the qualifiers are
+     * dropped. See `streetLineOf`.
+     *
+     * Losing the district loses the disambiguator with it, so a relaxed answer
+     * must be confirmed by the postcode from the original address —
+     * `requirePostcode`. That is also why the decision below is still judged
+     * against `query`, the address as written, and not against `street`.
+     */
+    const street = streetLineOf(query);
+    const relaxable = street !== '' && street !== query;
+    const expanded = expandAbbreviations(street);
+
+    let results: NominatimResult[];
+    let relaxed = false;
+    let searched = query;
+    try {
+      const search = (text: string, countries: string) => nominatimSearch(text, { limit: 5, countrycodes: countries, baseUrl: cmd.env.NOMINATIM_SEARCH_URL || undefined });
+
+      results = await search(query, countrycodes);
+      if (results.length === 0 && countrycodes !== '' && explicitCountries === undefined) {
+        results = await search(query, '');
+      }
+      if (results.length === 0 && relaxable) {
+        results = await search(street, countrycodes);
+        relaxed = results.length > 0;
+        if (relaxed) searched = street;
+      }
+      // Last of all, the street with its abbreviations spelled out. A guess, so
+      // it is tried only once everything else has come back empty, and it
+      // inherits `relaxed` — the postcode has to confirm whatever it finds.
+      if (results.length === 0 && expanded !== street) {
+        results = await search(expanded, countrycodes);
+        relaxed = results.length > 0;
+        if (relaxed) searched = expanded;
+      }
+    } catch (error) {
+      await cmd.writeError(`geocode-location: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+
+    const decision: GeocodeDecision = decideGeocode(query, results, { requirePostcode: relaxed });
+    const now = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+    if (decision.status === 'applied') {
+      const placed = await cmd.execute(`position-set ${shq(shapeOf(path))} --lat=${decision.lat} --lng=${decision.lng} --radius=${radius}`);
+      if (placed.code !== 0) {
+        await cmd.writeError(`geocode-location: ${placed.stderr}`);
+        return 1;
+      }
+
+      await cmd.sys.vfs.update(cmd.access, path, {
+        attrs: {
+          ...decision.address,
+          address: legacyAddress ?? raw,
+          geocodeInput: raw,
+          geocodedAt: now,
+          geocodeAttemptedAt: now,
+          locationSource: 'nominatim',
+          geocodeStatus: 'applied',
+          geocodeSource: 'nominatim',
+          geocodeQuery: searched,
+          geocodePrecision: decision.precision,
+          geocodeRelaxed: relaxed ? true : null,
+          geocodeCandidates: null,
+        },
+      });
+
+      return await report(
+        { status: 'applied', query, lat: decision.lat, lng: decision.lng, radius, precision: decision.precision, reason: decision.reason },
+        `${path}: ${decision.lat.toFixed(5)},${decision.lng.toFixed(5)} (${decision.reason})`,
+      );
+    }
+
+    // A position that came from the previous address is worse than none: it
+    // would keep dragging the photos inside it onto this location.
+    if (staleAddress) {
+      const cleared = await cmd.execute(`position-set ${shq(shapeOf(path))} --clear`);
+      if (cleared.code !== 0) {
+        await cmd.writeError(`geocode-location: ${cleared.stderr}`);
+        return 1;
+      }
+    }
+
+    await cmd.sys.vfs.update(cmd.access, path, {
+      attrs: {
+        address: legacyAddress ?? raw,
+        geocodeInput: raw,
+        geocodeAttemptedAt: now,
+        ...(staleAddress ? { locationSource: null, geocodedAt: null, geocodePrecision: null, geocodeRelaxed: null } : {}),
+        geocodeStatus: decision.status,
+        geocodeSource: 'nominatim',
+        geocodeQuery: searched,
+        geocodeCandidates: decision.candidates.length > 0 ? decision.candidates : null,
+      },
+    });
+
+    return await report(
+      { status: decision.status, query, reason: decision.reason, candidates: decision.candidates },
+      `${path}: ${decision.status} — ${decision.reason} (${decision.candidates.length} candidates)`,
+    );
+  } catch (error) {
+    await cmd.writeError(`geocode-location: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+geocodeLocation.spec = {
+  name: 'geocode-location',
+  effect: 'write' as const,
+  description: "Resolve a location's written address to coordinates (Nominatim forward geocoding)",
+  args: [
+    { name: 'path', type: 'path' as const, description: `VFS path to a location (e.g. ${LOCATIONS_ROOT}/<slug>)` },
+  ],
+  flags: [
+    { name: 'force', type: 'bool' as const, description: 'Re-geocode even if already placed or attempted' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'Report the query without calling the geocoder' },
+    { name: 'radius', type: 'string' as const, description: `Radius in meters for the resulting circle (default ${DEFAULT_RADIUS_M})` },
+    { name: 'countrycodes', type: 'string' as const, description: 'Restrict to these ISO country codes (default: se; empty to disable)' },
+    { name: 'query', type: 'string' as const, description: 'Override the address text to look up' },
+    { name: 'verbose', type: 'bool' as const, description: 'Print skipped locations too' },
+    {
+      name: 'accept',
+      type: 'number' as const,
+      description: "Take the geocoder's suggestion with this index (from the location's geocodeCandidates) instead of looking up; --radius sizes it",
+    },
+    { name: 'drawn', type: 'bool' as const, description: "Record that the location's shape was drawn by hand, answering any pending review" },
+  ],
+  examples: [
+    'geocode-location /archive/locations/Exempelstad',
+    'geocode-location /archive/locations/Exempelstad --accept 0 --radius 150',
+  ],
+  returns: "the coordinates the location's address resolved to.",
+};
+
+export default geocodeLocation;

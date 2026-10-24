@@ -1,0 +1,96 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { kinship, type Lang, makeCtx, render } from '@archive/people/genealogy';
+import type { PersonAttrs } from '@archive/people/types';
+
+const flagValue = (args: string[], name: string): string | undefined => {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+};
+
+async function displayName(cmd: Command, path: string): Promise<string> {
+  try {
+    const node = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, path);
+    return node.attrs.name ?? basename(path);
+  } catch {
+    return basename(path);
+  }
+}
+
+const personHowRelated = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const [aArg, bArg] = rest;
+  const json = cmd.args.includes('--json') || cmd.json;
+  const langFlag = flagValue(cmd.args, '--lang');
+  const lang: Lang = (langFlag ?? cmd.env.CFG_LANGUAGE) === 'sv' ? 'sv' : 'en';
+
+  if (!aArg || !bArg) {
+    await cmd.writeError('person-how-related: usage: person how-related <a> <b> [--lang en|sv] [--json]\n');
+    return 1;
+  }
+
+  const a = resolve(cmd.cwd, aArg);
+  const b = resolve(cmd.cwd, bArg);
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, a);
+    await cmd.sys.vfs.get(cmd.access, b);
+
+    const ctx = makeCtx(cmd.sys.vfs, cmd.access);
+    const forward = await kinship(ctx, a, b);
+    const aName = await displayName(cmd, a);
+    const bName = await displayName(cmd, b);
+
+    if (json) {
+      const backward = await kinship(ctx, b, a);
+      await cmd.writeLn(JSON.stringify({
+        a: aName,
+        b: bName,
+        relation: forward.kind,
+        term: render(forward, lang),
+        term_en: render(forward, 'en'),
+        term_sv: render(forward, 'sv'),
+        inverse_en: render(backward, 'en'),
+        inverse_sv: render(backward, 'sv'),
+      }));
+      return forward.kind === 'not-related' ? 1 : 0;
+    }
+
+    if (forward.kind === 'not-related') {
+      await cmd.writeLn(`${aName} and ${bName} are not related`);
+      return 1;
+    }
+    if (forward.kind === 'self') {
+      await cmd.writeLn(`${aName} is the same person as ${bName}`);
+      return 0;
+    }
+    await cmd.writeLn(`${bName} is ${aName}'s ${render(forward, lang)}`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-how-related: ${message}\n`);
+    return 1;
+  }
+};
+
+personHowRelated.spec = {
+  name: 'person-how-related',
+  effect: 'read' as const,
+  description: 'Compute the kinship term between two persons (English/Swedish)',
+  args: [
+    { name: 'a', type: 'path' as const, description: 'first person' },
+    { name: 'b', type: 'path' as const, description: 'second person' },
+  ],
+  flags: [
+    { name: 'lang', type: 'string' as const, description: 'en|sv (default $CFG_LANGUAGE or en)' },
+    { name: 'json', type: 'bool' as const, description: 'JSON output' },
+  ],
+  examples: [
+    'person-how-related /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+    'person-how-related --lang sv /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+  ],
+  returns: 'the kinship term in English and Swedish, as a sentence to repeat as it comes.',
+};
+
+export default personHowRelated;

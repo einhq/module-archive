@@ -1,0 +1,50 @@
+# Search by what is in the picture: a SigLIP2 vector for a photo, one per keyframe for a video
+# (EMS `vision.embed`). Plan: wow/history/search-models-beyond-immich.md, Phase 4.
+#
+# FIRST, NOT LAST. It needs no faces, so it starts on `media.metadata.extracted` with the rest of
+# the fan-out and a new picture is findable within seconds of import. It is also cheap enough to be
+# the search a host without a GPU has.
+#
+# Its own kind, so the models worker rotates it beside faces and the other model kinds rather than
+# behind them. One pass is ~40 ms on production's card and ~2 s on its CPU.
+name: media-embed-picture
+description: Embed a photo or a video's keyframes for search by what is in the picture
+
+vars:
+  FORCE: ''
+
+triggers:
+  - on: media.metadata.extracted
+    match:
+      mimetype: 'image/*'
+    skipIfExists: $NODE_PATH/metadata/picture
+    skipIfAttr: undecodable
+
+  - on: media.metadata.extracted
+    match:
+      mimetype: 'video/*'
+    skipIfExists: $NODE_PATH/metadata/picture
+    skipIfAttr: undecodable
+
+  # Emitted by the scan when a file has no picture vectors, or has vectors from a model EMS no
+  # longer runs. The fact is the guard, so there is no skipIfExists. The backfill priority keeps
+  # an archive re-embed behind newly imported media, and ahead of the transcript and OCR backfills
+  # (10): a picture vector is ~0.5 s and makes a file findable.
+  - on: media.picture.stale
+    skipIfAttr: undecodable
+    vars:
+      FORCE: -f
+    priority: 20
+
+steps:
+  embed-picture:
+    command: embed-picture $FORCE $NODE_PATH
+    description: Picture vector for search by content
+    pool: media
+    kind: embed-picture
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 50

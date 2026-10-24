@@ -1,0 +1,118 @@
+#!ts
+/**
+ * assign-faces — give every detected face in an image a person.
+ *
+ * Searches each unassigned face against the whole face-embedding space: a clear
+ * match to a face that already belongs to someone reuses that person, otherwise
+ * a new unnamed person is minted under /people/unknown. `detect-faces` calls
+ * this after it writes its faces, so recognition keeps up with the crawl
+ * instead of waiting for a batch pass.
+ *
+ * Standalone rather than a pipeline step so it can be re-run on one image, and
+ * so a failure here never fails detection. The decision logic lives in
+ * @media/face-assign, shared with nothing else but kept out of the bin so it is
+ * unit-testable and holds the process-wide lock.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { resolve } from '@std/path';
+import { assignFacesForFile, type AssignOptions, DEFAULT_ASSIGN_OPTIONS } from '@archive/media/face-assign';
+
+/** Flag, else env, else the shared default. */
+const num = (flag: string | undefined, env: string | undefined, fallback: number): number => {
+  const raw = flag ?? env;
+  if (raw === undefined || raw === '') return fallback;
+  return Number(raw);
+};
+
+const assignFaces = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['vote-threshold', 'attach-threshold', 'margin', 'k', 'min-create-confidence', 'min-create-size'],
+    boolean: ['no-create', 'reassign', 'allow-duplicate-person', 'dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+  });
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('assign-faces: usage: assign-faces <file>\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+  const verbose = !!flags.verbose;
+
+  const opts: AssignOptions = {
+    voteThreshold: num(flags['vote-threshold'], cmd.env.CFG_FACE_VOTE_THRESHOLD, DEFAULT_ASSIGN_OPTIONS.voteThreshold),
+    attachThreshold: num(flags['attach-threshold'], cmd.env.CFG_FACE_ATTACH_THRESHOLD, DEFAULT_ASSIGN_OPTIONS.attachThreshold),
+    margin: num(flags.margin, cmd.env.CFG_FACE_MARGIN, DEFAULT_ASSIGN_OPTIONS.margin),
+    k: num(flags.k, cmd.env.CFG_FACE_K, DEFAULT_ASSIGN_OPTIONS.k),
+    create: !flags['no-create'],
+    minCreateConfidence: num(flags['min-create-confidence'], cmd.env.CFG_FACE_MIN_CREATE_CONFIDENCE, DEFAULT_ASSIGN_OPTIONS.minCreateConfidence),
+    minCreateSize: num(flags['min-create-size'], cmd.env.CFG_FACE_MIN_CREATE_SIZE, DEFAULT_ASSIGN_OPTIONS.minCreateSize),
+    reassign: !!flags.reassign,
+    allowDuplicatePerson: !!flags['allow-duplicate-person'],
+    dryRun: !!flags['dry-run'],
+  };
+
+  for (const [name, v] of Object.entries(opts)) {
+    if (typeof v === 'number' && !Number.isFinite(v)) {
+      await cmd.writeError(`assign-faces: --${name} must be a number\n`);
+      return 1;
+    }
+  }
+
+  let results;
+  try {
+    results = await assignFacesForFile(cmd.sys.vfs, cmd.access, path, opts);
+  } catch (error) {
+    await cmd.writeError(`assign-faces: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const attached = results.filter((r) => r.reason === 'attached').length;
+  const created = results.filter((r) => r.reason === 'created').length;
+  const skipped = results.length - attached - created;
+
+  if (verbose) {
+    for (const r of results) {
+      await cmd.writeLn(`${r.reason} ${r.facePath}${r.personId ? ` -> ${r.personId}` : ''}`);
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ file: path, faces: results.length, attached, created, skipped, dryRun: opts.dryRun, results });
+    return 0;
+  }
+  await cmd.writeLn(
+    `Faces ${results.length}: attached ${attached}, created ${created}, skipped ${skipped}${opts.dryRun ? ' (dry run)' : ''}`,
+  );
+  return 0;
+};
+
+assignFaces.spec = {
+  name: 'assign-faces',
+  effect: 'write' as const,
+  description: "Match an image's detected faces to existing people, creating unnamed people for the rest",
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to the image file' },
+  ],
+  flags: [
+    { name: 'vote-threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
+    { name: 'attach-threshold', type: 'string' as const, description: 'min winning vote weight to attach to a person (default 0.55)' },
+    { name: 'margin', type: 'string' as const, description: 'winner must beat runner-up by this factor (default 1.2)' },
+    { name: 'k', type: 'string' as const, description: 'neighbours to consider per face (default 24)' },
+    { name: 'min-create-confidence', type: 'string' as const, description: 'min detection confidence to seed a new person (default 0.7)' },
+    { name: 'min-create-size', type: 'string' as const, description: 'min face box side in px to seed a new person (default 48)' },
+    { name: 'no-create', type: 'bool' as const, description: 'attach only; never create an unnamed person' },
+    { name: 'reassign', type: 'bool' as const, description: 'also re-decide faces a previous automatic run assigned' },
+    { name: 'allow-duplicate-person', type: 'bool' as const, description: 'permit one person on two faces of the same image' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report without writing' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each face' },
+  ],
+  examples: [
+    'assign-faces /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+    'assign-faces --dry-run --no-create /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'each detected face with the person it was matched to, the score, and whether a new unnamed person was created.',
+};
+
+export default assignFaces;

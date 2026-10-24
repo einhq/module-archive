@@ -1,0 +1,385 @@
+{
+  "note": "Questions for agent-eval, each asked once as the account running it (or --user), with `context` as what the app shows. `commands` are those that do the job: reaching any of them counts, and none means the question is answered without one. `resolvers` turn a name into a path, so calling one first is not a wrong first choice.",
+  "resolvers": [
+    "search-people",
+    "search-album",
+    "location-region",
+    "search"
+  ],
+  "questions": [
+    {
+      "id": "search-plain",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Visa bilder på segelbåtar",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "labels-list",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Vilka etiketter finns det i arkivet?",
+      "commands": [
+        "labels"
+      ]
+    },
+    {
+      "id": "search-person-and-relation",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Har jag några bilder på pappa när han seglar på 90-talet?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "search-age-not-year",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Visa en bild på min dotter när hon var 6 år",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "search-not-a-name-in-text",
+      "bucket": "search",
+      "lang": "en",
+      "ask": "Find pictures of the red Volvo, but not photos where it's only in the background.",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "search-video-two-people",
+      "bucket": "search",
+      "lang": "en",
+      "ask": "Find videos of Christmas where both Lisa and Johan appear.",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "search-midsummer-at-grandmother",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Visa bilder från midsommar hos farmor mellan 1995 och 2000.",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "count-not-search",
+      "bucket": "count",
+      "lang": "sv",
+      "ask": "Hur många gånger har vi varit i Italien?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "count-which-trips",
+      "bucket": "count",
+      "lang": "en",
+      "ask": "Which trips did we make in 2016?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "count-pictures-is-not-times",
+      "bucket": "count",
+      "lang": "sv",
+      "ask": "Hur många gånger har jag träffat Karin?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "count-people-in-album",
+      "bucket": "count",
+      "lang": "en",
+      "ask": "How many people were at this party?",
+      "context": {
+        "node": "/archive/albums/Exempelfest_2019"
+      },
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "kin-relatives-exact-word",
+      "bucket": "kin",
+      "lang": "sv",
+      "ask": "Vem är min moster?",
+      "commands": [
+        "person-relatives",
+        "person-children",
+        "person-graph",
+        "person-info"
+      ]
+    },
+    {
+      "id": "kin-chain",
+      "bucket": "kin",
+      "lang": "sv",
+      "ask": "Vad heter mammas syster?",
+      "commands": [
+        "person-relatives",
+        "person-children",
+        "person-graph",
+        "person-info"
+      ]
+    },
+    {
+      "id": "kin-plural-not-singular",
+      "bucket": "kin",
+      "lang": "sv",
+      "ask": "Vilka är mina barn?",
+      "commands": [
+        "person-relatives",
+        "person-children",
+        "person-graph",
+        "person-info"
+      ]
+    },
+    {
+      "id": "kin-how-related",
+      "bucket": "kin",
+      "lang": "sv",
+      "ask": "Hur är jag och Karin Berg släkt?",
+      "commands": [
+        "person-how-related"
+      ]
+    },
+    {
+      "id": "kin-person-info",
+      "bucket": "kin",
+      "lang": "en",
+      "ask": "Who is Karin Berg?",
+      "commands": [
+        "person-info"
+      ]
+    },
+    {
+      "id": "day-birthdays",
+      "bucket": "on-this-day",
+      "lang": "sv",
+      "ask": "Vem fyller år den här veckan?",
+      "commands": [
+        "events"
+      ]
+    },
+    {
+      "id": "day-not-a-search",
+      "bucket": "on-this-day",
+      "lang": "sv",
+      "ask": "Vad hände den här dagen?",
+      "commands": [
+        "events"
+      ]
+    },
+    {
+      "id": "write-death",
+      "bucket": "write",
+      "lang": "sv",
+      "ask": "Karin Berg dog den 3 mars 2024",
+      "commands": [
+        "attrs"
+      ]
+    },
+    {
+      "id": "write-event",
+      "bucket": "write",
+      "lang": "sv",
+      "ask": "Vi flyttade till Lund sommaren 1998",
+      "commands": [
+        "person-add-event"
+      ]
+    },
+    {
+      "id": "write-parent-link",
+      "bucket": "write",
+      "lang": "sv",
+      "ask": "Ella är min dotter",
+      "commands": [
+        "person-set-parent"
+      ]
+    },
+    {
+      "id": "write-create-then-link",
+      "bucket": "multi",
+      "lang": "sv",
+      "ask": "Anna fick en dotter, Eva Andersson, den 2 maj 2019",
+      "commands": [
+        "person-create",
+        "person-set-parent"
+      ]
+    },
+    {
+      "id": "write-never-for-a-question",
+      "bucket": "write",
+      "lang": "sv",
+      "ask": "När dog Karin Berg?",
+      "commands": [
+        "person-info"
+      ]
+    },
+    {
+      "id": "write-caption",
+      "bucket": "write",
+      "lang": "en",
+      "ask": "Set the caption of this picture to \"Ella on the jetty\"",
+      "context": {
+        "lightbox": "/archive/albums/Sommar_2019/files/IMG_0042.jpg"
+      },
+      "commands": [
+        "file-set-description"
+      ]
+    },
+    {
+      "id": "multi-details-then-context",
+      "bucket": "multi",
+      "lang": "sv",
+      "ask": "Vilka är med på den här bilden?",
+      "context": {
+        "lightbox": "/archive/albums/Jul_2019/files/IMG_0007.jpg"
+      },
+      "commands": [
+        "media-details"
+      ]
+    },
+    {
+      "id": "multi-what-happened-after",
+      "bucket": "multi",
+      "lang": "en",
+      "ask": "What did we do the weekend after this photograph?",
+      "context": {
+        "lightbox": "/archive/albums/Sommar_2019/files/IMG_0042.jpg"
+      },
+      "commands": [
+        "media-details",
+        "search"
+      ]
+    },
+    {
+      "id": "ambiguous-two-annas",
+      "bucket": "ambiguous",
+      "lang": "sv",
+      "ask": "Visa bilder på Anna",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "ambiguous-location-or-person",
+      "bucket": "ambiguous",
+      "lang": "en",
+      "ask": "Show me pictures from Paris",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "ambiguous-relation-many",
+      "bucket": "ambiguous",
+      "lang": "sv",
+      "ask": "Visa en bild på min kusin",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "missing-person",
+      "bucket": "missing",
+      "lang": "sv",
+      "ask": "Visa bilder på Gustav Vasa",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "missing-event",
+      "bucket": "missing",
+      "lang": "sv",
+      "ask": "När träffade jag Erik första gången enligt arkivet?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "missing-then-broaden",
+      "bucket": "recovery",
+      "lang": "en",
+      "ask": "pictures of Anna and Bo skiing",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "malformed-empty-object",
+      "bucket": "malformed",
+      "lang": "sv",
+      "ask": "Visa bilder från Rom",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "malformed-error-result",
+      "bucket": "malformed",
+      "lang": "sv",
+      "ask": "Visa bilder på Ella från 2018",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "malformed-truncated-hits",
+      "bucket": "malformed",
+      "lang": "en",
+      "ask": "Show me the newest pictures of Lisa",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "malformed-nulls",
+      "bucket": "malformed",
+      "lang": "sv",
+      "ask": "Vem är Lisa Berg?",
+      "commands": [
+        "person-info"
+      ]
+    },
+    {
+      "id": "repeat-more-pictures",
+      "bucket": "recovery",
+      "lang": "sv",
+      "ask": "Visa bilder på Ella",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "language-english-in-swedish-archive",
+      "bucket": "lang",
+      "lang": "en",
+      "ask": "Who was in Italy with Anna in 2007?",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "language-swedish-answer-stays-swedish",
+      "bucket": "lang",
+      "lang": "sv",
+      "ask": "Vilka bilder har du från Toscana 2016?",
+      "commands": [
+        "search"
+      ]
+    }
+  ]
+}

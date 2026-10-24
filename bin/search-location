@@ -1,0 +1,132 @@
+#!ts
+import { LOCATIONS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { nameScore } from '@archive/media/name-quality';
+
+const searchLocation = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    await cmd.writeLn(JSON.stringify({ kinds: ['location'] }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = LOCATIONS_ROOT;
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') {
+      limit = parseInt(cmd.args[++i] || '10', 10);
+    } else if (arg === '--root') {
+      root = cmd.args[++i] || LOCATIONS_ROOT;
+    } else {
+      queryParts.push(arg);
+    }
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+
+  if (!query) {
+    await cmd.writeError('search-location: missing search query\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+  // Every hit is in the `name` channel: a place's name, its address parts and its slug.
+  const results: SearchProviderHit[] = [];
+
+  try {
+    const entries = await cmd.sys.vfs.children(cmd.access, root);
+
+    for (const entry of entries) {
+      if (entry.node.type !== 'location') continue;
+
+      const attrs = entry.node.attrs as {
+        name?: string;
+        displayName?: string;
+        city?: string;
+        country?: string;
+        state?: string;
+        road?: string;
+      };
+
+      const fields = [
+        // The human label. It was missing from this list, so a location carrying only a `name`
+        // — every location that has not been geocoded — could not be found by that name at all.
+        attrs.name || '',
+        attrs.displayName || '',
+        attrs.city || '',
+        attrs.country || '',
+        attrs.state || '',
+        attrs.road || '',
+        entry.name,
+      ];
+
+      const score = Math.max(0, ...fields.map((field) => nameScore(queryLower, field)));
+
+      if (score > 0) {
+        const description = [attrs.city, attrs.state, attrs.country].filter(Boolean).join(', ');
+        results.push({
+          path: `${root}/${entry.name}`,
+          type: 'location',
+          // `name` before `displayName`: the latter is the full geocoded address, which is
+          // right for disambiguating and wrong as a label.
+          name: attrs.name || attrs.displayName || entry.name,
+          channel: 'name',
+          score,
+          id: entry.node.id,
+          ...(description ? { description } : {}),
+        });
+      }
+    }
+  } catch {
+    // root path doesn't exist
+  }
+
+  results.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+  const limited = results.slice(0, limit);
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ results: limited, ...(results.length > limit ? { truncated: true } : {}) } satisfies SearchProviderResponse));
+  } else {
+    if (limited.length === 0) {
+      await cmd.writeLn('No matches found.');
+    } else {
+      for (const r of limited) {
+        const scoreStr = (r.score * 100).toFixed(1);
+        await cmd.writeLn(`${scoreStr}% ${r.path}`);
+        if (r.description) {
+          await cmd.writeLn(`     ${r.description}`);
+        }
+      }
+    }
+  }
+
+  return 0;
+};
+
+searchLocation.spec = {
+  name: 'search-location',
+  effect: 'read' as const,
+  description: 'Search locations by name',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results (default 10)' },
+    { name: 'root', type: 'string' as const, description: 'Locations root directory (default: /locations)' },
+  ],
+  examples: [
+    "search-location 'Exempelstad' -l 10",
+  ],
+  returns: 'matching locations, best first.',
+};
+
+export default searchLocation;

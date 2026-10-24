@@ -1,0 +1,218 @@
+#!ts
+/**
+ * auto-album-assign — where would these go: the library albums media may belong in, weighed as
+ * staging weighs its suggested groups (`@archive/staging/match`), and nothing written.
+ *
+ * A subject is a suggested group, an album or a directory (`--per group`, the default), each media
+ * file under the paths (`--per file`), or everything given at once (`--per set`). `--holdout`
+ * weighs the albums that hold the subjects' media as if those media were not in them: their
+ * profiles are built again without them, in memory, which is how matching is measured against
+ * albums people made.
+ */
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, isOriginalMedia, parseArgs, reportUnknownFlags, verifyAccess } from '@ein/client';
+import { albumMembers, albumsHolding } from '@archive/media/album-members';
+import { profileAlbums } from '@archive/media/album-profile';
+import { ALBUMS_ROOT } from '@archive/paths';
+import type { AlbumMatchReport, AlbumMatchSubject } from '@archive/staging/api';
+import { AUTO_ORIGIN, type AutoAlbumMeta } from '@archive/staging/auto-album';
+import {
+  type IndexedAlbum,
+  indexedAlbum,
+  indexOf,
+  liveRejects,
+  type MatchContext,
+  profileIndex,
+  rankCandidates,
+  readItems,
+  rejectsFor,
+  type Subject,
+  weighSubjects,
+} from '@archive/staging/match';
+import { MATCH_MODEL, verdictOf } from '@archive/staging/model';
+import { isStagingGroup, parseStagedPath } from '@archive/staging/paths';
+
+const PER = ['group', 'file', 'set'] as const;
+type Per = typeof PER[number];
+
+/** Media one directory contributes at most. */
+const DIRECTORY_MAX = 20_000;
+const PAGE = 1000;
+
+type FileAttrs = { takenAt?: string; takenAtUtc?: string };
+type Media = { id: string; path: string; attrs: FileAttrs };
+
+/** The media at `path`: a file itself, an album's members, or the original media within a directory. */
+const mediaAt = async (cmd: Command, path: string): Promise<{ media: Media[]; label?: string; isGroup: boolean }> => {
+  const node = await cmd.sys.vfs.get(cmd.access, path);
+  if (node.type === 'file') return { media: isOriginalMedia(node) ? [{ id: node.id, path, attrs: node.attrs as FileAttrs }] : [], isGroup: false };
+  if (node.type === 'album') {
+    const { members } = await albumMembers(cmd, path);
+    const meta = node.attrs.autoAlbum as AutoAlbumMeta | undefined;
+    const label = meta?.seed?.label;
+    return {
+      media: members.map((member) => ({ id: member.node.id, path: member.path, attrs: member.node.attrs as FileAttrs })),
+      ...(label ? { label } : {}),
+      isGroup: node.attrs.origin === AUTO_ORIGIN,
+    };
+  }
+  const media: Media[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  while (media.length < DIRECTORY_MAX) {
+    const rows = await cmd.sys.vfs.query(cmd.access, { within: path, types: ['file'], where: [{ ref: 'sourceId', op: 'missing' }], ...(after ? { after } : {}), limit: PAGE });
+    for (const row of rows) if (isOriginalMedia(row.node)) media.push({ id: row.id, path: row.absPath, attrs: row.node.attrs as FileAttrs });
+    if (rows.length < PAGE) break;
+    after = { value: rows[rows.length - 1].sortValue, id: rows[rows.length - 1].id };
+  }
+  return { media, isGroup: false };
+};
+
+const autoAlbumAssign = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['per', 'root', 'top'],
+    boolean: ['holdout', 'evidence'],
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const per = (flags.per ?? 'group') as Per;
+  const top = flags.top === undefined ? 3 : Number(flags.top);
+  if (!PER.includes(per) || !Number.isSafeInteger(top) || top < 1) {
+    await cmd.writeError(`auto-album-assign: --per is one of ${PER.join(', ')}; --top is a whole number of at least 1\n`);
+    return 1;
+  }
+  const paths = (flags._ as unknown[]).map((arg) => resolve(cmd.cwd, String(arg)));
+  if (paths.length === 0) {
+    await cmd.writeError('auto-album-assign: give the media to match: files, albums, groups or directories\n');
+    return 1;
+  }
+  const root = resolve(cmd.cwd, (flags.root as string | undefined) ?? ALBUMS_ROOT);
+
+  try {
+    const { vfs } = cmd.sys;
+    const read = await Promise.all(paths.map(async (path) => ({ path, ...await mediaAt(cmd, path) })));
+    const subjectsOf: { path: string; kind: AlbumMatchSubject['kind']; media: Media[]; label?: string; group?: string }[] = per === 'set'
+      ? [{ path: paths.join(' '), kind: 'set', media: read.flatMap((each) => each.media) }]
+      : per === 'file'
+      ? read.flatMap((each) => each.media.map((media) => ({ path: media.path, kind: 'file' as const, media: [media] })))
+      : read.map((each) => ({
+        path: each.path,
+        kind: 'group' as const,
+        media: each.media,
+        ...(each.label ? { label: each.label } : {}),
+        ...(each.isGroup ? { group: each.path } : {}),
+      }));
+    const files = new Map(read.flatMap((each) => each.media.map((media) => [media.id, { path: media.path, attrs: media.attrs }] as const)));
+    const items = await readItems(vfs, cmd.access, files);
+    const subjects: Subject[] = subjectsOf.map((each) => ({
+      path: each.path,
+      kind: each.kind,
+      ...(each.label ? { label: each.label } : {}),
+      items: each.media.flatMap((media) => items.get(media.id) ?? []),
+    }));
+
+    let index = await profileIndex(vfs, cmd.access);
+    if (flags.holdout) {
+      // The albums holding the subjects' media, profiled again in memory without them.
+      const held = await albumsHolding(cmd, [...files.values()].map((file) => file.path), new Set(index.byPath.keys()));
+      const albums = [...new Set([...held.values()].flatMap((set) => [...set]))].flatMap((path) => index.albums.get(index.byPath.get(path) ?? '') ?? []);
+      const outcomes = await profileAlbums(
+        cmd,
+        albums.map((album) => ({ path: album.path, id: album.id, props: album.props, ...(album.count ? { mediaCount: album.count } : {}) })),
+        {
+          write: false,
+          force: true,
+          exclude: new Set(files.keys()),
+        },
+      );
+      const replaced = new Map<string, IndexedAlbum>(index.albums);
+      for (const outcome of outcomes) {
+        const album = index.albums.get(outcome.album.id);
+        if (album && outcome.profile) replaced.set(album.id, indexedAlbum(album, outcome.profile));
+      }
+      index = indexOf(replaced);
+    }
+
+    const context: MatchContext = { cmd, index, owner: cmd.access, root };
+    // A suggested group keeps its owner's rejections, as `staging match` does.
+    const rejected = new Map<string, Set<string>>();
+    for (const subject of subjectsOf) {
+      if (!subject.group || !isStagingGroup(subject.group)) continue;
+      const place = parseStagedPath(subject.group)!;
+      rejected.set(subject.path, rejectsFor(subject.media.map((media) => media.id), await liveRejects(vfs, cmd.access, place.user, place.category!)));
+    }
+    const weighings = await weighSubjects(context, subjects, (subject) => rejected.get(subject.path) ?? new Set());
+
+    const writable = (albumId: string) => {
+      const album = index.albums.get(albumId);
+      return album !== undefined && verifyAccess(cmd.access, album.props, 'w');
+    };
+    const report: AlbumMatchReport = {
+      model: MATCH_MODEL,
+      subjects: subjects.map((subject): AlbumMatchSubject => {
+        const { candidates: ranked, newAlbum } = rankCandidates(weighings.get(subject.path)?.weighed ?? [], writable, top);
+        const best = ranked[0];
+        const verdict = best ? verdictOf(best.score, best.margin) : { confidence: 'low' as const };
+        return {
+          path: subject.path,
+          kind: subject.kind,
+          items: subject.items.length,
+          dated: subject.items.filter((item) => item.minute !== undefined || item.period).length,
+          candidates: ranked.map((candidate) => {
+            const album = index.albums.get(candidate.albumId)!;
+            return {
+              album: { id: album.id, path: album.path, title: album.title, ...(album.count !== undefined ? { mediaCount: album.count } : {}) },
+              score: candidate.score,
+              ...(flags.evidence ? { evidence: candidate.evidence } : {}),
+              reasons: candidate.reasons,
+              writable: candidate.writable,
+            };
+          }),
+          newAlbum,
+          margin: best?.margin ?? 0,
+          confidence: verdict.confidence,
+        };
+      }),
+    };
+
+    if (cmd.json) await cmd.writeJSON(report satisfies AlbumMatchReport);
+    else {
+      for (const subject of report.subjects) {
+        await cmd.writeLn(`${subject.path} (${subject.items} media, ${subject.dated} dated): new album ${Math.round(subject.newAlbum * 100)}%`);
+        for (const candidate of subject.candidates) {
+          await cmd.writeLn(`  ${candidate.album.path}  ${Math.round(candidate.score * 100)}%  ${candidate.reasons.join('; ')}`);
+        }
+      }
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`auto-album-assign: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+autoAlbumAssign.spec = {
+  name: 'auto-album-assign',
+  effect: 'read' as const,
+  description: 'Weigh media against the library albums they may belong in, as staging weighs its suggested groups, and write nothing',
+  args: [
+    { name: 'path', type: 'path' as const, variadic: true, description: 'files, albums, suggested groups or directories to match' },
+  ],
+  flags: [
+    { name: 'per', type: 'string' as const, description: `what one subject is: each path (group, the default), each media file (file), or all of it (set)` },
+    { name: 'root', type: 'path' as const, description: `only albums under this directory (default ${ALBUMS_ROOT})` },
+    { name: 'top', type: 'string' as const, description: 'candidates per subject (default 3)' },
+    { name: 'holdout', type: 'bool' as const, description: "weigh the albums holding the subjects' media as if those media were not in them" },
+    { name: 'evidence', type: 'bool' as const, description: "each candidate's evidence, beside its reasons" },
+  ],
+  examples: [
+    'auto-album-assign /home/anna/staging/albums/inbox/2019-06-14 --evidence',
+    'auto-album-assign /home/anna/staging/files/inbox/upload-2026-10-01/IMG_0001.jpg /home/anna/staging/files/inbox/upload-2026-10-01/IMG_0002.jpg --per set --top 5',
+    'auto-album-assign /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg --per file --holdout',
+  ],
+  returns:
+    "each subject's media, how many are dated, its candidate albums best first with how likely and why, how likely a new album is, the margin and how sure (AlbumMatchReport).",
+};
+
+export default autoAlbumAssign;

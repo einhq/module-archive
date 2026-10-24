@@ -1,0 +1,190 @@
+#!ts
+/**
+ * Re-encode existing face crops from their source image and stored face box.
+ *
+ * This deliberately does not re-run detection and does not create missing crops: those are
+ * separate repair concerns. A finite page plus an explicit cursor makes a corpus pass safe to
+ * resume in production without one shell invocation owning tens of thousands of EMS calls.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, verifyAccess } from '@ein/client';
+import { FACE_CROP_NAME, faceCropRect, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
+import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
+import { displayDims, type FracBox } from '@archive/media/orientation';
+import { imageOfRegion, REGION_TYPE } from '@archive/media/regions';
+
+const DEFAULT_LIMIT = 100;
+
+type FaceAttrs = {
+  fileId?: string;
+  faceBox?: FracBox;
+};
+
+type FileAttrs = {
+  mimetype?: string;
+  width?: number;
+  height?: number;
+  angle?: unknown;
+  mirror?: unknown;
+};
+
+const isBox = (value: unknown): value is FracBox => {
+  if (typeof value !== 'object' || value === null) return false;
+  const box = value as Record<string, unknown>;
+  return ['x', 'y', 'width', 'height'].every((key) => typeof box[key] === 'number' && Number.isFinite(box[key]));
+};
+
+const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit', 'after', 'file'],
+    boolean: ['dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const limit = flags.limit === undefined ? DEFAULT_LIMIT : Number(flags.limit);
+  if (!Number.isInteger(limit) || limit <= 0) {
+    await cmd.writeError(`regenerate-face-crops: invalid --limit '${flags.limit}'\n`);
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const dryRun = Boolean(flags['dry-run']);
+  const verbose = Boolean(flags.verbose);
+
+  let onlyFileId: string | undefined;
+  if (flags.file) {
+    try {
+      onlyFileId = (await vfs.get(access, flags.file)).id;
+    } catch (error) {
+      await cmd.writeError(`regenerate-face-crops: ${flags.file}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+  }
+
+  const faces = await vfs.query(access, {
+    types: [REGION_TYPE],
+    where: onlyFileId ? [{ ref: 'fileId', op: 'eq' as const, value: onlyFileId }] : [],
+    after: flags.after ? { value: null, id: flags.after } : undefined,
+    limit,
+  });
+
+  const fileIds = [
+    ...new Set(
+      faces
+        .map((face) => (face.node.attrs as FaceAttrs).fileId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  ];
+  const files = await vfs.getNodesByIds<FileAttrs>(access, fileIds);
+  const stats = {
+    scanned: faces.length,
+    candidates: 0,
+    regenerated: 0,
+    skippedWithinBound: 0,
+    skippedMissingCrop: 0,
+    skippedInvalid: 0,
+    refused: 0,
+    failed: 0,
+  };
+
+  for (const face of faces) {
+    const attrs = face.node.attrs as FaceAttrs;
+    const fileId = attrs.fileId;
+    const file = fileId ? files.get(fileId) : undefined;
+    const sourcePath = imageOfRegion(face.absPath);
+
+    if (!file || !sourcePath || !isBox(attrs.faceBox) || !Number.isFinite(file.attrs.width) || !Number.isFinite(file.attrs.height)) {
+      stats.skippedInvalid++;
+      if (verbose) await cmd.writeLn(`skip invalid face geometry ${face.absPath}`);
+      continue;
+    }
+
+    const cropPath = `${face.absPath}/${FACE_CROP_NAME}`;
+    const crop = await vfs.get(access, cropPath).catch(() => undefined);
+    if (!crop) {
+      stats.skippedMissingCrop++;
+      if (verbose) await cmd.writeLn(`skip missing crop ${cropPath}`);
+      continue;
+    }
+
+    // The size gate is judged in the node's display frame: the box is a fraction of it, and
+    // what EMS cuts covers the same fraction of whatever raster it decodes, so the node's
+    // dimensions say whether the existing crop can already be within the bound.
+    const rect = faceCropRect(attrs.faceBox, displayDims(file.attrs.width!, file.attrs.height!, file.attrs.angle));
+    if (rect.width <= MAX_CROP_DIMENSION && rect.height <= MAX_CROP_DIMENSION) {
+      stats.skippedWithinBound++;
+      if (verbose) await cmd.writeLn(`skip within ${MAX_CROP_DIMENSION}px bound ${cropPath}`);
+      continue;
+    }
+
+    stats.candidates++;
+    if (dryRun) {
+      if (verbose) await cmd.writeLn(`would regenerate ${cropPath}`);
+      continue;
+    }
+
+    // EMS cuts the crop before it is written over, so one the caller may not write is refused first.
+    if (!verifyAccess(access, crop.props, 'w')) {
+      stats.refused++;
+      await cmd.writeError(`regenerate-face-crops: ${cropPath}: permission denied\n`);
+      continue;
+    }
+
+    const reason = await writeFaceCrop(cmd, sourcePath, cropPath, attrs.faceBox, file.attrs);
+    if (reason) {
+      stats.failed++;
+      await cmd.writeError(`regenerate-face-crops: ${cropPath}: ${reason}\n`);
+      continue;
+    }
+
+    stats.regenerated++;
+    if (verbose) await cmd.writeLn(`regenerated ${cropPath}`);
+  }
+
+  const summary = {
+    ...stats,
+    dryRun,
+    after: flags.after ?? null,
+    nextAfter: faces.at(-1)?.id ?? null,
+    done: faces.length < limit,
+  };
+
+  if (cmd.json) {
+    await cmd.writeJSON(summary);
+  } else {
+    await cmd.writeLn(
+      `${dryRun ? 'Would regenerate' : 'Regenerated'} ${dryRun ? stats.candidates : stats.regenerated} face crop(s); ` +
+        `${stats.skippedWithinBound} already bounded, ${stats.skippedMissingCrop} missing, ${stats.skippedInvalid} invalid, ${stats.refused} refused, ${stats.failed} failed`,
+    );
+    if (!summary.done && summary.nextAfter) {
+      await cmd.writeLn(`Next batch: regenerate-face-crops --limit ${limit} --after ${summary.nextAfter}`);
+    }
+  }
+
+  return stats.failed > 0 || stats.refused > 0 ? 1 : 0;
+};
+
+regenerateFaceCrops.spec = {
+  name: 'regenerate-face-crops',
+  effect: 'write' as const,
+  description: 'Re-encode a bounded, resumable batch of existing face crops without re-detecting faces',
+  args: [],
+  flags: [
+    { name: 'limit', type: 'string' as const, description: `maximum face nodes to scan (default ${DEFAULT_LIMIT})` },
+    { name: 'after', type: 'string' as const, description: 'resume after the node id returned as nextAfter' },
+    { name: 'file', type: 'path' as const, description: 'restrict the batch to one source image' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report existing crops without rewriting them' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each crop considered' },
+  ],
+  examples: [
+    'regenerate-face-crops --limit 200',
+  ],
+  returns: 'how many face crops were re-encoded, and where to resume.',
+};
+
+export default regenerateFaceCrops;

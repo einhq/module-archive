@@ -1,0 +1,84 @@
+#!ts
+/**
+ * track-import — import GPX track points into a device's track.
+ *
+ *   track-import <device> /uploads/trip.gpx
+ *
+ * Reads the GPX from a VFS file node (upload via PUT /file/<path>), parses
+ * <trkpt> elements (lat/lon attrs, optional <ele>/<time>) and appends them.
+ * Re-importing the same file appends nothing: a fix is keyed by its timestamp.
+ * Gives the device its track if it has none.
+ */
+import { ensureTrack, openTrack, parseGpx } from '@archive/location/track';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
+
+const trackImport = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  const gpxArg = flags._[1] as string | undefined;
+
+  if (!target || !gpxArg) {
+    await cmd.writeError('track-import: usage: track-import <device> <gpx-file>\n');
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const gpxPath = resolve(cmd.cwd, gpxArg);
+
+  try {
+    const gpxHandle = await vfs.open(access, gpxPath, { mode: 'r' });
+    let xml: string;
+    try {
+      xml = new TextDecoder().decode(await toArrayBuffer(gpxHandle.readable));
+    } finally {
+      await gpxHandle.close();
+    }
+
+    const { points } = parseGpx(xml);
+    if (points.length === 0) {
+      await cmd.writeError(`track-import: ${gpxPath}: no track points found\n`);
+      return 1;
+    }
+
+    const trackPath = await ensureTrack(cmd, target);
+    const { handle } = await openTrack(cmd, trackPath, 'a');
+    let imported: number;
+    try {
+      imported = await handle.appendPoints(points);
+    } finally {
+      await handle.close();
+    }
+
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ imported, skipped: points.length - imported, track: trackPath }));
+    } else {
+      await cmd.writeLn(`Imported ${imported} points into ${trackPath}`);
+    }
+  } catch (error) {
+    await cmd.writeError(`track-import: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  return 0;
+};
+
+trackImport.spec = {
+  name: 'track-import',
+  effect: 'write' as const,
+  description: "Import GPX track points into a device's track",
+  args: [
+    { name: 'device', type: 'path' as const, description: "the device (slug or path) whose track takes the points (made if missing), or a track's path" },
+    { name: 'gpx', type: 'path' as const, description: 'VFS path to uploaded GPX file' },
+  ],
+  flags: [],
+};
+
+export default trackImport;

@@ -1,0 +1,72 @@
+#!ts
+/**
+ * face-confirm — a human says these regions do show the person they are assigned to.
+ *
+ * The other half of "Not <name>" (`person-detach`): the region keeps its person, now as
+ * `personSource: 'manual'`, which `face-reset` never undoes and `face-audit` never questions,
+ * and any doubt the audit left on it goes.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { REGION_TYPE, type RegionAttrs } from '@archive/media/regions';
+import type { FaceConfirmResult } from '@archive/media/api';
+
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+const faceConfirm = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['dry-run'], alias: { n: 'dry-run' }, unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, String(arg)));
+  if (paths.length === 0) {
+    await cmd.writeError('face-confirm: usage: face-confirm <region...>\n');
+    return 1;
+  }
+
+  const confirmed: string[] = [];
+  try {
+    // Every region is checked before any is written, so a bad path changes nothing.
+    for (const path of paths) {
+      const node = await cmd.sys.vfs.get<RegionAttrs>(cmd.access, path, { follow: false });
+      if (node.type !== REGION_TYPE) throw new Error(`${path}: not a region (is ${node.type})`);
+      if (!node.attrs.personId) throw new Error(`${path}: assigned to nobody`);
+    }
+    for (const path of paths) {
+      if (!flags['dry-run']) {
+        await cmd.sys.vfs.update(cmd.access, path, {
+          follow: false,
+          attrs: { personSource: 'manual', personConfidence: null, personAssignedAt: nowIso(), doubt: null },
+        });
+      }
+      confirmed.push(path);
+    }
+  } catch (error) {
+    await cmd.writeError(`face-confirm: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ confirmed } satisfies FaceConfirmResult);
+    return 0;
+  }
+  await cmd.writeLn(`${flags['dry-run'] ? 'would confirm' : 'confirmed'} ${confirmed.length} region${confirmed.length === 1 ? '' : 's'}`);
+  return 0;
+};
+
+faceConfirm.spec = {
+  name: 'face-confirm',
+  effect: 'write' as const,
+  description: 'Confirm that regions show the person they are assigned to',
+  args: [
+    { name: 'region', type: 'path' as const, variadic: true, description: 'region paths, <image>/regions/<name>' },
+  ],
+  flags: [
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'check the regions without changing them' },
+  ],
+  examples: ['face-confirm /archive/photos/2001/IMG_0001.jpg/regions/face-0'],
+  returns: 'the regions confirmed.',
+};
+
+export default faceConfirm;

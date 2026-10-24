@@ -1,0 +1,161 @@
+#!ts
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
+import { embedImage, type EmbedImageResult, stepExitCode } from '@ems/client';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { pictureSource } from '@archive/media/picture-source';
+import { PICTURE_DIR, pictureEmbeddingType, pictureNodeName } from '@archive/media/embedding-types';
+import { reportUnwritable } from '@archive/media/writable';
+
+/**
+ * Embed a photo or a video's keyframes in the image-text space (SigLIP2 through EMS
+ * `vision.embed`), so search finds it by what is in the picture rather than by its caption.
+ *
+ * Plan: wow/history/search-models-beyond-immich.md, Phase 4. The retrieval eval behind it put this
+ * channel at nDCG@10 0.872 against 0.588 for caption search, and it needs no caption at all —
+ * which is also what makes a host without a GPU searchable.
+ */
+const embedPicture = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose', 'force'],
+    alias: { v: 'verbose', f: 'force' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  const force = Boolean(flags.force);
+  if (!inputPath) {
+    await cmd.writeError('embed-picture: missing file path\n');
+    return 1;
+  }
+
+  const phase = stepPhase(cmd, 'embed-picture', verbose);
+  const node = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  await phase('read file node');
+  if (!node) {
+    await cmd.writeError(`embed-picture: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (node.type !== 'file') {
+    await cmd.writeError(`embed-picture: ${inputPath}: not a file node (is ${node.type})\n`);
+    return 1;
+  }
+
+  if (await reportUnwritable(cmd, inputPath, node)) return 1;
+
+  const attrs = node.attrs;
+  const mimetype = typeof attrs.mimetype === 'string' ? attrs.mimetype : '';
+  if (!mimetype.startsWith('image/') && !mimetype.startsWith('video/')) {
+    await cmd.writeError(`embed-picture: ${inputPath}: not a picture or a video (${mimetype || 'no mimetype'})\n`);
+    return 1;
+  }
+  // The trigger skips these too; this covers a hand-run or a sweep. Nothing can decode the
+  // bytes, so there is no picture to embed and never will be.
+  const undecodable = attrs[UNDECODABLE_ATTR];
+  if (typeof undecodable === 'string' && undecodable.length > 0 && !force) {
+    if (verbose) await cmd.writeLn(`${inputPath}: source cannot be decoded (${undecodable}), skipping`);
+    return 0;
+  }
+
+  const pictureDir = `${inputPath}/metadata/${PICTURE_DIR}`;
+  const existing = await cmd.sys.vfs.get(cmd.access, pictureDir).catch(() => undefined);
+  // Done means the directory carries its `embeddedBy`, which is written last. A directory
+  // without it was interrupted and is redone.
+  if (!force && existing && typeof existing.attrs.embeddedBy === 'string' && existing.attrs.embeddedBy) {
+    if (verbose) await cmd.writeLn('Already embedded, skipping (use -f to force)');
+    return 0;
+  }
+
+  const source = await pictureSource(cmd, inputPath, attrs);
+
+  let result: EmbedImageResult;
+  try {
+    await phase(source.rendition ? 'asking ems (rendition)' : 'asking ems (original)');
+    result = await embedImage(cmd, source.path, source.opts);
+    await phase('ems answered');
+  } catch (error) {
+    await cmd.writeError(`embed-picture: ${inputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+
+  const embeddingType = pictureEmbeddingType(result.producer);
+  if (!embeddingType) {
+    // A model nothing has given a table to. Refusing is the only safe answer: storing it under
+    // another model's type would put two vector spaces in one index.
+    await cmd.writeError(`embed-picture: EMS embeds with "${result.producer}", which has no embedding type in @media/embedding-types\n`);
+    return 1;
+  }
+  const vectors: { name: string; vector: number[]; atSeconds?: number }[] = result.frames
+    ? result.frames.map((frame, index) => ({ name: pictureNodeName(index), vector: frame.embedding, atSeconds: frame.at }))
+    : result.embedding
+    ? [{ name: pictureNodeName(), vector: result.embedding }]
+    : [];
+  if (vectors.length === 0) {
+    await cmd.writeError(`embed-picture: ${inputPath}: EMS returned no vector\n`);
+    return 1;
+  }
+
+  // Start from an empty directory. A re-embed with another model must not leave the old model's
+  // vectors behind (retyping a node leaves its row in the old table), and a video re-embedded
+  // with fewer keyframes must not keep the extra ones. Straight through the VFS rather than
+  // `rm`/`mkdir`/`mknode` in a shell: those spawns were 0.36 s of a 0.65 s file in production, and a
+  // backfill is 120 000 files.
+  const metadataPath = `${inputPath}/metadata`;
+  if (existing) await cmd.sys.vfs.unlink(cmd.access, pictureDir, metadataPath, { recursive: true });
+  if (!await cmd.sys.vfs.exists(cmd.access, metadataPath)) await cmd.sys.vfs.create(cmd.access, 'directory', inputPath, 'metadata');
+
+  const embeddedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  // The directory and every vector node in one transaction; the vectors follow one write each,
+  // which is what the embedding store takes.
+  await cmd.sys.vfs.createTree(cmd.access, metadataPath, [{
+    type: 'directory',
+    name: PICTURE_DIR,
+    children: vectors.map(({ name, vector, atSeconds }) => ({
+      type: 'embedding',
+      name,
+      attrs: { embeddingType, capacity: vector.length, ...(atSeconds === undefined ? {} : { atSeconds }) },
+    })),
+  }]);
+  for (const { name, vector } of vectors) {
+    const handle = await cmd.sys.vfs.open(cmd.access, `${pictureDir}/${name}`, { mode: 'w' });
+    try {
+      await handle.write(new TextEncoder().encode(JSON.stringify(vector)));
+    } finally {
+      await handle.close();
+    }
+  }
+  await phase(`wrote ${vectors.length} vector(s)`);
+
+  // Last, so an interrupted run leaves a directory the next scan redoes.
+  await cmd.sys.vfs.update(cmd.access, pictureDir, { attrs: { embeddedBy: result.producer, embeddedAt } });
+
+  if (cmd.json) {
+    await cmd.writeLn(JSON.stringify({ path: pictureDir, vectors: vectors.length, embeddedBy: result.producer, dimension: result.dimension }));
+  } else {
+    await cmd.writeLn(`${inputPath}: ${vectors.length} picture vector(s), ${result.producer}`);
+  }
+  return 0;
+};
+
+embedPicture.spec = {
+  name: 'embed-picture',
+  effect: 'write' as const,
+  description: "Embed a photo or a video's keyframes for search by what is in the picture",
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to a photo or video file' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+    { name: 'f', type: 'bool' as const, description: 'Embed again even if already embedded' },
+  ],
+  examples: [
+    'embed-picture /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: "nothing; the picture vectors are written under the file's metadata/picture.",
+};
+
+export default embedPicture;

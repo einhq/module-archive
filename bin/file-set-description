@@ -1,0 +1,92 @@
+#!ts
+/**
+ * file-set-description — write the hand-written description of a file (what).
+ *
+ * Sets `attrs.description` on the node: a person's own words, which no sweep of
+ * the corpus ever writes.
+ *
+ * The description is embedded too (`<file>/metadata/authored/<type>`, see
+ * @ems/text-embedding `storeAuthoredText`), so search finds a person's own words.
+ * Saving does not wait on that: a description EMS could not embed is still
+ * saved, said so on stderr, and `media-reembed` embeds it later.
+ *
+ * `--text-base64` is what the UI uses. A description is arbitrary multi-line
+ * text on its way into a shell command string, the same problem `comment add`
+ * solves the same way.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { storeAuthoredText } from '@ems/text-embedding';
+import { decodeBase64 } from '@std/encoding/base64';
+import { resolve } from '@std/path';
+
+const USAGE = 'file-set-description: usage: file-set-description <file> [--text <s> | --text-base64 <b64>]';
+
+const fileSetDescription = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['text', 'text-base64'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  let text: string;
+  if (flags['text-base64'] !== undefined) {
+    try {
+      text = new TextDecoder().decode(decodeBase64(flags['text-base64']));
+    } catch {
+      await cmd.writeError('file-set-description: --text-base64: not valid base64\n');
+      return 1;
+    }
+  } else if (flags.text !== undefined) {
+    text = flags.text;
+  } else {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  const description = text.trim();
+
+  try {
+    // An emptied field means "there is no description", not "the description is
+    // the empty string" — every reader tests it for truthiness.
+    await cmd.sys.vfs.update(cmd.access, path, { attrs: { description: description || null } });
+  } catch (error) {
+    await cmd.writeError(`file-set-description: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const unembedded = await storeAuthoredText(cmd, path, description);
+  if (unembedded) await cmd.writeError(`file-set-description: ${path}: saved, but not yet searchable: ${unembedded}\n`);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path, description });
+  } else {
+    await cmd.writeLn(description ? `Set description on ${path}` : `Cleared description on ${path}`);
+  }
+  return 0;
+};
+
+fileSetDescription.spec = {
+  name: 'file-set-description',
+  effect: 'write' as const,
+  description: "Set a file's hand-written description",
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
+  ],
+  flags: [
+    { name: 'text', type: 'string' as const, description: 'the description; empty clears it' },
+    { name: 'text-base64', type: 'string' as const, description: 'the description, base64-encoded (for multi-line text)' },
+  ],
+  examples: [
+    "file-set-description --text 'Ett exempel' /archive/albums/Exempelalbum_2019/files/IMG_0042.jpg",
+  ],
+  returns: 'nothing; the description is written.',
+};
+
+export default fileSetDescription;

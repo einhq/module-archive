@@ -1,0 +1,21 @@
+name: track-stage
+description: A GPX file dropped in staging becomes its device's route
+
+# Subject is the GPX file. `updated` is the upload's size report, after the bytes
+# have landed; a file left waiting for a device is not tried again — the staging
+# page asks which device it was.
+trigger:
+  event: updated
+  nodeType: file
+  match:
+    nodePath: ['/home/*/staging/**.gpx', '/home/*/staging/**.GPX']
+  skipIfAttr: trackDevicePending
+
+steps:
+  import:
+    command: track-stage $NODE_PATH
+    description: Append its fixes to the track of the device it names, and remove it
+
+options:
+  maxAttempts: 2
+  priority: 5

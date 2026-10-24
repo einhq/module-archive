@@ -1,0 +1,5 @@
+{
+  "description": "Worker for CPU-bound media jobs — transcodes, derivatives, fingerprints",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

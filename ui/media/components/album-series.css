@@ -1,0 +1,47 @@
+/* A neighbour in a series, over the header's photo or pattern: a dark pill, so its white text reads on either. */
+.mrx-album-series-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(100%, 200px);
+  padding: 2px 10px 2px 2px;
+  border-radius: var(--mantine-radius-md);
+  background: rgba(0, 0, 0, .4);
+  backdrop-filter: blur(6px);
+  text-shadow: none;
+  transition: background var(--mrx-dur-fast) var(--mrx-ease);
+}
+
+.mrx-album-series-link:hover,
+.mrx-album-series-link:focus-visible {
+  background: rgba(0, 0, 0, .6);
+}
+
+/* The next one reads from the right: its arrow and cover stand at its far end. */
+.mrx-album-series-link[data-side='next'] {
+  flex-direction: row-reverse;
+  padding: 2px 2px 2px 10px;
+  text-align: right;
+}
+
+.mrx-album-series-arrow {
+  flex: none;
+  color: white;
+}
+
+.mrx-album-series-cover {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  overflow: hidden;
+  border-radius: var(--mantine-radius-sm);
+  background: rgba(255, 255, 255, .12);
+  color: white;
+}
+
+.mrx-album-series-text {
+  min-width: 0;
+}

@@ -1,0 +1,126 @@
+#!ts
+/**
+ * parse-eval — the search parse, scored on the live archive.
+ *
+ * `archive-parse` turns a written search into filters. This runs
+ * every question through it and scores what it resolved against what the question meant: the
+ * people, the locations and the years right of those asked for, and the names it made up. There
+ * is no search and no fast-shape gate — "Anna Andersson Göteborg 2017" is a search-box
+ * question as much as a sentence is.
+ *
+ * NOTHING IS CHANGED: a parse and its name lookups are all it runs.
+ *
+ * Questions are a JSON array of {text, people, locations, from, to} (`--questions`), a file written
+ * on the host from its own people and locations — real names never go into the repository.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { toText } from '@std/streams/to-text';
+import { type ParsedSearch, parseSearch } from '@archive/search/parse';
+
+type Expected = { text: string; people?: string[]; locations?: { name: string; geo?: boolean }[]; from?: string; to?: string };
+type Score = { people: [number, number]; locations: [number, number]; years: [number, number]; spurious: number; exact: boolean };
+
+const readJson = async (cmd: Command, path: string): Promise<unknown> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+  try {
+    return JSON.parse(await toText(handle.readable));
+  } finally {
+    await handle.close();
+  }
+};
+
+const quantile = (values: number[], q: number): number | undefined => {
+  if (values.length === 0) return undefined;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+};
+
+const norm = (value: string): string => value.replaceAll('_', ' ').trim().toLocaleLowerCase('sv');
+
+/** One person, by the name the archive gives them or by their slug. */
+const isPerson = (person: ParsedSearch['people'][number], want: string): boolean =>
+  person.slug !== undefined && (norm(person.slug) === norm(want) || norm(person.matches[0]?.name ?? '') === norm(want));
+
+const score = (expected: Expected, got: ParsedSearch): Score => {
+  const wantPeople = expected.people ?? [];
+  const wantLocations = expected.locations ?? [];
+  const wantYears = [expected.from, expected.to].filter(Boolean).length;
+  const peopleOk = wantPeople.filter((want) => got.people.some((person) => isPerson(person, want))).length;
+  const locationsOk =
+    wantLocations.filter((want) =>
+      got.locations.some((location) => (location.slug && norm(location.slug) === norm(want.name)) || (want.geo && norm(location.name) === norm(want.name)))
+    ).length;
+  const yearsOk = (expected.from && got.from === expected.from ? 1 : 0) + (expected.to && got.to === expected.to ? 1 : 0);
+  const spurious = got.people.filter((person) => !wantPeople.some((want) => isPerson(person, want))).length +
+    got.locations.filter((location) => !wantLocations.some((want) => norm(location.name) === norm(want.name) || (location.slug && norm(location.slug) === norm(want.name))))
+      .length +
+    (got.from && !expected.from ? 1 : 0);
+  const exact = peopleOk === wantPeople.length && locationsOk === wantLocations.length && yearsOk === wantYears && spurious === 0;
+  return { people: [peopleOk, wantPeople.length], locations: [locationsOk, wantLocations.length], years: [yearsOk, wantYears], spurious, exact };
+};
+
+const parseEval = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['questions', 'limit'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (!flags.questions) {
+    await cmd.writeError('parse-eval: missing --questions\n');
+    return 1;
+  }
+
+  let questions: Expected[];
+  try {
+    questions = await readJson(cmd, flags.questions as string) as Expected[];
+  } catch (error) {
+    await cmd.writeError(`parse-eval: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (flags.limit) questions = questions.slice(0, Number(flags.limit));
+
+  const results: { expected: Expected; parsed: ParsedSearch; ms: number; score: Score }[] = [];
+  for (const expected of questions) {
+    if (cmd.interrupted) break;
+    const started = Date.now();
+    const parsed = await parseSearch(cmd, expected.text);
+    const result = { expected, parsed, ms: Date.now() - started, score: score(expected, parsed) };
+    results.push(result);
+    if (!cmd.json) {
+      const s = result.score;
+      await cmd.writeLn(
+        `${s.exact ? 'OK ' : '-- '}p${s.people[0]}/${s.people[1]} l${s.locations[0]}/${s.locations[1]} y${s.years[0]}/${s.years[1]} x${s.spurious} ${
+          String(result.ms).padStart(5)
+        }ms | ${expected.text}${s.exact ? '' : `\n     → ${parsed.explain}${parsed.unresolved.length ? `; unresolved ${parsed.unresolved.join(', ')}` : ''}`}`,
+      );
+    }
+  }
+
+  const sum = (pick: (s: Score) => [number, number]) => results.reduce((acc, r) => [acc[0] + pick(r.score)[0], acc[1] + pick(r.score)[1]], [0, 0]);
+  const ms = results.map((r) => r.ms);
+  const summary = {
+    exact: results.filter((r) => r.score.exact).length,
+    of: results.length,
+    people: sum((s) => s.people),
+    locations: sum((s) => s.locations),
+    years: sum((s) => s.years),
+    spurious: results.reduce((acc, r) => acc + r.score.spurious, 0),
+    ms: { p50: quantile(ms, 0.5), p90: quantile(ms, 0.9) },
+  };
+  if (cmd.json) await cmd.writeJSON({ summary, results });
+  else await cmd.writeLn(`\n${JSON.stringify(summary)}`);
+  return 0;
+};
+
+parseEval.spec = {
+  name: 'parse-eval',
+  effect: 'read' as const,
+  description: 'Score the search parse (archive-parse) against the filters each question means',
+  flags: [
+    { name: 'questions', type: 'path' as const, description: 'a JSON array of {text, people, locations, from, to}' },
+    { name: 'limit', type: 'number' as const, description: 'stop after this many questions' },
+  ],
+  examples: ['parse-eval --questions /tmp/parse-questions.json'],
+  returns: 'per question: people, locations and years right of those asked for, names made up, and the time; totals and p50/p90.',
+};
+
+export default parseEval;

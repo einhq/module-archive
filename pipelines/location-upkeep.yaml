@@ -1,0 +1,31 @@
+name: location-upkeep
+description: Re-derive a location's position and re-link the photos inside it when the location or its photos change
+
+# Subject is the location. The fact comes from archive-bridge: the location was
+# created, its shape was written, an attr its position derives from changed
+# (address, name, locationSource), or a photo was linked to it by hand.
+trigger:
+  on: location.changed
+
+steps:
+  locate:
+    # Photos first, then the address. Coordinates set by hand are left alone, and
+    # nothing is written unless it moved.
+    command: location-locate --refresh $NODE_PATH
+    description: Place it from its photos, or failing that its address
+  link:
+    command: location-link-media --location $NODE_PATH
+    description: Link the photos inside its shape, drop the ones it no longer covers
+    dependsOn: [locate]
+
+options:
+  # A location is an aggregate of its photos: an album's worth of links arrives as a
+  # burst, and one arriving while a run is live is a change that run cannot have
+  # seen. `rerun` folds them into one further run instead of dropping them. The
+  # steps do re-announce the location when they move it (its shape and attrs), so a
+  # run that changed something is followed by exactly one that changes nothing:
+  # both commands compare before they write, and a shape link never re-announces.
+  coalesce: rerun
+  debounceMs: 5000
+  maxAttempts: 2
+  priority: 5

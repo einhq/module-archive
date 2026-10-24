@@ -1,0 +1,208 @@
+#!ts
+/**
+ * file-set-orientation — turn or flip a file, for good.
+ *
+ * Writes `angle` **and** `angleManual` to the same value, which is what the legacy importer
+ * does too: every downstream reader (`generate-derivatives`, `detect-faces`, `@archive/media/face-crop`,
+ * the search enrichment) consults the plain `angle`, while `angleManual` is the sentinel that
+ * stops `exif-extract` overwriting it on a re-index. Writing only one of the two would either
+ * be ignored or be silently reverted by the next crawl.
+ *
+ * Turning a file moves the display frame under its face boxes — they are fractions of that
+ * frame (@media/orientation) — so the boxes are remapped through the raw frame here, in the
+ * same command, rather than left to rot.
+ *
+ * Renditions: the cheap `still` class is regenerated inline. A video's transcode is minutes
+ * of ffmpeg and is not this command's to start: the `angleManual`/`mirror` write is the
+ * `media.file.turned` fact, on which `media-transcode` re-encodes it on the media pool. The old
+ * rendition stays playable, sideways, until the new one replaces it.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { resolve } from '@std/path';
+import {
+  type Angle,
+  boxDisplayToRaw,
+  boxRawToDisplay,
+  clampBox,
+  type FracBox,
+  type FracPoint,
+  normalizeAngle,
+  normalizeMirror,
+  pointDisplayToRaw,
+  pointRawToDisplay,
+  roundBox,
+} from '@archive/media/orientation';
+import { isFacePose, remapPose } from '@archive/media/face-pose';
+
+const ANGLES = [0, 90, 180, 270];
+const ROTATIONS = ['cw', 'ccw', '180'];
+
+const isBox = (value: unknown): value is FracBox => {
+  if (typeof value !== 'object' || value === null) return false;
+  const box = value as Record<string, unknown>;
+  return ['x', 'y', 'width', 'height'].every((key) => typeof box[key] === 'number');
+};
+
+const isLandmarks = (value: unknown): value is FracPoint[] =>
+  Array.isArray(value) && value.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number');
+
+/**
+ * A stored box, moved from one display frame to another: back to the raw raster at the old
+ * orientation, then forward at the new one. The raw frame is the invariant — the pixels did
+ * not move, only the frame we describe them in.
+ */
+const remapBox = (box: FracBox, from: { angle: Angle; mirror: boolean }, to: { angle: Angle; mirror: boolean }): FracBox | undefined =>
+  clampBox(boxRawToDisplay(boxDisplayToRaw(box, from.angle, from.mirror), to.angle, to.mirror));
+
+const remapPoint = (point: FracPoint, from: { angle: Angle; mirror: boolean }, to: { angle: Angle; mirror: boolean }): FracPoint =>
+  pointRawToDisplay(pointDisplayToRaw(point, from.angle, from.mirror), to.angle, to.mirror);
+
+const fileSetOrientation = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['rotate', 'angle'],
+    boolean: ['mirror', 'toggle-mirror', 'no-regenerate', 'verbose'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('file-set-orientation: usage: file-set-orientation <file> [--rotate cw|ccw|180] [--angle 0|90|180|270] [--mirror|--no-mirror|--toggle-mirror]\n');
+    return 1;
+  }
+  if (flags.rotate !== undefined && !ROTATIONS.includes(flags.rotate)) {
+    await cmd.writeError(`file-set-orientation: --rotate must be one of ${ROTATIONS.join(', ')}\n`);
+    return 1;
+  }
+  if (flags.angle !== undefined && !ANGLES.includes(Number(flags.angle))) {
+    await cmd.writeError(`file-set-orientation: --angle must be one of ${ANGLES.join(', ')}\n`);
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  let node;
+  try {
+    node = await vfs.get<{ angle?: unknown; angleManual?: unknown; mirror?: unknown; width?: number; height?: number }>(access, path);
+  } catch (error) {
+    await cmd.writeError(`file-set-orientation: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const from = { angle: normalizeAngle(node.attrs.angle), mirror: normalizeMirror(node.attrs.mirror) };
+
+  // The stored angle rotates the raw raster counter-clockwise, so a clockwise gesture
+  // *decreases* it. Getting this backwards is invisible on a 180 and obvious on a quarter turn.
+  let angle: Angle = from.angle;
+  if (flags.angle !== undefined) angle = normalizeAngle(flags.angle);
+  if (flags.rotate === 'cw') angle = normalizeAngle(angle + 270);
+  else if (flags.rotate === 'ccw') angle = normalizeAngle(angle + 90);
+  else if (flags.rotate === '180') angle = normalizeAngle(angle + 180);
+
+  // parseArgs gives `mirror: false` whether the flag was absent or spelled --no-mirror, so
+  // the raw args decide whether it was mentioned at all.
+  const mirrorMentioned = cmd.args.includes('--mirror') || cmd.args.includes('--no-mirror');
+  let mirror = from.mirror;
+  if (flags['toggle-mirror']) mirror = !mirror;
+  else if (mirrorMentioned) mirror = flags.mirror === true;
+
+  const to = { angle, mirror };
+  const unchanged = to.angle === from.angle && to.mirror === from.mirror;
+
+  // ===== Faces: remap before the attrs move under them =====
+  let facesRemapped = 0;
+
+  if (!unchanged) {
+    let faces: Awaited<ReturnType<typeof vfs.children>> = [];
+    try {
+      faces = await vfs.children(access, `${path}/regions`);
+    } catch {
+      // no regions directory
+    }
+
+    for (const face of faces) {
+      const attrs = face.node.attrs as Record<string, unknown>;
+      if (!isBox(attrs.faceBox)) continue;
+
+      const box = remapBox(attrs.faceBox, from, to);
+      if (!box) {
+        await cmd.writeError(`file-set-orientation: ${path}/regions/${face.name}: box degenerate after remap, left as is\n`);
+        continue;
+      }
+
+      const update: Record<string, unknown> = { faceBox: roundBox(box) };
+      if (isLandmarks(attrs.landmarks)) {
+        update.landmarks = attrs.landmarks.map((p) => remapPoint(p, from, to));
+      }
+      // Turning the frame turns the head's tilt with it; mirroring it flips the turn.
+      if (isFacePose(attrs.pose)) update.pose = remapPose(attrs.pose, from, to);
+
+      await vfs.update(access, `${path}/regions/${face.name}`, { attrs: update });
+      facesRemapped++;
+    }
+
+    await vfs.update(access, path, { attrs: { angle: to.angle, angleManual: to.angle, mirror: to.mirror } });
+  }
+
+  // ===== Renditions =====
+  const regenerate = !unchanged && !flags['no-regenerate'];
+  let stillsCode = 0;
+
+  if (regenerate) {
+    // Face crops are cut from the raster *after* it is rotated into the display frame, so they
+    // come out sideways once the frame changes — even though the pixels they cover did not
+    // move. `-f` therefore has to reach them too, and it does: the crops are a target of the
+    // still class, cut from the boxes remapped just above. Doing it here as well was a
+    // second `convert` per face on every rotation, and one that never knew about a RAW's two
+    // rasters. See @media/face-crop-rebuild.
+    const stills = await cmd.execute(`generate-derivatives ${shq(path)} -f --only still`);
+    stillsCode = stills.code;
+    if (stills.code !== 0) {
+      await cmd.writeError(`file-set-orientation: still derivatives failed: ${stills.stderr}\n`);
+    }
+  }
+
+  const result = { ok: stillsCode === 0, path, angle: to.angle, mirror: to.mirror, facesRemapped, changed: !unchanged };
+
+  if (cmd.json) {
+    await cmd.writeJSON(result);
+  } else if (unchanged) {
+    await cmd.writeLn(`${path} already at angle ${to.angle}${to.mirror ? ', mirrored' : ''}`);
+  } else {
+    await cmd.writeLn(
+      `${path}: angle ${from.angle} -> ${to.angle}${from.mirror !== to.mirror ? `, mirror ${to.mirror}` : ''}` +
+        (facesRemapped ? `, ${facesRemapped} face box${facesRemapped === 1 ? '' : 'es'} remapped` : ''),
+    );
+  }
+
+  return stillsCode === 0 ? 0 : 1;
+};
+
+fileSetOrientation.spec = {
+  name: 'file-set-orientation',
+  effect: 'write' as const,
+  description: 'Rotate or mirror a file for good: writes angle/angleManual/mirror, remaps face boxes and regenerates renditions (a video re-encodes on the media pool)',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
+  ],
+  flags: [
+    { name: 'rotate', type: 'string' as const, description: 'relative turn: cw | ccw | 180' },
+    { name: 'angle', type: 'string' as const, description: 'absolute angle: 0 | 90 | 180 | 270' },
+    { name: 'mirror', type: 'bool' as const, description: 'set the horizontal flip (--no-mirror clears it)' },
+    { name: 'toggle-mirror', type: 'bool' as const, description: 'flip the horizontal flip' },
+    { name: 'no-regenerate', type: 'bool' as const, description: 'leave the still renditions and face crops stale (a video is still re-encoded on the media pool)' },
+    { name: 'v', type: 'bool' as const, description: 'verbose output' },
+  ],
+  examples: [
+    'file-set-orientation --rotate 90 /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+  ],
+  returns: 'nothing; the file is rotated for good and its renditions regenerated.',
+};
+
+export default fileSetOrientation;

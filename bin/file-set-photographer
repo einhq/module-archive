@@ -1,0 +1,66 @@
+#!ts
+/**
+ * file-set-photographer — link the person who took a file (who).
+ *
+ * Creates (or replaces) a `photographer` softlink child on the file pointing at
+ * a person node.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+
+const LINK_NAME = 'photographer';
+
+const fileSetPhotographer = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  const personArg = flags._[1] as string | undefined;
+  if (!target || !personArg) {
+    await cmd.writeError('file-set-photographer: usage: file-set-photographer <file> <person>\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+  const person = resolve(cmd.cwd, personArg);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  if (!(await vfs.exists(access, person))) {
+    await cmd.writeError(`file-set-photographer: ${person}: not found\n`);
+    return 1;
+  }
+  try {
+    const linkPath = `${path}/${LINK_NAME}`;
+    if (await vfs.exists(access, linkPath, { follow: false })) {
+      await vfs.unlink(access, linkPath, path, { follow: false });
+    }
+    await vfs.create(access, 'softlink', path, LINK_NAME, {
+      props: { uid: access.uid, gid: access.gid, mode: 0o777, softlink: person },
+    });
+  } catch (error) {
+    await cmd.writeError(`file-set-photographer: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  await cmd.writeLn(`Set photographer ${person} on ${path}`);
+  return 0;
+};
+
+fileSetPhotographer.spec = {
+  name: 'file-set-photographer',
+  effect: 'write' as const,
+  description: 'Link the person who took a file (photographer softlink)',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [],
+  examples: [
+    'file-set-photographer /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg /archive/people/Anna_Exempel',
+  ],
+  returns: 'nothing; the photographer link is written.',
+};
+
+export default fileSetPhotographer;

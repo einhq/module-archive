@@ -1,0 +1,49 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { CHILDREN_DIR, readRelationDir } from '@archive/people/genealogy';
+
+const personChildren = async (cmd: Command): CmdReturn => {
+  const rest = cmd.args.filter((a) => !a.startsWith('-'));
+  const targetArg = rest[0];
+  if (!targetArg) {
+    await cmd.writeError('person-children: missing person path\n');
+    return 1;
+  }
+  const target = resolve(cmd.cwd, targetArg);
+
+  try {
+    await cmd.sys.vfs.get(cmd.access, target);
+    const entries = await readRelationDir(cmd.sys.vfs, cmd.access, target, CHILDREN_DIR);
+    const children = entries.filter((e) => e.target).map((e) => ({ name: basename(e.target), path: e.target }));
+
+    if (cmd.json) {
+      await cmd.writeJSON(children);
+    } else if (children.length === 0) {
+      await cmd.writeLn('No children found');
+    } else {
+      for (const child of children) await cmd.writeLn(child.path);
+    }
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`person-children: ${message}\n`);
+    return 1;
+  }
+};
+
+personChildren.spec = {
+  name: 'person-children',
+  effect: 'read' as const,
+  description: "List a person's children (children/ dir)",
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [],
+  examples: [
+    'person-children /archive/people/Bo_Exempel',
+  ],
+  returns: "each child's name and slug.",
+};
+
+export default personChildren;

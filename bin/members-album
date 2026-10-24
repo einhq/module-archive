@@ -1,0 +1,60 @@
+#!ts
+/**
+ * members-album — who is in an album, by its own rules (`@archive/media/album-members`).
+ *
+ * Its name is what makes it the album's: `search --under <album>` and `members <album>` run
+ * `members-<type>` for a node's type when there is one. Search does the rest itself — loads the
+ * members, orders them, filters and pages. The rules — the imported `files/` layout, the cover
+ * link, stacks of similar photos — are archive's, so this is the only place core learns them.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { albumMembers, containerListing, visibleMembers } from '@archive/media/album-members';
+
+const albumMembersCommand = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['include-stacked'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [arg] = flags._.map(String);
+  if (!arg) {
+    await cmd.writeError('members-album: expected an album path\n');
+    return 1;
+  }
+
+  try {
+    const album = await albumMembers(cmd, resolve(cmd.cwd, arg));
+    if (cmd.json) {
+      await cmd.writeJSON(containerListing(album));
+      return 0;
+    }
+    const shown = flags['include-stacked'] ? album.members : visibleMembers(album.members);
+    for (const member of shown) {
+      const stack = member.stackCount ? `  (stack of ${member.stackCount})` : member.front ? `  (under ${member.front})` : '';
+      await cmd.writeLn(`${member.memberPath ?? member.path}${member.memberPath ? ` -> ${member.path}` : ''}${stack}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`members-album: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+albumMembersCommand.spec = {
+  name: 'members-album',
+  effect: 'read' as const,
+  description: "List an album's media by the album's own rules: an imported album's files/ folder, links followed, the cover left out, stacks of similar photos folded",
+  args: [
+    { name: 'album', type: 'path' as const, description: 'album path' },
+  ],
+  flags: [
+    { name: 'include-stacked', type: 'bool' as const, description: 'text output: also list the photos folded under a stack' },
+  ],
+  examples: [
+    'members-album /archive/albums/Exempelalbum_2019',
+    'members-album /archive/albums/Exempelalbum_2019 --include-stacked',
+  ],
+  returns: 'every member, stacked ones included: its path, node id, the link it is a member through, and for a stacked photo the front that stands for it and the stack size.',
+};
+
+export default albumMembersCommand;

@@ -1,0 +1,114 @@
+#!ts
+/**
+ * search-device — find cameras and recorders by what they are called.
+ *
+ * Discovered by `search` like every other `search-*` on PATH. Its rows are in the `name` channel
+ * (name, make and model, serial number, id) and the `description` channel.
+ *
+ * A substring ladder, the same shape `search-people` and `search-location` use,
+ * and for the same reason: `NodeQuery` has no `contains` operator
+ * (src/vfs/query.ts), only prefix, so a scan is the only option. `/devices` is a
+ * flat listing of tens of entries, not thousands, so the scan is the cheap part.
+ *
+ * The serial number is matched too. It reads like an implementation detail, but
+ * it is the one field that tells two identical camera bodies apart, and it is
+ * what `device-match` keys on — so it is what someone chasing "which camera shot
+ * this" actually has in hand.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { nameScore } from '@archive/media/name-quality';
+import { type DeviceEntry, DEVICES_ROOT, listDevices } from '@archive/device/device';
+
+/** The best `nameScore` over the fields. */
+const scoreText = (query: string, fields: (string | undefined)[]): number => Math.max(0, ...fields.map((field) => nameScore(query, field)));
+
+const searchDevice = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    await cmd.writeLn(JSON.stringify({ kinds: ['device'] }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = DEVICES_ROOT;
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
+    else if (arg === '--root') root = cmd.args[++i] || DEVICES_ROOT;
+    else queryParts.push(arg);
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+  if (!query) {
+    await cmd.writeError('search-device: missing search query\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+  const named: SearchProviderHit[] = [];
+  const described: SearchProviderHit[] = [];
+
+  // One `ls -l` rather than an `attrs` per device — see listDevices.
+  let devices: DeviceEntry[] = [];
+  try {
+    devices = await listDevices(cmd, root);
+  } catch {
+    // no devices root
+  }
+
+  for (const device of devices) {
+    // `make model` as one field so "canon eos" matches a device split across
+    // the two, which is how EXIF stores every camera.
+    const makeModel = [device.make, device.model].filter(Boolean).join(' ');
+    const hit = { path: device.path, type: 'device', name: device.name, ...(device.description || makeModel ? { description: device.description || makeModel } : {}) };
+    const name = scoreText(queryLower, [device.name, makeModel, device.serialNumber, device.id]);
+    if (name > 0) named.push({ ...hit, channel: 'name', score: name });
+    const description = scoreText(queryLower, [device.description]);
+    if (description > 0) described.push({ ...hit, channel: 'description', score: description });
+  }
+
+  // Each channel's best `limit`; path breaks ties.
+  const best = (hits: SearchProviderHit[]) => hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+  const limited = [...best(named), ...best(described)];
+  const truncated = named.length > limit || described.length > limit;
+
+  if (cmd.json) {
+    await cmd.writeJSON({ results: limited, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse);
+  } else if (limited.length === 0) {
+    await cmd.writeLn('No matches found.');
+  } else {
+    for (const r of limited) {
+      await cmd.writeLn(`${(r.score * 100).toFixed(1)}% ${r.channel.padEnd(11)} ${r.path}`);
+      if (r.description) await cmd.writeLn(`     ${r.description}`);
+    }
+  }
+
+  return 0;
+};
+
+searchDevice.spec = {
+  name: 'search-device',
+  effect: 'read' as const,
+  description: 'Search devices by name, make, model or serial number',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
+    { name: 'root', type: 'string' as const, description: `Devices root (default: ${DEVICES_ROOT})` },
+  ],
+  examples: [
+    "search-device 'exempelkamera' -l 10",
+  ],
+  returns: 'matching devices, one row per channel that found it (name, description), best first within each.',
+};
+
+export default searchDevice;

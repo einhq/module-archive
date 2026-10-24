@@ -1,0 +1,5 @@
+#!ts
+/** events-anniversaries — what comes round every year, around a date, as events entries. The command is `eventsAnniversaries` in [lib](../lib/events-anniversaries.ts), where its spec says the rest. */
+import { eventsAnniversaries } from '@archive/events-anniversaries';
+
+export default eventsAnniversaries;

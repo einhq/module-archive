@@ -1,0 +1,680 @@
+{
+  "name": "archive",
+  "version": "0.1.0",
+  "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
+  "coreApi": "^0.1.0",
+  "exports": {
+    "./labels/api": "./lib/labels/api.ts",
+    "./location/api": "./lib/location/api.ts",
+    "./media/api": "./lib/media/api.ts",
+    "./media/event-rules": "./lib/media/event-rules.ts",
+    "./media/face-crop": "./lib/media/face-crop.ts",
+    "./media/face-crop-rebuild": "./lib/media/face-crop-rebuild.ts",
+    "./media/orientation": "./lib/media/orientation.ts",
+    "./media/regions": "./lib/media/regions.ts",
+    "./paths": "./lib/paths.ts",
+    "./people/api": "./lib/people/api.ts",
+    "./people/events": "./lib/people/events.ts",
+    "./people/genealogy": "./lib/people/genealogy.ts",
+    "./people/person": "./lib/people/person.ts",
+    "./people/residence": "./lib/people/residence.ts",
+    "./staging": "./lib/staging/staging.ts",
+    "./staging/api": "./lib/staging/api.ts",
+    "./staging/init": "./lib/staging/init.ts",
+    "./staging/paths": "./lib/staging/paths.ts",
+    "./staging/proposal": "./lib/staging/proposal.ts",
+    "./timeline/api": "./lib/timeline/api.ts"
+  },
+  "dependencies": {
+    "ems": "^0.1.0"
+  },
+  "imports": {
+    "@archive/device/api": "./lib/device/api.ts",
+    "@archive/device/device": "./lib/device/device.ts",
+    "@archive/device/device-zone": "./lib/device/device-zone.ts",
+    "@archive/device/types": "./types/device/mod.ts",
+    "@archive/event-rules": "./lib/event-rules.ts",
+    "@archive/events-anniversaries": "./lib/events-anniversaries.ts",
+    "@archive/find-within": "./lib/find-within.ts",
+    "@archive/labels/api": "./lib/labels/api.ts",
+    "@archive/labels/classifier": "./lib/labels/classifier.ts",
+    "@archive/labels/label-model": "./lib/labels/label-model.ts",
+    "@archive/labels/vocabulary": "./lib/labels/vocabulary.ts",
+    "@archive/location/centroid": "./lib/location/centroid.ts",
+    "@archive/location/geocode": "./lib/location/geocode.ts",
+    "@archive/location/event-rules": "./lib/location/event-rules.ts",
+    "@archive/location/location-link": "./lib/location/location-link.ts",
+    "@archive/location/track": "./lib/location/track.ts",
+    "@archive/location/types": "./types/location/mod.ts",
+    "@archive/media/album-members": "./lib/media/album-members.ts",
+    "@archive/media/album-profile": "./lib/media/album-profile.ts",
+    "@archive/media/album-span": "./lib/media/album-span.ts",
+    "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
+    "@archive/media/chapters": "./lib/media/chapters.ts",
+    "@archive/media/chromaprint": "./lib/media/chromaprint.ts",
+    "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
+    "@archive/media/embedding-types": "./lib/media/embedding-types.ts",
+    "@archive/media/exif-date": "./lib/media/exif-date.ts",
+    "@archive/media/exif-service": "./lib/media/exif-service.ts",
+    "@archive/media/extracted-text": "./lib/media/extracted-text.ts",
+    "@archive/media/face-assign": "./lib/media/face-assign.ts",
+    "@archive/media/face-audit": "./lib/media/face-audit.ts",
+    "@archive/media/face-cluster": "./lib/media/face-cluster.ts",
+    "@archive/media/face-match": "./lib/media/face-match.ts",
+    "@archive/media/face-pose": "./lib/media/face-pose.ts",
+    "@archive/media/face-quality": "./lib/media/face-quality.ts",
+    "@archive/media/face-subcluster": "./lib/media/face-subcluster.ts",
+    "@archive/media/filename-date": "./lib/media/filename-date.ts",
+    "@archive/media/fingerprint-service": "./lib/media/fingerprint-service.ts",
+    "@archive/media/fingerprints": "./lib/media/fingerprints.ts",
+    "@archive/media/image-ladder": "./lib/media/image-ladder.ts",
+    "@archive/media/media-probe": "./lib/media/media-probe.ts",
+    "@archive/media/media-stacks": "./lib/media/media-stacks.ts",
+    "@archive/media/merge-duplicates": "./lib/media/merge-duplicates.ts",
+    "@archive/media/name-quality": "./lib/media/name-quality.ts",
+    "@archive/media/near-duplicates": "./lib/media/near-duplicates.ts",
+    "@archive/media/on-this-day": "./lib/media/on-this-day.ts",
+    "@archive/media/paired-sidecar": "./lib/media/paired-sidecar.ts",
+    "@archive/media/picture-source": "./lib/media/picture-source.ts",
+    "@archive/media/resolve-time": "./lib/media/resolve-time.ts",
+    "@archive/media/sidecars": "./lib/media/sidecars.ts",
+    "@archive/media/sizes": "./lib/media/sizes.ts",
+    "@archive/media/staging": "./lib/media/staging.ts",
+    "@archive/media/storyboard": "./lib/media/storyboard.ts",
+    "@archive/media/takeout": "./lib/media/takeout.ts",
+    "@archive/media/speaker-assign": "./lib/media/speaker-assign.ts",
+    "@archive/media/speaker-faces": "./lib/media/speaker-faces.ts",
+    "@archive/media/speakers": "./lib/media/speakers.ts",
+    "@archive/media/transcode": "./lib/media/transcode.ts",
+    "@archive/media/transcript": "./lib/media/transcript.ts",
+    "@archive/media/types": "./types/media/mod.ts",
+    "@archive/media/video-codec": "./lib/media/video-codec.ts",
+    "@archive/media/writable": "./lib/media/writable.ts",
+    "@archive/media/xmp": "./lib/media/xmp.ts",
+    "@archive/news-albums": "./lib/news-albums.ts",
+    "@archive/people/cover": "./lib/people/cover.ts",
+    "@archive/people/feed": "./lib/people/feed.ts",
+    "@archive/people/kin": "./lib/people/kin.ts",
+    "@archive/people/types": "./types/people/mod.ts",
+    "@archive/search/listed": "./lib/search/listed.ts",
+    "@archive/search/parse": "./lib/search/parse.ts",
+    "@archive/search/proposal": "./lib/search/proposal.ts",
+    "@archive/search/rules": "./lib/search/rules.ts",
+    "@archive/staging/auto-album": "./lib/staging/auto-album.ts",
+    "@archive/staging/category": "./lib/staging/category.ts",
+    "@archive/staging/check": "./lib/staging/check.ts",
+    "@archive/staging/cluster": "./lib/staging/cluster.ts",
+    "@archive/staging/decide": "./lib/staging/decide.ts",
+    "@archive/staging/dedupe": "./lib/staging/dedupe.ts",
+    "@archive/staging/deferral": "./lib/staging/deferral.ts",
+    "@archive/staging/detect": "./lib/staging/detect.ts",
+    "@archive/staging/duplicate-read": "./lib/staging/duplicate-read.ts",
+    "@archive/staging/duplicate-rules": "./lib/staging/duplicate-rules.ts",
+    "@archive/staging/duplicates": "./lib/staging/duplicates.ts",
+    "@archive/staging/edits": "./lib/staging/edits.ts",
+    "@archive/staging/facts": "./lib/staging/facts.ts",
+    "@archive/staging/file": "./lib/staging/file.ts",
+    "@archive/staging/home": "./lib/staging/home.ts",
+    "@archive/staging/journal": "./lib/staging/journal.ts",
+    "@archive/staging/lock": "./lib/staging/lock.ts",
+    "@archive/staging/match": "./lib/staging/match.ts",
+    "@archive/staging/membership": "./lib/staging/membership.ts",
+    "@archive/staging/model": "./lib/staging/model.ts",
+    "@archive/staging/naming": "./lib/staging/naming.ts",
+    "@archive/staging/near-candidates": "./lib/staging/near-candidates.ts",
+    "@archive/staging/nodes-at": "./lib/staging/nodes-at.ts",
+    "@archive/staging/organizer": "./lib/staging/organizer.ts",
+    "@archive/staging/reject": "./lib/staging/reject.ts",
+    "@archive/staging/retime": "./lib/staging/retime.ts",
+    "@archive/staging/rows": "./lib/staging/rows.ts",
+    "@archive/staging/scoring": "./lib/staging/scoring.ts",
+    "@archive/staging/signals": "./lib/staging/signals.ts",
+    "@archive/staging/status": "./lib/staging/status.ts",
+    "@archive/staging/strategy": "./lib/staging/strategy.ts",
+    "@archive/staging/undo": "./lib/staging/undo.ts",
+    "@archive/subjects": "./lib/subjects.ts",
+    "@archive/timeline": "./lib/timeline/mod.ts",
+    "@archive/timeline/facets": "./lib/timeline/facets.ts",
+    "@archive/timeline/paging": "./lib/timeline/paging.ts",
+    "@std/assert": "jsr:@std/assert@^1.0.16",
+    "@std/encoding": "jsr:@std/encoding@^1.0.10",
+    "@std/path": "jsr:@std/path@^1.1.3",
+    "@std/streams": "jsr:@std/streams@^1.0.17",
+    "@std/ulid": "jsr:@std/ulid@^1.0.0",
+    "@std/yaml": "jsr:@std/yaml@^1.0.11",
+    "pg": "npm:pg@^8.16.3"
+  },
+  "config": {
+    "options": [
+      {
+        "key": "CFG_CPU_SLOTS",
+        "scope": "system",
+        "type": "number",
+        "default": "2",
+        "label": "CPU budget for media work",
+        "description": "How much CPU-bound media work runs at once. Each job declares what it costs, so one video transcode can exclude a face assignment on a small box.",
+        "group": "Processing",
+        "restarts": [
+          "cpu"
+        ]
+      },
+      {
+        "key": "CFG_CPU_WORKERS",
+        "scope": "system",
+        "type": "number",
+        "default": "4",
+        "label": "CPU worker slots",
+        "description": "Upper bound on concurrent CPU media jobs. The budget above is the real limit; this only caps how many can be in flight.",
+        "group": "Processing",
+        "restarts": [
+          "cpu"
+        ]
+      },
+      {
+        "key": "CFG_CPU_NON_ENTRY_SLOTS",
+        "scope": "system",
+        "type": "number",
+        "default": "1",
+        "label": "CPU slots for downstream media",
+        "description": "Soft reservation for non-ingest CPU work. Ingest borrows unused slots, but ready downstream jobs get them first so a continuous ingest backlog cannot starve the rest of the pipeline.",
+        "group": "Processing",
+        "restarts": [
+          "cpu"
+        ]
+      },
+      {
+        "key": "CFG_MODEL_SLOTS",
+        "scope": "system",
+        "type": "number",
+        "default": "2",
+        "label": "Model requests in flight",
+        "description": "How many model-bound media steps (faces, picture vectors, text in pictures, text vectors, transcripts, voices) EiN keeps in flight against the media service at once. Whether each runs on the GPU or the CPU is the media service's decision; size this against its own model limit, since more slots than it runs at once only move the wait into its queue.",
+        "group": "Processing",
+        "restarts": [
+          "models"
+        ]
+      },
+      {
+        "key": "CFG_MODEL_KIND_QUANTUM_MS",
+        "scope": "system",
+        "type": "number",
+        "default": "900000",
+        "label": "Model backlog rotation (ms)",
+        "description": "How long the models worker stays on one backlog (faces, picture vectors, text in pictures, text vectors, transcripts, voices) before rotating to the next when work remains on more than one. Faces outrank the other backlogs and a crawl finds new ones continuously, so without this they would starve the rest outright.",
+        "group": "Processing",
+        "restarts": [
+          "models"
+        ]
+      },
+      {
+        "key": "CFG_FACE_ATTACH_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.55",
+        "label": "Face match threshold",
+        "description": "How similar two faces must be before one is attached to a known person. Higher is stricter and produces fewer wrong matches but more unknown faces.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MIN_CONFIDENCE",
+        "scope": "system",
+        "type": "number",
+        "default": "0.7",
+        "label": "Minimum face confidence",
+        "description": "How sure the detector must be before a box is kept as a face that takes part in recognition. Below 0.7 most detections are backs of heads, blur or things that are not faces, and they pull strangers toward the wrong person. Applies to new detections; a box below it is not stored unless someone tags it by hand.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MIN_SIZE",
+        "scope": "system",
+        "type": "number",
+        "default": "24",
+        "label": "Minimum face size (px)",
+        "description": "The shorter side a face box must have, in pixels of the displayed photo, to be kept as a face.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MAX_YAW",
+        "scope": "system",
+        "type": "number",
+        "default": "80",
+        "label": "Maximum head turn (degrees)",
+        "description": "How far a head may be turned away from the camera, estimated from the eyes, nose and mouth, and still be kept as a face. Full profiles beyond this match the wrong person far more often.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_USER_SLIDESHOW_SECONDS",
+        "scope": "user",
+        "type": "number",
+        "default": "3",
+        "label": "Seconds per slide",
+        "description": "How long each photo is shown in a slideshow.",
+        "group": "Playback"
+      },
+      {
+        "key": "CFG_USER_KEN_BURNS",
+        "scope": "user",
+        "type": "boolean",
+        "default": "true",
+        "label": "Ken Burns effect",
+        "description": "Slowly pan and zoom each photo during a slideshow.",
+        "group": "Playback"
+      },
+      {
+        "key": "CFG_MEDIA_TRANSCRIPTS_CURRENT",
+        "scope": "system",
+        "type": "string",
+        "default": "",
+        "label": "Keep transcripts current",
+        "description": "Videos and recordings transcribed with other speech-recognition settings than the media service runs now are transcribed again in the background, behind new media. Set to \"off\" to leave existing transcripts alone. On a large library a change of settings means hours of background work.",
+        "group": "Processing"
+      },
+      {
+        "key": "CFG_MEDIA_HEAL_INTERVAL",
+        "scope": "system",
+        "type": "number",
+        "default": "900",
+        "label": "Gap check interval (seconds)",
+        "description": "How often the background check looks for media missing something a pipeline should have given it, when nothing else is waiting to be processed.",
+        "group": "Processing",
+        "restarts": ["media-heal"]
+      },
+      {
+        "key": "CFG_MEDIA_HEAL_REST",
+        "scope": "system",
+        "type": "number",
+        "default": "21600",
+        "label": "Rest after a full gap check (seconds)",
+        "description": "How long the background gap check waits after it has been through the whole archive before it starts over.",
+        "group": "Processing",
+        "restarts": ["media-heal"]
+      },
+      {
+        "key": "CFG_FACE_VOTE_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.5",
+        "label": "Face neighbour similarity",
+        "description": "How similar a known face must be to count as a vote for its person. Faces less alike than this are ignored when deciding who an unknown face is.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_K",
+        "scope": "system",
+        "type": "number",
+        "default": "24",
+        "label": "Face neighbours compared",
+        "description": "How many of the most similar known faces are compared with each unknown one.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MARGIN",
+        "scope": "system",
+        "type": "number",
+        "default": "1.2",
+        "label": "Face winner margin",
+        "description": "How far the leading person's votes must outweigh the runner-up's before a face is attached. 1.2 means 20% more; higher leaves close calls unknown.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MIN_CREATE_CONFIDENCE",
+        "scope": "system",
+        "type": "number",
+        "default": "0.7",
+        "label": "Confidence to start a new person from a face",
+        "description": "How sure the detector must be of a face that matches nobody before it starts a new, unnamed person. Less certain faces stay unknown.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_FACE_MIN_CREATE_SIZE",
+        "scope": "system",
+        "type": "number",
+        "default": "48",
+        "label": "Size to start a new person from a face (px)",
+        "description": "The shorter side, in pixels, a face that matches nobody must have before it starts a new, unnamed person. Small faces stay unknown rather than seeding people from blur.",
+        "group": "Faces"
+      },
+      {
+        "key": "CFG_VOICE_ATTACH_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.55",
+        "label": "Voice match threshold",
+        "description": "How similar a voice in a recording must be to a known voice before it is attached to that person. Higher is stricter and produces fewer wrong matches but more unknown speakers.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_PERSON_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.7",
+        "label": "Voice likeness to the person",
+        "description": "How similar a voice must be to the average of a person's voices before it joins them. Stops a person drifting from one speaker to the next through a chain of loosely similar voices.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_ASD_PERSON_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.5",
+        "label": "Voice likeness to the person seen speaking",
+        "description": "How similar a voice must be to the average of a person's voices before a face seen speaking with it may join them. Lower than the plain likeness bar, since the face is evidence too; it stops the camera operator's voice going to whoever is in frame.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_VOTE_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.5",
+        "label": "Voice neighbour similarity",
+        "description": "How similar a known voice must be to count as a vote for its person. Voices less alike than this are ignored when deciding who is speaking.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_K",
+        "scope": "system",
+        "type": "number",
+        "default": "24",
+        "label": "Voice neighbours compared",
+        "description": "How many of the most similar known voices are compared with each unknown one.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_MARGIN",
+        "scope": "system",
+        "type": "number",
+        "default": "1.2",
+        "label": "Voice winner margin",
+        "description": "How far the leading person's votes must outweigh the runner-up's before a voice is attached. 1.2 means 20% more; higher leaves close calls unknown.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_MIN_CREATE_SECONDS",
+        "scope": "system",
+        "type": "number",
+        "default": "10",
+        "label": "Speech to start a new person (seconds)",
+        "description": "How long a voice that matches nobody must have spoken in a recording, in all, before it starts a new, unnamed person. Voices heard for less stay unknown.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_ASD_VOTE_WEIGHT",
+        "scope": "system",
+        "type": "number",
+        "default": "0.9",
+        "label": "Lip-sync vote weight",
+        "description": "How much it counts, as a similarity, that a person's face is seen speaking in step with the voice. Only voices someone named or locked are weighed against it.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_VOICE_ASD_MIN_SCORE",
+        "scope": "system",
+        "type": "number",
+        "default": "0.6",
+        "label": "Minimum lip-sync score",
+        "description": "How clearly a face must be seen speaking in step with a voice before that counts as a vote at all.",
+        "group": "Voices"
+      },
+      {
+        "key": "CFG_ALBUM_STACK_THRESHOLD",
+        "scope": "system",
+        "type": "number",
+        "default": "0.75",
+        "label": "Stack similarity",
+        "description": "How alike two neighbouring photos in an album must look to be stacked as one burst. Higher stacks only near-identical shots.",
+        "group": "Albums"
+      },
+      {
+        "key": "CFG_ALBUM_STACK_MAX_GAP_SECONDS",
+        "scope": "system",
+        "type": "number",
+        "default": "10",
+        "label": "Stack time gap (seconds)",
+        "description": "How far apart in capture time two neighbouring photos may be and still be stacked together.",
+        "group": "Albums"
+      }
+    ]
+  },
+  "environment": [
+    {
+      "key": "NOMINATIM_SEARCH_URL",
+      "kind": "option",
+      "default": "https://nominatim.openstreetmap.org/search",
+      "description": "Where geocoding asks Nominatim for an address, as geocode-location and location-region do. Point it at your own server to avoid the public one's rate limit."
+    }
+  ],
+  "nodeTypes": [
+    {
+      "type": "person",
+      "label": "Person",
+      "category": "content",
+      "root": "/archive/people",
+      "description": "Someone in the archive, with names, dates of birth and death, and contact details. Parents, children and partners are links between people; the photos they appear in are found by their faces."
+    },
+    {
+      "type": "device",
+      "label": "Device",
+      "category": "content",
+      "root": "/archive/devices",
+      "description": "A camera, phone or tracker, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right."
+    },
+    {
+      "type": "location",
+      "label": "Location",
+      "category": "content",
+      "root": "/archive/locations",
+      "description": "A location under /archive/locations: its name, the address it was written down with and how that was geocoded, the people who lived there and the photos linked to it. Where it is on the map is its child named position, a point, circle or outline."
+    },
+    {
+      "type": "media-region",
+      "label": "Region",
+      "category": "content",
+      "description": "A box on a photo, kept under the photo's regions/ directory: a face the detector found, a box someone drew, or a tag imported from the old archive. It carries who is in it. A region that shows a usable face has the face's vector as a child named embedding, and only those take part in face recognition."
+    },
+    {
+      "type": "album",
+      "label": "Album",
+      "category": "content",
+      "root": "/archive/albums",
+      "description": "A collection of photos and videos that behaves as a directory. It holds its files, and links the ones added to it from elsewhere. It remembers its cover, the time span of its media, and the stacks of similar photos taken in a row."
+    },
+    {
+      "type": "exif",
+      "label": "EXIF",
+      "category": "content",
+      "description": "The metadata read from a media file — camera, capture time, exposure, position — kept as a child of the file."
+    },
+    {
+      "type": "album-profile",
+      "label": "Album profile",
+      "category": "content",
+      "description": "A summary of a library album's members — their times, days, places, people and a few pictures that stand for how it looks — kept beside it as its .profile child, which staging matches suggested groups against."
+    }
+  ],
+  "roots": [
+    "/archive/people",
+    "/archive/locations",
+    "/archive/devices",
+    "/archive/albums"
+  ],
+  "indexes": [
+    {
+      "name": "event_date",
+      "on": [
+        "date"
+      ],
+      "partial": "eventType"
+    },
+    {
+      "name": "moved_in",
+      "on": [
+        "movedIn"
+      ],
+      "partial": "movedIn"
+    },
+    {
+      "name": "moved_out",
+      "on": [
+        "movedOut"
+      ],
+      "partial": "movedOut"
+    },
+    {
+      "name": "relation_from",
+      "on": [
+        "relation.from"
+      ],
+      "partial": "relation.from"
+    },
+    {
+      "name": "media_stack_album",
+      "on": [
+        "mediaStack.albumId"
+      ],
+      "partial": "mediaStack.albumId"
+    },
+    {
+      "name": "device_taken_utc",
+      "on": [
+        "devicePath",
+        "takenAtUtc"
+      ],
+      "partial": "devicePath"
+    },
+    {
+      "name": "device_serial",
+      "on": [
+        "deviceSerialNumber"
+      ],
+      "partial": "deviceSerialNumber"
+    },
+    {
+      "name": "taken_utc",
+      "on": [
+        "takenAtUtc"
+      ]
+    },
+    {
+      "name": "mime_taken_utc",
+      "on": [
+        "mimetype",
+        "takenAtUtc"
+      ]
+    },
+    {
+      "name": "mime",
+      "on": [
+        "mimetype"
+      ]
+    },
+    {
+      "name": "person",
+      "on": [
+        "personId"
+      ],
+      "partial": "personId"
+    },
+    {
+      "name": "region_file",
+      "on": [
+        "fileId"
+      ],
+      "partial": "fileId"
+    },
+    {
+      "name": "spoken_text",
+      "on": [
+        "text"
+      ],
+      "partial": "text",
+      "using": "trigram"
+    },
+    {
+      "name": "duplicate_found",
+      "on": [
+        "duplicate.inbox",
+        "duplicate.kind",
+        "duplicate.where"
+      ],
+      "partial": "duplicate.kind"
+    },
+    {
+      "name": "duplicate_deferred",
+      "on": ["duplicate.deferred"],
+      "using": "statistics"
+    },
+    {
+      "name": "staging_journal",
+      "on": [
+        "stagingJournal.inbox",
+        "stagingJournal.category",
+        "stagingJournal.at"
+      ],
+      "partial": "stagingJournal.inbox"
+    },
+    {
+      "name": "staging_edit",
+      "on": [
+        "stagingJournal.inbox",
+        "stagingJournal.category",
+        "stagingJournal.at"
+      ],
+      "partial": "stagingEdit.op"
+    },
+    {
+      "name": "time_start",
+      "on": [
+        "timeStart"
+      ],
+      "partial": "timeStart"
+    }
+  ],
+  "ui": {
+    "routes": {
+      "/albums": "ui/media/pages/albums.tsx",
+      "/albums/:id": "ui/media/pages/album.tsx",
+      "/albums/new": "ui/media/pages/new-album.tsx",
+      "/devices": "ui/device/pages/devices.tsx",
+      "/devices/:id": "ui/device/pages/device.tsx",
+      "/devices/new": "ui/device/pages/new-device.tsx",
+      "/duplicates": "ui/media/pages/duplicates.tsx",
+      "/events/anniversary": "ui/pages/events-anniversary.tsx",
+      "/explore/people": "ui/pages/explore-people.tsx",
+      "/explore/locations": "ui/pages/explore-locations.tsx",
+      "/explore/labels": "ui/pages/explore-labels.tsx",
+      "/explore/years": "ui/pages/explore-years.tsx",
+      "/family": "ui/people/pages/family.tsx",
+      "/favourites": "ui/pages/favourites.tsx",
+      "/map": "ui/pages/map.tsx",
+      "/map/pins": "ui/location/pages/map-pins.tsx",
+      "/media": "ui/pages/media.tsx",
+      "/media/:id": "ui/media/pages/media-file.tsx",
+      "/memories/:day": "ui/pages/memories.tsx",
+      "/news/album": "ui/pages/news-album.tsx",
+      "/onthisday/media": "ui/pages/onthisday-media.tsx",
+      "/people": "ui/people/pages/people.tsx",
+      "/people/:id": "ui/people/pages/person.tsx",
+      "/people/new": "ui/people/pages/new-person.tsx",
+      "/people/unknown": "ui/people/pages/unknown-people.tsx",
+      "/locations": "ui/location/pages/locations.tsx",
+      "/locations/:id": "ui/location/pages/location.tsx",
+      "/locations/new": "ui/location/pages/new-location.tsx",
+      "/looks-like": "ui/pages/looks-like.tsx",
+      "/staging": "ui/staging/pages/staging.tsx",
+      "/staging/categories/new": "ui/staging/pages/category-new.tsx",
+      "/staging/categories/:slug": "ui/staging/pages/category.tsx",
+      "/staging/import": "ui/staging/pages/import.tsx",
+      "/start/upload": "ui/staging/pages/start-upload.tsx",
+      "/stats/life-events": "ui/people/pages/life-events.tsx",
+      "/timeline": "ui/pages/timeline.tsx",
+      "/year": "ui/pages/year.tsx"
+    },
+    "open": {
+      "person": "/people/{name}",
+      "location": "/locations/{name}",
+      "album": "/albums/{path}",
+      "device": "/devices/{name}",
+      "track": "/devices/{parent}?tab=track"
+    }
+  }
+}

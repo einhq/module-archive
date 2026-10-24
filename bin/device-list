@@ -1,0 +1,49 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { DEVICES_ROOT, listDevices } from '@archive/device/device';
+
+const deviceList = async (cmd: Command): CmdReturn => {
+  const root = cmd.args[0] || DEVICES_ROOT;
+
+  let devices;
+  try {
+    devices = await listDevices(cmd, root);
+  } catch (error) {
+    await cmd.writeError(`device-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON(devices);
+    return 0;
+  }
+
+  if (devices.length === 0) {
+    await cmd.writeLn('No devices found');
+    return 0;
+  }
+
+  for (const device of devices) {
+    let line = device.name;
+    if (device.make || device.model) line += ` (${[device.make, device.model].filter(Boolean).join(' ')})`;
+    if (device.serialNumber) line += ` [${device.serialNumber}]`;
+    if (device.timezone) line += ` ${device.timezone}`;
+    if (device.digitizer) line += ' [digitizer]';
+    if (device.quicktimeUtc) line += ' [video UTC]';
+    await cmd.writeLn(line);
+  }
+
+  return 0;
+};
+
+deviceList.spec = {
+  name: 'device-list',
+  effect: 'read' as const,
+  description: 'List all devices',
+  args: [
+    { name: 'root', type: 'path' as const, description: `Device directory (default: ${DEVICES_ROOT})` },
+  ],
+  flags: [],
+};
+
+export default deviceList;

@@ -1,0 +1,27 @@
+name: staging-retime
+description: Date staged files again by the time rules of the category they were moved into
+
+# `staging.retime.requested` names a directory moved into a category that dates its files by
+# other clocks than where it came from (a scans category trusts none of a scanner's), or the folder
+# of a file that did. `staging retime` stamps each media original there with its category's rules
+# and resolves its capture time again where they changed; a file already stamped is left alone.
+trigger:
+  on: staging.retime.requested
+
+steps:
+  retime:
+    command: staging retime $NODE_PATH
+    description: Stamp the staged files with their category's time rules and date them again
+    pool: media
+    kind: retime
+    priority: 20
+    requires:
+      cpu: 1
+
+options:
+  # The files of one move into a folder are announced one by one, all for that folder: the hold
+  # lets them arrive before the job is claimed, and one run dates them all.
+  coalesce: rerun
+  debounceMs: 10000
+  maxAttempts: 2
+  priority: 0

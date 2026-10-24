@@ -1,0 +1,163 @@
+#!ts
+/**
+ * device-update — change a device's settings.
+ *
+ * Exists so the UI (and anyone else) has one vocabulary for editing a device
+ * rather than reaching for `attrs -s`: the field names here are the device's,
+ * not the node's, `--serial` writes `serialNumber`, and a timezone is checked
+ * against ICU before it is stored rather than sitting there unusable.
+ *
+ * Clearing is explicit. `--clear timezone` removes the attr; passing an empty
+ * `--timezone ''` does not, because "set it to nothing" and "unset it" are
+ * different intentions and only one of them is ever meant.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs, shq } from '@ein/client';
+import { resolve } from '@std/path';
+import { NODE_TYPE_DEVICE } from '@archive/device/device';
+
+/** Flag → attr name. `serial` is the flag; `serialNumber` is what the node carries. */
+const FIELDS: Record<string, string> = {
+  name: 'name',
+  make: 'make',
+  model: 'model',
+  serial: 'serialNumber',
+  timezone: 'timezone',
+  description: 'description',
+  digitizer: 'digitizer',
+  'quicktime-utc': 'quicktimeUtc',
+};
+
+/** The switches among `FIELDS`: set with the bare flag, unset with `--clear`. */
+const SWITCHES = ['digitizer', 'quicktime-utc'];
+
+const isKnownTimezone = (timezone: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const deviceUpdate = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['name', 'make', 'model', 'serial', 'timezone', 'description'],
+    boolean: SWITCHES,
+    collect: ['clear'],
+  });
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('device-update: missing device path\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, target);
+
+  const clear = (flags.clear ?? []) as string[];
+  for (const field of clear) {
+    if (!(field in FIELDS)) {
+      await cmd.writeError(`device-update: unknown field '${field}' (expected: ${Object.keys(FIELDS).join(', ')})\n`);
+      return 1;
+    }
+  }
+
+  const timezone = flags.timezone as string | undefined;
+  if (timezone !== undefined && timezone !== '' && !isKnownTimezone(timezone)) {
+    await cmd.writeError(`device-update: unknown timezone '${timezone}' (expected an IANA name, e.g. Europe/Stockholm)\n`);
+    return 1;
+  }
+
+  let node;
+  try {
+    node = await cmd.sys.vfs.get(cmd.access, path);
+  } catch {
+    await cmd.writeError(`device-update: ${path}: not found\n`);
+    return 1;
+  }
+  if (node.type !== NODE_TYPE_DEVICE) {
+    await cmd.writeError(`device-update: ${path}: not a device (${node.type})\n`);
+    return 1;
+  }
+
+  const parts: string[] = [];
+  const changed: string[] = [];
+
+  for (const [flag, attr] of Object.entries(FIELDS).filter(([flag]) => !SWITCHES.includes(flag))) {
+    const value = flags[flag as keyof typeof flags] as string | undefined;
+    if (value === undefined) continue;
+    parts.push(`-s ${shq(`${attr}=${value}`)}`);
+    changed.push(attr);
+  }
+
+  for (const flag of SWITCHES) {
+    if (!flags[flag as keyof typeof flags]) continue;
+    parts.push(`-J ${FIELDS[flag]}=true`);
+    changed.push(FIELDS[flag]);
+  }
+
+  for (const field of clear) {
+    const attr = FIELDS[field];
+    // A field both set and cleared in one call is a caller bug, not something
+    // to resolve by ordering — `attrs` would apply whichever landed last.
+    if (changed.includes(attr)) {
+      await cmd.writeError(`device-update: '${field}' is both set and cleared\n`);
+      return 1;
+    }
+    parts.push(`-d ${shq(attr)}`);
+    changed.push(attr);
+  }
+
+  if (parts.length === 0) {
+    await cmd.writeError('device-update: nothing to change (pass a field, or --clear <field>)\n');
+    return 1;
+  }
+
+  const result = await cmd.execute(`attrs ${shq(path)} ${parts.join(' ')}`);
+  if (result.code !== 0) {
+    await cmd.writeError(`device-update: ${path}: ${result.stderr.trim() || 'update failed'}\n`);
+    return 1;
+  }
+
+  // Three registry settings change the meaning of dates on files already linked to this device:
+  // `digitizer` says its clock records the scan rather than the exposure, `timezone` says which
+  // meridian its clock was set to, and `quicktimeUtc` says its videos' `CreateDate` is UTC. Each
+  // moves its files' dates, so they reapply through the indexed file-side devicePath lookup — no
+  // EXIF scan, no exiftool. An unapplied setting is worse than an absent one.
+  const RETIMING_SETTINGS = ['digitizer', 'timezone', 'quicktimeUtc'];
+  let relink: Record<string, unknown> | undefined;
+  if (changed.some((field) => RETIMING_SETTINGS.includes(field))) {
+    const reapplied = await cmd.execute(`JSON_OUTPUT=1 device-relink ${shq(path)} --reapply`);
+    if (reapplied.code !== 0) {
+      await cmd.writeError(`device-update: ${path}: setting saved, but existing media were not updated: ${reapplied.stderr.trim() || 'relink failed'}\n`);
+      return 1;
+    }
+    relink = JSON.parse(reapplied.stdout) as Record<string, unknown>;
+  }
+
+  if (cmd.json) await cmd.writeJSON({ ok: true, path, changed, ...(relink ? { relink } : {}) });
+
+  return 0;
+};
+
+deviceUpdate.spec = {
+  name: 'device-update',
+  effect: 'write' as const,
+  description: "Change a device's settings",
+  args: [
+    { name: 'device', type: 'path' as const, description: 'VFS path to device node' },
+  ],
+  flags: [
+    { name: 'name', type: 'string' as const, description: 'display name' },
+    { name: 'make', type: 'string' as const, description: 'manufacturer, as exif writes it' },
+    { name: 'model', type: 'string' as const, description: 'model, as exif writes it' },
+    { name: 'serial', type: 'string' as const, description: 'serial number (the strong match key)' },
+    { name: 'timezone', type: 'string' as const, description: 'IANA timezone, e.g. Europe/Stockholm' },
+    { name: 'digitizer', type: 'bool' as const, description: 'mark as a scanner and suppress its device dates on linked media' },
+    { name: 'quicktime-utc', type: 'bool' as const, description: "read its videos' QuickTime CreateDate as UTC (phones), not local time" },
+    { name: 'description', type: 'string' as const, description: 'free-text note' },
+    { name: 'clear', type: 'string' as const, description: 'remove a field (repeatable)' },
+  ],
+};
+
+export default deviceUpdate;

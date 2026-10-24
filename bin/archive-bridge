@@ -1,0 +1,298 @@
+#!ts
+/**
+ * archive-bridge — turns VFS mutations into the archive's domain facts.
+ *
+ * Owns a durable queue bound to the handful of VFS routing keys the media and
+ * location rules care about, applies `@archive/event-rules`, and writes the
+ * resulting facts to /dev/events for the pipeline engine to trigger on: a media
+ * file to index or a stage of it done, an album whose members changed, a location
+ * whose position may be out of date, a photo point that may belong to a location.
+ * A fact about a file in a staging category of the bulk lane says so (`lane: 'bulk'`), and
+ * the work it starts runs below everything else.
+ *
+ * The bridge is the only emitter of those facts. Steps stay dumb: they write to
+ * the VFS and the fact follows from what they wrote, so the event stream can
+ * never disagree with what is actually on disk, and a gap can be filled by
+ * replaying the same rules over the tree (see media-scan).
+ *
+ * Delivery is at-least-once end to end: a message is acked only after its facts
+ * are published. A duplicate fact is absorbed by the pipeline's `skipIf` and the
+ * one-instance-per-node rule. That includes a message nacked because one rule set
+ * failed, whose redelivery re-announces what the other already published.
+ *
+ * `ARCHIVE_BRIDGE_CONCURRENCY` (default 4) consumers compete on the one queue, the
+ * same shape the pipeline engine uses. A queue handle allows a single unacked
+ * entry, so concurrency is N handles on the one subscription rather than a faster
+ * loop — and since a message costs a claim, one to three node reads, a publish and
+ * an ack, all of them round trips, that is the part which parallelises.
+ *
+ * Messages are therefore consumed out of order, which the rules already tolerate:
+ * they read the node fresh instead of trusting the event payload, so the fact
+ * derived is a projection of current state whichever order it is derived in. A
+ * removal, read off the payload, describes a node that no longer exists, which no
+ * later event can contradict. Two consumers racing on one subject converge in the
+ * engine, whose trigger pool dedups on `<pipeline>/<nodeId>`.
+ */
+
+import { QUEUES_PATH } from '@ein/paths';
+import type { CmdReturn, Command, NodeQueryCursor, ResourceHandleIf } from '@ein/client';
+import { EVENTS_NODE_PATH, NodeNotFoundError } from '@ein/client';
+import { ulid } from '@std/ulid/ulid';
+import { ARCHIVE_BRIDGE_ROUTING_KEYS, type ArchiveRuleContext, deriveArchiveEvents, type VfsEventInput } from '@archive/event-rules';
+import type { NodeSnapshot } from '@archive/media/event-rules';
+import { SIDECAR_MIMETYPES } from '@archive/media/paired-sidecar';
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** Rows per page of the subtree query behind `unreadFilesWithin`. */
+const WITHIN_PAGE = 500;
+
+const archiveBridge = async (cmd: Command): CmdReturn => {
+  const queuePath = cmd.env.ARCHIVE_BRIDGE_QUEUE || `${QUEUES_PATH}/archive-bridge`;
+  const queueDir = queuePath.slice(0, queuePath.lastIndexOf('/'));
+  const queueName = queuePath.slice(queuePath.lastIndexOf('/') + 1);
+  const concurrency = Math.max(1, Number(cmd.env.ARCHIVE_BRIDGE_CONCURRENCY) || 4);
+
+  // The queue directory's own parent, not the root: with the queues under /var,
+  // pinning it to '/' put a stray /queues beside the real one.
+  await cmd.sys.vfs.ensure(cmd.access, 'directory', queueDir.slice(0, queueDir.lastIndexOf('/')) || '/', queueDir.slice(queueDir.lastIndexOf('/') + 1));
+  await cmd.sys.vfs.ensure(cmd.access, 'queue', queueDir, queueName, {
+    attrs: { routingKeys: ARCHIVE_BRIDGE_ROUTING_KEYS },
+  });
+  // Re-bind in case the rule set changed since the queue node was created.
+  await cmd.sys.vfs.update(cmd.access, queuePath, { attrs: { routingKeys: ARCHIVE_BRIDGE_ROUTING_KEYS } });
+
+  const ctx: ArchiveRuleContext = {
+    getNode: async (path) => {
+      try {
+        const node = await cmd.sys.vfs.get(cmd.access, path);
+        return {
+          id: node.id,
+          type: node.type,
+          attrs: node.attrs as Record<string, unknown>,
+          modtime: typeof node.props.modtime === 'number' ? node.props.modtime : undefined,
+        };
+      } catch {
+        return undefined;
+      }
+    },
+    exists: async (path) => {
+      try {
+        return await cmd.sys.vfs.exists(cmd.access, path);
+      } catch {
+        return false;
+      }
+    },
+    // Every directory the file sits in: the parent of each path its id resolves
+    // to (hard links, the file's own path included) and the parent of each
+    // softlink pointing at it (a file added to an album). Both are indexed
+    // reverse lookups, not walks.
+    containersOf: async (filePath, nodeId) => {
+      const containers = new Set<string>();
+      const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
+
+      try {
+        for (const path of (await cmd.sys.vfs.resolveIdPaths(cmd.access, [nodeId])).get(nodeId) ?? [filePath]) {
+          containers.add(parentOf(path));
+        }
+        for (const link of await cmd.sys.vfs.findLinks(cmd.access, filePath)) {
+          containers.add(parentOf(link.absPath));
+        }
+      } catch (error) {
+        await cmd.writeError(`archive-bridge: ${filePath}: containers lookup failed: ${error}\n`);
+      }
+
+      return [...containers];
+    },
+    // An indexed subtree query, a page at a time by id, rather than a walk. A directory moved
+    // and then removed before its event is read carries nothing; the error would otherwise nack
+    // the event until it is dead-lettered.
+    unreadFilesWithin: async (path) => {
+      const files: { path: string; node: NodeSnapshot }[] = [];
+      let after: NodeQueryCursor | undefined;
+      for (;;) {
+        let rows;
+        try {
+          rows = await cmd.sys.vfs.query(cmd.access, {
+            within: path,
+            types: ['file'],
+            where: [{ ref: 'textIndexedAt', op: 'missing' }],
+            after,
+            limit: WITHIN_PAGE,
+          });
+        } catch (error) {
+          if (error instanceof NodeNotFoundError) return files;
+          throw error;
+        }
+        for (const row of rows) files.push({ path: row.absPath, node: { id: row.id, type: row.node.type, attrs: row.node.attrs as Record<string, unknown> } });
+        // Fewer than a page means none are left.
+        if (rows.length < WITHIN_PAGE) return files;
+        after = { value: null, id: rows[rows.length - 1].id };
+      }
+    },
+    // One indexed lookup of a single row, so a media file landing where no sidecar waits announces nothing.
+    unpairedSidecarsIn: async (path) => {
+      try {
+        const rows = await cmd.sys.vfs.query(cmd.access, {
+          within: path,
+          types: ['file'],
+          where: [{ ref: 'mimetype', op: 'in', value: SIDECAR_MIMETYPES }, { ref: 'sourceId', op: 'missing' }, { ref: 'sidecar', op: 'missing' }],
+          limit: 1,
+        });
+        return rows.length > 0;
+      } catch (error) {
+        await cmd.writeError(`archive-bridge: ${path}: unpaired sidecar lookup failed: ${error}\n`);
+        return true;
+      }
+    },
+    getLink: async (path) => {
+      try {
+        const node = await cmd.sys.vfs.get(cmd.access, path, { follow: false, readlink: true });
+        return { id: node.id, target: node.props.softlink, attrs: node.attrs as Record<string, unknown> };
+      } catch {
+        return undefined;
+      }
+    },
+    hasPoint: async (path) => {
+      try {
+        const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+        try {
+          return (await handle.read(1)).length > 0;
+        } finally {
+          await handle.close();
+        }
+      } catch {
+        return false;
+      }
+    },
+  };
+
+  const abort = new AbortController();
+  let running = true;
+
+  cmd.onInterrupt(() => {
+    running = false;
+    abort.abort();
+  });
+
+  /** Pause between consume retries, resolving early when the bridge is stopping. */
+  const backoff = (ms = 1000): Promise<void> =>
+    new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        abort.signal.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      abort.signal.addEventListener('abort', done, { once: true });
+    });
+
+  // Both tracked as they open, not gathered at the end: a failure partway through
+  // still leaves the successful ones for the shutdown path to close.
+  const queues: ResourceHandleIf[] = [];
+  const opened: ResourceHandleIf[] = [];
+
+  let derived = 0;
+  let failures = 0;
+
+  const consumeLoop = async (queue: ResourceHandleIf, events: ResourceHandleIf): Promise<void> => {
+    while (running) {
+      let event: VfsEventInput;
+
+      try {
+        const bytes = await queue.read(1, abort.signal);
+
+        if (bytes.length === 0) {
+          // Empty means aborted or closed — unless we are still running, in which
+          // case it is a transient blip the queue could not ride out. Backing off
+          // and retrying rather than returning: a return here exits 0, and the
+          // service's `on-failure` restart policy would leave the bridge looking
+          // healthy while the media and location pipelines are deaf.
+          if (!running || abort.signal.aborted) break;
+          await cmd.writeError('archive-bridge: empty queue read while running, retrying\n');
+          await backoff();
+          continue;
+        }
+
+        event = JSON.parse(decoder.decode(bytes)) as VfsEventInput;
+      } catch (error) {
+        if (!running || abort.signal.aborted) break;
+        await cmd.writeError(`archive-bridge: failed to read queue: ${error}\n`);
+        // Backed off, not retried immediately: a read that keeps throwing — a
+        // closed handle, a store that is down — would otherwise spin a core and
+        // emit an error line per iteration.
+        await backoff();
+        continue;
+      }
+
+      try {
+        const facts = await deriveArchiveEvents(event, ctx);
+
+        for (const fact of facts) {
+          await events.write(encoder.encode(JSON.stringify({ id: ulid(), ...fact }) + '\n'));
+          derived++;
+        }
+
+        // Ack only once the facts are out, so a crash mid-derive redelivers.
+        await queue.write(encoder.encode('ack\n'));
+      } catch (error) {
+        await cmd.writeError(`archive-bridge: ${event.path}: ${error}\n`);
+        try {
+          await queue.write(encoder.encode('nack\n'));
+        } catch { /* the queue is going away with us */ }
+      }
+    }
+  };
+
+  try {
+    for (let i = 0; i < concurrency; i++) {
+      const queue = await cmd.sys.vfs.open(cmd.access, queuePath, { mode: 'r+' });
+      queues.push(queue);
+      opened.push(queue);
+    }
+
+    // One append handle for all consumers. Safe to share: the router node's write
+    // decodes the buffer it was handed and publishes each line, holding no state
+    // between calls, so lines from different consumers cannot interleave.
+    const events = await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+    opened.push(events);
+
+    await cmd.write(`archive-bridge running (${queuePath}, ${concurrency} consumers)\n`);
+
+    // allSettled, not all: one consumer throwing must not pull the handles out
+    // from under the others mid-entry. Each rejection is reported and counted.
+    const results = await Promise.allSettled(queues.map((queue) => consumeLoop(queue, events)));
+
+    for (const result of results) {
+      if (result.status === 'rejected') {
+        failures++;
+        await cmd.writeError(`archive-bridge: consumer failed: ${result.reason}\n`);
+      }
+    }
+  } finally {
+    cmd.onInterrupt(null);
+    // Closing a queue handle auto-nacks whatever that consumer still holds, so it
+    // is redelivered rather than sitting locked until its lease lapses.
+    await Promise.allSettled(opened.map((handle) => handle.close()));
+  }
+
+  await cmd.write(`archive-bridge stopped (${derived} events emitted)\n`).catch(() => {});
+
+  // Non-zero when a consumer died, so the service's `on-failure` policy restarts
+  // us. Exiting 0 leaves the service looking healthy while the pipelines are deaf
+  // to whatever share of the queue that consumer would have taken.
+  return failures > 0 ? 1 : 0;
+};
+
+archiveBridge.spec = {
+  name: 'archive-bridge',
+  effect: 'write' as const,
+  description: 'Derive media and location domain events from VFS mutations (long-running)',
+  examples: [
+    'archive-bridge',
+  ],
+  returns: 'nothing; it runs until stopped, turning VFS mutations into media and location events.',
+};
+
+export default archiveBridge;

@@ -1,0 +1,55 @@
+#!ts
+/** Remove one region and clean up its now-empty unnamed person. */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import { releasePerson } from '@archive/people/person';
+import { imageOfRegion, REGION_TYPE } from '@archive/media/regions';
+
+type FaceAttrs = { personId?: string };
+
+const faceRemove = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const facePath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!imageOfRegion(facePath)) {
+    await cmd.writeError('face-remove: expected a region path directly below an image regions directory\n');
+    return 1;
+  }
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const face = await vfs.get<FaceAttrs>(access, facePath, { follow: false }).catch(() => undefined);
+  if (!face || face.type !== REGION_TYPE) {
+    await cmd.writeError(`face-remove: ${facePath}: not a region\n`);
+    return 1;
+  }
+
+  await vfs.unlink(access, facePath, dirname(facePath), { recursive: true });
+
+  const personId = face.attrs.personId;
+  const { personPath, personRemoved, representativeChanged } = personId
+    ? await releasePerson(vfs, access, personId, new Set([face.id]))
+    : { personPath: null, personRemoved: false, representativeChanged: false };
+
+  const result = { faceId: face.id, facePath, personId: personId ?? null, personPath, personRemoved, representativeChanged };
+  if (cmd.json) await cmd.writeJSON(result);
+  else await cmd.writeLn(`Removed ${facePath}${personRemoved ? ` and empty unnamed person ${personPath}` : ''}`);
+  return 0;
+};
+
+faceRemove.spec = {
+  name: 'face-remove',
+  effect: 'write' as const,
+  description: "Remove a face and its person when it was the person's only unidentified face",
+  args: [{ name: 'face', type: 'path' as const, description: 'VFS path to a region' }],
+  flags: [],
+  examples: [
+    'face-remove /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg/regions/face-1',
+  ],
+  returns: 'nothing; the face is removed.',
+};
+
+export default faceRemove;

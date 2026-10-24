@@ -1,0 +1,38 @@
+name: media-stills
+description: Still pictures of every media file — a photo's sizes and face crops, a video's poster frames, an audio file's waveform
+
+# Cheap still-image work for every media type, kept apart from media-transcode
+# (which re-encodes video and audio) so a failed encode never takes the poster
+# frame down with it.
+trigger:
+  on: media.metadata.extracted
+  # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
+  # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
+  # three attempts of the same permanent answer only make a corrupt original look like a
+  # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
+  skipIfAttr: undecodable
+
+steps:
+  stills:
+    command: generate-derivatives $NODE_PATH --only still
+    description: Thumbnail and display-size pictures
+    pool: media
+    kind: stills
+    priority: 60
+    requires:
+      cpu: 1
+  device-cover:
+    command: device-cover --media $NODE_PATH
+    description: Offer a video's poster frame to its device as a cover
+    dependsOn: [stills]
+    # device-link covers a device as it links each file, which for a video is usually before
+    # its poster frame exists: a device that took only videos would stay uncovered. Only a
+    # video with device information gets here; an image is covered at link time, as it needs
+    # no rendition to be picked.
+    condition: |
+      case "$EVENT_MIMETYPE" in video/*) ;; *) exit 1;; esac
+      [ -n "$EVENT_DEVICE_KEY" ]
+
+options:
+  maxAttempts: 3
+  priority: 15

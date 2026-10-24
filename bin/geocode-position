@@ -1,0 +1,166 @@
+#!ts
+import type { GeocodePositionResult } from '@archive/location/api';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { NOMINATIM_REVERSE_URL, nominatimFetch } from '@archive/location/geocode';
+
+const geocodePosition = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['force', 'verbose'],
+    alias: { f: 'force', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? String(flags._[0]) : '';
+  const force = Boolean(flags.force);
+  const verbose = Boolean(flags.verbose);
+
+  if (!inputPath) {
+    await cmd.writeError('geocode-position: missing position path\n');
+    return 1;
+  }
+
+  // Validate it's a position node
+  const infoResult = await cmd.execute(`JSON_OUTPUT=1 info ${shq(inputPath)}`);
+  if (infoResult.code !== 0) {
+    await cmd.writeError(`geocode-position: ${inputPath}: ${infoResult.stderr}\n`);
+    return 1;
+  }
+  const nodeInfo = JSON.parse(infoResult.stdout);
+  if (nodeInfo.type !== 'position') {
+    await cmd.writeError(`geocode-position: ${inputPath}: not a position node (is ${nodeInfo.type})\n`);
+    return 1;
+  }
+
+  // Check if already geocoded
+  if (!force) {
+    const attrsResult = await cmd.execute(`JSON_OUTPUT=1 attrs ${shq(inputPath)}`);
+    if (attrsResult.code === 0) {
+      const attrs = JSON.parse(attrsResult.stdout);
+      if (attrs.geocodedAt) {
+        if (verbose) await cmd.writeLn(`Already geocoded at ${attrs.geocodedAt}, skipping (use --force to re-geocode)`);
+        if (cmd.json) await cmd.writeJSON({ skipped: 'geocoded already', geocodedAt: String(attrs.geocodedAt) } satisfies GeocodePositionResult);
+        return 0;
+      }
+    }
+  }
+
+  // Read lat/lng from the position node
+  const locHandle = await cmd.sys.vfs.open(cmd.access, inputPath, { mode: 'r' });
+  let lat: number;
+  let lng: number;
+  try {
+    const data = await locHandle.read(4096);
+    if (data.length === 0) {
+      // A position node with no coordinates yet — `media.position.available` fires on the
+      // node's creation, and an uploader can create the node before it writes the point.
+      // There is nothing to look up and nothing a retry would change, so this is not a
+      // failure: the next write to the node announces it again.
+      if (verbose) await cmd.writeLn(`${inputPath}: no position data yet, nothing to geocode`);
+      if (cmd.json) await cmd.writeJSON({ skipped: 'no position data' } satisfies GeocodePositionResult);
+      return 0;
+    }
+    const json = JSON.parse(new TextDecoder().decode(data));
+    lat = json.lat;
+    lng = json.lng;
+  } finally {
+    await locHandle.close();
+  }
+
+  if (typeof lat !== 'number' || typeof lng !== 'number') {
+    await cmd.writeError(`geocode-position: ${inputPath}: invalid position data\n`);
+    return 1;
+  }
+
+  if (verbose) await cmd.writeLn(`Geocoding ${lat}, ${lng}...`);
+
+  // Call Nominatim reverse geocoding.
+  //
+  // The pacing and the 429 handling are the shared ones from @archive/location/geocode, not a
+  // local sleep: the 1 req/s policy belongs to the public instance, and the forward geocoder
+  // calls the same host. A counter of our own here would let the two of us issue two requests per
+  // second between us. `media-geocode` runs this once per GPS-bearing file, so an album of phone
+  // photos arrives as a burst, and a refused request is lost silently: the node never gets a
+  // `geocodedAt`, and nothing retries.
+  const url = new URL(cmd.env.NOMINATIM_REVERSE_URL || NOMINATIM_REVERSE_URL);
+  url.searchParams.set('lat', String(lat));
+  url.searchParams.set('lon', String(lng));
+  url.searchParams.set('format', 'json');
+  url.searchParams.set('zoom', '18');
+
+  let response: Response;
+  try {
+    response = await nominatimFetch(url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await cmd.writeError(`geocode-position: ${message}\n`);
+    return 1;
+  }
+
+  const result = await response.json();
+  const address = result.address || {};
+
+  // Extract address fields
+  const country = address.country || '';
+  const state = address.state || '';
+  const city = address.city || address.town || address.village || address.municipality || '';
+  const suburb = address.suburb || address.neighbourhood || '';
+  const road = address.road || '';
+  const houseNumber = address.house_number || '';
+  const postcode = address.postcode || '';
+  // The answer's own name is the place the point is at — a museum, a campsite — when it is one;
+  // for a point on a street or in a town it is only that street's or that town's name again.
+  const name = typeof result.name === 'string' ? result.name.trim() : '';
+  const poi = name && name !== road && name !== city ? name : '';
+  const displayName = result.display_name || '';
+  const geocodedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+  // Set attrs on the position node. Written straight through the VFS, so an
+  // address with an apostrophe in it ("O'Connell") needs no shell quoting.
+  await cmd.sys.vfs.update(cmd.access, inputPath, {
+    attrs: {
+      ...(country ? { country } : {}),
+      ...(state ? { state } : {}),
+      ...(city ? { city } : {}),
+      ...(suburb ? { suburb } : {}),
+      ...(road ? { road } : {}),
+      ...(houseNumber ? { houseNumber } : {}),
+      ...(postcode ? { postcode } : {}),
+      ...(poi ? { poi } : {}),
+      ...(displayName ? { displayName } : {}),
+      geocodedAt,
+    },
+  });
+
+  // Output
+  if (cmd.json) {
+    await cmd.writeJSON({ country, state, city, suburb, road, houseNumber, postcode, poi, displayName, geocodedAt } satisfies GeocodePositionResult);
+  } else {
+    await cmd.writeLn(`Geocoded ${inputPath}`);
+    if (displayName) await cmd.writeLn(`  ${displayName}`);
+  }
+
+  return 0;
+};
+
+geocodePosition.spec = {
+  name: 'geocode-position',
+  effect: 'write' as const,
+  description: "Reverse geocode a file's position node using Nominatim (OSM)",
+  args: [
+    { name: 'path', type: 'path' as const, description: 'VFS path to a position node, <file>/position' },
+  ],
+  flags: [
+    { name: 'f', type: 'bool' as const, description: 'Force re-geocode even if cached' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: [
+    'geocode-position /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg/position',
+  ],
+  returns: 'the address the coordinates resolved to.',
+};
+
+export default geocodePosition;

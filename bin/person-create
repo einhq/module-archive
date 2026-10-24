@@ -1,0 +1,39 @@
+#!bash
+arg --desc "Create a person node"
+arg --effect write
+arg '<target>' path "VFS path for the person node"
+arg -n --name string "Display name"
+arg -f --fullname string "Full name"
+arg -g --gender string "Gender: male, female, other, unknown"
+arg -b --born string "Birth date (YYYY[-MM[-DD]])"
+arg -d --died string "Death date (YYYY[-MM[-DD]])"
+arg -a --allergies string "Allergy notes"
+arg --example "person-create /archive/people/Disa_Exempel --name 'Disa Exempel' --born 2019-01-01"
+arg --returns "nothing; the person node is created."
+arg --export
+
+if [ -z "$TARGET" ]; then
+  echo "person-create: missing target path" >&2
+  exit 1
+fi
+
+if [ -z "$NAME" ]; then
+  echo "person-create: missing --name" >&2
+  exit 1
+fi
+
+TARGET=$(abspath "$TARGET")
+
+# Ensure parent exists
+mkdir -p $(dirname "$TARGET")
+
+# mknode skips --as attributes with empty values, so unset flags are dropped
+mknode -t person "$TARGET" --as "name=$NAME" --as "fullname=$FULLNAME" --as "gender=$GENDER" --as "born=$BORN" --as "died=$DIED" --as "allergies=$ALLERGIES"
+
+if [ $? -ne 0 ]; then
+  echo "person-create: failed to create person node" >&2
+  exit 1
+fi
+
+# Create events subdirectory
+mkdir "$TARGET/events"

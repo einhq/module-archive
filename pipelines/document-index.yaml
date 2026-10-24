@@ -1,0 +1,76 @@
+name: document-index
+description: Extract text and create embeddings for document files
+
+# One trigger body on two events: a file is indexed when it is written, and when it is moved,
+# which is how a staged file leaves staging unindexed. The third trigger is `media-scan`'s gap
+# for a file neither event reached; the fact is decided by the same mimetypes as the filter
+# (`isTextIndexedMimetype`), and the paths are excluded here as for the events.
+triggers:
+  - &trigger
+    event: updated
+    nodeType: file
+    # Paths never read, skipped before any shell runs: a write under one costs no filter
+    # evaluation however many there are. `*` is one name, `**` crosses `/`.
+    unless: &unread
+      nodePath:
+        # A staged file is read once it is filed, not while it waits: an import of thousands of
+        # sidecars costs no extraction. media-ocr leaves out the same paths for pictures.
+        - '/home/*/staging/**'
+        # EiN's own state, configuration and code: service logs, pipeline scratch and session
+        # state are text/plain file nodes that every append writes again. Indexed, they would
+        # spend model-server calls and put log noise into semantic search results.
+        - '/var/**'
+        - '/etc/**'
+        - '/usr/**'
+        - '/dev/**'
+        - '/tmp/**'
+        # Dotfiles anywhere, a trash among them: a staged file put in the trash is moved to
+        # /home/<user>/.trash/<entry>/, and shell history and settings are text files.
+        - '**/.**'
+        # A node's own metadata: index-document's output (metadata/content, text/plain), which
+        # indexed would read back the text it was made from, and an album's description, which
+        # is text about the album rather than a document in it.
+        - '**/metadata/**'
+    # Declarative, so an already-indexed file costs one node read instead of two shell
+    # evaluations. The engine checks skipIfAttr *before* filter and skipIf, and both of those
+    # are scripts on the engine's single shared shell — under a crawl that shell is the queue
+    # every trigger waits in, and a builtin there costs ~39ms, `attrs | jq` far more. Nearly
+    # every updated event on an indexed file lands here, so this is the common path, not an
+    # optimisation for a corner.
+    # index-document sets textIndexedAt whether it found text or not, so this is also the
+    # "already tried" check. Derived files are left out by the engine (no allowDerived).
+    skipIfAttr: textIndexedAt
+    filter: |
+      case "$MIMETYPE" in
+        application/pdf|text/plain) exit 0;;
+        application/vnd.openxmlformats-officedocument.wordprocessingml.document) exit 0;;
+        application/vnd.oasis.opendocument.text) exit 0;;
+        # Pictures are read by media-ocr, on the media pool.
+        text/markdown) exit 1;;
+        # JSON and XMP sidecars (application/json, application/rdf+xml) are metadata, not
+        # documents.
+        *) exit 1;;
+      esac
+  - <<: *trigger
+    event: moved
+  - on: media.text.missing
+    # The documents of the filter above; a picture's gap is media-ocr's.
+    match:
+      mimetype:
+        - application/pdf
+        - text/plain
+        - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+        - application/vnd.oasis.opendocument.text
+    unless: *unread
+    skipIfAttr: textIndexedAt
+
+steps:
+  extract-text:
+    command: index-document $NODE_PATH
+    description: Extract text, create summary and embedding
+
+options:
+  maxAttempts: 3
+  # The bottom priority: extraction is the cheap, numerous, less valuable work, and the engine
+  # hands its permits out by priority, so media work takes them first.
+  priority: 0

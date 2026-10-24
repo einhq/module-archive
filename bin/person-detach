@@ -1,0 +1,253 @@
+#!ts
+/**
+ * person-detach — take individual faces off a person.
+ *
+ * `person-merge` moves an identity wholesale; there was no way back at face
+ * granularity. Recognition fuses two people on one weak edge, or parks a hand
+ * and a slice of watermelon under a name, and until now the reviewer's only
+ * options were to endorse that by naming it or to leave it alone.
+ *
+ * Four modes, which are four different things a reviewer means:
+ *
+ *   --to-new-person   these are somebody else       -> mint an unnamed person
+ *   --to <person>     these are *that* person       -> move them there
+ *   --rematch         these are not *this* person   -> recognition decides again, without them
+ *   (none)            these are not a person at all -> unassign and lock
+ *
+ * `--rematch` is for a reviewer who knows who a face is not, but not who it is. The face
+ * keeps the person it left in `rejectedPersonIds`, which the voting in `@archive/media/face-cluster`
+ * honours, and `assign-faces` runs on its image at once: it lands on another known person,
+ * seeds a new unnamed one, or — too small or doubtful to seed — stays unassigned for the
+ * next `cluster-faces` pass. The faces are decided one by one, not moved as a group.
+ *
+ * The bare mode is the first writer of `assignLocked`. The flag has been read by
+ * `cluster-faces` and `face-assign` from the start and written by nothing, which
+ * made "not a person" unexpressible: clearing personId alone just invites the
+ * next assign-faces run to put it straight back.
+ *
+ * The two targeted modes write `personSource: 'manual'`, the same marker
+ * `person-merge` and `person-name` use, so `face-reset --source auto|cluster`
+ * cannot undo a human's decision.
+ *
+ * Every person a face left is tidied up as `face-remove` does: an unnamed one left holding
+ * nothing is deleted, and anyone else whose representative face left gets another.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import { createUnnamedPerson, type FaceNodeAttrs, NOT_A_PERSON, type PersonNodeAttrs, personPathOf, releasePerson, type UnnamedPerson } from '@archive/people/person';
+import { REGION_TYPE } from '@archive/media/regions';
+
+/** Where one rematched face ended up; `person` is null when recognition left it unassigned. */
+type Rematched = { facePath: string; person: { id: string; path: string; name: string; unnamed: boolean } | null };
+
+/** The face's rejected people plus the one it is leaving now. */
+const rejectedWith = (attrs: FaceNodeAttrs): string[] => {
+  const previous = Array.isArray(attrs.rejectedPersonIds) ? attrs.rejectedPersonIds : [];
+  return [...new Set([...previous, ...(attrs.personId ? [attrs.personId] : [])])];
+};
+
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+const personDetach = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['to'],
+    boolean: ['to-new-person', 'rematch', 'dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const facePaths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, arg));
+  if (facePaths.length === 0) {
+    await cmd.writeError('person-detach: usage: person-detach <facePath...> [--to <person> | --to-new-person]\n');
+    return 1;
+  }
+  if ([flags.to, flags['to-new-person'], flags.rematch].filter(Boolean).length > 1) {
+    await cmd.writeError('person-detach: --to, --to-new-person and --rematch are mutually exclusive\n');
+    return 1;
+  }
+  const rematch = !!flags.rematch;
+
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const dryRun = !!flags['dry-run'];
+  const verbose = !!flags.verbose;
+
+  const detached: string[] = [];
+  const failed: { facePath: string; error: string }[] = [];
+  /** The ids of the faces each person lost, by that person's id. */
+  const left = new Map<string, Set<string>>();
+  const removedPeople: string[] = [];
+
+  try {
+    // Read every face first. Minting a person for a batch that turns out to hold
+    // a bad path would leave an empty person behind.
+    const faces: { path: string; attrs: FaceNodeAttrs; id: string }[] = [];
+    for (const facePath of facePaths) {
+      try {
+        const node = await vfs.get<FaceNodeAttrs>(access, facePath, { follow: false });
+        const isVoice = node.type === 'embedding' && node.attrs.embeddingType === 'voice';
+        if (node.type !== REGION_TYPE && !isVoice) throw new Error(`not a region or a voice (is ${node.type})`);
+        // `assign-faces` is the matcher being asked again: it needs a face's vector. Voices have
+        // their own matcher, and a tag has nothing to match with — it would only lose its person.
+        if (rematch && (isVoice || !(await vfs.exists(access, `${facePath}/embedding`, { follow: false })))) {
+          throw new Error('--rematch takes detected faces only, not tags or voices');
+        }
+        faces.push({ path: facePath, attrs: node.attrs, id: node.id });
+      } catch (error) {
+        failed.push({ facePath, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    let target: UnnamedPerson | undefined;
+    if (flags.to) {
+      const targetPath = personPathOf(flags.to, cmd.cwd);
+      const node = await vfs.get<PersonNodeAttrs>(access, targetPath, { follow: false });
+      if (node.type !== 'person') throw new Error(`${targetPath}: not a person node (is ${node.type})`);
+      target = { id: node.id, path: targetPath, name: (node.attrs as PersonNodeAttrs).name ?? targetPath.split('/').pop() ?? '' };
+    } else if (flags['to-new-person'] && faces.length > 0 && !dryRun) {
+      // This command works on any embedding node carrying the person contract, which is now
+      // voices as well as faces. A split-off voice has no crop to represent it, so it must
+      // not be recorded as face-originated with a representative pointing at audio — that
+      // would send anything resolving a thumbnail looking for an image that cannot exist.
+      const voicesOnly = faces.every((f) => f.attrs.embeddingType === 'voice');
+      if (voicesOnly) {
+        target = await createUnnamedPerson(vfs, access, { createdBy: 'person-detach', origin: 'voice' });
+      } else {
+        // The most confident detection represents the new person, matching what
+        // cluster-faces and assign-faces record when they mint one.
+        const best = faces.reduce((a, b) => ((b.attrs.confidence ?? 0) > (a.attrs.confidence ?? 0) ? b : a));
+        target = await createUnnamedPerson(vfs, access, { createdBy: 'person-detach', representativeFaceId: best.id });
+      }
+    }
+
+    for (const face of faces) {
+      if (dryRun) {
+        detached.push(face.path);
+        if (verbose) await cmd.writeLn(`would detach ${face.path}`);
+        continue;
+      }
+      try {
+        // null removes the key (see NodeAttrsUpdate), so an unassigned face is
+        // indistinguishable from a freshly detected one apart from the lock.
+        const attrs: Record<string, string | string[] | boolean | null> = rematch
+          ? {
+            personId: null,
+            personSource: null,
+            personConfidence: null,
+            personAssignedAt: null,
+            assignLocked: null,
+            rejectedPersonIds: rejectedWith(face.attrs),
+          }
+          : target
+          ? {
+            personId: target.id,
+            personSource: 'manual',
+            personConfidence: null,
+            personAssignedAt: nowIso(),
+            // An explicit human assignment: the lock has done its job.
+            assignLocked: null,
+          }
+          : NOT_A_PERSON;
+
+        await vfs.update(access, face.path, { follow: false, attrs });
+        detached.push(face.path);
+        const previous = face.attrs.personId;
+        if (previous && previous !== target?.id) left.set(previous, (left.get(previous) ?? new Set()).add(face.id));
+        if (verbose) await cmd.writeLn(`${face.path} -> ${target ? target.path : 'unassigned (locked)'}`);
+      } catch (error) {
+        failed.push({ facePath: face.path, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+
+    // Decide the rematched faces now rather than leave them for the nightly clustering: the
+    // reviewer is looking at the page and wants to see where they went. One run per image,
+    // since `assign-faces` decides every unassigned face of an image together.
+    const rematched: Rematched[] = [];
+    if (rematch && !dryRun && detached.length > 0) {
+      const images = [...new Set(detached.map((path) => dirname(dirname(path))))];
+      for (const image of images) {
+        const run = await cmd.execute(`assign-faces ${shq(image)}`);
+        if (run.code !== 0) await cmd.writeError(`person-detach: assign-faces ${image}: ${run.stderr.trim()}\n`);
+      }
+      const landed = await Promise.all(detached.map((path) => vfs.get<FaceNodeAttrs>(access, path, { follow: false })));
+      const ids = [...new Set(landed.map((node) => node.attrs.personId).filter((id): id is string => !!id))];
+      const paths = ids.length > 0 ? await vfs.resolveIdPaths(access, ids) : new Map<string, string[]>();
+      const people = ids.length > 0 ? await vfs.getNodesByIds<PersonNodeAttrs>(access, ids) : new Map();
+      detached.forEach((facePath, index) => {
+        const personId = landed[index].attrs.personId ?? undefined;
+        const person = personId ? people.get(personId) : undefined;
+        rematched.push({
+          facePath,
+          person: personId ? { id: personId, path: paths.get(personId)?.[0] ?? '', name: person?.attrs.name ?? '', unnamed: person?.attrs.unnamed === true } : null,
+        });
+      });
+    }
+
+    for (const [personId, gone] of left) {
+      const released = await releasePerson(vfs, access, personId, gone);
+      if (released.personRemoved && released.personPath) removedPeople.push(released.personPath);
+    }
+
+    const ok = failed.length === 0;
+    // A dry run never mints, so `target` is undefined even with --to-new-person.
+    // Say what would happen rather than describing the mode it did not take.
+    const destination = target ? target.path : flags['to-new-person'] ? 'a new unnamed person' : rematch ? 'recognition' : 'unassigned (locked)';
+
+    if (cmd.json) {
+      await cmd.writeJSON({
+        ok,
+        detached: detached.length,
+        locked: target || flags['to-new-person'] || rematch ? 0 : detached.length,
+        person: target ?? null,
+        ...(rematch ? { rematched } : {}),
+        removedPeople,
+        failed,
+        dryRun,
+      });
+      return ok ? 0 : 1;
+    }
+
+    await cmd.writeLn(
+      `${detached.length} face${detached.length === 1 ? '' : 's'} -> ${destination}` +
+        (dryRun ? ' (dry run)' : ''),
+    );
+    for (const entry of rematched) {
+      await cmd.writeLn(`  ${entry.facePath} -> ${entry.person ? entry.person.path : 'unassigned'}`);
+    }
+    for (const path of removedPeople) await cmd.writeLn(`removed empty unnamed person ${path}`);
+    for (const failure of failed) {
+      await cmd.writeError(`person-detach: ${failure.facePath}: ${failure.error}\n`);
+    }
+    return ok ? 0 : 1;
+  } catch (error) {
+    await cmd.writeError(`person-detach: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+personDetach.spec = {
+  name: 'person-detach',
+  effect: 'write' as const,
+  description: 'Take faces off a person: to a new unnamed person, to an existing one, or off identity entirely',
+  args: [
+    { name: 'facePath...', type: 'path' as const, description: 'regions or voices, e.g. /albums/x.jpg/regions/face-0' },
+  ],
+  flags: [
+    { name: 'to', type: 'string' as const, description: 'move the faces to this person (path or bare unknown id)' },
+    { name: 'to-new-person', type: 'bool' as const, description: 'mint one unnamed person and move the faces there' },
+    { name: 'rematch', type: 'bool' as const, description: 'not this person: let recognition place each face again, never back on the person it left' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would move without changing anything' },
+    { name: 'verbose', type: 'bool' as const, description: 'print each face' },
+  ],
+  examples: [
+    'person-detach --rematch /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg/regions/face-1',
+    'person-detach --to-new-person /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg/regions/face-1',
+  ],
+  returns: 'which faces moved, and to whom, and the unnamed people left empty and removed.',
+};
+
+export default personDetach;
