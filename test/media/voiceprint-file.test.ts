@@ -129,6 +129,41 @@ Deno.test({
       // The video's rotation reached EMS, so the faces were found the way the video is shown.
       const asked = stub.requests.filter((r) => r.op === 'speech.active_speakers').at(-1)!;
       assertEquals((asked.body.file as { angle: number }).angle, 90);
+      assertEquals(s1.asdRegionId, null);
+    });
+
+    await t.step("a face seen speaking is tied to the video's own face on screen then", async () => {
+      const video = await recording('fest.mp4', 'video/mp4');
+      const region = async (name: string, appearances: [number, number][], vector: number[]) => {
+        const path = `${video}/regions/${name}`;
+        await cmd.shouldSucceed(`mkdir -p ${video}/regions`);
+        await cmd.shouldSucceed(`mknode -t media-region ${path}`);
+        await vfs.update(ADMIN_ACCESS, path, { attrs: { appearances } });
+        await cmd.shouldSucceed(`mknode -t embedding ${path}/embedding --as embeddingType=face --an capacity=4`);
+        const handle = await vfs.open(ADMIN_ACCESS, `${path}/embedding`, { mode: 'w' });
+        await handle.write(new TextEncoder().encode(JSON.stringify(vector)));
+        await handle.close();
+        return (await vfs.get(ADMIN_ACCESS, path)).id;
+      };
+      // Anna on screen early, nobody's yet; someone else beside her and on after her; Anna again,
+      // her face matching the speaking one better, but only after the moment it was seen.
+      const early = await region('face-0', [[0, 4]], [0, 0.2, 1, 0]);
+      await region('face-1', [[3, 9]], [0, 0, 0, 1]);
+      await region('face-2', [[10, 12]], [0, 0, 1, 0]);
+      faces = [
+        { id: 'speaker_1', score: 0.9, t: 3.5, box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: [0, 0, 1, 0] },
+        { id: 'speaker_0', score: 0.7, t: 6, box: { x: 0.5, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: [0, 0, 1, 0] },
+      ];
+
+      const out = await run(video);
+      assertEquals(out.success, true, out.error);
+      const speakersDir = `${video}/metadata/transcript/speakers`;
+      const s1 = await attrsOf(`${speakersDir}/s1`);
+      assertEquals([s1.asdRegionId, s1.asdPersonId, s1.asdScore], [early, 'p-anna', 0.9]);
+      // At 6 s only someone else is on screen: no region of this video is the face, and the
+      // archive-wide match still names it.
+      const s0 = await attrsOf(`${speakersDir}/s0`);
+      assertEquals([s0.asdRegionId, s0.asdPersonId], [null, 'p-anna']);
     });
   } finally {
     await stub.close();

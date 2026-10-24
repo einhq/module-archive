@@ -32,7 +32,12 @@ export type SpeakerAttrs = {
   turns: Span[];
   talkSeconds: number;
   turnCount: number;
-  /** The person whose face was seen speaking with this voice, when one was, and how surely. */
+  /**
+   * The face seen speaking with this voice, on a video: the region of the video's own faces it is
+   * (@archive/media/speaker-faces), the person it was recognised as among all the archive's faces,
+   * and how surely its lips moved with the voice.
+   */
+  asdRegionId: string | null;
   asdPersonId: string | null;
   asdScore: number | null;
   personId: string | null;

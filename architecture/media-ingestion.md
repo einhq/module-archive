@@ -1552,10 +1552,16 @@ call per recording): EMS scores up to 4 s of each voice's longest turns at 25 fp
 decoding the video once, and answers per voice the face whose lips moved with it and that face's
 embedding. The model only reads what it was trained on, so EMS feeds it as LR-ASD's own pipeline
 does — the lower face cropped square from the smoothed track, MFCCs of 16-bit samples; fed a
-whole-head crop and float samples it scored a woman talking to the camera at 0.1. A face recognition knows — found among the archive's faces, its person read from the
-region the hit belongs to (`@archive/media/speaker-faces`) — becomes the voice's `asdPersonId`.
-The faces the video shows are found apart from this, by `media-video-faces`: lip-sync looks only
-at a few seconds of each voice, and only to tie a voice to a face.
+whole-head crop and float samples it scored a woman talking to the camera at 0.1. The face is
+tied to the video's own face region it is (`@archive/media/speaker-faces`): of the regions on
+screen when it was seen (their `appearances` cover its `t`), the one whose vector is nearest, if
+near enough (cosine 0.5) — the voice's `asdRegionId`. Faces on screen together are different
+people, so the nearest of them is the one even where another video shows the same person more
+alike. The face is also searched among all the archive's faces, its person read from the region
+the hit belongs to — the voice's `asdPersonId`. The faces the video shows are found apart from
+this, by `media-video-faces`: lip-sync looks only at a few seconds of each voice, and only to tie
+a voice to a face. A voice printed before its video's faces are detected has no region
+(ein/core#728).
 
 `assign-speakers` and `cluster-voices` mirror `assign-faces` and `cluster-faces` and share their
 voting core. A voice is decided as a whole, on far more voice than any turn carries, and the
@@ -1563,8 +1569,11 @@ diarizer's word holds as a photo's does for faces: two voices of one recording n
 other and never go to the same person automatically — a diarizer that split one person in two is
 a merge to fix, two people fused into one would have to be found first. The gate on founding a new
 identity is how long the voice spoke in all (`CFG_VOICE_MIN_CREATE_SECONDS`, 10 s). A recognised
-face seen speaking (`asdScore` at least `CFG_VOICE_ASD_MIN_SCORE`, 0.6) is one more vote, and
-against it only voices a person named or locked are counted: automatic assignments are earlier
+face seen speaking (`asdScore` at least `CFG_VOICE_ASD_MIN_SCORE`, 0.6) is one more vote: for the
+person of the voice's region as it is when the voice is decided — a face named before then, or
+before an `assign-speakers --reassign`, names the voice with it (ein/core#728); for nobody when a person locked the region as no one or rejected the archive-wide match;
+for that match while the region names no one or is gone. Against it only voices a person named
+or locked are counted: automatic assignments are earlier
 runs' guesses, and an unnamed voice that has swept up a few hundred recordings would outvote any
 face. Neighbours vote, but a voice joins the person they elect only when it is also like the mean
 of every voice that person already holds (`CFG_VOICE_PERSON_THRESHOLD`, cosine 0.7): each

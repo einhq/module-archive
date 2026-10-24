@@ -72,6 +72,23 @@ Deno.test({
     return path;
   };
 
+  /** A face region of a recording, on screen throughout, with the person fields given. */
+  const addRegion = async (file: string, name: string, attrs: Record<string, unknown>) => {
+    const path = `${file}/regions/${name}`;
+    await client.exec(`mkdir -p ${file}/regions`);
+    await client.exec(`mknode -t media-region ${path}`);
+    await vfs.update(ADMIN_ACCESS, path, { attrs: { appearances: [[0, 30]], ...attrs } });
+    return (await vfs.get(ADMIN_ACCESS, path)).id;
+  };
+
+  /** A direction no other voice of these tests is near. */
+  const alone = (i: number) => Array.from({ length: DIM }, (_, j) => (j === 3 * BLOCK + 8 + i ? 1 : 0));
+
+  const newPerson = async (name: string) => {
+    await client.exec(`mknode -t person ${PEOPLE_ROOT}/${name}`);
+    return (await vfs.get(ADMIN_ACCESS, `${PEOPLE_ROOT}/${name}`)).id;
+  };
+
   try {
     await client.exec(`mkdir -p ${PEOPLE_ROOT}`);
 
@@ -286,6 +303,49 @@ Deno.test({
 
       await client.execJson<Summary>('assign-speakers /rec/11.mp4');
       assertEquals((await attrsOf(path)).personId, edvinId, 'the voiceprints won');
+    });
+
+    await t.step("a voice tied to the video's own face votes with that face's person", async () => {
+      // Across the archive the face looked most like Anna, but in this video it is Dora's: the
+      // region decides, so naming the face names the voice.
+      const doraId = await newPerson('dora');
+      await makeRecording('/rec/30.mp4');
+      const region = await addRegion('/rec/30.mp4', 'face-0', { personId: doraId, personSource: 'manual' });
+      const path = await addSpeaker('/rec/30.mp4', 's0', alone(0), { talkSeconds: 4 });
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: region, asdPersonId: annaId, asdScore: 0.9 } });
+
+      const res = await client.execJson<Summary>('assign-speakers /rec/30.mp4');
+      assertEquals(res.attached, 1);
+      const attrs = await attrsOf(path);
+      assertEquals(attrs.personId, doraId);
+      assertEquals(attrs.asdAssisted, true);
+    });
+
+    await t.step('a region that names nobody yet leaves the vote to the archive-wide match', async () => {
+      // Not decided yet, or gone since: a re-detect replaces a video's regions.
+      for (const [n, regionId] of [[31, await addRegion('/rec/31.mp4', 'face-0', {})], [32, 'gone']] as const) {
+        const personId = await newPerson(`erik-${n}`);
+        await makeRecording(`/rec/${n}.mp4`);
+        const path = await addSpeaker(`/rec/${n}.mp4`, 's0', alone(n - 30), { talkSeconds: 4 });
+        await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: regionId, asdPersonId: personId, asdScore: 0.9 } });
+        await client.execJson<Summary>(`assign-speakers /rec/${n}.mp4`);
+        assertEquals((await attrsOf(path)).personId, personId, `/rec/${n}.mp4`);
+      }
+    });
+
+    await t.step('a region a person ruled the match out for leaves the voice without a face', async () => {
+      // "Not a person at all", and "not this person": either way the face does not vote.
+      const fridaId = await newPerson('frida');
+      const cases = [[33, { assignLocked: true, personSource: 'manual' }], [34, { rejectedPersonIds: [fridaId] }]] as const;
+      for (const [n, ruling] of cases) {
+        await makeRecording(`/rec/${n}.mp4`);
+        const region = await addRegion(`/rec/${n}.mp4`, 'face-0', ruling);
+        const path = await addSpeaker(`/rec/${n}.mp4`, 's0', alone(n - 30), { talkSeconds: 4 });
+        await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: region, asdPersonId: fridaId, asdScore: 0.9 } });
+        const res = await client.execJson<Summary>(`assign-speakers /rec/${n}.mp4`);
+        assertEquals(res.results[0].reason, 'skipped-gate', `/rec/${n}.mp4`);
+        assertEquals((await attrsOf(path)).personId, undefined);
+      }
     });
 
     await t.step('a dry run decides without writing', async () => {

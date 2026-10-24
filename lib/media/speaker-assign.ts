@@ -27,12 +27,18 @@
  * lip-sync match is checked too, against a lower bar: the face seen moving with the sound is
  * often not the one speaking — the camera operator talks while someone else is in frame
  * (ein/core#632).
+ *
+ * **The face seen speaking** is the video's own face region when the voice was tied to one, read
+ * as it is when the voice is decided: whoever named or corrected that face by then names the voice
+ * with it. The person the face was recognised as across the archive stands in only while the
+ * region says nothing.
  */
 
 import type { Command } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
 import { createUnnamedPerson, voicesOf } from '@archive/people/person';
+import type { RegionAttrs } from '@archive/media/regions';
 import { isHeld, type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 
 type Vfs = Command['sys']['vfs'];
@@ -161,6 +167,19 @@ const likenessToPerson = async (vfs: Vfs, access: Access, personId: string, spea
 };
 
 /**
+ * The person whose face was seen speaking with a voice. The video's own region decides while it
+ * exists and says anything: its person, or no one when a person decided it is nobody or rejected
+ * the person the archive-wide match found. Otherwise that match.
+ */
+const seenSpeakingPerson = (voice: Pick<SpeakerAttrs, 'asdPersonId'>, region: RegionAttrs | undefined): string | null => {
+  const matched = occ(voice.asdPersonId) ? voice.asdPersonId : null;
+  if (!region) return matched;
+  if (occ(region.personId)) return region.personId;
+  if (isHeld(region)) return null;
+  return matched && !region.rejectedPersonIds?.includes(matched) ? matched : null;
+};
+
+/**
  * Decide a person for every undecided speaker of one recording, the one who spoke most first:
  * the clearest voice is the likeliest to find or found its person, and it claims that person
  * before a shorter voice of the same recording can.
@@ -192,6 +211,8 @@ export const assignSpeakersForFile = async (
       return true;
     })
     .sort((x, y) => (y.node.attrs.talkSeconds ?? 0) - (x.node.attrs.talkSeconds ?? 0));
+  const seenRegionIds = [...new Set(candidates.map((c) => c.node.attrs.asdRegionId).filter(occ))];
+  const seenRegions = seenRegionIds.length > 0 ? await vfs.getNodesByIds<RegionAttrs>(access, seenRegionIds) : new Map();
 
   const results: SpeakerAssignResult[] = [];
 
@@ -221,7 +242,9 @@ export const assignSpeakersForFile = async (
       // match only the voices a person decided vote — automatic ones are what a run before this
       // one guessed, and a guess repeated over a few hundred recordings would outweigh any face.
       const asdScore = typeof attrs.asdScore === 'number' ? attrs.asdScore : 0;
-      const asdUsed = occ(attrs.asdPersonId) && asdScore >= opts.asdMinScore;
+      const region = occ(attrs.asdRegionId) ? seenRegions.get(attrs.asdRegionId)?.attrs : undefined;
+      const seenPerson = seenSpeakingPerson(attrs, region);
+      const asdUsed = seenPerson !== null && asdScore >= opts.asdMinScore;
 
       const labeled = new Map<string, string>();
       const edges: FaceEdge[] = [];
@@ -239,7 +262,7 @@ export const assignSpeakersForFile = async (
       // rules: voices a person decided can still outvote it.
       if (asdUsed) {
         const witness = `asd:${speakerId}`;
-        labeled.set(witness, attrs.asdPersonId as string);
+        labeled.set(witness, seenPerson);
         edges.push({ a: witness, b: speakerId, sim: opts.asdVoteWeight });
       }
 
@@ -254,7 +277,7 @@ export const assignSpeakersForFile = async (
       if (winner) {
         if (taken.has(winner.personId)) return undecided('skipped-taken');
         // A person who holds no voice yet passes: that is the cold start the face is there for.
-        const bar = asdUsed && winner.personId === attrs.asdPersonId ? opts.asdPersonThreshold : opts.personThreshold;
+        const bar = asdUsed && winner.personId === seenPerson ? opts.asdPersonThreshold : opts.personThreshold;
         const likeness = await likenessToPerson(vfs, access, winner.personId, speakerId, vector);
         if (likeness !== null && likeness < bar) return undecided('skipped-unlike');
         if (!opts.dryRun) {
