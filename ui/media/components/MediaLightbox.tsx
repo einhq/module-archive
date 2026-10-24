@@ -411,9 +411,15 @@ export function MediaLightbox() {
   const { person: reviewPerson, refetch: refetchReviewPerson } = useUnknownPerson(reviewPersonId ?? undefined);
   const { people: namedPeople } = usePeople(PEOPLE_ROOT, reviewPersonId !== null || personFacePath !== null);
 
-  // Boxes are drawn over photos only: a video's face box holds for the one moment it was seen
-  // at, so its faces are listed in the sidebar with when they are on screen instead.
-  const faces = useMemo(() => media?.type === 'photo' ? toFaceMarks(faceDetails?.faces ?? []) : [], [faceDetails, media?.type]);
+  // A video's face box holds for the one moment it was seen at, so a video shows no boxes while it
+  // plays: the sidebar shows one face at a time, paused on that moment (`showFace`).
+  const [shownFacePath, setShownFacePath] = useState<string | null>(null);
+  useEffect(() => setShownFacePath(null), [media?.id]);
+  const shownFace = media?.type === 'video' ? faceDetails?.faces.find((face) => face.facePath === shownFacePath && face.atSeconds !== undefined) : undefined;
+  const faces = useMemo(
+    () => media?.type === 'photo' ? toFaceMarks(faceDetails?.faces ?? []) : shownFace ? toFaceMarks([shownFace]) : [],
+    [faceDetails, media?.type, shownFace],
+  );
   const personFace = faceDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
   // The text in a photo, which the "more" menu lays over it, and opens for writing, in a dialog
   // beside the picture, to whoever may write the photo. Shown, it stays on from picture to
@@ -1453,6 +1459,32 @@ export function MediaLightbox() {
     mediaRef.current = el;
   }, []);
 
+  /** Pause a video on the frame a face was seen most clearly in, and box that face there. */
+  const showFace = useCallback((facePath: string) => {
+    const face = faceDetails?.faces.find((candidate) => candidate.facePath === facePath);
+    const video = mediaRef.current;
+    if (face?.atSeconds === undefined || !(video instanceof HTMLVideoElement)) return;
+    video.pause();
+    video.currentTime = face.atSeconds;
+    setShownFacePath(facePath);
+  }, [faceDetails]);
+
+  // Playing on, or moving to another moment, leaves the frame the box belongs to.
+  useEffect(() => {
+    const video = mediaRef.current;
+    const at = shownFace?.atSeconds;
+    if (at === undefined || !(video instanceof HTMLVideoElement)) return;
+    const leave = () => {
+      if (!video.paused || Math.abs(video.currentTime - at) > 0.5) setShownFacePath(null);
+    };
+    video.addEventListener('play', leave);
+    video.addEventListener('seeked', leave);
+    return () => {
+      video.removeEventListener('play', leave);
+      video.removeEventListener('seeked', leave);
+    };
+  }, [shownFace]);
+
   // A recording the browser will not start by itself (an autoplay policy), one that fails, or one
   // known to be undecodable never ends; a slideshow moves past it after one slide's time rather
   // than stopping there. A stall lasts until the recording plays after all.
@@ -1577,6 +1609,7 @@ export function MediaLightbox() {
       onHoverFace={setHoveredFace}
       onNavigate={goTo}
       onReviewUnknown={setReviewPersonId}
+      onShowFace={media.type === 'video' ? showFace : undefined}
       onOpenMap={mapPoint ? () => setMapOpen(true) : undefined}
       canEdit={canEdit}
       addToAlbumPath={actionPath}
@@ -1996,7 +2029,7 @@ export function MediaLightbox() {
                   key={`face-overlay-${media.id}-${reloadToken}`}
                   mediaRef={mediaRef}
                   faces={faces}
-                  pinned={showFaces}
+                  pinned={showFaces || shownFace !== undefined}
                   hoveredKey={hoveredFace}
                   onHover={setHoveredFace}
                   onOpenPerson={goTo}

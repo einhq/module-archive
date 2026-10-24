@@ -31,8 +31,6 @@ export type PersonTag = NodeRef & {
   source: 'tag' | 'face' | 'voice';
   /** Only for `source: 'face'` — a boxless legacy tag has none. */
   faceBox?: FaceBox;
-  /** On a video whose faces show the person: when they are on screen, `[start, end]` in seconds. */
-  appearances?: [number, number][];
 };
 
 export type MediaPosition = {
@@ -128,8 +126,6 @@ export type UnknownFace = {
   personPath: string;
   personName: string;
   faceBox?: FaceBox;
-  /** On a video: when the face is on screen, `[start, end]` in seconds. */
-  appearances?: [number, number][];
 };
 
 /**

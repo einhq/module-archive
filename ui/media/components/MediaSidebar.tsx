@@ -25,7 +25,7 @@ import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChan
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
-import { SeenAt } from './SeenAt.tsx';
+import { ShowFace } from './ShowFace.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
@@ -365,6 +365,7 @@ export function MediaSidebar(
     onHoverFace,
     onNavigate,
     onReviewUnknown,
+    onShowFace,
     onOpenMap,
     canEdit,
     addToAlbumPath,
@@ -387,6 +388,8 @@ export function MediaSidebar(
     onNavigate: (path: string) => void;
     /** Keep unidentified-person review in the lightbox instead of changing route. */
     onReviewUnknown: (personId: string) => void;
+    /** On a video: pause on the frame a face was seen most clearly in, and box it. */
+    onShowFace?: (facePath: string) => void;
     /** Open the lightbox-owned, enlarged view of this media location. */
     onOpenMap?: () => void;
     canEdit: boolean;
@@ -439,6 +442,7 @@ export function MediaSidebar(
   const albums = details?.albums ?? [];
   const people = details?.people ?? [];
   const unknownFaces = details?.unknownFaces ?? [];
+  const faces = details?.faces ?? [];
   const comments = details?.comments ?? [];
   const exif = details?.exif ?? null;
   const albumStack = details?.albumStack;
@@ -651,7 +655,7 @@ export function MediaSidebar(
                     {person.age === 0 && person.ageMonths !== undefined ? `${person.ageMonths} months` : `${person.age} years`}
                   </Badge>
                 )}
-                <SeenAt appearances={person.appearances} name={person.name} />
+                <ShowFace face={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)} name={person.name} onShow={onShowFace} />
               </Group>
             ))}
 
@@ -680,7 +684,7 @@ export function MediaSidebar(
                 >
                   {face.personName}
                 </Anchor>
-                <SeenAt appearances={face.appearances} name={face.personName} />
+                <ShowFace face={faces.find((candidate) => candidate.faceId === face.faceId)} name={face.personName} onShow={onShowFace} />
               </Group>
             ))}
           </IconRow>
