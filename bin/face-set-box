@@ -78,7 +78,7 @@ const faceSetBox = async (cmd: Command): CmdReturn => {
     });
   }
 
-  const cropError = flags['no-crop'] ? undefined : (await writeFaceCrop(cmd, sourcePath, cropPath, storedBox, source.attrs)) ?? undefined;
+  const cropError = flags['no-crop'] ? undefined : (await writeFaceCrop(cmd, sourcePath, cropPath, storedBox, source.attrs, face.attrs.atSeconds)) ?? undefined;
   const result = { faceId: face.id, facePath, box: storedBox, cropWritten: !flags['no-crop'] && !cropError, ...(cropError ? { cropError } : {}) };
   if (cmd.json) await cmd.writeJSON(result satisfies FaceSetBoxResult);
   else {

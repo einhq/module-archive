@@ -18,6 +18,7 @@ const DEFAULT_LIMIT = 100;
 type FaceAttrs = {
   fileId?: string;
   faceBox?: FracBox;
+  atSeconds?: number;
 };
 
 type FileAttrs = {
@@ -135,7 +136,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
       continue;
     }
 
-    const reason = await writeFaceCrop(cmd, sourcePath, cropPath, attrs.faceBox, file.attrs);
+    const reason = await writeFaceCrop(cmd, sourcePath, cropPath, attrs.faceBox, file.attrs, attrs.atSeconds);
     if (reason) {
       stats.failed++;
       await cmd.writeError(`regenerate-face-crops: ${cropPath}: ${reason}\n`);

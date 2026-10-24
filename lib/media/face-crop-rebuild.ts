@@ -108,9 +108,12 @@ export const writeFaceCrops = async (
   return null;
 };
 
-/** `writeFaceCrops` for one face. */
-export const writeFaceCrop = (cmd: Command, input: string, output: string, box: FracBox, source: FaceSourceAttrs): Promise<string | null> =>
-  writeFaceCrops(cmd, input, [{ output, box }], source);
+/** `writeFaceCrops` for one face; `at` is a video region's `atSeconds`. */
+export const writeFaceCrop = (cmd: Command, input: string, output: string, box: FracBox, source: FaceSourceAttrs, at?: unknown): Promise<string | null> =>
+  writeFaceCrops(cmd, input, [{ output, box, ...secondOf(at) }], source);
+
+/** `{ at }` for a usable second, nothing otherwise. */
+const secondOf = (at: unknown): { at?: number } => typeof at === 'number' && Number.isFinite(at) ? { at } : {};
 
 type FaceCropRebuild = {
   /** Crop paths written by this pass. */
@@ -198,8 +201,7 @@ export const rebuildFaceCrops = async (
     }
 
     await log?.(`Generating ${cropPath}...`);
-    const at = face.node.attrs.atSeconds;
-    wanted.push({ output: cropPath, box: face.node.attrs.faceBox, ...(typeof at === 'number' && Number.isFinite(at) ? { at } : {}) });
+    wanted.push({ output: cropPath, box: face.node.attrs.faceBox, ...secondOf(face.node.attrs.atSeconds) });
   }
 
   // As many crops per decode as EMS takes in one call. The crops of a call succeed or fail

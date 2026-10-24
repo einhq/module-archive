@@ -66,7 +66,7 @@ const TARGETS: Record<string, Target[]> = {
     { size: 'medium', ext: 'avif', kind: 'image', class: 'still' },
     { size: 'large', ext: 'avif', kind: 'image', class: 'still' },
     // A crop is a few hundred pixels out of a raster that is already open, so it costs about
-    // what one step of the ladder above does — `still`, alongside them. Only images:
+    // what one step of the ladder above does — `still`, alongside them. Photos and videos:
     // `detect-faces` refuses anything else, so no other media type has a `regions/` directory.
     { size: 'face', kind: 'face', class: 'still' },
   ],
@@ -86,6 +86,8 @@ const TARGETS: Record<string, Target[]> = {
     { size: 'preview', ext: 'mp4', kind: 'video', class: 'transcode' },
     { size: '1080p', ext: 'mp4', kind: 'video', class: 'transcode' },
     { size: 'storyboard', kind: 'storyboard', class: 'storyboard' },
+    // Each face cut from the frame its region was seen at, one frame read per crop.
+    { size: 'face', kind: 'face', class: 'still' },
   ],
   // Audio's picture is a rendered waveform, so the sizes are the ones the UI already
   // asks for and nothing more: `thumb` for the square consumers, and 512/800/1600 —
