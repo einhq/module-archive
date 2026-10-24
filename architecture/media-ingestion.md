@@ -1248,11 +1248,14 @@ the legacy import carried. A **video** carries `regions/` too, one `face-N` for 
 sparser past half an hour), follows each face from frame to frame and groups the sightings of one
 file by vector, never joining two faces seen in the same frame. The region's box, landmarks and
 pose are its clearest sighting, at `atSeconds`; `appearances` are when it is on screen; its vector
-is the mean of its best sightings, compared with photos' faces like any other. The gate below
+is the mean of its best sightings, compared with photos' faces like any other; and its child
+`track` (`application/x-ndjson`) logs its box in every sampled frame, a `[t, x, y, width, height]`
+line each, which the lightbox follows between the seconds. The gate below
 judges that clearest sighting, and assignment rules a person out of a video face only for a face
 of the same video on screen at the same time — one person the grouping left as two faces is two
-faces of one person, not two people. The lightbox draws no boxes over a video; its sidebar plays
-from where a person is seen. A region that shows a usable face has the face's 512-d vector as a
+faces of one person, not two people. The lightbox draws no boxes over a playing video but the one
+face its sidebar is asked to follow: paused first on that face's clearest frame, then boxed wherever
+its track has it, and not at all while it is off screen. A region that shows a usable face has the face's 512-d vector as a
 child named `embedding` (`embeddingType: face`), the way `metadata/description` has one — that
 child is what makes a region a **face**, and a region without one is a **tag**: a box and a
 person, which recognition never searches or votes with. The box, landmarks, pose, detector and
