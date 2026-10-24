@@ -71,7 +71,7 @@ import {
 } from '@ein/ui/signals';
 import { AudioPlayer } from './AudioPlayer.tsx';
 import { FaceOverlay, toFaceMarks } from './FaceOverlay.tsx';
-import { FollowedFace } from './FollowedFace.tsx';
+import { VideoFaces } from './VideoFaces.tsx';
 import { type FacePersonChange, FacePersonDialog } from './FacePersonDialog.tsx';
 import { MediaSidebar, SIDEBAR_WIDTH } from './MediaSidebar.tsx';
 import { TextEditDialog } from './TextEditDialog.tsx';
@@ -412,9 +412,14 @@ export function MediaLightbox() {
   const { person: reviewPerson, refetch: refetchReviewPerson } = useUnknownPerson(reviewPersonId ?? undefined);
   const { people: namedPeople } = usePeople(PEOPLE_ROOT, reviewPersonId !== null || personFacePath !== null);
 
-  // A photo's boxes are all drawn. A video's are followed one at a time, the face the sidebar
-  // picked (`followFace`), its box moving with it; the rest would stand on empty frames.
+  // A photo's boxes stand where its faces are. A video's move with them (`VideoFaces`), each on
+  // its track, and the face the sidebar picks is followed (`followFace`).
   const faces = useMemo(() => media?.type === 'photo' ? toFaceMarks(faceDetails?.faces ?? []) : [], [faceDetails, media?.type]);
+  const videoFaces = useMemo(
+    () => media?.type === 'video' ? (faceDetails?.faces ?? []).filter((face) => face.atSeconds !== undefined) : [],
+    [faceDetails, media?.type],
+  );
+  const faceCount = media?.type === 'video' ? videoFaces.length : faces.length;
   const [followedFacePath, setFollowedFacePath] = useState<string | null>(null);
   useEffect(() => setFollowedFacePath(null), [media?.id]);
   const followedFace = media?.type === 'video' ? faceDetails?.faces.find((face) => face.facePath === followedFacePath && face.atSeconds !== undefined) : undefined;
@@ -1526,14 +1531,14 @@ export function MediaLightbox() {
   // file name in the details does.
   const viewMenuItems = (iconSize: number) => (
     <>
-      {media?.type === 'photo' && (
+      {(media?.type === 'photo' || media?.type === 'video') && (
         <Menu.Item
-          leftSection={<TablerIcon name='user-square-rounded' size={iconSize} color={showFaces && faces.length > 0 ? 'var(--mrx-accent)' : undefined} />}
+          leftSection={<TablerIcon name='user-square-rounded' size={iconSize} color={showFaces && faceCount > 0 ? 'var(--mrx-accent)' : undefined} />}
           rightSection={isMobile ? undefined : <Kbd size='xs'>f</Kbd>}
-          disabled={faces.length === 0}
+          disabled={faceCount === 0}
           onClick={toggleFacesVisible}
         >
-          {faces.length === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
+          {faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
         </Menu.Item>
       )}
       {pictureText && (
@@ -2034,11 +2039,15 @@ export function MediaLightbox() {
                   onDraftChange={setFaceDraftReady}
                 />
               )}
-              {followedFace && !slideshow && (
-                <FollowedFace
-                  key={`followed-${media.id}-${reloadToken}-${followedFace.facePath}`}
+              {videoFaces.length > 0 && (!slideshow || showFaces) && (
+                <VideoFaces
+                  key={`video-faces-${media.id}-${reloadToken}`}
                   mediaRef={mediaRef}
-                  face={followedFace}
+                  faces={videoFaces}
+                  followed={followedFace ? followedFace.facePath : null}
+                  pinned={showFaces}
+                  hoveredKey={hoveredFace}
+                  onHover={setHoveredFace}
                   onOpenPerson={goTo}
                   onNamePerson={namePerson}
                 />

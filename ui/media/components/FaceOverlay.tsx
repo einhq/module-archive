@@ -47,6 +47,8 @@ type FaceOverlayProps = {
   /** Draw the boxes even when nothing is hovered — the toolbar/`f` toggle. */
   pinned: boolean;
   hoveredKey: string | null;
+  /** A face drawn as if hovered, whatever is: the one a video follows. */
+  followedKey?: string;
   onHover: (key: string | null) => void;
   /** Navigate to a person's page; given the route, the same one the sidebar's names use. */
   onOpenPerson: (route: string) => void;
@@ -140,6 +142,7 @@ export function FaceOverlay(
     faces,
     pinned,
     hoveredKey,
+    followedKey,
     onHover,
     onOpenPerson,
     onNamePerson,
@@ -317,7 +320,7 @@ export function FaceOverlay(
       }}
     >
       {faces.map((face) => {
-        const active = hoveredKey === face.key || hoveredKey === face.personHoverKey;
+        const active = hoveredKey === face.key || hoveredKey === face.personHoverKey || followedKey === face.key;
         // By path: the key changes with the person, when a face is named or loses its name.
         const selected = pendingDraft?.face?.facePath === face.facePath;
         const shown = allShown || active;
