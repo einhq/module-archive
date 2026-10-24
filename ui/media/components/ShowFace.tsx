@@ -15,14 +15,30 @@ const onScreen = (appearances: [number, number][]): string => {
 
 /**
  * A button beside a person or a face in a video's sidebar: the video paused on the frame the
- * face was seen most clearly in, with the face boxed. Nothing for a face no video moment holds.
+ * face was seen most clearly in, with the face boxed, and the box following it from there.
+ * Pressed again, it stops following. Nothing for a face no video moment holds.
  */
-export function ShowFace({ face, name, onShow }: { face?: MediaFace; name: string; onShow?: (facePath: string) => void }) {
+export function ShowFace({ face, name, onShow, followed }: {
+  face?: MediaFace;
+  name: string;
+  onShow?: (facePath: string) => void;
+  /** The face being followed. */
+  followed?: string | null;
+}) {
   if (!onShow || face?.atSeconds === undefined) return null;
+  const following = followed === face.facePath;
   const seen = face.appearances && face.appearances.length > 0 ? ` · on screen ${onScreen(face.appearances)}` : '';
+  const label = following ? `Stop following ${name}` : `Show ${name} at ${formatClock(face.atSeconds)}${seen}`;
   return (
-    <Tooltip label={`Show ${name} at ${formatClock(face.atSeconds)}${seen}`} withinPortal multiline maw={320}>
-      <ActionIcon size='sm' variant='subtle' color='gray' aria-label={`Show ${name} in the video`} onClick={() => onShow(face.facePath)}>
+    <Tooltip label={label} withinPortal multiline maw={320}>
+      <ActionIcon
+        size='sm'
+        variant={following ? 'light' : 'subtle'}
+        color={following ? 'marine' : 'gray'}
+        aria-pressed={following}
+        aria-label={`Show ${name} in the video`}
+        onClick={() => onShow(face.facePath)}
+      >
         <TablerIcon name='user-square-rounded' size={16} />
       </ActionIcon>
     </Tooltip>

@@ -366,6 +366,7 @@ export function MediaSidebar(
     onNavigate,
     onReviewUnknown,
     onShowFace,
+    followedFace,
     onOpenMap,
     canEdit,
     addToAlbumPath,
@@ -388,8 +389,10 @@ export function MediaSidebar(
     onNavigate: (path: string) => void;
     /** Keep unidentified-person review in the lightbox instead of changing route. */
     onReviewUnknown: (personId: string) => void;
-    /** On a video: pause on the frame a face was seen most clearly in, and box it. */
+    /** On a video: follow a face, from the frame it was seen most clearly in; the same face again stops. */
     onShowFace?: (facePath: string) => void;
+    /** The face being followed, whose button shows it. */
+    followedFace?: string | null;
     /** Open the lightbox-owned, enlarged view of this media location. */
     onOpenMap?: () => void;
     canEdit: boolean;
@@ -655,7 +658,12 @@ export function MediaSidebar(
                     {person.age === 0 && person.ageMonths !== undefined ? `${person.ageMonths} months` : `${person.age} years`}
                   </Badge>
                 )}
-                <ShowFace face={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)} name={person.name} onShow={onShowFace} />
+                <ShowFace
+                  face={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)}
+                  name={person.name}
+                  onShow={onShowFace}
+                  followed={followedFace}
+                />
               </Group>
             ))}
 
@@ -684,7 +692,7 @@ export function MediaSidebar(
                 >
                   {face.personName}
                 </Anchor>
-                <ShowFace face={faces.find((candidate) => candidate.faceId === face.faceId)} name={face.personName} onShow={onShowFace} />
+                <ShowFace face={faces.find((candidate) => candidate.faceId === face.faceId)} name={face.personName} onShow={onShowFace} followed={followedFace} />
               </Group>
             ))}
           </IconRow>

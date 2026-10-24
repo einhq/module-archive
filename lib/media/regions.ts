@@ -4,7 +4,8 @@
  * Every box on a picture is a region — a detection, a box somebody drew in the lightbox, a tag
  * imported from the legacy archive. A video's regions are its faces, one for each person
  * `detect-faces` told apart: the box is where the face was seen most clearly, at `atSeconds`,
- * and `appearances` say when it is on screen. A region that shows a usable face has the face's vector as a child
+ * `appearances` say when it is on screen, and the child `track` logs its box in every frame
+ * that was looked at, one `[t, x, y, width, height]` line each. A region that shows a usable face has the face's vector as a child
  * named `embedding`; that child is what makes it a face, and nothing else does. Recognition searches embeddings and maps each hit back to its region
  * with one batched parent lookup; the person fields (`personId`, `personSource`, …) live on the
  * region. No id is stored in either direction, so the two cannot drift apart.
@@ -27,6 +28,10 @@ export const REGION_TYPE = 'media-region';
 
 /** Name of a face region's vector child. */
 export const FACE_EMBEDDING_NAME = 'embedding';
+
+/** Name and mimetype of a video face's track: its box a line per sampled frame. */
+export const FACE_TRACK_NAME = 'track';
+export const FACE_TRACK_MIMETYPE = 'application/x-ndjson';
 
 /** `embeddingType` of a face vector. */
 export const FACE_EMBEDDING_TYPE = 'face';

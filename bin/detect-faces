@@ -13,6 +13,8 @@ import {
   FACE_DETECTOR,
   FACE_EMBEDDING_NAME,
   FACE_EMBEDDING_TYPE,
+  FACE_TRACK_MIMETYPE,
+  FACE_TRACK_NAME,
   faceEmbeddingPathOf,
   REGION_TYPE,
   REGIONS_DIR,
@@ -38,12 +40,23 @@ type Found = {
   embedding: number[];
   landmarks?: number[][];
   pose?: unknown;
-  /** On a video: the second the box is of, and when the face is on screen. */
+  /** On a video: the second the box is of, when the face is on screen, and its box in every sampled frame. */
   at?: number;
   appearances?: [number, number][];
+  track?: [number, number, number, number, number][];
 };
 
 type Detection = { frame: { width: number; height: number }; faces: Found[] };
+
+/** Write `text` as the whole content of the file node at `path`. */
+const writeText = async (cmd: Command, path: string, text: string): Promise<void> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
+  try {
+    await handle.write(new TextEncoder().encode(text));
+  } finally {
+    await handle.close();
+  }
+};
 
 const detectFaces = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -139,7 +152,7 @@ const detectFaces = async (cmd: Command): CmdReturn => {
       log('video sampled', { interval: result.interval, samples: result.samples, faces: result.faces.length });
       detection = {
         frame: result.frame,
-        faces: result.faces.map((face, index) => ({ ...face, index, at: face.t, appearances: face.appearances })),
+        faces: result.faces.map((face, index) => ({ ...face, index, at: face.t, appearances: face.appearances, track: face.track })),
       };
     } else {
       detection = await detectFacesOp(cmd, inputPath, angle, mirror);
@@ -221,11 +234,11 @@ const detectFaces = async (cmd: Command): CmdReturn => {
         attrs: { embeddingType: FACE_EMBEDDING_TYPE, capacity: 512 },
       });
       // Written through the VFS rather than the shell, which would truncate it.
-      const handle = await cmd.sys.vfs.open(cmd.access, faceEmbeddingPathOf(regionPath), { mode: 'w' });
-      try {
-        await handle.write(new TextEncoder().encode(JSON.stringify(face.embedding)));
-      } finally {
-        await handle.close();
+      await writeText(cmd, faceEmbeddingPathOf(regionPath), JSON.stringify(face.embedding));
+      if (face.track && face.track.length > 0) {
+        // Where the face was in each frame looked at, a line a frame, for a box that follows it.
+        await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_TRACK_NAME, { attrs: { mimetype: FACE_TRACK_MIMETYPE } });
+        await writeText(cmd, `${regionPath}/${FACE_TRACK_NAME}`, face.track.map((line) => JSON.stringify(line)).join('\n') + '\n');
       }
     } catch (error) {
       await cmd.writeError(`detect-faces: failed to create ${regionPath}: ${error instanceof Error ? error.message : String(error)}\n`);

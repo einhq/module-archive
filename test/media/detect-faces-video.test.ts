@@ -8,6 +8,7 @@ import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
+import { toText } from '@std/streams/to-text';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
 
@@ -34,6 +35,7 @@ Deno.test({
       landmarks: LANDMARKS,
       pose: { pitch: 1, yaw: -8, roll: 0 },
       embedding: [1, 0, 0, 0],
+      track: [[1, 0.39, 0.2, 0.1, 0.18], [4, 0.4, 0.2, 0.1, 0.18], [31, 0.5, 0.25, 0.08, 0.15]],
     },
     // Seen for a moment at the edge of the crowd, and too weak to be a face anyone could name.
     { appearances: [[12.5, 13.5]], detections: 1, t: 13, box: { x: 0.8, y: 0.1, width: 0.05, height: 0.08 }, confidence: 0.6, embedding: [0, 1, 0, 0] },
@@ -72,7 +74,14 @@ Deno.test({
       assertEquals(anna.confidence, 0.93);
       assertEquals(anna.pose, { pitch: 1, yaw: -8, roll: 0 });
       assertEquals(anna.personId, undefined);
-      assertEquals(await names(`${clip}/regions/face-0`), ['embedding', 'image.avif']);
+      assertEquals(await names(`${clip}/regions/face-0`), ['embedding', 'image.avif', 'track']);
+      // Its box in every frame it was seen in, a line a frame.
+      assertEquals((await attrsOf(`${clip}/regions/face-0/track`)).mimetype, 'application/x-ndjson');
+      const handle = await vfs.open(ADMIN_ACCESS, `${clip}/regions/face-0/track`, { mode: 'r' });
+      const track = await toText(handle.readable).finally(() => handle.close());
+      assertEquals(track.trim().split('\n').map((line) => JSON.parse(line)), [[1, 0.39, 0.2, 0.1, 0.18], [4, 0.4, 0.2, 0.1, 0.18], [31, 0.5, 0.25, 0.08, 0.15]]);
+      // A face EMS gave no track has none.
+      assertEquals(await names(`${clip}/regions/face-2`), ['embedding', 'image.avif']);
       assertEquals((await attrsOf(`${clip}/regions/face-0/embedding`)).embeddingType, 'face');
       assertEquals((await attrsOf(`${clip}/regions/face-2/image.avif`)).sourceId, (await vfs.get(ADMIN_ACCESS, clip)).id);
       const file = await attrsOf(clip);
