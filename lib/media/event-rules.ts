@@ -168,8 +168,6 @@ const MANUAL_ORIENTATION_ATTRS = ['angleManual', 'mirror'];
 const MEDIA_MIMETYPE = /^(image|video|audio)\//;
 /** Only images get a face-detection marker, so only images can be missing one. */
 const IMAGE_MIMETYPE = /^image\//;
-/** What `detect-faces` detects on: photos, and videos through their frames. */
-const FACES_MIMETYPE = /^(image|video)\//;
 /** What `embed-picture` takes: a photo, or a video's keyframes. */
 const PICTURE_MIMETYPE = /^(image|video)\//;
 /**
@@ -635,9 +633,10 @@ export async function deriveGaps(
   const missingDerivatives = !(await ctx.exists(`${filePath}/thumbnails`));
   // `detect-faces` writes `facesAt` in both of its exit paths, including on a photo with nobody
   // in it, so its absence means the step never ran — which a `regions/` directory would not say,
-  // since the legacy importer writes one at import time. Photos and videos only: nothing else
-  // ever gets the marker, so a recording would otherwise read as a gap on every scan forever.
-  const missingFaces = FACES_MIMETYPE.test(str(file.attrs.mimetype) ?? '') && !str(file.attrs.facesAt);
+  // since the legacy importer writes one at import time. Images only: a video gets the marker
+  // too, but one without it is not announced again — sampling every video of an archive is hours
+  // of card time, and an import detects its videos' faces as it indexes them (ein/core#410).
+  const missingFaces = IMAGE_MIMETYPE.test(str(file.attrs.mimetype) ?? '') && !str(file.attrs.facesAt);
 
   const events: Omit<DomainEvent, 'id'>[] = [];
 

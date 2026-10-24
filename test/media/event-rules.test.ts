@@ -623,10 +623,12 @@ const rendition = (id: string): NodeSnapshot => ({ id, type: 'file', attrs: { so
  * clip a tile plays. They share `thumbnails/` with the poster frames, which is exactly why the
  * derivatives term cannot stand in for a transcode term.
  *
- * And `facesAt`, which `detect-faces` writes on a video as on a photo.
+ * No `facesAt`: a video indexed before its faces were looked for has none, so an image's marker
+ * must not creep in here and hide a term that reads it.
  */
 const indexedVideo = (attrs: Record<string, unknown> = {}): Record<string, NodeSnapshot> => {
   const nodes = indexed({ mimetype: 'video/mp4', duration: 42, ...attrs }, VID);
+  delete nodes[VID].attrs.facesAt;
   nodes[`${VID}/thumbnails/512x512.avif`] = rendition('r0');
   nodes[`${VID}/thumbnails/1920x1080.mp4`] = rendition('r1');
   nodes[`${VID}/thumbnails/480x480.mp4`] = rendition('r2');
@@ -634,11 +636,7 @@ const indexedVideo = (attrs: Record<string, unknown> = {}): Record<string, NodeS
   return nodes;
 };
 
-/**
- * Complete for audio: its transcript, the waveform picture, and the one normalised track. No
- * `facesAt`: nothing detects faces in a recording, so a marker must not creep in here and hide a
- * term that reads it.
- */
+/** Complete for audio: its transcript, the waveform picture, and the one normalised track. */
 const indexedAudio = (attrs: Record<string, unknown> = {}): Record<string, NodeSnapshot> => {
   const nodes = indexed({ mimetype: 'audio/x-wav', duration: 180, ...attrs }, SND);
   delete nodes[SND].attrs.facesAt;
@@ -676,12 +674,9 @@ Deno.test('gap: exif but no face detection re-opens the fan-out', async () => {
   assertEquals(facts[0].data?.mimetype, 'image/x-fujifilm-raf');
 });
 
-Deno.test('gap: a video without a face marker re-opens the fan-out, a recording does not need one', async () => {
-  const video = indexedVideo();
-  delete video[VID].attrs.facesAt;
-  assertEquals((await deriveGaps(VID, tree(video), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-  // Nothing detects faces in sound, so `facesAt` is absent on every recording by construction.
-  assertEquals(await deriveGaps(SND, tree(indexedAudio()), 100), []);
+Deno.test('gap: a video without a face marker is not a gap', async () => {
+  // A video indexed before its faces were looked for is left for the next import to detect.
+  assertEquals(await deriveGaps(VID, tree(indexedVideo()), 100), []);
 });
 
 Deno.test('gap: a video with poster frames but no transcode re-opens the fan-out', async () => {
