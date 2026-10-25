@@ -2,7 +2,7 @@
   "name": "archive",
   "version": "0.1.0",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
-  "coreApi": "^0.2.0",
+  "coreApi": "^0.3.0",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -445,38 +445,46 @@
   ],
   "nodeTypes": [
     {
+      "type": "album",
+      "label": "Album",
+      "category": "content",
+      "root": "/archive/albums",
+      "searchable": true,
+      "plural": "Albums",
+      "description": "A collection of photos and videos that behaves as a directory. It holds its files, and links the ones added to it from elsewhere. It remembers its cover, the time span of its media, and the stacks of similar photos taken in a row."
+    },
+    {
       "type": "person",
       "label": "Person",
       "category": "content",
       "root": "/archive/people",
+      "searchable": true,
+      "plural": "People",
       "description": "Someone in the archive, with names, dates of birth and death, and contact details. Parents, children and partners are links between people; the photos they appear in are found by their faces."
-    },
-    {
-      "type": "device",
-      "label": "Device",
-      "category": "content",
-      "root": "/archive/devices",
-      "description": "A camera, phone or tracker, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right."
     },
     {
       "type": "location",
       "label": "Location",
       "category": "content",
       "root": "/archive/locations",
+      "searchable": true,
+      "plural": "Locations",
       "description": "A location under /archive/locations: its name, the address it was written down with and how that was geocoded, the people who lived there and the photos linked to it. Where it is on the map is its child named position, a point, circle or outline."
+    },
+    {
+      "type": "device",
+      "label": "Device",
+      "category": "content",
+      "root": "/archive/devices",
+      "searchable": true,
+      "plural": "Devices",
+      "description": "A camera, phone or tracker, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right."
     },
     {
       "type": "media-region",
       "label": "Region",
       "category": "content",
       "description": "A box on a photo, kept under the photo's regions/ directory: a face the detector found, a box someone drew, or a tag imported from the old archive. It carries who is in it. A region that shows a usable face has the face's vector as a child named embedding, and only those take part in face recognition."
-    },
-    {
-      "type": "album",
-      "label": "Album",
-      "category": "content",
-      "root": "/archive/albums",
-      "description": "A collection of photos and videos that behaves as a directory. It holds its files, and links the ones added to it from elsewhere. It remembers its cover, the time span of its media, and the stacks of similar photos taken in a row."
     },
     {
       "type": "exif",
