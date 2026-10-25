@@ -15,6 +15,7 @@ const MODEL_STEPS = [
   { file: 'media-embed-text.yaml', step: 'embed-text', kind: 'embed-text' },
   { file: 'media-transcribe.yaml', step: 'transcribe-file', kind: 'transcribe' },
   { file: 'media-voiceprint.yaml', step: 'voiceprint-file', kind: 'diarize' },
+  { file: 'media-speaker-faces.yaml', step: 'see', kind: 'diarize' },
   { file: 'media-transcode.yaml', step: 'chapters', kind: 'shots' },
 ];
 

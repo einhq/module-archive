@@ -40,6 +40,8 @@ export type SpeakerAttrs = {
   asdRegionId: string | null;
   asdPersonId: string | null;
   asdScore: number | null;
+  /** Set by `assign-speakers` when the face seen speaking voted for the person it gave the voice. */
+  asdAssisted?: boolean;
   personId: string | null;
   personSource: string | null;
   personConfidence: number | null;

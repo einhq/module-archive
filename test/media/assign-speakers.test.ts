@@ -323,9 +323,10 @@ Deno.test({
 
     await t.step('a region that names nobody yet leaves the vote to the archive-wide match', async () => {
       // Not decided yet, or gone since: a re-detect replaces a video's regions.
-      for (const [n, regionId] of [[31, await addRegion('/rec/31.mp4', 'face-0', {})], [32, 'gone']] as const) {
+      for (const n of [31, 32]) {
         const personId = await newPerson(`erik-${n}`);
         await makeRecording(`/rec/${n}.mp4`);
+        const regionId = n === 31 ? await addRegion(`/rec/${n}.mp4`, 'face-0', {}) : 'gone';
         const path = await addSpeaker(`/rec/${n}.mp4`, 's0', alone(n - 30), { talkSeconds: 4 });
         await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: regionId, asdPersonId: personId, asdScore: 0.9 } });
         await client.execJson<Summary>(`assign-speakers /rec/${n}.mp4`);
@@ -346,6 +347,66 @@ Deno.test({
         assertEquals(res.results[0].reason, 'skipped-gate', `/rec/${n}.mp4`);
         assertEquals((await attrsOf(path)).personId, undefined);
       }
+    });
+
+    await t.step('an automatic voice is decided again once its face is someone', async () => {
+      // Voices first: decided while the video's face named nobody, it founded a person of its own.
+      // The face assigned since names someone, and the voice goes with it; the person it founded,
+      // left holding nothing, goes.
+      const gustavId = await newPerson('gustav');
+      await makeRecording('/rec/40.mp4');
+      const region = await addRegion('/rec/40.mp4', 'face-0', {});
+      const path = await addSpeaker('/rec/40.mp4', 's0', alone(5));
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: region, asdPersonId: null, asdScore: 0.9 } });
+      const first = await client.execJson<Summary>('assign-speakers /rec/40.mp4');
+      assertEquals(first.created, 1);
+      const founded = (await attrsOf(path)).personId;
+      const before = (await unknownPeople()).length;
+
+      await vfs.update(ADMIN_ACCESS, `/rec/40.mp4/regions/face-0`, { attrs: { personId: gustavId, personSource: 'auto' } });
+      const res = await client.execJson<Summary>('assign-speakers /rec/40.mp4');
+      assertEquals(res.attached, 1);
+      const attrs = await attrsOf(path);
+      assertEquals([attrs.personId, attrs.personSource, attrs.asdAssisted], [gustavId, 'auto', true]);
+      assertEquals((await unknownPeople()).length, before - 1);
+      assertEquals((await unknownPeople()).some((p) => p.node.id === founded), false);
+    });
+
+    await t.step('a voice the face decided is decided again when the face is ruled out', async () => {
+      // As if the face had said nothing from the start: too little voice to found anyone on, so
+      // undecided — not left with the person the face named.
+      const hildaId = await newPerson('hilda');
+      await makeRecording('/rec/41.mp4');
+      const region = await addRegion('/rec/41.mp4', 'face-0', { personId: hildaId, personSource: 'manual' });
+      const path = await addSpeaker('/rec/41.mp4', 's0', alone(6), { talkSeconds: 4 });
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { asdRegionId: region, asdPersonId: null, asdScore: 0.9 } });
+      await client.execJson<Summary>('assign-speakers /rec/41.mp4');
+      assertEquals((await attrsOf(path)).personId, hildaId);
+
+      await vfs.update(ADMIN_ACCESS, '/rec/41.mp4/regions/face-0', { attrs: { personId: null, personSource: 'manual', assignLocked: true } });
+      const res = await client.execJson<Summary>('assign-speakers /rec/41.mp4');
+      assertEquals(res.results[0].reason, 'skipped-gate');
+      const attrs = await attrsOf(path);
+      assertEquals([attrs.personId, attrs.personSource, attrs.asdAssisted], [undefined, undefined, undefined]);
+      // A named person is never deleted for losing a voice.
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${PEOPLE_ROOT}/hilda`)).id, hildaId);
+    });
+
+    await t.step('a voice the face agrees with, a weak match, or a voice a person named is left alone', async () => {
+      const iraId = await newPerson('ira');
+      const jonId = await newPerson('jon');
+      await makeRecording('/rec/42.mp4');
+      const region = await addRegion('/rec/42.mp4', 'face-0', { personId: iraId, personSource: 'manual' });
+      const agrees = await addSpeaker('/rec/42.mp4', 's0', alone(7));
+      await vfs.update(ADMIN_ACCESS, agrees, { attrs: { asdRegionId: region, asdScore: 0.9, personId: iraId, personSource: 'auto' } });
+      const weak = await addSpeaker('/rec/42.mp4', 's1', near(dir(2), 11));
+      await vfs.update(ADMIN_ACCESS, weak, { attrs: { asdRegionId: region, asdScore: 0.2, personId: jonId, personSource: 'auto' } });
+      const named = await addSpeaker('/rec/42.mp4', 's2', near(dir(2), 12));
+      await vfs.update(ADMIN_ACCESS, named, { attrs: { asdRegionId: region, asdScore: 0.9, personId: jonId, personSource: 'manual' } });
+
+      const res = await client.execJson<Summary>('assign-speakers /rec/42.mp4');
+      assertEquals(res.speakers, 0);
+      assertEquals([(await attrsOf(agrees)).personId, (await attrsOf(weak)).personId, (await attrsOf(named)).personId], [iraId, jonId, jonId]);
     });
 
     await t.step('a dry run decides without writing', async () => {

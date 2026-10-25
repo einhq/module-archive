@@ -32,12 +32,18 @@
  * as it is when the voice is decided: whoever named or corrected that face by then names the voice
  * with it. The person the face was recognised as across the archive stands in only while the
  * region says nothing.
+ *
+ * **Decided again when the face disagrees.** A video's faces are often detected, assigned or named
+ * after its voices were decided (ein/core#728). An automatic voice whose face now names someone
+ * else, or names nobody where the decision leaned on it, is decided again as if it were new: the
+ * outcome stands, undecided included, so the order the evidence arrived in does not change who the
+ * voice is. A person the voice leaves, unnamed and left holding nothing, is deleted.
  */
 
 import type { Command } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
-import { createUnnamedPerson, voicesOf } from '@archive/people/person';
+import { createUnnamedPerson, releasePerson, voicesOf } from '@archive/people/person';
 import type { RegionAttrs } from '@archive/media/regions';
 import { isHeld, type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 
@@ -179,6 +185,22 @@ const seenSpeakingPerson = (voice: Pick<SpeakerAttrs, 'asdPersonId'>, region: Re
   return matched && !region.rejectedPersonIds?.includes(matched) ? matched : null;
 };
 
+/** The person a lip-sync match strong enough to count names, or null. */
+const seenPersonOf = (voice: SpeakerAttrs, region: RegionAttrs | undefined, asdMinScore: number): string | null =>
+  (typeof voice.asdScore === 'number' ? voice.asdScore : 0) >= asdMinScore ? seenSpeakingPerson(voice, region) : null;
+
+/**
+ * Whether the face seen speaking with a voice given a person automatically disagrees with it: it
+ * names someone else now, or it names nobody and the decision leaned on it.
+ */
+const faceDisagrees = (voice: SpeakerAttrs, region: RegionAttrs | undefined, asdMinScore: number): boolean => {
+  const seen = seenPersonOf(voice, region, asdMinScore);
+  return seen !== voice.personId && (seen !== null || voice.asdAssisted === true);
+};
+
+/** The person fields of a voice nobody is decided for. `null` removes a key. */
+const UNDECIDED = { personId: null, personSource: null, personConfidence: null, personAssignedAt: null, asdAssisted: null } as const;
+
 /**
  * Decide a person for every undecided speaker of one recording, the one who spoke most first:
  * the clearest voice is the likeliest to find or found its person, and it claims that person
@@ -204,15 +226,17 @@ export const assignSpeakersForFile = async (
   // People this recording's voices already are: the second voice to win one is left undecided.
   const taken = new Set(speakers.map((c) => c.node.attrs.personId).filter(occ));
 
+  const seenRegionIds = [...new Set(speakers.map((c) => c.node.attrs.asdRegionId).filter(occ))];
+  const seenRegions = seenRegionIds.length > 0 ? await vfs.getNodesByIds<RegionAttrs>(access, seenRegionIds) : new Map();
+  const regionOf = (a: SpeakerAttrs): RegionAttrs | undefined => occ(a.asdRegionId) ? seenRegions.get(a.asdRegionId)?.attrs : undefined;
+
   const candidates = speakers
     .filter((c) => {
       const a = c.node.attrs;
-      if (occ(a.personId)) return opts.reassign && a.personSource === 'auto';
-      return true;
+      if (!occ(a.personId)) return true;
+      return a.personSource === 'auto' && (opts.reassign || faceDisagrees(a, regionOf(a), opts.asdMinScore));
     })
     .sort((x, y) => (y.node.attrs.talkSeconds ?? 0) - (x.node.attrs.talkSeconds ?? 0));
-  const seenRegionIds = [...new Set(candidates.map((c) => c.node.attrs.asdRegionId).filter(occ))];
-  const seenRegions = seenRegionIds.length > 0 ? await vfs.getNodesByIds<RegionAttrs>(access, seenRegionIds) : new Map();
 
   const results: SpeakerAssignResult[] = [];
 
@@ -226,10 +250,14 @@ export const assignSpeakersForFile = async (
       results.push(undecided('skipped-locked'));
       continue;
     }
-    // A re-decision frees the person this speaker held, for itself or a sibling.
-    if (occ(attrs.personId)) taken.delete(attrs.personId);
+    const region = regionOf(attrs);
+    // A re-decision frees the person this speaker held, for itself or a sibling. One the face
+    // disagrees with is decided afresh: a voice that comes out undecided is left undecided.
+    const held = occ(attrs.personId) ? attrs.personId : null;
+    const afresh = held !== null && faceDisagrees(attrs, region, opts.asdMinScore);
+    if (held) taken.delete(held);
 
-    const result = await withLock(async (): Promise<SpeakerAssignResult> => {
+    const decide = async (): Promise<SpeakerAssignResult> => {
       const vector = await readVector(vfs, access, speakerPath);
       if (!vector) return undecided('skipped-no-vector');
 
@@ -241,10 +269,8 @@ export const assignSpeakersForFile = async (
       // voiceprint neighbour is only as good as whoever decided it. Against a confident lip-sync
       // match only the voices a person decided vote — automatic ones are what a run before this
       // one guessed, and a guess repeated over a few hundred recordings would outweigh any face.
-      const asdScore = typeof attrs.asdScore === 'number' ? attrs.asdScore : 0;
-      const region = occ(attrs.asdRegionId) ? seenRegions.get(attrs.asdRegionId)?.attrs : undefined;
-      const seenPerson = seenSpeakingPerson(attrs, region);
-      const asdUsed = seenPerson !== null && asdScore >= opts.asdMinScore;
+      const seenPerson = seenPersonOf(attrs, region, opts.asdMinScore);
+      const asdUsed = seenPerson !== null;
 
       const labeled = new Map<string, string>();
       const edges: FaceEdge[] = [];
@@ -287,7 +313,7 @@ export const assignSpeakersForFile = async (
               personSource: 'auto',
               personConfidence: winner.confidence,
               personAssignedAt: nowIso(),
-              ...(asdUsed ? { asdAssisted: true } : {}),
+              asdAssisted: asdUsed ? true : null,
             },
           });
         }
@@ -306,11 +332,21 @@ export const assignSpeakersForFile = async (
 
       const person = await createUnnamedPerson(vfs, access, { createdBy: 'assign-speakers', origin: 'voice' });
       await vfs.update(access, speakerPath, {
-        attrs: { personId: person.id, personSource: 'auto', personConfidence: null, personAssignedAt: nowIso() },
+        attrs: { personId: person.id, personSource: 'auto', personConfidence: null, personAssignedAt: nowIso(), asdAssisted: null },
       });
       taken.add(person.id);
       return { speakerPath, speakerId, personId: person.id, created: true, confidence: 0, reason: 'created' };
+    };
+
+    const result = await withLock(async (): Promise<SpeakerAssignResult> => {
+      const outcome = await decide();
+      if (!held || opts.dryRun) return outcome;
+      if (outcome.personId === null && afresh) await vfs.update(access, speakerPath, { attrs: UNDECIDED });
+      if ((outcome.personId ?? (afresh ? null : held)) !== held) await releasePerson(vfs, access, held, new Set([speakerId]));
+      return outcome;
     });
+    // Left undecided by a re-decision that is not afresh, the voice keeps the person it held.
+    if (held && result.personId === null && !result.created && !afresh) taken.add(held);
 
     results.push(result);
   }

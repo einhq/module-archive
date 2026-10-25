@@ -1,0 +1,102 @@
+#!ts
+/**
+ * see-speakers — tie the voices a video already has to the faces seen speaking them.
+ *
+ * `voiceprint-file` asks EMS who is seen speaking as it writes the voices, and ties each face to
+ * the video's own face region it is — when the regions are there. A video's faces are often
+ * detected after its voices are printed (ein/core#728); this asks again over the voices as they
+ * are, once the faces are: one `speech.active_speakers` call and no diarization, and each voice's
+ * `asdRegionId`, `asdPersonId` and `asdScore` written anew (@archive/media/speaker-faces). Who
+ * each voice is stays `assign-speakers`'s to decide; `media-speaker-faces` runs it next.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
+import { stepExitCode } from '@ems/client';
+import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
+import { seeSpeakers, tiedToRegions } from '@archive/media/speaker-faces';
+import { reportUnwritable } from '@archive/media/writable';
+
+const seeSpeakersCmd = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!inputPath) {
+    await cmd.writeError('see-speakers: usage: see-speakers [-v] <video>\n');
+    return 1;
+  }
+  const verbose = Boolean(flags.verbose);
+
+  const nodeInfo = await cmd.sys.vfs.get(cmd.access, inputPath).catch(() => undefined);
+  if (!nodeInfo) {
+    await cmd.writeError(`see-speakers: ${inputPath}: file not found or unreadable\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, inputPath, nodeInfo)) return 1;
+  const fileAttrs = nodeInfo.attrs as Record<string, unknown>;
+  const mimetype = typeof fileAttrs.mimetype === 'string' ? fileAttrs.mimetype : '';
+  if (!mimetype.startsWith('video/')) {
+    await cmd.writeError(`see-speakers: ${inputPath}: not a video (${mimetype})\n`);
+    return 1;
+  }
+
+  // Not voiceprinted yet is nothing to do: `voiceprint-file` asks for the faces itself.
+  const speakersPath = speakersPathOf(inputPath);
+  const children = await cmd.sys.vfs.children<SpeakerAttrs>(cmd.access, speakersPath).catch(() => []);
+  const voices = children.filter((c) => c.node.attrs.embeddingType === VOICE_EMBEDDING_TYPE && Array.isArray(c.node.attrs.turns));
+  if (voices.length === 0) {
+    if (verbose) await cmd.writeLn('No voices yet, nothing to see');
+    if (cmd.json) await cmd.writeJSON({ path: inputPath, speakers: 0, seen: 0, regions: 0 });
+    return 0;
+  }
+
+  const phase = stepPhase(cmd, 'see-speakers', verbose);
+  let seen;
+  let faces;
+  try {
+    await phase('active speakers');
+    // The node's name answers for the voice: it is unique within the recording, as EMS needs.
+    ({ seen, faces } = await seeSpeakers(cmd, inputPath, fileAttrs, voices.map((v) => ({ id: v.name, turns: v.node.attrs.turns })), (p) => phase(`ems: ${p}`)));
+  } catch (error) {
+    await cmd.writeError(`see-speakers: ${inputPath}: active speakers: ${error instanceof Error ? error.message : String(error)}\n`);
+    return stepExitCode(error);
+  }
+
+  for (const voice of voices) {
+    const face = seen.get(voice.name);
+    const a = voice.node.attrs;
+    const attrs = { asdRegionId: face?.regionId ?? null, asdPersonId: face?.personId ?? null, asdScore: face?.score ?? null };
+    if (attrs.asdRegionId === (a.asdRegionId ?? null) && attrs.asdPersonId === (a.asdPersonId ?? null) && attrs.asdScore === (a.asdScore ?? null)) continue;
+    await cmd.sys.vfs.update(cmd.access, `${speakersPath}/${voice.name}`, { attrs });
+  }
+
+  if (verbose) {
+    await cmd.writeLn(`${inputPath}: a face scored for ${faces} of ${voices.length} voices, ${seen.size} with a known face (${tiedToRegions(seen)} the video's own)`);
+  }
+  if (cmd.json) await cmd.writeJSON({ path: inputPath, speakers: voices.length, seen: seen.size, regions: tiedToRegions(seen) });
+  return 0;
+};
+
+seeSpeakersCmd.spec = {
+  name: 'see-speakers',
+  effect: 'write' as const,
+  description: "Tie a video's voices to the faces seen speaking them, the video's own face regions first",
+  args: [
+    { name: 'video', type: 'path' as const, description: 'VFS path to a voiceprinted video' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: [
+    'see-speakers /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+  ],
+  returns: "nothing; each voice's asdRegionId, asdPersonId and asdScore are written.",
+};
+
+export default seeSpeakersCmd;

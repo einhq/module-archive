@@ -20,19 +20,20 @@
  * **One call to EMS for the voices**, however long the recording: EMS diarizes in whatever
  * windows its card allows, stitches them into file-wide voices and pools each voice's
  * voiceprints. **One more for the faces**, on a video: EMS decodes it once and answers, per
- * voice, the face whose lips moved with it (`speech.active_speakers`). The face is tied to the
+ * voice, the face whose lips moved with it (@archive/media/speaker-faces). The face is tied to the
  * region of the video's own faces it is (`asdRegionId`), when they are detected and it is one of
- * them, and to the person recognition knows it as among all the archive's faces (`asdPersonId`):
- * one vote among the voiceprints', the region's person first (@archive/media/speaker-assign).
- * Seeing the speaker is an assist: no face, or nobody known, is the ordinary outcome on home
- * video, where the speaker is often holding the camera. `--no-video` skips it.
+ * them — `see-speakers` ties them once they are — and to the person recognition knows it as among
+ * all the archive's faces (`asdPersonId`): one vote among the voiceprints', the region's person
+ * first (@archive/media/speaker-assign). Seeing the speaker is an assist: no face, or nobody
+ * known, is the ordinary outcome on home video, where the speaker is often holding the camera.
+ * `--no-video` skips it.
  */
 
 import { resolve } from '@std/path';
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, STEP_EXIT_TEMPORARY, stepPhase } from '@ein/client';
-import { type ActiveSpeaker, activeSpeakers, stepExitCode, voiceprint, type VoiceSpeaker } from '@ems/client';
+import { stepExitCode, voiceprint, type VoiceSpeaker } from '@ems/client';
 import { carryOver, type HeldAssignment, isHeld, type SpeakerAttrs, speakerNodeName, SPEAKERS_DIR, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
-import { facesOfVideo, personOfFace, speakingRegion } from '@archive/media/speaker-faces';
+import { type SeenFace, seeSpeakers, tiedToRegions } from '@archive/media/speaker-faces';
 import { reportUnwritable } from '@archive/media/writable';
 
 /** Write bytes through the VFS, so a long vector survives without going near a shell. */
@@ -62,27 +63,6 @@ const heldAssignments = async (cmd: Command, transcriptPath: string): Promise<He
     });
   }
   return held;
-};
-
-/** Who the face seen speaking with a voice is, and how well its lips moved with it. */
-type SeenFace = { regionId: string | null; personId: string | null; score: number };
-
-/**
- * The face EMS scored best with each voice, as the video's own face region it is and the person
- * it was recognised as: `voice id → hint`, for every face that is either. Kept whatever the score
- * — it is evidence, and `assign-speakers` decides how much a score has to be to count
- * (`CFG_VOICE_ASD_MIN_SCORE`).
- */
-const recognizeSpeakers = async (cmd: Command, videoPath: string, seen: ActiveSpeaker[]): Promise<Map<string, SeenFace>> => {
-  const out = new Map<string, SeenFace>();
-  if (seen.length === 0) return out;
-  const faces = await facesOfVideo(cmd.sys.vfs, cmd.access, videoPath);
-  for (const speaker of seen) {
-    const regionId = speakingRegion(faces, speaker)?.id ?? null;
-    const personId = await personOfFace(cmd.sys.vfs, cmd.access, speaker.embedding);
-    if (regionId || personId) out.set(speaker.id, { regionId, personId, score: speaker.score });
-  }
-  return out;
 };
 
 /**
@@ -120,9 +100,6 @@ const writeSpeakers = async (
   }
   return written;
 };
-
-/** How many of the faces seen speaking are one of the video's own face regions. */
-const regionsOf = (seen: Map<string, SeenFace>): number => [...seen.values()].filter((face) => face.regionId).length;
 
 const voiceprintFile = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -201,16 +178,9 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
   if (!noVideo && mimetype.startsWith('video/') && result.speakers.length > 0) {
     try {
       await phase('active speakers');
-      const faces = await activeSpeakers(
-        cmd,
-        inputPath,
-        typeof fileAttrs.angle === 'number' ? fileAttrs.angle : 0,
-        fileAttrs.mirror === true,
-        result.speakers.map((s) => ({ id: s.id, turns: s.turns })),
-        { onProgress: (p) => phase(`ems: ${p}`) },
-      );
-      seen = await recognizeSpeakers(cmd, inputPath, faces);
-      await phase(`active speakers: a face scored for ${faces.length} voices, ${seen.size} of them known, ${regionsOf(seen)} of them the video's own`);
+      const answer = await seeSpeakers(cmd, inputPath, fileAttrs, result.speakers.map((s) => ({ id: s.id, turns: s.turns })), (p) => phase(`ems: ${p}`));
+      seen = answer.seen;
+      await phase(`active speakers: a face scored for ${answer.faces} voices, ${seen.size} of them known, ${tiedToRegions(seen)} of them the video's own`);
     } catch (error) {
       // EMS busy or down is worth waiting for: the hint is evidence, and a run without it would
       // be final. Anything else leaves the voices without a face, as no face on screen would.
@@ -255,7 +225,7 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
 
   if (verbose) {
     await cmd.writeLn(
-      `${inputPath}: ${result.speakers.length} voices over ${result.turns.length} turns, ${seen.size} with a known face (${regionsOf(seen)} the video's own), ` +
+      `${inputPath}: ${result.speakers.length} voices over ${result.turns.length} turns, ${seen.size} with a known face (${tiedToRegions(seen)} the video's own), ` +
         `${held.size} kept from before, model ${result.model}`,
     );
   }
@@ -265,7 +235,7 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
       speech: result.speakers.length > 0,
       speakers: result.speakers.length,
       seen: seen.size,
-      regions: regionsOf(seen),
+      regions: tiedToRegions(seen),
       kept: held.size,
       model: result.model,
     });

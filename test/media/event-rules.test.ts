@@ -311,6 +311,57 @@ Deno.test('rule: the voices of a recording are one fact, when speakersAt is writ
   assertEquals(later.filter((f) => f.type === MEDIA_EVENTS.speakersDetected).length, 0);
 });
 
+Deno.test("rule: a video's faces complete on the write that finished detection, saying whether its voices are there", async () => {
+  const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', VID, 'updated'), changedAttrs });
+  const completed = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.facesCompleted);
+  const nodes = indexedVideo({ speakersAt: '2026-10-10T08:00:00Z' });
+  nodes[VID].attrs.facesAt = '2026-10-11T08:00:00Z';
+  nodes[VID].attrs.faceCount = 2;
+
+  const facts = completed(await deriveEvents(updated(['facesAt', 'faceCount']), tree(nodes), 100));
+  assertEquals(facts.length, 1);
+  assertEquals(facts[0].subject, VID);
+  assertEquals(facts[0].data, { mimetype: 'video/mp4', facesAt: '2026-10-11T08:00:00Z', faceCount: 2, speakersAt: '2026-10-10T08:00:00Z' });
+
+  // Any later write to the video is not another completion.
+  assertEquals(completed(await deriveEvents(updated(['description']), tree(nodes), 100)), []);
+
+  // Faces first: the voices are not there to tie yet.
+  delete nodes[VID].attrs.speakersAt;
+  assertEquals(completed(await deriveEvents(updated(['facesAt', 'faceCount']), tree(nodes), 100))[0].data?.speakersAt, '');
+});
+
+Deno.test("rule: a face of a video with voices changing person is a fact about the video's voices", async () => {
+  const REGION = `${VID}/regions/face-0`;
+  const changed = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.speakersFaceChanged);
+  const updated = (changedAttrs: string[], path = REGION): VfsEventInput => ({ ...event('media-region', path, 'updated'), changedAttrs });
+  const nodes = indexedVideo({ speakersAt: '2026-10-10T08:00:00Z' });
+  nodes[REGION] = { id: 'rg0', type: 'media-region', attrs: { personId: 'p-anna' } };
+
+  for (const attrs of [['personId', 'personSource', 'personAssignedAt'], ['assignLocked'], ['rejectedPersonIds']]) {
+    const facts = changed(await deriveEvents(updated(attrs), tree(nodes), 100));
+    assertEquals(facts.length, 1, attrs.join());
+    assertEquals(facts[0].subject, VID);
+    assertEquals(facts[0].nodeId, 'f1');
+    assertEquals(facts[0].data, { mimetype: 'video/mp4', regionPath: REGION });
+  }
+
+  // A write that leaves the person alone is no fact, and needs no read to tell.
+  const untouched = tree(nodes, { getNode: () => Promise.reject(new Error('read')) });
+  assertEquals(await deriveEvents(updated(['doubt']), untouched, 100), []);
+  assertEquals(await deriveEvents(updated(['faceBox']), untouched, 100), []);
+  assertEquals(await deriveEvents(event('media-region', REGION, 'deleted'), untouched, 100), []);
+
+  // No voices yet: `voiceprint-file` reads the faces as they are when it ties them.
+  const silent = indexedVideo();
+  silent[REGION] = nodes[REGION];
+  assertEquals(changed(await deriveEvents(updated(['personId']), tree(silent), 100)), []);
+
+  // A photo's face has no voices to decide.
+  const photo = indexed();
+  assertEquals(changed(await deriveEvents(updated(['personId'], `${IMG}/regions/face-0`), tree(photo), 100)), []);
+});
+
 Deno.test('rule: an indexed video turned or flipped by hand is turned; any other write is not', async () => {
   const updated = (changedAttrs: string[], path = VID): VfsEventInput => ({ ...event('file', path, 'updated'), changedAttrs });
   const turned = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.fileTurned);

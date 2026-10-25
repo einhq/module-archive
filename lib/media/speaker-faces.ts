@@ -12,9 +12,13 @@
  *  - the person the face is among all the archive's faces (`personOfFace`). The person comes from
  *    the *region* a hit belongs to — a face embedding carries no person fields, its region does
  *    (@archive/media/regions).
+ *
+ * `seeSpeakers` asks EMS and answers both, for `voiceprint-file` as it writes the voices and for
+ * `see-speakers` once the video's faces are there.
  */
 
 import type { Command } from '@ein/client';
+import { type ActiveSpeaker, activeSpeakers } from '@ems/client';
 import { cosine, parseVector } from '@archive/media/near-duplicates';
 import { FACE_EMBEDDING_TYPE, faceEmbeddingsOfRegions, type RegionAttrs, regionsOfEmbeddings, regionsPathOf } from '@archive/media/regions';
 import type { Span } from '@archive/media/speakers';
@@ -28,7 +32,7 @@ const SPEAKER_FACE_MATCH_THRESHOLD = 0.5;
 const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
 
 /** The person a face embedding belongs to: the nearest face that is someone's, or null. */
-export const personOfFace = async (vfs: Vfs, access: Access, embedding: number[]): Promise<string | null> => {
+const personOfFace = async (vfs: Vfs, access: Access, embedding: number[]): Promise<string | null> => {
   const matches = await vfs.findSimilar(access, FACE_EMBEDDING_TYPE, new TextEncoder().encode(JSON.stringify(embedding)), 8, SPEAKER_FACE_MATCH_THRESHOLD);
   if (matches.length === 0) return null;
   const regionOf = await regionsOfEmbeddings(vfs, access, matches.map((m) => m.id));
@@ -46,7 +50,7 @@ export const personOfFace = async (vfs: Vfs, access: Access, embedding: number[]
 type VideoFace = { id: string; appearances: Span[]; vector: number[] };
 
 /** The face regions of a video that say when they are on screen and carry a vector. */
-export const facesOfVideo = async (vfs: Vfs, access: Access, videoPath: string): Promise<VideoFace[]> => {
+const facesOfVideo = async (vfs: Vfs, access: Access, videoPath: string): Promise<VideoFace[]> => {
   const entries = await vfs.children<RegionAttrs>(access, regionsPathOf(videoPath)).catch(() => []);
   const timed = entries.filter((entry) => Array.isArray(entry.node.attrs.appearances) && entry.node.attrs.appearances.length > 0);
   const embeddings = await faceEmbeddingsOfRegions(vfs, access, timed.map((entry) => entry.node.id));
@@ -67,7 +71,7 @@ export const facesOfVideo = async (vfs: Vfs, access: Access, videoPath: string):
  * near enough. Faces on screen together are different people (detection never groups them), so
  * the nearest of them is the one, even where some other video shows the same person more like it.
  */
-export const speakingRegion = (faces: VideoFace[], seen: { t: number; embedding: number[] }): VideoFace | undefined => {
+const speakingRegion = (faces: VideoFace[], seen: { t: number; embedding: number[] }): VideoFace | undefined => {
   let best: { face: VideoFace; similarity: number } | undefined;
   for (const face of faces) {
     if (!face.appearances.some(([start, end]) => start <= seen.t && seen.t <= end)) continue;
@@ -76,3 +80,45 @@ export const speakingRegion = (faces: VideoFace[], seen: { t: number; embedding:
   }
   return best?.face;
 };
+
+/** Who the face seen speaking with a voice is, and how well its lips moved with it. */
+export type SeenFace = { regionId: string | null; personId: string | null; score: number };
+
+/** A voice as EMS is asked about it: an id to answer by, and the turns it spoke. */
+type Voice = { id: string; turns: Span[] };
+
+/**
+ * The face EMS scored best with each voice of a video (`speech.active_speakers`, one call), as the
+ * video's own face region it is and the person it was recognised as: `voice id → face`, for every
+ * face that is either. Kept whatever the score — it is evidence, and `assign-speakers` decides how
+ * much a score has to be to count (`CFG_VOICE_ASD_MIN_SCORE`). `faces` is how many voices EMS
+ * scored a face for. Throws what the EMS call throws.
+ */
+export const seeSpeakers = async (
+  cmd: Command,
+  videoPath: string,
+  fileAttrs: Record<string, unknown>,
+  voices: Voice[],
+  onProgress?: (progress: string) => void | Promise<void>,
+): Promise<{ seen: Map<string, SeenFace>; faces: number }> => {
+  const answers: ActiveSpeaker[] = await activeSpeakers(
+    cmd,
+    videoPath,
+    typeof fileAttrs.angle === 'number' ? fileAttrs.angle : 0,
+    fileAttrs.mirror === true,
+    voices,
+    { onProgress },
+  );
+  const seen = new Map<string, SeenFace>();
+  if (answers.length === 0) return { seen, faces: 0 };
+  const videoFaces = await facesOfVideo(cmd.sys.vfs, cmd.access, videoPath);
+  for (const answer of answers) {
+    const regionId = speakingRegion(videoFaces, answer)?.id ?? null;
+    const personId = await personOfFace(cmd.sys.vfs, cmd.access, answer.embedding);
+    if (regionId || personId) seen.set(answer.id, { regionId, personId, score: answer.score });
+  }
+  return { seen, faces: answers.length };
+};
+
+/** How many of the faces seen speaking are one of the video's own face regions. */
+export const tiedToRegions = (seen: Map<string, SeenFace>): number => [...seen.values()].filter((face) => face.regionId).length;

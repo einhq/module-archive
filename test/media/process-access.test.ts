@@ -89,6 +89,7 @@ Deno.test({
       `compute-fingerprint ${photo}`,
       `transcribe-file ${clip}`,
       `voiceprint-file ${clip}`,
+      `see-speakers ${clip}`,
       `index-document ${letter}`,
       `media-reembed ${photo}`,
       'regenerate-face-crops',

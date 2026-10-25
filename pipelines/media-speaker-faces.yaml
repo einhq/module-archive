@@ -1,0 +1,42 @@
+name: media-speaker-faces
+description: Tie a video's voices to the faces seen speaking them, once its faces are detected
+
+# A video's faces are usually detected after its voices are printed: `media-video-faces` runs in
+# the faces kind below every photo's faces, and transcription and diarization in kinds of their
+# own. `voiceprint-file` ties a voice to the video's own face region only when the regions are
+# there, so this asks EMS again over the voices as they are, once the faces are, and decides the
+# voices the faces now say something new about. A video whose faces came first has its voices
+# tied as they are printed, and the trigger leaves it alone (`speakersAt` empty).
+#
+# Only on the write that finished detection, so a later attr write to the video asks nothing.
+trigger:
+  on: media.faces.completed
+  match:
+    mimetype: video/*
+    speakersAt: '?*'
+
+steps:
+  see:
+    command: see-speakers $NODE_PATH
+    description: LR-ASD over the voices already printed, each tied to the video's face seen speaking it
+    pool: media
+    # The same EMS call as `voiceprint-file`'s second one, and its kind.
+    kind: diarize
+    priority: 30
+    requires:
+      models: 1
+  assign:
+    command: assign-speakers $NODE_PATH
+    description: Decide the voices that are undecided, or that the face seen speaking now disagrees with
+    dependsOn: [see]
+    pool: media
+    kind: speaker-assign
+    priority: 40
+    # The key `media-speaker-assign` and faces share: see there.
+    exclusive: person-mint
+    requires:
+      cpu: 1
+
+options:
+  maxAttempts: 2
+  priority: 40

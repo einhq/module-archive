@@ -50,7 +50,8 @@ waits for rather than by a shared DAG:
    | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                              |
    | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`     | pool `transcribe` (1 model slot; priority 50/10)                                                   |
    | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                    | pool `diarize` (1 model slot; priority 30)                                                         |
-   | `media-speaker-assign` | `speakers.detected` (one per recording)                                         | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                             |
+   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                             |
+   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                     | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`) |
    | `media-duplicates`     | `duplicates.stale`                                                              | pool `dedupe` (1 cpu, priority 20)                                                                 |
    | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)       | pool `retime` (1 cpu, priority 20)                                                                 |
    | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed) | pool `sidecars` (1 cpu, priority 30, exclusive)                                                    |
@@ -1563,8 +1564,21 @@ people, so the nearest of them is the one even where another video shows the sam
 alike. The face is also searched among all the archive's faces, its person read from the region
 the hit belongs to — the voice's `asdPersonId`. The faces the video shows are found apart from
 this, by `media-video-faces`: lip-sync looks only at a few seconds of each voice, and only to tie
-a voice to a face. A voice printed before its video's faces are detected has no region
-(ein/core#728).
+a voice to a face.
+
+The two usually come the other way round: `media-video-faces` runs in the `faces` kind below every
+photo's faces, transcription and diarization in kinds of their own, so on an import a video's
+voices are printed long before its faces are detected (ein/core#728). The bridge announces
+`media.faces.completed` for a video on the write that sets its `facesAt`, with the file's
+`speakersAt`, and `media-speaker-faces` takes the ones that have voices: `see-speakers` asks EMS
+again over the voices as they are (`speech.active_speakers` alone, no diarization) and writes each
+voice's `asd*` fields anew, then `assign-speakers` decides the voices the faces now say something
+new about. A face whose person changes later — assigned after the voices were decided, named,
+corrected, locked as no one — is `media.speakers.face-changed` on its video, when the video has
+voices: the bridge binds `media-region.updated` and drops every write that leaves `personId`,
+`assignLocked` and `rejectedPersonIds` alone on the names the event carries. `media-speaker-assign`
+takes it, folding the faces of one video, assigned one after another, into one run
+(`coalesce: rerun`, a 5 s hold).
 
 `assign-speakers` and `cluster-voices` mirror `assign-faces` and `cluster-faces` and share their
 voting core. A voice is decided as a whole, on far more voice than any turn carries, and the
@@ -1573,10 +1587,10 @@ other and never go to the same person automatically — a diarizer that split on
 a merge to fix, two people fused into one would have to be found first. The gate on founding a new
 identity is how long the voice spoke in all (`CFG_VOICE_MIN_CREATE_SECONDS`, 10 s). A recognised
 face seen speaking (`asdScore` at least `CFG_VOICE_ASD_MIN_SCORE`, 0.6) is one more vote: for the
-person of the voice's region as it is when the voice is decided — a face named before then, or
-before an `assign-speakers --reassign`, names the voice with it (ein/core#728); for nobody when a person locked the region as no one or rejected the archive-wide match;
-for that match while the region names no one or is gone. Against it only voices a person named
-or locked are counted: automatic assignments are earlier
+person of the voice's region as it is when the voice is decided, so naming the face names the
+voice; for nobody when a person locked the region as no one or rejected the archive-wide match;
+for that match while the region names no one or is gone. Against the face only voices a person
+named or locked are counted: automatic assignments are earlier
 runs' guesses, and an unnamed voice that has swept up a few hundred recordings would outvote any
 face. Neighbours vote, but a voice joins the person they elect only when it is also like the mean
 of every voice that person already holds (`CFG_VOICE_PERSON_THRESHOLD`, cosine 0.7): each
@@ -1586,7 +1600,14 @@ lower bar (`CFG_VOICE_ASD_PERSON_THRESHOLD`, 0.5), and one who holds no voice ye
 the cold start the face is there for. Lip-sync on home video often names the face in frame while
 the camera operator talks; that voice is plainly someone else's, and the bar catches it.
 `media-speaker-assign` runs it
-once per recording, on the CPU pool, under the `person-mint` exclusive key faces share.
+once per recording when its voices are written and again when a face of the video changes person,
+on the CPU pool, under the `person-mint` exclusive key faces share.
+
+An automatic voice whose face disagrees with it — the face names someone else now, or names
+nobody where the decision leaned on it (`asdAssisted`) — is decided again as if new, and the
+outcome stands even when it is undecided, so the order faces and voices arrive in does not change
+who a voice is. The person it leaves, unnamed and holding nothing else, is deleted
+(`releasePerson`).
 
 `media-details` returns the recording's `speakers` (each with its turns and person) and the
 `unattributedTurns`; people only heard join the file's `people` with `source: 'voice'`, and

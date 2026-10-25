@@ -6,14 +6,21 @@ description: Decide which person each voice of a recording is
 # voices of one recording are never the same person automatically, which only a pass over all
 # of them at once can hold to.
 #
+# Again whenever a face of the video changes person — assigned after the voices were decided,
+# named, corrected — since a voice seen speaking with it votes for whoever the face is. Such a
+# change during a run is one the run may not have read, so it folds into one further run
+# (`coalesce: rerun`); nothing `assign-speakers` writes announces either fact. The hold lets the
+# faces of one video, assigned one after the other, arrive before the job is claimed.
+#
 # Pure database work — a kNN over every known voice — so it belongs on the CPU pool and never
 # holds a model slot for work that never calls EMS.
 #
 # `exclusive` is load-bearing and is deliberately the *same key faces use*: two recordings of
 # one new speaker decided at the same time would each mint a person, and so would a face-mint
 # racing a voice-mint. Both write under /people/unknown, so they serialise against each other.
-trigger:
-  on: media.speakers.detected
+triggers:
+  - on: media.speakers.detected
+  - on: media.speakers.face-changed
 
 steps:
   assign:
@@ -27,5 +34,7 @@ steps:
       cpu: 1
 
 options:
+  coalesce: rerun
+  debounceMs: 5000
   maxAttempts: 2
   priority: 5

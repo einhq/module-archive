@@ -53,13 +53,21 @@ export const MEDIA_EVENTS = {
   fingerprintComputed: 'media.fingerprint.computed',
   /** One face. Subject is the face node, so assignment is a per-face unit. */
   faceDetected: 'media.face.detected',
-  /** Face detection has finished for an image, including a zero-face result. */
+  /**
+   * Face detection has finished for an image, including a zero-face result, or for a video, on
+   * the write that finished it. A video's `data.speakersAt` says whether its voices are there yet.
+   */
   facesCompleted: 'media.faces.completed',
   /**
    * A recording's voices are written (`speakersAt` on the file). Subject is the file: who each
    * voice is gets decided once per recording, not once per turn.
    */
   speakersDetected: 'media.speakers.detected',
+  /**
+   * A face region of a video with voices changed person: a voice seen speaking with it may be
+   * someone else now. Subject is the video, whose voices are decided together.
+   */
+  speakersFaceChanged: 'media.speakers.face-changed',
   /**
    * A recording with speech in its transcript has no voices: never voiceprinted. The reconciler's
    * gap.
@@ -135,6 +143,9 @@ export const MEDIA_BRIDGE_ROUTING_KEYS = [
   'system.vfs.exif.updated',
   'system.vfs.position.created',
   'system.vfs.embedding.created',
+  // A face's person changing: about one write per face. Any other write to a region is dropped on
+  // the names the event carries; a person change costs one read of the file.
+  'system.vfs.media-region.updated',
   // Album membership. `child-attached` / `child-detached` carry the parent, so an album's own
   // level is exactly these two keys and nothing else on the system publishes on them.
   'system.vfs.album.child-attached',
@@ -533,20 +544,26 @@ function deriveTextLanguageSet(event: VfsEventInput, file: NodeSnapshot, now: nu
   }];
 }
 
-/** The fact revealed by detect-faces' final update of the source file. */
+/**
+ * The fact revealed by detect-faces' final update of the source file. A video's only on the write
+ * that set `facesAt`: what follows it (the voices tied to its faces) asks EMS, and a video's file
+ * takes many later attr writes.
+ */
 function deriveFacesCompleted(
-  filePath: string,
+  event: VfsEventInput,
   file: NodeSnapshot,
   now: number,
 ): Omit<DomainEvent, 'id'>[] {
   const mimetype = str(file.attrs.mimetype) ?? '';
   const facesAt = str(file.attrs.facesAt);
 
-  if (!isIndexableMedia(file) || !IMAGE_MIMETYPE.test(mimetype) || !facesAt) return [];
+  if (!isIndexableMedia(file) || !PICTURE_MIMETYPE.test(mimetype) || !facesAt) return [];
+  const video = !IMAGE_MIMETYPE.test(mimetype);
+  if (video && !(event.changedAttrs ?? []).includes('facesAt')) return [];
 
   return [{
     type: MEDIA_EVENTS.facesCompleted,
-    subject: filePath,
+    subject: event.path,
     nodeId: file.id,
     time: now,
     source: MEDIA_EVENT_SOURCE,
@@ -554,7 +571,39 @@ function deriveFacesCompleted(
       mimetype,
       facesAt,
       faceCount: num(file.attrs.faceCount) ?? 0,
+      ...(video ? { speakersAt: str(file.attrs.speakersAt) ?? '' } : {}),
     },
+  }];
+}
+
+/** Region attrs that decide whom a voice seen speaking with the face votes for. */
+const REGION_PERSON_ATTRS = ['personId', 'assignLocked', 'rejectedPersonIds'];
+
+/**
+ * The fact a face region's person changing reveals about a video's voices. Only a video that has
+ * voices: the voices tied to the face are decided again where the face now disagrees with them
+ * (@archive/media/speaker-assign).
+ *
+ * A region removed is no fact: `detect-faces` replacing a video's regions announces
+ * `media.faces.completed`, which ties the voices to the new ones, and a face a person removes by
+ * hand leaves the voices as they were decided.
+ */
+async function deriveForRegion(event: VfsEventInput, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
+  if (event.type !== 'updated' || !(event.changedAttrs ?? []).some((name) => REGION_PERSON_ATTRS.includes(name))) return [];
+  const regionsDir = parentOf(event.path);
+  if (nameOf(regionsDir) !== 'regions') return [];
+  const filePath = parentOf(regionsDir);
+  if (isTrashPath(filePath)) return [];
+  const file = await ctx.getNode(filePath);
+  const mimetype = str(file?.attrs.mimetype) ?? '';
+  if (!file || !mimetype.startsWith('video/') || !str(file.attrs.speakersAt)) return [];
+  return [{
+    type: MEDIA_EVENTS.speakersFaceChanged,
+    subject: filePath,
+    nodeId: file.id,
+    time: now,
+    source: MEDIA_EVENT_SOURCE,
+    data: { mimetype, regionPath: event.path },
   }];
 }
 
@@ -1204,7 +1253,7 @@ export async function deriveEvents(
 
       return [
         ...arrival,
-        ...deriveFacesCompleted(event.path, file, now),
+        ...deriveFacesCompleted(event, file, now),
         ...deriveSpeakersDetected(event, file, now),
         ...await deriveFileTurned(event, file, ctx, now),
         ...deriveTextLanguageSet(event, file, now),
@@ -1224,6 +1273,8 @@ export async function deriveEvents(
       return await withMemberFingerprinted(await deriveForEmbedding(event.path, ctx, now), ctx, now);
     case 'position':
       return await deriveForPosition(event.path, ctx, now);
+    case 'media-region':
+      return await deriveForRegion(event, ctx, now);
     case 'directory':
       return event.type === 'moved' ? await deriveForDirectoryMove(event.path, ctx, now) : [];
     default:
