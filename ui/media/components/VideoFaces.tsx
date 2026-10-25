@@ -1,4 +1,5 @@
 import { type RefObject, useEffect, useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { fileUrl } from '@ein/ui/lib';
 import type { FaceBox, MediaFace } from '@archive/media/api';
 import { boxAt, FACE_TRACK_NAME, parseTrack, type TrackPoint } from '../lib/face-track.ts';
@@ -30,37 +31,27 @@ function useFaceTracks(facePaths: string[]): Map<string, TrackPoint[]> {
   return tracks;
 }
 
-/** The video's playhead: every frame while it plays, and wherever it is paused or sought to. */
+/**
+ * The time of the video frame on screen, for every frame the video presents: while it plays and
+ * when it is paused or sought to.
+ *
+ * Read from the frame itself (`mediaTime`) rather than `currentTime`, which runs about a frame
+ * behind the one being presented, and committed at once: the callback comes in the rendering
+ * step that paints the frame, so the boxes are painted with it and not a frame later.
+ */
 function useVideoTime(mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | null>): number {
   const [time, setTime] = useState(0);
   useEffect(() => {
     const video = mediaRef.current;
     if (!(video instanceof HTMLVideoElement)) return;
-    let frame = 0;
-    const read = () => setTime(video.currentTime);
-    const tick = () => {
-      read();
-      frame = requestAnimationFrame(tick);
+    let handle = 0;
+    const presented = (_now: number, frame: VideoFrameCallbackMetadata) => {
+      flushSync(() => setTime(frame.mediaTime));
+      handle = video.requestVideoFrameCallback(presented);
     };
-    const play = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(tick);
-    };
-    const pause = () => {
-      cancelAnimationFrame(frame);
-      read();
-    };
-    read();
-    if (!video.paused) play();
-    video.addEventListener('play', play);
-    video.addEventListener('pause', pause);
-    video.addEventListener('seeked', read);
-    return () => {
-      cancelAnimationFrame(frame);
-      video.removeEventListener('play', play);
-      video.removeEventListener('pause', pause);
-      video.removeEventListener('seeked', read);
-    };
+    setTime(video.currentTime);
+    handle = video.requestVideoFrameCallback(presented);
+    return () => video.cancelVideoFrameCallback(handle);
   }, [mediaRef]);
   return time;
 }
