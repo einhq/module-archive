@@ -49,9 +49,18 @@ function useVideoTime(mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | 
       flushSync(() => setTime(frame.mediaTime));
       handle = video.requestVideoFrameCallback(presented);
     };
-    setTime(video.currentTime);
+    // Standing still the playhead is the frame shown: taken as well, so a paused or sought frame
+    // never keeps the box of a frame callback that did not come.
+    const still = () => setTime(video.currentTime);
+    still();
     handle = video.requestVideoFrameCallback(presented);
-    return () => video.cancelVideoFrameCallback(handle);
+    video.addEventListener('pause', still);
+    video.addEventListener('seeked', still);
+    return () => {
+      video.cancelVideoFrameCallback(handle);
+      video.removeEventListener('pause', still);
+      video.removeEventListener('seeked', still);
+    };
   }, [mediaRef]);
   return time;
 }
