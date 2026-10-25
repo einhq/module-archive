@@ -40,7 +40,7 @@ type Found = {
   embedding: number[];
   landmarks?: number[][];
   pose?: unknown;
-  /** On a video: the second the box is of, when the face is on screen, and its box in every sampled frame. */
+  /** On a video: the second the box is of, when the face is on screen, and its path: its box as often as it moves, at least once a second. */
   at?: number;
   appearances?: [number, number][];
   track?: [number, number, number, number, number][];
@@ -236,7 +236,7 @@ const detectFaces = async (cmd: Command): CmdReturn => {
       // Written through the VFS rather than the shell, which would truncate it.
       await writeText(cmd, faceEmbeddingPathOf(regionPath), JSON.stringify(face.embedding));
       if (face.track && face.track.length > 0) {
-        // Where the face was in each frame looked at, a line a frame, for a box that follows it.
+        // Where the face was along its path, a line a sighting, for a box that follows it.
         await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_TRACK_NAME, { attrs: { mimetype: FACE_TRACK_MIMETYPE } });
         await writeText(cmd, `${regionPath}/${FACE_TRACK_NAME}`, face.track.map((line) => JSON.stringify(line)).join('\n') + '\n');
       }

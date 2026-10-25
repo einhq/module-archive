@@ -1,7 +1,8 @@
 /**
- * A video face's track: its box in every frame `detect-faces` looked at, a line each. Between
- * two of those frames the box slides from one to the next, so it follows the face while the
- * video plays; outside the face's appearances there is no box.
+ * A video face's track: its box at the moments EMS kept, a line each — every sample while the
+ * face moves, about one a second while it stands still. Between two of them the box slides from
+ * one to the next, so it follows the face while the video plays; outside the face's appearances
+ * there is no box.
  */
 
 import type { FaceBox } from '@archive/media/api';
