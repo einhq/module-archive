@@ -21,6 +21,7 @@ import {
   regionsPathOf,
   removeDetectedRegions,
 } from '@archive/media/regions';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
 import { reportUnwritable } from '@archive/media/writable';
 
 const log = (...args: unknown[]) => console.log('[detect-faces]', ...args);
@@ -104,6 +105,14 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   if (!video && !mimetype.startsWith('image/')) {
     await cmd.writeError(`detect-faces: ${inputPath}: not an image or a video (is ${mimetype})\n`);
     return 1;
+  }
+
+  // `exif-extract` found nothing can decode the bytes, so there are no frames to look at and never
+  // will be. Every other step downstream skips on it too, and media-heal leaves it out.
+  const undecodable = fileAttrs[UNDECODABLE_ATTR];
+  if (typeof undecodable === 'string' && undecodable.length > 0 && !force) {
+    if (verbose) await cmd.writeLn(`${inputPath}: source cannot be decoded (${undecodable}), no faces to find`);
+    return 0;
   }
 
   const nodeId = nodeInfo.id;

@@ -114,6 +114,16 @@ Deno.test({
       assertEquals(await vfs.exists(ADMIN_ACCESS, `${empty}/regions`), false);
     });
 
+    await t.step('a video nothing can decode is not sent to EMS, and the step succeeds', async () => {
+      const broken = `${ALBUMS_ROOT}/fest/files/P1030159.MOV`;
+      await cmd.shouldSucceed(`mknode -t file ${broken} --as name=P1030159.MOV --as mimetype=video/quicktime --as 'undecodable=moov atom not found'`);
+      const asked = stub.requests.length;
+      const out = await run(broken);
+      assertEquals(out.success, true, out.error);
+      assertEquals(stub.requests.length, asked);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${broken}/regions`), false);
+    });
+
     await t.step('a recording is not something faces are looked for in', async () => {
       const sound = `${ALBUMS_ROOT}/fest/files/tal.m4a`;
       await cmd.shouldSucceed(`mknode -t file ${sound} --as name=tal.m4a --as mimetype=audio/mp4`);
