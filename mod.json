@@ -207,6 +207,18 @@
         ]
       },
       {
+        "key": "CFG_MODEL_KIND_GROUPS",
+        "scope": "system",
+        "type": "string",
+        "default": "",
+        "label": "Model backlogs that share a turn",
+        "description": "Backlogs whose models fit on the media service's card together, kinds joined by `+` and groups apart by commas, such as `faces+embed-picture+ocr,transcribe+diarize`. A group shares one turn of the rotation and its backlogs are sent side by side, so the media service runs their models at once. Empty, each backlog has its turn alone. Size a group against the card's share: models that do not fit are run on the CPU.",
+        "group": "Processing",
+        "restarts": [
+          "models"
+        ]
+      },
+      {
         "key": "CFG_FACE_ATTACH_THRESHOLD",
         "scope": "system",
         "type": "number",
