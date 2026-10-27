@@ -42,7 +42,10 @@ export default function FamilyPage() {
     };
   }, [key]);
 
-  const expanded = useMemo(() => new Set(Object.keys(graph?.nodes ?? {})), [graph]);
+  const expanded = useMemo(() => {
+    const everyone = new Set(Object.keys(graph?.nodes ?? {}));
+    return { up: everyone, down: everyone };
+  }, [graph]);
 
   if (failed) return <Text size='sm' c='dimmed'>No family to draw.</Text>;
   if (!graph) {
@@ -63,7 +66,6 @@ export default function FamilyPage() {
       onAddRelation={ignore}
       onRemoveRelation={ignore}
       fit
-      expandable
     />
   );
 }

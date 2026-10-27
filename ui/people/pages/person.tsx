@@ -194,7 +194,6 @@ export default function PersonDetailPage() {
               editable={isAdmin}
               onAddRelation={(path, kind) => setAdding({ subject: { path, name: graph?.nodes[path]?.name ?? path }, kind })}
               onRemoveRelation={setRemoving}
-              expandable
               emptyMessage={isAdmin
                 ? `No family recorded for ${person.name} yet. Use the menu on their card to add a parent, partner or child.`
                 : `No family recorded for ${person.name} yet.`}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { FamilyGraph, shq } from '@ein/ui/lib';
+import type { FamilyDirection } from '@ein/ui/components';
 import { mergeFamilyNodes } from '../lib/family-graph.ts';
 import type { FamilyNode, GraphResponse } from '@archive/people/api';
 
@@ -8,17 +9,19 @@ type UsePersonGraphResult = {
   graph: FamilyGraph | null;
   loading: boolean;
   error: Error | null;
-  /** Pull in one more generation each way around `path` and merge it in. */
-  expand: (path: string) => void;
-  /** Paths whose neighbours have been fetched — a card only offers to expand once. */
-  expanded: ReadonlySet<string>;
-  /** Currently fetching around this path, so the card can say so. */
-  expanding: string | null;
+  /** Pull in the generation above or below `path` and merge it in. */
+  expand: (path: string, direction: FamilyDirection) => void;
+  /** Paths each direction has been fetched from — a card only offers to expand that way once. */
+  expanded: Readonly<Record<FamilyDirection, ReadonlySet<string>>>;
+  /** Currently fetching from this path that way, so its card can say so. */
+  expanding: { path: string; direction: FamilyDirection } | null;
   /** Throw away every expansion and go back to the opening slice. */
   reset: () => void;
   /** Re-read everything, keeping the expansions — after an edit. */
   refetch: () => void;
 };
+
+const NONE_EXPANDED = { up: new Set<string>(), down: new Set<string>() } as const;
 
 /** What the opening view shows: enough to recognise the shape, little enough to read. */
 const INITIAL_UP = 2;
@@ -29,8 +32,9 @@ const INITIAL_DOWN = 2;
  *
  * The whole graph is never fetched: a corpus reaching back to the 1600s would
  * arrive as a payload nobody can read and a drawing nobody can scan. Expanding a
- * card asks `person-graph` again rooted *there* and merges the answer, so the
- * command stays stateless and each click costs one exec.
+ * card asks `person-graph` again rooted *there*, one generation the way it was
+ * expanded, and merges the answer, so the command stays stateless and each
+ * click costs one exec.
  *
  * Slices accumulate through `mergeFamilyNodes`, which unions the edges rather
  * than replacing them — see there for why replacing detaches rows that are
@@ -38,8 +42,8 @@ const INITIAL_DOWN = 2;
  */
 export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
   const [nodes, setNodes] = useState<Record<string, FamilyNode>>({});
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
-  const [expanding, setExpanding] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Readonly<Record<FamilyDirection, ReadonlySet<string>>>>(NONE_EXPANDED);
+  const [expanding, setExpanding] = useState<{ path: string; direction: FamilyDirection } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -47,7 +51,7 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
   useEffect(() => {
     if (!rootPath) {
       setNodes({});
-      setExpanded(new Set());
+      setExpanded(NONE_EXPANDED);
       return;
     }
 
@@ -59,7 +63,7 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
         const answer = await execCommand<GraphResponse>(`person-graph ${shq(rootPath)} --up ${INITIAL_UP} --down ${INITIAL_DOWN}`);
         if (cancelled) return;
         setNodes(answer.nodes ?? {});
-        setExpanded(new Set());
+        setExpanded(NONE_EXPANDED);
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err : new Error(String(err)));
@@ -74,12 +78,13 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
     };
   }, [rootPath, reloadKey]);
 
-  const expand = useCallback(async (path: string) => {
-    setExpanding(path);
+  const expand = useCallback(async (path: string, direction: FamilyDirection) => {
+    setExpanding({ path, direction });
     try {
-      const answer = await execCommand<GraphResponse>(`person-graph ${shq(path)} --up 1 --down 1`);
+      const [up, down] = direction === 'up' ? [1, 0] : [0, 1];
+      const answer = await execCommand<GraphResponse>(`person-graph ${shq(path)} --up ${up} --down ${down}`);
       setNodes((current) => mergeFamilyNodes(current, answer.nodes ?? {}));
-      setExpanded((current) => new Set(current).add(path));
+      setExpanded((current) => ({ ...current, [direction]: new Set(current[direction]).add(path) }));
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
@@ -97,7 +102,7 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
     graph,
     loading,
     error,
-    expand: useCallback((path: string) => void expand(path), [expand]),
+    expand: useCallback((path: string, direction: FamilyDirection) => void expand(path, direction), [expand]),
     expanded,
     expanding,
     reset,
