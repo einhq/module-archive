@@ -48,10 +48,11 @@ the location's and the archive's.
   someone you pick, make them one new unidentified person, or say they are not a
   face at all.
 - **Family** — an interactive tree. Ancestors above, descendants below, couples side
-  by side. Drag it around, and pinch or scroll to zoom; the buttons in its corner
-  open it full screen and fit the whole family. A chevron on top of a card shows
-  their parents, one underneath their children; the menu on a card adds a parent,
-  partner or child, or removes a relation.
+  by side. Drag it around, and pinch, scroll or double-click to zoom
+  (Shift+double-click zooms out); the buttons in its corner open it full screen and
+  fit the whole family. A chevron on top of a card shows their parents, one
+  underneath their children; the menu on a card adds a parent, partner or child, or
+  removes a relation.
 
 ## Good to know
 
