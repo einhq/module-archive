@@ -198,9 +198,9 @@
         "key": "CFG_MODEL_KIND_QUANTUM_MS",
         "scope": "system",
         "type": "number",
-        "default": "900000",
+        "default": "3600000",
         "label": "Model backlog rotation (ms)",
-        "description": "How long the models worker stays on one backlog (faces, picture vectors, text in pictures, text vectors, transcripts, voices) before rotating to the next when work remains on more than one. Faces outrank the other backlogs and a crawl finds new ones continuously, so without this they would starve the rest outright.",
+        "description": "How long the models worker stays on one backlog (faces, picture vectors, text in pictures, text vectors, transcripts, voices) before rotating to the next when work remains on more than one. Faces outrank the other backlogs and a crawl finds new ones continuously, so without this they would starve the rest outright. Each rotation costs the media service a minute or two of loading models and of slots waiting for the last long step of the old backlog, so an hour puts throughput before the wait of the other backlogs; a backlog with no work hands its turn on at once either way.",
         "group": "Processing",
         "restarts": [
           "models"
