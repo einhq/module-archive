@@ -42,10 +42,6 @@
 # that nothing ever wrote to. The engine filled /var/pools/media while both workers sat
 # parked on /pools/media claiming nothing, with no error on either side. See
 # ein/core#210.
-# CFG_MODEL_KIND_GROUPS names kinds whose models fit on the card together, kinds joined by `+`
-# and groups apart by commas (`faces+embed-picture+ocr,transcribe+diarize`). A group shares one
-# turn of the rotation, its kinds taking slots in turn, so EMS runs their families side by side
-# instead of one turn after another. Empty, every kind has its turn alone.
 echo models-worker: starting
 
 pipeline-worker --pool "${POOLS_PATH:-/var/pools}/media" \
@@ -58,5 +54,4 @@ pipeline-worker --pool "${POOLS_PATH:-/var/pools}/media" \
   --kind diarize \
   --kind shots \
   --kind-quantum "${CFG_MODEL_KIND_QUANTUM_MS:-3600000}" \
-  --kind-group "${CFG_MODEL_KIND_GROUPS:-}" \
   --concurrency "${CFG_MODEL_SLOTS:-2}"
