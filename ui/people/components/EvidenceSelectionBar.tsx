@@ -7,6 +7,7 @@ import type { PersonVoice } from '../hooks/usePersonVoices.ts';
 import { type DetachDestination, detachFromPerson } from '../lib/person-detach.ts';
 import type { AppliedFaceChange } from '../lib/face-change.ts';
 import { regionCount } from '../lib/face-crop.ts';
+import { PersonOption } from './PersonOption.tsx';
 import { execCommand } from '@ein/ui/signals';
 import { Dialog, DialogActions, TablerIcon } from '@ein/ui/components';
 
@@ -192,6 +193,7 @@ export function EvidenceSelectionBar({ faces, voices, total, named, onClear, onD
             label='Who they are'
             placeholder='Pick someone'
             data={people}
+            renderOption={({ option }) => <PersonOption path={option.value} name={option.label} />}
             value={target}
             onChange={setTarget}
             nothingFoundMessage='Nobody by that name'

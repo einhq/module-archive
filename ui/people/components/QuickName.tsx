@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { notify } from '@ein/ui/signals';
 import type { PersonEntry } from '../hooks/usePeople.ts';
+import { PersonOption } from './PersonOption.tsx';
 
 type Props = {
   /** The unidentified person this names. */
@@ -28,7 +29,13 @@ type Props = {
 export function QuickName({ path, named, onName, onMerge, onDone, form = false }: Props) {
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
-  const names = useMemo(() => [...new Set(named.map((person) => person.name))], [named]);
+  /** Each name once, with whoever has it first, for their picture in the list. */
+  const byName = useMemo(() => {
+    const map = new Map<string, PersonEntry>();
+    for (const person of named) if (!map.has(person.name)) map.set(person.name, person);
+    return map;
+  }, [named]);
+  const names = useMemo(() => [...byName.keys()], [byName]);
   const name = value.trim();
   const existing = useMemo(() => named.find((person) => person.name.toLocaleLowerCase() === name.toLocaleLowerCase()), [named, name]);
 
@@ -63,6 +70,10 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
       // of eight unrelated names dropped over the faces and recordings would hide what it is for.
       data={name ? names : []}
       limit={8}
+      renderOption={({ option }) => {
+        const person = byName.get(option.value);
+        return person ? <PersonOption path={`${PEOPLE_ROOT}/${person.id}`} name={person.name} /> : option.value;
+      }}
       disabled={busy}
       data-autofocus={form || undefined}
       onKeyDown={(event) => {
