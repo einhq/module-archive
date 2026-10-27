@@ -8,7 +8,7 @@
 
 import { PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { mergeFamilyNodes } from '../family-graph.ts';
+import { collapseFamilyNodes, mergeFamilyNodes } from '../family-graph.ts';
 import type { FamilyNode } from '@archive/people/api';
 
 const node = (name: string, over: Partial<FamilyNode> = {}): FamilyNode => ({
@@ -70,4 +70,53 @@ Deno.test('family graph merge: partners union by path, without duplicating', () 
 Deno.test('family graph merge: people only in one side survive', () => {
   const merged = mergeFamilyNodes({ [`${PEOPLE_ROOT}/a`]: node('a') }, { [`${PEOPLE_ROOT}/b`]: node('b') });
   assertEquals(Object.keys(merged).toSorted(), [`${PEOPLE_ROOT}/a`, `${PEOPLE_ROOT}/b`]);
+});
+
+Deno.test('family graph collapse: an expand is undone with everything grown from it', () => {
+  const p = (name: string) => `${PEOPLE_ROOT}/${name}`;
+  // mia on screen with her mother anna; anna expanded up brought gustav and
+  // hedda, and gustav expanded down then brought nils.
+  const nodes = {
+    [p('mia')]: node('mia', { parents: [p('anna')], parentCount: 1 }),
+    [p('anna')]: node('anna', { children: [p('mia')], parents: [p('gustav'), p('hedda')], parentCount: 2, childCount: 1 }),
+    [p('gustav')]: node('gustav', { children: [p('anna'), p('nils')], partners: [{ path: p('hedda') }], childCount: 2 }),
+    [p('hedda')]: node('hedda', { children: [p('anna'), p('nils')], partners: [{ path: p('gustav') }], childCount: 2 }),
+    [p('nils')]: node('nils', { parents: [p('gustav'), p('hedda')], parentCount: 2 }),
+  };
+  const expansions = [
+    { path: p('anna'), direction: 'up' as const, added: [p('gustav'), p('hedda')] },
+    { path: p('gustav'), direction: 'down' as const, added: [p('nils')] },
+  ];
+
+  const folded = collapseFamilyNodes(p('mia'), nodes, expansions, p('anna'), 'up');
+  assertEquals(Object.keys(folded.nodes).sort(), [p('anna'), p('mia')]);
+  // Anna's parents are off the tree, and the count still says she has two.
+  assertEquals(folded.nodes[p('anna')].parents, []);
+  assertEquals(folded.nodes[p('anna')].parentCount, 2);
+  assertEquals(folded.expansions, []);
+
+  // Undoing only the later expand keeps the earlier one.
+  const once = collapseFamilyNodes(p('mia'), nodes, expansions, p('gustav'), 'down');
+  assertEquals(Object.keys(once.nodes).sort(), [p('anna'), p('gustav'), p('hedda'), p('mia')]);
+  assertEquals(once.nodes[p('hedda')].children, [p('anna')]);
+  assertEquals(once.expansions, [expansions[0]]);
+});
+
+Deno.test('family graph collapse: another expand left incomplete is forgotten', () => {
+  const p = (name: string) => `${PEOPLE_ROOT}/${name}`;
+  // Both parents were expanded down; gustav's brought nils, hedda's found him already there.
+  const nodes = {
+    [p('anna')]: node('anna', { parents: [p('gustav'), p('hedda')], parentCount: 2 }),
+    [p('gustav')]: node('gustav', { children: [p('anna'), p('nils')], partners: [{ path: p('hedda') }], childCount: 2 }),
+    [p('hedda')]: node('hedda', { children: [p('anna'), p('nils')], partners: [{ path: p('gustav') }], childCount: 2 }),
+    [p('nils')]: node('nils', { parents: [p('gustav'), p('hedda')], parentCount: 2 }),
+  };
+  const expansions = [
+    { path: p('gustav'), direction: 'down' as const, added: [p('nils')] },
+    { path: p('hedda'), direction: 'down' as const, added: [] },
+  ];
+  const folded = collapseFamilyNodes(p('anna'), nodes, expansions, p('gustav'), 'down');
+  assertEquals(folded.nodes[p('nils')], undefined);
+  // Hedda no longer shows all her children, so she offers to expand again.
+  assertEquals(folded.expansions, []);
 });

@@ -51,7 +51,7 @@ the location's and the archive's.
   by side. Drag it around, and pinch, scroll or double-click to zoom
   (Shift+double-click zooms out); the buttons in its corner open it full screen and
   fit the whole family. A chevron on top of a card shows their parents, one
-  underneath their children; the menu on a card adds a parent, partner or child, or
+  underneath their children, and once shown it turns round to hide them again; the menu on a card adds a parent, partner or child, or
   removes a relation.
 
 ## Good to know

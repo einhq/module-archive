@@ -63,7 +63,7 @@ export default function PersonDetailPage() {
 
   // Family changes affect the graph, header and feed, so all three are
   // re-read after an edit.
-  const { graph, loading: graphLoading, expand, expanded, expanding, refetch: refetchGraph } = usePersonGraph(
+  const { graph, loading: graphLoading, expand, collapse, expanded, expanding, refetch: refetchGraph } = usePersonGraph(
     tab === 'family' ? person?.path ?? null : null,
   );
   const [adding, setAdding] = useState<{ subject: { path: string; name: string }; kind: RelationKind } | null>(null);
@@ -191,6 +191,7 @@ export default function PersonDetailPage() {
               expanded={expanded}
               expanding={expanding}
               onExpand={expand}
+              onCollapse={collapse}
               editable={isAdmin}
               onAddRelation={(path, kind) => setAdding({ subject: { path, name: graph?.nodes[path]?.name ?? path }, kind })}
               onRemoveRelation={setRemoving}

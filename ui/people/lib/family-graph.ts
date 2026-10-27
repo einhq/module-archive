@@ -44,3 +44,71 @@ export function mergeFamilyNodes(current: Record<string, FamilyNode>, incoming: 
 
   return merged;
 }
+
+/** One expand of a card: which way, and the people it brought onto the tree that were not there before. */
+export type FamilyExpansion = { path: string; direction: 'up' | 'down'; added: string[] };
+
+/**
+ * Undo an expand: take off the people it brought in, the people every later expand from one of them
+ * brought in, and anybody left with no tie to `root`, and trim every edge to them. People who were
+ * on the tree before it stay, however they are related.
+ *
+ * Another expand whose relatives that way are now no longer all drawn is forgotten too, so its card
+ * offers to expand again rather than claiming a branch it no longer shows.
+ */
+export function collapseFamilyNodes(
+  root: string,
+  nodes: Record<string, FamilyNode>,
+  expansions: readonly FamilyExpansion[],
+  path: string,
+  direction: 'up' | 'down',
+): { nodes: Record<string, FamilyNode>; expansions: FamilyExpansion[] } {
+  const undone = expansions.find((expansion) => expansion.path === path && expansion.direction === direction);
+  if (!undone) return { nodes, expansions: [...expansions] };
+
+  const removed = new Set<string>();
+  const dropped = new Set<FamilyExpansion>();
+  const pending = [undone];
+  while (pending.length > 0) {
+    const expansion = pending.pop()!;
+    if (dropped.has(expansion)) continue;
+    dropped.add(expansion);
+    for (const added of expansion.added) {
+      if (added !== root) removed.add(added);
+    }
+    pending.push(...expansions.filter((other) => !dropped.has(other) && removed.has(other.path)));
+  }
+
+  // Whoever is left with no way back to the root went with them.
+  const reached = new Set<string>([root]);
+  const queue = [root];
+  while (queue.length > 0) {
+    const node = nodes[queue.pop()!];
+    if (!node) continue;
+    for (const next of [...node.parents, ...node.children, ...node.partners.map((partner) => partner.path)]) {
+      if (removed.has(next) || reached.has(next) || !nodes[next]) continue;
+      reached.add(next);
+      queue.push(next);
+    }
+  }
+
+  const kept: Record<string, FamilyNode> = {};
+  for (const [key, node] of Object.entries(nodes)) {
+    if (!reached.has(key)) continue;
+    kept[key] = {
+      ...node,
+      parents: node.parents.filter((other) => reached.has(other)),
+      children: node.children.filter((other) => reached.has(other)),
+      partners: node.partners.filter((partner) => reached.has(partner.path)),
+    };
+  }
+
+  const whole = (expansion: FamilyExpansion): boolean => {
+    const before = nodes[expansion.path];
+    const after = kept[expansion.path];
+    if (!before || !after) return false;
+    return expansion.direction === 'up' ? after.parents.length === before.parents.length : after.children.length === before.children.length;
+  };
+
+  return { nodes: kept, expansions: expansions.filter((expansion) => !dropped.has(expansion) && whole(expansion)) };
+}
