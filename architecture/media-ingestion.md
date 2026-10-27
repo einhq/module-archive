@@ -1432,7 +1432,8 @@ comes from the largest gap in the top merges (`suggestCut`), because no fixed th
 work — average-link similarities depend entirely on the person, and on the real `Unknown
 KA0J5R` the two people join at 0.015 while their own merges sit near 0.33. No gap means no
 split suggested. Vectors arrive through `vfs.getVectors`, one query for the set, rather than an
-`open`/`read` round trip per face.
+`open`/`read` round trip per face. `subcluster-voices <person>` is the same over a person's voices,
+one per recording they are heard in, for a person `cluster-voices` fused the same way.
 
 `person-detach <facePath...>` is the write side and the only thing in the archive that moves
 identity at face granularity: `--to-new-person` mints an unnamed person for a sub-group,

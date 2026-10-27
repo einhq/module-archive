@@ -1,0 +1,137 @@
+#!ts
+/**
+ * subcluster-voices — re-cluster one person's own voices, so a wrongly fused identity found by
+ * voice can be taken apart.
+ *
+ * The voice counterpart of `subcluster-faces`, over the same average-linkage dendrogram
+ * (@archive/media/face-subcluster): `cluster-voices` builds people from single-link components
+ * as `cluster-faces` does, and fuses two speakers on one weak edge the same way. One item is one
+ * voice of one recording, a speaker node holding its voiceprint.
+ *
+ * Read-only, and a dendrogram rather than groups, for the same reason: the reviewer re-cuts it
+ * at any threshold, and `person-detach` acts on the voices they pick.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { parseArgs } from '@ein/client';
+import { type PersonNodeAttrs, personPathOf, voicesOf, type VoiceView, voiceView, withRecordings } from '@archive/people/person';
+import { buildDendrogram, cutAtSimilarity, cutIntoK, groupsFrom, normalize, suggestCut } from '@archive/media/face-subcluster';
+import type { Merge, VoiceSubclusterResult } from '@archive/media/api';
+
+const VOICE_TYPE = 'voice';
+
+const subclusterVoices = async (cmd: Command): CmdReturn => {
+  const flags = parseArgs(cmd.args, {
+    string: ['threshold', 'k'],
+    boolean: ['verbose'],
+    alias: { t: 'threshold', v: 'verbose' },
+  });
+
+  const [personArg] = flags._ as string[];
+  if (!personArg) {
+    await cmd.writeError('subcluster-voices: usage: subcluster-voices <person>\n');
+    return 1;
+  }
+  const personPath = personPathOf(personArg, cmd.cwd);
+
+  const bad: string[] = [];
+  const num = (name: string, value: string | undefined): number | undefined => {
+    if (value === undefined) return undefined;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+    bad.push(name);
+    return undefined;
+  };
+  // No default threshold: see suggestCut for why a fixed one cannot work.
+  const threshold = num('threshold', flags.threshold);
+  const k = num('k', flags.k);
+  if (bad.length > 0) {
+    await cmd.writeError(`subcluster-voices: ${bad.map((name) => `--${name}`).join(', ')} must be a number\n`);
+    return 1;
+  }
+
+  try {
+    const vfs = cmd.sys.vfs;
+    const access = cmd.access;
+
+    const node = await vfs.get<PersonNodeAttrs>(access, personPath, { follow: false });
+    if (node.type !== 'person') throw new Error(`${personPath}: not a person node (is ${node.type})`);
+
+    // A speaker node is the embedding itself, so its id is the vector's id.
+    const rows = await voicesOf(vfs, access, node.id);
+    const vectors = await vfs.getVectors(access, VOICE_TYPE, rows.map((row) => row.id));
+
+    const usable: { view: VoiceView; vector: Float32Array }[] = [];
+    let withoutVector = 0;
+    for (const row of rows) {
+      const raw = vectors.get(row.id);
+      if (!raw) {
+        withoutVector++;
+        continue;
+      }
+      usable.push({ view: voiceView(row), vector: normalize(JSON.parse(new TextDecoder().decode(raw)) as number[]) });
+    }
+    await withRecordings(vfs, access, usable.map((voice) => voice.view));
+
+    // Longest heard first, as `person-voices` lists them, and stable so a re-run gives the same indices.
+    usable.sort((a, b) => b.view.talkSeconds - a.view.talkSeconds || a.view.voicePath.localeCompare(b.view.voicePath));
+
+    const dendrogram = buildDendrogram(usable.map((voice) => voice.vector));
+    const suggested = suggestCut(dendrogram);
+    const cutAt = threshold ?? suggested.threshold;
+    const groups = groupsFrom(k === undefined ? cutAtSimilarity(dendrogram, cutAt) : cutIntoK(dendrogram, k));
+
+    const attrs = node.attrs as PersonNodeAttrs;
+    const result = {
+      person: { id: node.id, path: personPath, name: attrs.name ?? personPath.split('/').pop() ?? '', unnamed: !!attrs.unnamed },
+      total: usable.length,
+      withoutVector,
+      threshold: k === undefined ? cutAt : null,
+      k: k ?? null,
+      suggested,
+      voices: usable.map((voice) => voice.view),
+      merges: dendrogram.merges.map((m): Merge => [m.a, m.b, Number(m.sim.toFixed(5)), m.size]),
+      groups,
+    };
+
+    if (cmd.json) {
+      await cmd.writeJSON(result satisfies VoiceSubclusterResult);
+      return 0;
+    }
+
+    await cmd.writeLn(
+      `${result.person.name}: ${usable.length} voice${usable.length === 1 ? '' : 's'}` +
+        (withoutVector > 0 ? ` (${withoutVector} without a voiceprint, skipped)` : '') +
+        ` -> ${groups.length} group${groups.length === 1 ? '' : 's'}` +
+        (k === undefined ? ` at similarity ${cutAt.toFixed(4)}${threshold === undefined ? ' (suggested)' : ''}` : ` cut into ${k}`),
+    );
+    for (const [index, group] of groups.entries()) {
+      await cmd.writeLn(`  group ${index + 1}: ${group.length} voice${group.length === 1 ? '' : 's'}`);
+      if (!flags.verbose) continue;
+      for (const member of group) await cmd.writeLn(`    ${usable[member].view.filePath ?? usable[member].view.voicePath}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`subcluster-voices: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+subclusterVoices.spec = {
+  name: 'subcluster-voices',
+  effect: 'read' as const,
+  description: "Re-cluster one person's voices with average linkage, to find two people fused into one",
+  args: [
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+  ],
+  flags: [
+    { name: 'threshold', type: 'string' as const, description: 'min average similarity to keep voices together (default: the largest gap in the dendrogram)' },
+    { name: 'k', type: 'string' as const, description: 'cut into exactly this many groups instead of by threshold' },
+    { name: 'verbose', type: 'bool' as const, description: 'list the recordings in each group' },
+  ],
+  examples: [
+    'subcluster-voices /archive/people/Anna_Exempel',
+  ],
+  returns: "the sub-clusters the person's voices fall into, which is how two speakers fused into one show up.",
+};
+
+export default subclusterVoices;

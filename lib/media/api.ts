@@ -7,7 +7,7 @@
  */
 
 import type { CommentEntry, NodeOwnership } from '@ein/api';
-import type { PersonFace } from '@archive/people/api';
+import type { PersonFace, PersonVoice } from '@archive/people/api';
 import type { StagingGroupDetail, StagingRowInfo } from '@archive/staging/api';
 
 export type NodeRef = {
@@ -241,6 +241,18 @@ export type SubclusterResult = {
   total: number;
   withoutVector: number;
   faces: PersonFace[];
+  merges: Merge[];
+  groups: number[][];
+  suggested: { threshold: number; groups: number };
+};
+
+/** `subcluster-voices`: the same dendrogram over one person's voices, one per recording heard in. */
+export type VoiceSubclusterResult = {
+  person: { id: string; path: string; name: string; unnamed: boolean };
+  total: number;
+  /** Voices whose recording was never voiceprinted, which have nothing to compare. */
+  withoutVector: number;
+  voices: PersonVoice[];
   merges: Merge[];
   groups: number[][];
   suggested: { threshold: number; groups: number };

@@ -311,8 +311,9 @@ pickable; what is picked, faces and recordings together, is split off as someone
 someone, or marked not a person from a bar at the foot (`EvidenceSelectionBar`, over
 `person-detach`). "Not a person" beside the name box says it of the whole cluster
 (`person-discard`): everything they hold is locked and the entry goes; the overview's selection bar
-does the same for the clusters ticked there, next to merging them. "Group similar faces" re-clusters the faces against each other once
-(`subcluster-faces`) and lays them out in groups cut wherever the slider says, a group's box picking
+does the same for the clusters ticked there, next to merging them. "Adjust group threshold", on the
+faces and on the voices each, re-clusters them against each other once (`subcluster-faces`,
+`subcluster-voices`) and lays them out in groups cut wherever the slider says, a group's box picking
 all of it, so two people fused into one come apart with the same actions. The person page's Heard in
 tab is the same tiles. Ages under one year use completed months rather than
 displaying zero years. Hovering a person's row lights their box on the

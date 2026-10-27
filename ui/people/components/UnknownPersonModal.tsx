@@ -1,11 +1,11 @@
 import { Alert, Badge, Box, Button, Center, Checkbox, Group, Loader, Paper, Slider, Stack, Switch, Text } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import type { UnknownPeopleFaceChange, UnknownPerson } from '../hooks/useUnknownPeople.ts';
 import { type PersonFace, usePersonFaces } from '../hooks/usePersonFaces.ts';
-import { usePersonVoices } from '../hooks/usePersonVoices.ts';
-import { useSubclusters } from '../hooks/useSubclusters.ts';
+import { type PersonVoice, usePersonVoices } from '../hooks/usePersonVoices.ts';
+import { type SubclusterKind, useSubclusters } from '../hooks/useSubclusters.ts';
 import { cutAtSimilarity, cutIntoK, cutRange, groupsFrom } from '../lib/face-cut.ts';
 import { stopClip } from '../lib/clip-player.ts';
 import { useSelection } from '@ein/ui/hooks';
@@ -96,15 +96,110 @@ function FaceTile({ face, size, picked, picking, onPick, onOpen }: FaceTileProps
 }
 
 /**
+ * One kind of evidence sorted into groups by how alike it is, on asking: re-clustered on the server
+ * once, cut in the browser wherever the slider says.
+ */
+function useGrouping<K extends SubclusterKind>(kind: K, personPath: string | null) {
+  const [grouped, setGrouped] = useState(false);
+  const [threshold, setThreshold] = useState<number | null>(null);
+  const sub = useSubclusters(kind, grouped ? personPath : null);
+  const range = useMemo(() => cutRange(sub.merges), [sub.merges]);
+  useEffect(() => {
+    setGrouped(false);
+    setThreshold(null);
+  }, [personPath]);
+  // Open on the cut the clustering's own shape suggests: on two people fused, the join between them.
+  useEffect(() => {
+    if (sub.suggested !== null && threshold === null) setThreshold(sub.suggested);
+  }, [sub.suggested, threshold]);
+  const groups = useMemo(() => {
+    if (!grouped || sub.items.length === 0) return [];
+    return groupsFrom(threshold === null ? cutIntoK(sub.items.length, sub.merges, 1) : cutAtSimilarity(sub.items.length, sub.merges, threshold));
+  }, [grouped, sub.items.length, sub.merges, threshold]);
+  return { grouped, setGrouped, threshold, setThreshold, range, groups, sub };
+}
+
+type Grouping<K extends SubclusterKind> = ReturnType<typeof useGrouping<K>>;
+
+/** The switch that sorts a section into groups. */
+function GroupSwitch({ grouping }: { grouping: Grouping<SubclusterKind> }) {
+  return <Switch size='sm' label='Adjust group threshold' checked={grouping.grouped} onChange={(event) => grouping.setGrouped(event.currentTarget.checked)} />;
+}
+
+type GroupsProps<T> = {
+  grouping: {
+    threshold: number | null;
+    setThreshold: (value: number) => void;
+    range: { min: number; max: number };
+    groups: number[][];
+    sub: { items: T[]; loading: boolean; error: Error | null };
+  };
+  loadingLabel: string;
+  /** What one item is called, and many. */
+  noun: [string, string];
+  /** Why some items are in no group, when some are. */
+  ungrouped: string | null;
+  keyOf: (item: T) => string;
+  selection: ReturnType<typeof useSelection>;
+  /** One item's tile, shown among the members of its group. */
+  tile: (item: T, members: T[]) => ReactNode;
+};
+
+/** A section's items in groups cut wherever the slider says; a group's box picks all of it. */
+function Groups<T>({ grouping, loadingLabel, noun, ungrouped, keyOf, selection, tile }: GroupsProps<T>) {
+  const { threshold, setThreshold, range, groups, sub: { items, loading, error } } = grouping;
+  if (loading) return <PageLoader label={loadingLabel} />;
+  if (error) return <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />}>{error.message}</Alert>;
+  const count = (n: number) => `${n} ${n === 1 ? noun[0] : noun[1]}`;
+  const shown = groups.slice(0, MAX_GROUPS);
+  const tail = groups.slice(MAX_GROUPS);
+  const tailItems = tail.reduce((sum, group) => sum + group.length, 0);
+  return (
+    <Stack gap='sm'>
+      <Group align='center' gap='md' wrap='nowrap'>
+        <Text size='sm' style={{ whiteSpace: 'nowrap' }}>How alike</Text>
+        <Slider flex={1} min={range.min} max={range.max} step={0.001} value={threshold ?? range.min} onChange={setThreshold} label={(value) => value.toFixed(3)} />
+        <Badge variant='light' style={{ whiteSpace: 'nowrap' }}>{groups.length} {groups.length === 1 ? 'group' : 'groups'}</Badge>
+      </Group>
+      {ungrouped && <Text size='xs' c='dimmed'>{ungrouped}</Text>}
+      {shown.map((group, index) => {
+        const members = group.map((member) => items[member]);
+        const keys = members.map(keyOf);
+        const all = keys.every((key) => selection.isSelected(key));
+        const some = !all && keys.some((key) => selection.isSelected(key));
+        return (
+          <Paper key={`${threshold}-${index}`} p='xs' radius='md' bg='var(--mrx-surface-sunken)'>
+            <Checkbox
+              size='xs'
+              mb={6}
+              checked={all}
+              indeterminate={some}
+              onChange={() => selection.setKeys(keys, !all)}
+              label={`${index === 0 ? 'Largest group' : `Group ${index + 1}`} · ${count(group.length)}`}
+            />
+            <Group gap={4}>{members.map((item) => tile(item, members))}</Group>
+          </Paper>
+        );
+      })}
+      {tail.length > 0 && (
+        <Text size='xs' c='dimmed' ta='center'>
+          {tail.length} smaller {tail.length === 1 ? 'group' : 'groups'} ({count(tailItems)}) are not shown. Move the slider left to bring them up here.
+        </Text>
+      )}
+    </Stack>
+  );
+}
+
+/**
  * One unidentified person, all of them: who they are at the top, then every face and every
  * recording they are heard in, each one pickable, and what to do with the picked ones at the foot —
  * split them off as someone new, move them to someone, or say they are not a person.
  *
  * The overview shows four glimpses, which is a preview and not evidence — recognition can fuse two
  * people on a single weak edge, and four thumbnails will never show it. So the evidence is all here,
- * and where two people are fused, "Group similar faces" re-clusters the faces against each other
- * (`subcluster-faces`, once) and lays them out in groups cut wherever the slider says; a group's
- * box picks all of it, for the same actions. One box names the person: a new name names them,
+ * and where two people are fused, "Adjust group threshold" re-clusters the faces, or the voices,
+ * against each other (`subcluster-faces`, `subcluster-voices`, once) and lays them out in groups cut
+ * wherever the slider says; a group's box picks all of it, for the same actions. One box names the person: a new name names them,
  * someone already named takes them in. Beside it, "Not a person" discards the whole cluster, however
  * many of its faces are loaded.
  */
@@ -117,35 +212,17 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
   const [discarding, setDiscarding] = useState(false);
   const [discardBusy, setDiscardBusy] = useState(false);
 
-  // Faces sorted into groups by how alike they are, on asking: re-clustered on the server once, cut
-  // in the browser wherever the slider says.
-  const [grouped, setGrouped] = useState(false);
-  const [threshold, setThreshold] = useState<number | null>(null);
-  const sub = useSubclusters(grouped ? personPath : null);
-  const range = useMemo(() => cutRange(sub.merges), [sub.merges]);
-  useEffect(() => {
-    setGrouped(false);
-    setThreshold(null);
-  }, [personPath]);
-  // Open on the cut the clustering's own shape suggests: on two people fused, the join between them.
-  useEffect(() => {
-    if (sub.suggested !== null && threshold === null) setThreshold(sub.suggested);
-  }, [sub.suggested, threshold]);
-  const groups = useMemo(() => {
-    if (!grouped || sub.faces.length === 0) return [];
-    return groupsFrom(threshold === null ? cutIntoK(sub.faces.length, sub.merges, 1) : cutAtSimilarity(sub.faces.length, sub.merges, threshold));
-  }, [grouped, sub.faces.length, sub.merges, threshold]);
-  const shownGroups = groups.slice(0, MAX_GROUPS);
-  const tail = groups.slice(MAX_GROUPS);
-  const tailFaces = tail.reduce((sum, group) => sum + group.length, 0);
+  const faceGroups = useGrouping('faces', personPath);
+  const voiceGroups = useGrouping('voices', personPath);
 
   // Picking runs over every face on show (all of them grouped, the loaded pages otherwise) and
-  // every recording; the same face is the same pick in either view.
-  const shownFaces = grouped ? sub.faces : faces;
-  const keys = useMemo(() => [...shownFaces.map((face) => face.facePath), ...voices.map((voice) => voice.voicePath)], [shownFaces, voices]);
+  // every recording on show; the same face or recording is the same pick in either view.
+  const shownFaces = faceGroups.grouped ? faceGroups.sub.items : faces;
+  const shownVoices = voiceGroups.grouped ? voiceGroups.sub.items : voices;
+  const keys = useMemo(() => [...shownFaces.map((face) => face.facePath), ...shownVoices.map((voice) => voice.voicePath)], [shownFaces, shownVoices]);
   const selection = useSelection(keys);
   const pickedFaces = useMemo(() => shownFaces.filter((face) => selection.selected.has(face.facePath)), [shownFaces, selection.selected]);
-  const pickedVoices = useMemo(() => voices.filter((voice) => selection.selected.has(voice.voicePath)), [voices, selection.selected]);
+  const pickedVoices = useMemo(() => shownVoices.filter((voice) => selection.selected.has(voice.voicePath)), [shownVoices, selection.selected]);
   const pick = (key: string, event: { shiftKey: boolean }) => selection.toggle(key, { range: event.shiftKey, additive: true });
 
   const close = () => {
@@ -209,7 +286,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
 
   const faceCount = total || person?.faceCount || 0;
   const voiceCount = voiceTotal || person?.voiceCount || 0;
-  const allVoicesPicked = voices.length > 0 && voices.every((voice) => selection.isSelected(voice.voicePath));
+  const allVoicesPicked = shownVoices.length > 0 && shownVoices.every((voice) => selection.isSelected(voice.voicePath));
 
   const discard = async () => {
     if (!person) return;
@@ -239,7 +316,8 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
       // is read again without unmounting.
       refetch();
       refetchVoices();
-      if (grouped) sub.refetch();
+      if (faceGroups.grouped) faceGroups.sub.refetch();
+      if (voiceGroups.grouped) voiceGroups.sub.refetch();
       onFacesChanged?.(null);
       return;
     }
@@ -249,8 +327,9 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
     removeFaces(removedFaces);
     removeVoices(removedVoices);
     selection.remove([...removedFaces, ...removedVoices]);
-    // The groups were cut from the faces as they were.
-    if (grouped && removedFaces.length > 0) sub.refetch();
+    // The groups were cut from the faces and voices as they were.
+    if (faceGroups.grouped && removedFaces.length > 0) faceGroups.sub.refetch();
+    if (voiceGroups.grouped && removedVoices.length > 0) voiceGroups.sub.refetch();
     // The overview's cards carry voices it cannot work out from here; it reads them again.
     if (removedVoices.length > 0) return onFacesChanged?.(null);
     onFacesChanged?.({
@@ -270,6 +349,16 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
       picking={selection.active}
       onPick={(event) => pick(face.facePath, event)}
       onOpen={() => openPhoto(among, face.filePath)}
+    />
+  );
+
+  const voiceTile = (voice: PersonVoice) => (
+    <VoiceTile
+      key={voice.voicePath}
+      voice={voice}
+      picked={selection.isSelected(voice.voicePath)}
+      onPick={(event) => pick(voice.voicePath, event)}
+      onOpen={voice.filePath ? () => openRecording(voice.filePath!, voice.start) : undefined}
     />
   );
 
@@ -322,10 +411,10 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
                 Faces
                 <Text component='span' size='xs' c='dimmed' ml={6}>{faceCount}</Text>
               </Text>
-              {faceCount >= 3 && <Switch size='sm' label='Group similar faces' checked={grouped} onChange={(event) => setGrouped(event.currentTarget.checked)} />}
+              {faceCount >= 3 && <GroupSwitch grouping={faceGroups} />}
             </Group>
 
-            {!grouped && (loading ? <PageLoader label='Loading faces…' /> : (
+            {!faceGroups.grouped && (loading ? <PageLoader label='Loading faces…' /> : (
               <>
                 <Group gap='xs'>{faces.map((face) => faceTile(face, CROP_SIZE, faces))}</Group>
                 {hasMore && (
@@ -338,51 +427,21 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
               </>
             ))}
 
-            {grouped && (sub.loading
-              ? <PageLoader label='Comparing every face against every other' />
-              : sub.error
-              ? <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />}>{sub.error.message}</Alert>
-              : (
-                <Stack gap='sm'>
-                  <Group align='center' gap='md' wrap='nowrap'>
-                    <Text size='sm' style={{ whiteSpace: 'nowrap' }}>How alike</Text>
-                    <Slider flex={1} min={range.min} max={range.max} step={0.001} value={threshold ?? range.min} onChange={setThreshold} label={(value) => value.toFixed(3)} />
-                    <Badge variant='light' style={{ whiteSpace: 'nowrap' }}>{groups.length} {groups.length === 1 ? 'group' : 'groups'}</Badge>
-                  </Group>
-                  {sub.withoutVector > 0 && (
-                    <Text size='xs' c='dimmed'>
-                      {sub.withoutVector} hand-drawn {sub.withoutVector === 1 ? 'tag has' : 'tags have'} no vector to compare, and {sub.withoutVector === 1 ? 'is' : 'are'}
-                      {' '}
-                      in no group.
-                    </Text>
-                  )}
-                  {shownGroups.map((group, index) => {
-                    const members = group.map((member) => sub.faces[member]);
-                    const paths = members.map((face) => face.facePath);
-                    const all = paths.every((path) => selection.isSelected(path));
-                    const some = !all && paths.some((path) => selection.isSelected(path));
-                    return (
-                      <Paper key={`${threshold}-${index}`} p='xs' radius='md' bg='var(--mrx-surface-sunken)'>
-                        <Checkbox
-                          size='xs'
-                          mb={6}
-                          checked={all}
-                          indeterminate={some}
-                          onChange={() => selection.setKeys(paths, !all)}
-                          label={`${index === 0 ? 'Largest group' : `Group ${index + 1}`} · ${group.length} ${group.length === 1 ? 'face' : 'faces'}`}
-                        />
-                        <Group gap={4}>{members.map((face) => faceTile(face, GROUP_CROP_SIZE, members))}</Group>
-                      </Paper>
-                    );
-                  })}
-                  {tail.length > 0 && (
-                    <Text size='xs' c='dimmed' ta='center'>
-                      {tail.length} smaller {tail.length === 1 ? 'group' : 'groups'} ({tailFaces}{' '}
-                      {tailFaces === 1 ? 'face' : 'faces'}) are not shown. Move the slider left to bring them up here.
-                    </Text>
-                  )}
-                </Stack>
-              ))}
+            {faceGroups.grouped && (
+              <Groups
+                grouping={faceGroups}
+                loadingLabel='Comparing every face against every other'
+                noun={['face', 'faces']}
+                ungrouped={faceGroups.sub.withoutVector > 0
+                  ? `${faceGroups.sub.withoutVector} hand-drawn ${faceGroups.sub.withoutVector === 1 ? 'tag has' : 'tags have'} no vector to compare, and ${
+                    faceGroups.sub.withoutVector === 1 ? 'is' : 'are'
+                  } in no group.`
+                  : null}
+                keyOf={(face) => face.facePath}
+                selection={selection}
+                tile={(face, members) => faceTile(face, GROUP_CROP_SIZE, members)}
+              />
+            )}
           </Stack>
         )}
 
@@ -393,31 +452,42 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
                 Voice
                 <Text component='span' size='xs' c='dimmed' ml={6}>heard in {voiceCount} {voiceCount === 1 ? 'recording' : 'recordings'}</Text>
               </Text>
-              {voices.length > 1 && (
-                <Button size='compact-xs' variant='subtle' onClick={() => selection.setKeys(voices.map((voice) => voice.voicePath), !allVoicesPicked)}>
-                  {allVoicesPicked ? 'Unpick all' : 'Pick all'}
-                </Button>
-              )}
+              <Group gap='md'>
+                {shownVoices.length > 1 && (
+                  <Button
+                    size='compact-xs'
+                    variant='subtle'
+                    onClick={() => selection.setKeys(shownVoices.map((voice) => voice.voicePath), !allVoicesPicked)}
+                  >
+                    {allVoicesPicked ? 'Unpick all' : 'Pick all'}
+                  </Button>
+                )}
+                {voiceCount >= 3 && <GroupSwitch grouping={voiceGroups} />}
+              </Group>
             </Group>
-            {voicesLoading
+            {voiceGroups.grouped
+              ? (
+                <Groups
+                  grouping={voiceGroups}
+                  loadingLabel='Comparing every voice against every other'
+                  noun={['recording', 'recordings']}
+                  ungrouped={voiceGroups.sub.withoutVector > 0
+                    ? `${voiceGroups.sub.withoutVector} ${voiceGroups.sub.withoutVector === 1 ? 'recording has' : 'recordings have'} no voiceprint to compare, and ${
+                      voiceGroups.sub.withoutVector === 1 ? 'is' : 'are'
+                    } in no group.`
+                    : null}
+                  keyOf={(voice) => voice.voicePath}
+                  selection={selection}
+                  tile={voiceTile}
+                />
+              )
+              : voicesLoading
               ? (
                 <Center py='lg'>
                   <Loader size='sm' />
                 </Center>
               )
-              : (
-                <Group gap='xs'>
-                  {voices.map((voice) => (
-                    <VoiceTile
-                      key={voice.voicePath}
-                      voice={voice}
-                      picked={selection.isSelected(voice.voicePath)}
-                      onPick={(event) => pick(voice.voicePath, event)}
-                      onOpen={voice.filePath ? () => openRecording(voice.filePath!, voice.start) : undefined}
-                    />
-                  ))}
-                </Group>
-              )}
+              : <Group gap='xs'>{voices.map(voiceTile)}</Group>}
           </Stack>
         )}
 

@@ -51,7 +51,7 @@ type Props = {
  * one click.
  */
 export function SplitPersonModal({ personPath, personName, named, onClose, onApplied }: Props) {
-  const { faces, merges, suggested, withoutVector, loading, error } = useSubclusters(personPath);
+  const { items: faces, merges, suggested, withoutVector, loading, error } = useSubclusters('faces', personPath);
 
   const [threshold, setThreshold] = useState<number | null>(null);
   const [actions, setActions] = useState<Record<number, Action>>({});
