@@ -82,6 +82,7 @@
     "@archive/people/feed": "./lib/people/feed.ts",
     "@archive/people/genealogy": "./lib/people/genealogy.ts",
     "@archive/people/kin": "./lib/people/kin.ts",
+    "@archive/people/name-match": "./lib/people/name-match.ts",
     "@archive/people/person": "./lib/people/person.ts",
     "@archive/people/residence": "./lib/people/residence.ts",
     "@archive/people/types": "./types/people/mod.ts",

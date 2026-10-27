@@ -3,6 +3,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
 import { nameScore } from '@archive/media/name-quality';
+import { namesHaveWords, nameWords } from '@archive/people/name-match';
 
 const searchPeople = async (cmd: Command): CmdReturn => {
   // `search` asks every provider what it can answer before fanning out, so a
@@ -38,7 +39,7 @@ const searchPeople = async (cmd: Command): CmdReturn => {
   }
 
   const queryLower = query.toLowerCase();
-  const queryWords = [...new Set(queryLower.split(/\s+/).filter(Boolean))];
+  const queryWords = nameWords(query);
   // Every hit is in the `name` channel: a person is found by what they are called.
   const results: SearchProviderHit[] = [];
 
@@ -55,7 +56,7 @@ const searchPeople = async (cmd: Command): CmdReturn => {
       const nameFields = [nameLower, fullnameLower, birthnameLower];
 
       let score = Math.max(...nameFields.map((field) => nameScore(queryLower, field)));
-      if (score === 0 && queryWords.every((word) => nameFields.some((field) => field.includes(word)))) {
+      if (score === 0 && namesHaveWords(queryWords, nameFields)) {
         // Word order and intervening names should not matter: "Andersson An" is
         // still a partial match for "Anna B Andersson". All words must belong
         // to this one person; matches from different people are never combined.

@@ -92,6 +92,7 @@
     "@archive/media/writable": "./lib/media/writable.ts",
     "@archive/media/xmp": "./lib/media/xmp.ts",
     "@archive/news-albums": "./lib/news-albums.ts",
+    "@archive/people/name-match": "./lib/people/name-match.ts",
     "@archive/people/cover": "./lib/people/cover.ts",
     "@archive/people/feed": "./lib/people/feed.ts",
     "@archive/people/kin": "./lib/people/kin.ts",

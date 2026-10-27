@@ -1,6 +1,7 @@
-import { Autocomplete, Button, Group } from '@mantine/core';
+import { Autocomplete, Button, Group, type OptionsFilter } from '@mantine/core';
 import { useMemo, useState } from 'react';
 import { PEOPLE_ROOT } from '@archive/paths';
+import { namesHaveWords, nameWords } from '@archive/people/name-match';
 import { notify } from '@ein/ui/signals';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import { PersonOption } from './PersonOption.tsx';
@@ -36,6 +37,14 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
     return map;
   }, [named]);
   const names = useMemo(() => [...byName.keys()], [byName]);
+  /** As the finder matches people: every typed word in one of a person's names, so "Anna Andersson" offers "Anna B Andersson". */
+  const filter: OptionsFilter = ({ options, search, limit }) => {
+    const words = nameWords(search);
+    return options.filter((option) => {
+      const person = 'value' in option ? byName.get(option.value) : undefined;
+      return person && namesHaveWords(words, [person.name, person.fullname, person.birthname]);
+    }).slice(0, limit);
+  };
   const name = value.trim();
   const existing = useMemo(() => named.find((person) => person.name.toLocaleLowerCase() === name.toLocaleLowerCase()), [named, name]);
 
@@ -70,6 +79,7 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
       // of eight unrelated names dropped over the faces and recordings would hide what it is for.
       data={name ? names : []}
       limit={8}
+      filter={filter}
       renderOption={({ option }) => {
         const person = byName.get(option.value);
         return person ? <PersonOption path={`${PEOPLE_ROOT}/${person.id}`} name={person.name} /> : option.value;

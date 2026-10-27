@@ -12,6 +12,7 @@ export type PersonEntry = {
   id: string; // node/directory name, used as the route param
   name: string;
   fullname?: string;
+  birthname?: string;
   gender?: string;
 };
 
@@ -44,6 +45,7 @@ export function usePeople(rootPath: string = PEOPLE_ROOT, enabled = true): UsePe
             id: entry.name,
             name: (attrs.name as string) || entry.name,
             fullname: attrs.fullname as string | undefined,
+            birthname: attrs.birthname as string | undefined,
             gender: attrs.gender as string | undefined,
           };
         });
