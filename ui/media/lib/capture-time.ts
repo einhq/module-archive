@@ -52,6 +52,9 @@ function parseCaptureTime(value?: string): CaptureTimeParts | undefined {
 /** How much of a capture time is real, or undefined when it is not one. */
 export const precisionOf = (value?: string): TimePrecision | undefined => parseCaptureTime(value)?.precision;
 
+/** The year of a capture time, or undefined when it is not one. */
+export const yearOf = (value?: string): string | undefined => parseCaptureTime(value)?.year;
+
 /** Whether a value claims less than a whole day — a year or a month. */
 export const isVague = (value?: string): boolean => {
   const precision = precisionOf(value);

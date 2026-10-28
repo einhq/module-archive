@@ -1,7 +1,8 @@
-import { ActionIcon, Checkbox, Paper, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Checkbox, Paper, Stack, Text, Tooltip } from '@mantine/core';
 import { TablerIcon } from '@ein/ui/components';
-import { formatClock, formatRange } from '@ein/ui/lib';
+import { formatClock } from '@ein/ui/lib';
 import type { PersonVoice } from '../hooks/usePersonVoices.ts';
+import { EvidencePeek, YearMark } from './EvidencePeek.tsx';
 import { VoiceClip } from './VoiceClip.tsx';
 
 type Props = {
@@ -15,12 +16,13 @@ type Props = {
 
 /**
  * One recording a voice is heard in, the size of a face: a round button that plays the voice's
- * longest turn, the recording's name under it (the whole name, its date and how long they speak in
- * it on hover), a way to open it in the lightbox, and a box to pick it.
+ * longest turn with the year on its edge, the recording's name under it, a way to open it in the
+ * lightbox, and a box to pick it. Lingering shows the recording, its path, its date and how long
+ * they speak in it.
  */
 export function VoiceTile({ voice, picked = false, onPick, onOpen }: Props) {
   const name = voice.filePath?.split('/').pop() ?? voice.voicePath.split('/').pop() ?? voice.voicePath;
-  const about = [voice.takenAt ? formatRange(voice.takenAt) : '', `speaks ${formatClock(voice.talkSeconds)} in it`].filter(Boolean).join(' · ');
+  const about = `Plays ${formatClock(voice.end - voice.start)} · speaks ${formatClock(voice.talkSeconds)} in it`;
 
   return (
     <Paper
@@ -50,24 +52,15 @@ export function VoiceTile({ voice, picked = false, onPick, onOpen }: Props) {
           </ActionIcon>
         </Tooltip>
       )}
-      <Stack align='center' gap={6} pt={4}>
-        <VoiceClip clip={{ key: voice.voicePath, ...voice }} size={56} />
-        <Tooltip
-          label={
-            <>
-              {name}
-              <br />
-              {about}
-            </>
-          }
-          multiline
-          maw={280}
-          withArrow
-          openDelay={300}
-        >
+      <EvidencePeek filePath={voice.filePath} takenAt={voice.takenAt} extra={about}>
+        <Stack align='center' gap={6} pt={4}>
+          <Box pos='relative'>
+            <VoiceClip clip={{ key: voice.voicePath, ...voice }} size={56} untitled />
+            <YearMark takenAt={voice.takenAt} />
+          </Box>
           <Text size='xs' c='dimmed' ta='center' truncate w='100%'>{name}</Text>
-        </Tooltip>
-      </Stack>
+        </Stack>
+      </EvidencePeek>
     </Paper>
   );
 }

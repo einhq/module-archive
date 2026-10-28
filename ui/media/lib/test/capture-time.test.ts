@@ -6,7 +6,7 @@
  */
 
 import { assertEquals } from '@std/assert';
-import { formatTaken, formatTakenParts, isVague, offsetOf, precisionOf, timeSourceLabel, viewerLocalTime } from '../capture-time.ts';
+import { formatTaken, formatTakenParts, isVague, offsetOf, precisionOf, timeSourceLabel, viewerLocalTime, yearOf } from '../capture-time.ts';
 
 Deno.test('precision comes from the value', () => {
   assertEquals(precisionOf('1975'), 'year');
@@ -16,6 +16,10 @@ Deno.test('precision comes from the value', () => {
   assertEquals(precisionOf('2003-04-30T14:03:11+02:00'), 'second');
   assertEquals(precisionOf('nonsense'), undefined);
   assertEquals(precisionOf(undefined), undefined);
+
+  assertEquals(yearOf('1975'), '1975');
+  assertEquals(yearOf('2003-04-30T14:03:11+02:00'), '2003');
+  assertEquals(yearOf('nonsense'), undefined);
 
   assertEquals(isVague('1975'), true);
   assertEquals(isVague('2004-03'), true);

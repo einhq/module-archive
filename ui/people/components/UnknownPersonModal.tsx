@@ -13,6 +13,7 @@ import { mediaItemFrom } from '@ein/ui/lib';
 import { closeLightboxWithoutReturn, isLightboxOpen, type MediaItem, notify, openMediaAt } from '@ein/ui/signals';
 import { Dialog, DialogActions, PageLoader, TablerIcon } from '@ein/ui/components';
 import { type EvidenceChange, EvidenceSelectionBar } from './EvidenceSelectionBar.tsx';
+import { EvidencePeek, YearMark } from './EvidencePeek.tsx';
 import { FaceCrop } from './FaceCrop.tsx';
 import { QuickName } from './QuickName.tsx';
 import { VoiceTile } from './VoiceTile.tsx';
@@ -69,29 +70,32 @@ type FaceTileProps = {
   onOpen: () => void;
 };
 
-/** One face: its crop opens the photo it was cut from, its box picks it. */
+/** One face: its crop opens the photo it was cut from, its box picks it, and lingering shows the photo. */
 function FaceTile({ face, size, picked, picking, onPick, onOpen }: FaceTileProps) {
   return (
-    <Box className='mrx-face-pick' data-selected={picked || undefined} style={{ position: 'relative' }}>
-      <FaceCrop facePath={face.facePath} size={size} alt='' lazy title={face.filePath} selected={picked} onClick={(event) => picking ? onPick(event) : onOpen()} />
-      <Box
-        className='mrx-face-check'
-        style={{ position: 'absolute', top: 0, left: 0 }}
-        onClick={(event) => {
-          event.stopPropagation();
-          onPick(event);
-        }}
-      >
-        <Checkbox
-          checked={picked}
-          readOnly
-          size='xs'
-          radius='xl'
-          aria-label={`Pick the face from ${face.filePath ?? 'this photo'}`}
-          styles={{ input: { cursor: 'pointer' } }}
-        />
+    <EvidencePeek filePath={face.filePath} takenAt={face.takenAt}>
+      <Box className='mrx-face-pick' data-selected={picked || undefined} style={{ position: 'relative' }}>
+        <FaceCrop facePath={face.facePath} size={size} alt='' lazy selected={picked} onClick={(event) => picking ? onPick(event) : onOpen()} />
+        <YearMark takenAt={face.takenAt} />
+        <Box
+          className='mrx-face-check'
+          style={{ position: 'absolute', top: 0, left: 0 }}
+          onClick={(event) => {
+            event.stopPropagation();
+            onPick(event);
+          }}
+        >
+          <Checkbox
+            checked={picked}
+            readOnly
+            size='xs'
+            radius='xl'
+            aria-label={`Pick the face from ${face.filePath ?? 'this photo'}`}
+            styles={{ input: { cursor: 'pointer' } }}
+          />
+        </Box>
       </Box>
-    </Box>
+    </EvidencePeek>
   );
 }
 
