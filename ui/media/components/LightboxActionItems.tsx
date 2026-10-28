@@ -18,10 +18,10 @@ const MENU_CONTEXT: SelectionBarContextValue = {
  * and hidden by `display: none` (`keepMountedMode`): Mantine's default `<Activity>` would hold back
  * every update to a dialog while the menu is shut, so it could be neither typed in nor closed.
  */
-export function LightboxActionItems({ path }: { path: string }) {
+export function LightboxActionItems({ path, iconSize }: { path: string; iconSize?: number }) {
   return (
     <SelectionBarContext.Provider value={MENU_CONTEXT}>
-      <AddToAlbumAction paths={[path]} />
+      <AddToAlbumAction paths={[path]} iconSize={iconSize} />
     </SelectionBarContext.Provider>
   );
 }

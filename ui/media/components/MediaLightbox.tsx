@@ -23,6 +23,7 @@ import { bumpDerivativeVersion, bust, canWrite, displayDims, fileUrl, forgetAspe
 import { zoomFromTile, zoomToTile } from '../lib/lightbox-tile-zoom.ts';
 import { itemAtAngle, lightboxPhotoSources } from '../lib/lightbox-image.ts';
 import { lightboxSheetOpens, lightboxSwipeAction, lightboxSwipeFinish, type LightboxTouchPoint, releaseVelocityX, releaseVelocityY } from '../lib/lightbox-gesture.ts';
+import { THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import {
   isDoubleTap,
   isTap,
@@ -861,9 +862,9 @@ export function MediaLightbox() {
     }
   }, [albumMedia?.stackAlbumPath, details?.albumStack?.albumPath, refetch]);
 
-  // Only a still picture zooms: video has its own controls under the pointer, and the slideshow
-  // is already moving the picture itself.
-  const zoomable = media?.type === 'photo' && !slideshow;
+  // A photo and a video's picture zoom; the slideshow is already moving the picture itself, and
+  // a video that cannot be played has only its message to show.
+  const zoomable = (media?.type === 'photo' || (media?.type === 'video' && !faceDetails?.undecodable)) && !slideshow;
 
   const setZoom = useCallback((next: ZoomState, animate: boolean) => {
     zoomRef.current = next;
@@ -875,10 +876,12 @@ export function MediaLightbox() {
   const zoomFrame = useCallback((): ZoomFrame => {
     const box = zoomBoxRef.current;
     const viewport = { width: box?.offsetWidth ?? globalThis.innerWidth, height: box?.offsetHeight ?? globalThis.innerHeight };
-    const image = mediaRef.current;
-    if (image instanceof HTMLImageElement && image.naturalWidth > 0 && image.naturalHeight > 0) {
-      const scale = Math.min(image.clientWidth / image.naturalWidth, image.clientHeight / image.naturalHeight);
-      if (scale > 0) return { viewport, content: { width: image.naturalWidth * scale, height: image.naturalHeight * scale } };
+    const picture = mediaRef.current;
+    const width = picture instanceof HTMLVideoElement ? picture.videoWidth : picture?.naturalWidth ?? 0;
+    const height = picture instanceof HTMLVideoElement ? picture.videoHeight : picture?.naturalHeight ?? 0;
+    if (picture && width > 0 && height > 0) {
+      const scale = Math.min(picture.clientWidth / width, picture.clientHeight / height);
+      if (scale > 0) return { viewport, content: { width: width * scale, height: height * scale } };
     }
     return { viewport, content: viewport };
   }, []);
@@ -926,7 +929,9 @@ export function MediaLightbox() {
     if (!gestureSurface || !zoomable) return;
     // A face hit-box is only a hover target; the text laid over the picture is the one thing
     // inside the surface that scrolls, and the wheel scrolls it rather than zooming.
+    // A video's controls are left the wheel too.
     const onWheel = (event: WheelEvent) => {
+      if (event.target instanceof Element && event.target.closest('[data-video-controls]')) return;
       if (!event.ctrlKey && event.target instanceof Element && event.target.closest('[data-text-overlay]')) return;
       event.preventDefault();
       const current = zoomRef.current;
@@ -940,11 +945,12 @@ export function MediaLightbox() {
 
   const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
     // Two taps arrive here too, as the browser's synthesized dblclick, after the touch
-    // handler has already toggled on them; acting twice would undo it.
-    if (!zoomable || lastPointerTypeRef.current === 'touch' || isGestureControl(event.target)) return;
+    // handler has already toggled on them; acting twice would undo it. A video's double-click
+    // is its player's: fullscreen.
+    if (!zoomable || media?.type === 'video' || lastPointerTypeRef.current === 'touch' || isGestureControl(event.target)) return;
     event.preventDefault();
     setZoom(toggleZoom(zoomRef.current, zoomFocal(event.clientX, event.clientY), zoomFrame()), true);
-  }, [setZoom, zoomFocal, zoomFrame, zoomable]);
+  }, [media?.type, setZoom, zoomFocal, zoomFrame, zoomable]);
 
   // Mouse and pen drag the zoomed picture around. Touch is left to the touch handlers below,
   // which have to tell a pan from a swipe and a pinch.
@@ -1565,6 +1571,9 @@ export function MediaLightbox() {
   );
   const kenBurnsClass = kenBurnsClassForIndex(currentMediaIndex.value, kenBurns);
   const zoomed = zoomable && isZoomed(zoom);
+  const zoomTransition = zoomAnimating ? `transform ${ZOOM_ANIMATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)` : 'none';
+  // A video's zoom moves its picture inside the player (`pictureStyle`), so its controls stay put.
+  const zoomInPlayer = isVideo;
   const activeSlideshowPhotoTransition = slideshowPhotoTransition?.incomingId === media.id ? slideshowPhotoTransition : undefined;
   // Both neighbours are kept mounted beside the frame once it has loaded, so the first
   // movement of a drag finds their pictures ready instead of mounting them. With two media the
@@ -1718,7 +1727,7 @@ export function MediaLightbox() {
                 keepMounted
                 keepMountedMode='display-none'
                 // Sized for a thumb, like the bar's buttons.
-                styles={{ item: { fontSize: 'var(--mantine-font-size-lg)', padding: '14px 18px' }, itemSection: { marginRight: 14 } }}
+                styles={THUMB_MENU_STYLES}
               >
                 <Menu.Target>
                   <ActionIcon
@@ -1894,12 +1903,14 @@ export function MediaLightbox() {
                 justifyContent: 'center',
                 minHeight: 0,
                 position: 'relative',
-                // Zoom is applied to the same box as the swipe, so the face overlay inside
-                // it follows the picture without a second measurement. `zoomFocal` relies
-                // on the origin being the centre.
+                // A photo's zoom is applied to the same box as the swipe, so the face overlay
+                // inside it follows the picture without a second measurement. `zoomFocal` relies
+                // on the origin being the centre, as does the video's picture, which fills this box.
                 transformOrigin: 'center',
-                transform: `translate3d(calc(var(--swipe-x, 0px) + ${zoom.x}px), ${zoom.y}px, 0) scale(${zoom.scale})`,
-                transition: `var(--swipe-transition, ${zoomAnimating ? `transform ${ZOOM_ANIMATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)` : 'none'})`,
+                transform: zoomInPlayer
+                  ? 'translate3d(var(--swipe-x, 0px), 0, 0)'
+                  : `translate3d(calc(var(--swipe-x, 0px) + ${zoom.x}px), ${zoom.y}px, 0) scale(${zoom.scale})`,
+                transition: `var(--swipe-transition, ${zoomInPlayer ? 'none' : zoomTransition})`,
                 willChange: isMobile || zoomed ? 'transform' : undefined,
               }}
             >
@@ -1935,6 +1946,25 @@ export function MediaLightbox() {
                     media={media}
                     reloadToken={reloadToken}
                     videoRef={attachMediaElement}
+                    pictureStyle={{
+                      transform: `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`,
+                      transition: zoomTransition,
+                      willChange: zoomed ? 'transform' : undefined,
+                    }}
+                    pictureOverlay={videoFaces.length > 0 && (!slideshow || showFaces) && (
+                      <VideoFaces
+                        key={`video-faces-${media.id}-${reloadToken}`}
+                        mediaRef={mediaRef}
+                        faces={videoFaces}
+                        followed={followedFace ? followedFace.facePath : null}
+                        pinned={showFaces}
+                        hoveredKey={hoveredFace}
+                        onHover={setHoveredFace}
+                        onOpenPerson={goTo}
+                        onNamePerson={namePerson}
+                        scale={zoom.scale}
+                      />
+                    )}
                     transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
                     chapters={faceDetails?.chapters}
                     // The sheet's hash is in its URL: one made again under the same name would be served
@@ -2037,19 +2067,6 @@ export function MediaLightbox() {
                   onRemoveFace={removeFace}
                   onChangePerson={setPersonFacePath}
                   onDraftChange={setFaceDraftReady}
-                />
-              )}
-              {videoFaces.length > 0 && (!slideshow || showFaces) && (
-                <VideoFaces
-                  key={`video-faces-${media.id}-${reloadToken}`}
-                  mediaRef={mediaRef}
-                  faces={videoFaces}
-                  followed={followedFace ? followedFace.facePath : null}
-                  pinned={showFaces}
-                  hoveredKey={hoveredFace}
-                  onHover={setHoveredFace}
-                  onOpenPerson={goTo}
-                  onNamePerson={namePerson}
                 />
               )}
               {showText && pictureText && !slideshow && (

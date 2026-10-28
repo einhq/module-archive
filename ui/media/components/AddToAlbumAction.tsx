@@ -18,7 +18,7 @@ import { type AlbumChoice, AlbumPickerDialog } from './AlbumPickerDialog.tsx';
  *
  * The guest, who may change no album and make none, is not offered the action.
  */
-export function AddToAlbumAction({ paths, onDone }: { paths: string[]; onDone?: () => void }) {
+export function AddToAlbumAction({ paths, onDone, iconSize = 14 }: { paths: string[]; onDone?: () => void; iconSize?: number }) {
   const access = useAccessIds();
   const { reportError } = useSelectionBar();
   const [open, setOpen] = useState(false);
@@ -65,7 +65,7 @@ export function AddToAlbumAction({ paths, onDone }: { paths: string[]; onDone?: 
   if (isGuest(access)) return null;
   return (
     <>
-      <SelectionActionButton icon={<TablerIcon name='library-plus' size={14} />} onClick={() => setOpen(true)} disabled={paths.length === 0}>
+      <SelectionActionButton icon={<TablerIcon name='library-plus' size={iconSize} />} onClick={() => setOpen(true)} disabled={paths.length === 0}>
         Add to album
       </SelectionActionButton>
       <AlbumPickerDialog

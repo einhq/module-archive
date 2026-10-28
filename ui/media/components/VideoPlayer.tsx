@@ -106,6 +106,10 @@ type VideoPlayerProps = {
   reloadToken: number;
   /** Hands the element to the lightbox, whose zoom, face boxes and details sheet measure it. */
   videoRef: (el: HTMLVideoElement | null) => void;
+  /** The lightbox's zoom, a transform about the player's centre: it moves the picture and not the controls. */
+  pictureStyle?: CSSProperties;
+  /** What is drawn on the picture and moves with it under the zoom: the face boxes. */
+  pictureOverlay?: ReactNode;
   /** The transcript's language and voices, when the video has one. */
   transcript?: { language?: string; speakers: MediaSpeaker[] };
   /** The video's storyboard sheet and where to fetch it, for the frame shown over the timeline. */
@@ -149,6 +153,8 @@ export function VideoPlayer({
   media,
   reloadToken,
   videoRef,
+  pictureStyle,
+  pictureOverlay,
   transcript,
   storyboard,
   chapters,
@@ -527,21 +533,25 @@ export function VideoPlayer({
       // In fullscreen the pointer goes with an idle mouse, whatever the controls are doing.
       style={{ cursor: fullscreen && !active && !hovered ? 'none' : undefined }}
     >
-      <video
-        ref={attachVideo}
-        playsInline
-        preload='metadata'
-        // Not `media.thumbnailUrl`: that is the 320 square *crop*, and a centre-cropped poster
-        // under a contain-fitted video is the wrong picture in the wrong shape.
-        poster={bust(posterUrl(media.path, media.type, media.hasDerivatives, displayDims(media)), reloadToken)}
-        // The browser's menu offers to show its own controls, which would draw a second bar under ours.
-        onContextMenu={(event) => event.preventDefault()}
-        style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
-      >
-        {/* Without a rendition the original plays as whatever it is; only the rendition is known to be AV1. */}
-        <source ref={sourceRef} src={bust(media.fullUrl, reloadToken)} type={media.hasDerivatives ? VIDEO_SOURCE_TYPE : undefined} />
-        {transcript && <track kind='subtitles' src={transcriptUrl} srcLang={transcript.language ?? 'und'} label={transcriptLabel(transcript.language)} />}
-      </video>
+      {/* The picture alone takes the zoom; the subtitles and controls stay where they are. */}
+      <Box data-video-picture className='mrx-video-picture' style={pictureStyle}>
+        <video
+          ref={attachVideo}
+          playsInline
+          preload='metadata'
+          // Not `media.thumbnailUrl`: that is the 320 square *crop*, and a centre-cropped poster
+          // under a contain-fitted video is the wrong picture in the wrong shape.
+          poster={bust(posterUrl(media.path, media.type, media.hasDerivatives, displayDims(media)), reloadToken)}
+          // The browser's menu offers to show its own controls, which would draw a second bar under ours.
+          onContextMenu={(event) => event.preventDefault()}
+          style={{ display: 'block', width: '100%', height: '100%', objectFit: 'contain' }}
+        >
+          {/* Without a rendition the original plays as whatever it is; only the rendition is known to be AV1. */}
+          <source ref={sourceRef} src={bust(media.fullUrl, reloadToken)} type={media.hasDerivatives ? VIDEO_SOURCE_TYPE : undefined} />
+          {transcript && <track kind='subtitles' src={transcriptUrl} srcLang={transcript.language ?? 'und'} label={transcriptLabel(transcript.language)} />}
+        </video>
+        {pictureOverlay}
+      </Box>
 
       {subtitles && cue && (
         <Box

@@ -11,6 +11,13 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The video and the face boxes on it, over the player's whole box like the video was. */
+.mrx-video-picture {
+  position: absolute;
+  inset: 0;
+  transform-origin: center;
+}
+
 /*
  * Hidden controls fade and stop taking the pointer, so a tap on the picture reaches it. Never
  * `visibility`: the lightbox hides the whole box with it while the picture flies in from its tile,

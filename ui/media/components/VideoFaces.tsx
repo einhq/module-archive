@@ -79,7 +79,7 @@ const boxNow = (face: MediaFace, track: TrackPoint[] | undefined, time: number):
  *
  * Its own component, so a playhead read every frame redraws these boxes and not the lightbox.
  */
-export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onNamePerson }: {
+export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onNamePerson, scale }: {
   mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | null>;
   faces: MediaFace[];
   /** The face the sidebar follows, by path. */
@@ -89,6 +89,8 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
   onHover: (key: string | null) => void;
   onOpenPerson: (route: string) => void;
   onNamePerson: (personPath: string, name: string) => Promise<void>;
+  /** The zoom the picture is scaled by (`FaceOverlay`'s `scale`). */
+  scale?: number;
 }) {
   const tracks = useFaceTracks(useMemo(() => faces.map((face) => face.facePath), [faces]));
   const time = useVideoTime(mediaRef);
@@ -111,6 +113,7 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
       onHover={onHover}
       onOpenPerson={onOpenPerson}
       onNamePerson={onNamePerson}
+      scale={scale}
     />
   );
 }

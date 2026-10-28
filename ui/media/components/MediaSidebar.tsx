@@ -23,7 +23,7 @@ import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
 import type { CommentEntry, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
-import { mediaTerminalCommand } from '../lib/lightbox-presentation.ts';
+import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
 import { ShowFace } from './ShowFace.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
@@ -419,6 +419,8 @@ export function MediaSidebar(
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
+  const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
   useEffect(() => onLayer(editing || sharing), [editing, sharing]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
@@ -524,28 +526,29 @@ export function MediaSidebar(
 
           {(canEdit || addToAlbumPath) && (
             // Kept mounted, so the album picker outlives the menu closing on the click that opened it.
-            <Menu position='bottom-end' withinPortal shadow='md' keepMounted keepMountedMode='display-none'>
+            // On a phone its rows are a thumb's, like the lightbox bar's menu.
+            <Menu position='bottom-end' withinPortal shadow='md' keepMounted keepMountedMode='display-none' styles={mobile ? THUMB_MENU_STYLES : undefined}>
               <Menu.Target>
-                <ActionIcon variant='subtle' color='gray' size='lg' loading={orienting} aria-label='Edit media'>
-                  <TablerIcon name='pencil' size={20} />
+                <ActionIcon variant='subtle' color='gray' size={mobile ? 'xl' : 'lg'} loading={orienting} aria-label='Edit media'>
+                  <TablerIcon name='pencil' size={mobile ? 24 : 20} />
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
                 {canEdit && (
-                  <Menu.Item leftSection={<TablerIcon name='pencil' size={16} />} disabled={!details} onClick={() => setEditing(true)}>
+                  <Menu.Item leftSection={<TablerIcon name='pencil' size={menuIcon} />} disabled={!details} onClick={() => setEditing(true)}>
                     Edit
                   </Menu.Item>
                 )}
                 {canEdit && (
-                  <Menu.Item leftSection={<TablerIcon name='share' size={16} />} onClick={() => openShareModal(media.path)}>
+                  <Menu.Item leftSection={<TablerIcon name='share' size={menuIcon} />} onClick={() => openShareModal(media.path)}>
                     Share
                   </Menu.Item>
                 )}
-                {addToAlbumPath && <LightboxActionItems path={addToAlbumPath} />}
+                {addToAlbumPath && <LightboxActionItems path={addToAlbumPath} iconSize={menuIcon} />}
                 {canEdit && !mobile && media.type === 'photo' && onAddFace && (
                   <Menu.Item
-                    leftSection={<TablerIcon name='user-square-rounded' size={16} />}
-                    rightSection={addingFace ? <TablerIcon name='check' size={14} /> : undefined}
+                    leftSection={<TablerIcon name='user-square-rounded' size={menuIcon} />}
+                    rightSection={addingFace ? <TablerIcon name='check' size={menuCheck} /> : undefined}
                     color={addingFace ? 'marine' : undefined}
                     onClick={onAddFace}
                   >
@@ -554,15 +557,15 @@ export function MediaSidebar(
                 )}
                 {canEdit && canOrient && (
                   <>
-                    <Menu.Item leftSection={<TablerIcon name='rotate-2' size={16} />} disabled={orienting} onClick={() => onTurn({ rotate: 'ccw' })}>
+                    <Menu.Item leftSection={<TablerIcon name='rotate-2' size={menuIcon} />} disabled={orienting} onClick={() => onTurn({ rotate: 'ccw' })}>
                       Rotate left
                     </Menu.Item>
-                    <Menu.Item leftSection={<TablerIcon name='rotate-clockwise-2' size={16} />} disabled={orienting} onClick={() => onTurn({ rotate: 'cw' })}>
+                    <Menu.Item leftSection={<TablerIcon name='rotate-clockwise-2' size={menuIcon} />} disabled={orienting} onClick={() => onTurn({ rotate: 'cw' })}>
                       Rotate right
                     </Menu.Item>
                     <Menu.Item
-                      leftSection={<TablerIcon name='flip-vertical' size={16} />}
-                      rightSection={details?.mirror ? <TablerIcon name='check' size={14} /> : undefined}
+                      leftSection={<TablerIcon name='flip-vertical' size={menuIcon} />}
+                      rightSection={details?.mirror ? <TablerIcon name='check' size={menuCheck} /> : undefined}
                       color={details?.mirror ? 'marine' : undefined}
                       disabled={orienting}
                       onClick={() => onTurn({ mirror: 'toggle' })}
