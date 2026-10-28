@@ -196,6 +196,18 @@
         ]
       },
       {
+        "key": "CFG_MODEL_SECOND_SLOTS",
+        "scope": "system",
+        "type": "number",
+        "default": "0",
+        "label": "Second models worker's slots",
+        "description": "Slots of a second worker for the model-bound media steps, which goes through the same backlogs in the reverse order, so the media service runs a second model family beside the first worker's. 0 leaves it off. Size both workers' slots together against the media service's model limit, and mind its card: two families' models must fit there, or one runs on the CPU.",
+        "group": "Processing",
+        "restarts": [
+          "models-second"
+        ]
+      },
+      {
         "key": "CFG_MODEL_KIND_QUANTUM_MS",
         "scope": "system",
         "type": "number",
