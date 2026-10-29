@@ -148,6 +148,9 @@ Deno.test({ name: 'staging decisions', sanitizeResources: false, sanitizeOps: fa
       // Without a destination an event is a new album, unsure: below the default floor.
       const unsure = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --dry-run');
       assertEquals(unsure.skipped, [{ group: `${GROUPS}/2019-06-22`, reason: 'below-confidence' }]);
+      // The web interface's "Every proposal" asks for the least sure as well.
+      const any = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --confidence low --dry-run');
+      assertEquals([any.skipped, any.plan.map((row) => row.proposal.action)], [[], ['new']]);
 
       await cmd.shouldSucceed(`staging category inbox --destination ${ALBUMS_ROOT}/summer`);
       const before = (await journal()).entries.length;

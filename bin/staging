@@ -231,7 +231,7 @@ const writeSets = async (cmd: Command, page: DuplicatePage): Promise<void> => {
 };
 
 const SHARES = ['private', 'default'] as const;
-const CONFIDENCES: MatchConfidence[] = ['high', 'medium'];
+const CONFIDENCES: MatchConfidence[] = ['high', 'medium', 'low'];
 
 const staging = async (cmd: Command): CmdReturn => {
   const subcommand = cmd.args[0];
@@ -605,7 +605,7 @@ const staging = async (cmd: Command): CmdReturn => {
       const raws = (flags._ as unknown[]).map(String);
       if (raws.length === 0) throw new Error('staging accept needs at least one group');
       const confidence = (flags.confidence as string | undefined) ?? 'medium';
-      if (!(CONFIDENCES as string[]).includes(confidence)) throw new Error(`--confidence is ${CONFIDENCES.join(' or ')}`);
+      if (!(CONFIDENCES as string[]).includes(confidence)) throw new Error(`--confidence is ${CONFIDENCES.join(', ')}`);
       const result = await acceptGroups(cmd, raws.map((raw) => groupPath(cmd, flags, raw, 'accept')), {
         confidence: confidence as MatchConfidence,
         expect: keysFlag(flags.expect),
