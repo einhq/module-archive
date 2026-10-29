@@ -20,8 +20,13 @@ Deno.test('an empty category has every segment at nothing', () => {
   assertEquals(empty.map((segment) => segment.value), [0, 0, 0, 0]);
 });
 
+Deno.test('a deferred exact copy, never read, is not counted as ready to sort', () => {
+  const segments = categorySegments({ files: 10, other: 0, indexing: 2, indexed: 5, undated: 1, bytes: 0, copies: { library: 0, inbox: 3 }, near: { library: 0, inbox: 0 } });
+  assertEquals(segments.map((segment) => segment.value), [2, 4, 1, 0]);
+});
+
 Deno.test('ready never goes below nothing when the counts disagree', () => {
-  const ready = categorySegments({ files: 3, other: 0, indexing: 2, indexed: 1, undated: 2, bytes: 0, copies: { library: 0, inbox: 0 }, near: { library: 0, inbox: 0 } }).find(
+  const ready = categorySegments({ files: 3, other: 0, indexing: 0, indexed: 1, undated: 2, bytes: 0, copies: { library: 0, inbox: 0 }, near: { library: 0, inbox: 0 } }).find(
     (segment) => segment.key === 'ready',
   );
   assertEquals(ready?.value, 0);

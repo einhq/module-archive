@@ -29,12 +29,13 @@ type CategorySegment = { key: CategorySegmentKey; label: string; value: number }
 
 /**
  * A category's staged originals split into the parts its bar draws, in order: media whose metadata
- * is still being read, media ready to sort, media read without a capture time, and files that are
- * not media. Together they are every staged original but an empty media file, which is never read.
+ * is still being read, media read and ready to sort, media read without a capture time, and files
+ * that are not media. Together they are every staged original but an empty media file and a
+ * deferred exact copy, which are never read.
  */
 export const categorySegments = (counts: StagingFileCounts): CategorySegment[] => [
   { key: 'preparing', label: 'Being prepared', value: counts.indexing },
-  { key: 'ready', label: 'To sort', value: Math.max(0, counts.files - counts.indexing - counts.undated) },
+  { key: 'ready', label: 'To sort', value: Math.max(0, counts.indexed - counts.undated) },
   { key: 'undated', label: 'Needs a date', value: counts.undated },
   { key: 'other', label: 'Other files', value: counts.other },
 ];
