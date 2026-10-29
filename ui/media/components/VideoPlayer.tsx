@@ -19,6 +19,7 @@ import { useContentRect } from '../hooks/useContentRect.ts';
 import { useCast } from '../hooks/useCast.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePictureInPicture } from '../hooks/usePictureInPicture.ts';
+import { usePlayerFullscreen } from '../hooks/usePlayerFullscreen.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
 import { useVolume } from '../hooks/useVolume.ts';
 import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
@@ -110,8 +111,6 @@ type VideoPlayerProps = {
   slideshow: boolean;
   /** Boxes are being drawn on the paused picture: no play button lies over it, the bar's is enough. */
   drawing?: boolean;
-  fullscreen: boolean;
-  onToggleFullscreen: () => void;
   /** Off while a dialog over the lightbox has the keys. */
   keysEnabled: boolean;
   /** In a slideshow, how much of the player's bottom edge the information bar lies over. */
@@ -152,8 +151,6 @@ export function VideoPlayer({
   compact,
   slideshow,
   drawing = false,
-  fullscreen,
-  onToggleFullscreen,
   keysEnabled,
   coveredBottom,
   onEnded,
@@ -299,6 +296,7 @@ export function VideoPlayer({
   // An iPhone has no fullscreen for a page, only Safari's player for the video itself, which throws
   // until the video has its metadata.
   const nativeFullscreenOnly = !document.fullscreenEnabled && 'webkitEnterFullscreen' in HTMLVideoElement.prototype;
+  const { fullscreen, toggle: togglePlayerFullscreen } = usePlayerFullscreen(rootRef);
   const lockAskedAtRef = useRef(0);
   const lockedRef = useRef(false);
   const toggleFullscreen = useCallback(() => {
@@ -308,8 +306,8 @@ export function VideoPlayer({
       return;
     }
     lockAskedAtRef.current = !fullscreen && pointerTypeRef.current !== 'mouse' ? performance.now() : 0;
-    onToggleFullscreen();
-  }, [fullscreen, nativeFullscreenOnly, onToggleFullscreen]);
+    togglePlayerFullscreen();
+  }, [fullscreen, nativeFullscreenOnly, togglePlayerFullscreen]);
   // A page in fullscreen does not turn the phone: a landscape video on an upright phone would stay
   // small, so the screen is locked to landscape while it lasts, where the browser allows it — only
   // for a fullscreen this player's own button asked for, and given back when it ends or the

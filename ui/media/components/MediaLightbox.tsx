@@ -1949,8 +1949,6 @@ export function MediaLightbox() {
                     keysEnabled={playerKeys}
                     transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
                     compact={isMobile}
-                    fullscreen={fullscreen}
-                    onToggleFullscreen={toggleFullscreen}
                   />
                 )
                 : isVideo
@@ -1994,8 +1992,6 @@ export function MediaLightbox() {
                     compact={isMobile}
                     slideshow={slideshow}
                     drawing={addingFace}
-                    fullscreen={fullscreen}
-                    onToggleFullscreen={toggleFullscreen}
                     keysEnabled={playerKeys}
                     coveredBottom={infoRowHeight}
                     onEnded={slideshow ? advanceSlideshow : undefined}

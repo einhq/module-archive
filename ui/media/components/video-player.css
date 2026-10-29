@@ -11,6 +11,11 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* The player alone in fullscreen (usePlayerFullscreen), on the lightbox's background. */
+.mrx-video-player:fullscreen {
+  background: var(--mrx-media-bg);
+}
+
 /* The video and the face boxes on it, over the player's whole box like the video was. */
 .mrx-video-picture {
   position: absolute;

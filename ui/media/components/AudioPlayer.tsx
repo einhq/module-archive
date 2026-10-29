@@ -7,6 +7,7 @@ import { useShortcutHelp } from '@ein/ui/hooks';
 import { fileUrl, formatClock, gridSrcSet, gridUrl, WAVEFORM_ASPECT } from '@ein/ui/lib';
 import { useAudioPictureInPicture } from '../hooks/useAudioPictureInPicture.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
+import { usePlayerFullscreen } from '../hooks/usePlayerFullscreen.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
 import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
 import { useVolume } from '../hooks/useVolume.ts';
@@ -46,8 +47,6 @@ type AudioPlayerProps = {
   transcript?: PlayerTranscript;
   /** A phone's layout: larger targets, no mute. */
   compact?: boolean;
-  fullscreen: boolean;
-  onToggleFullscreen: () => void;
 };
 
 /**
@@ -67,8 +66,9 @@ type AudioPlayerProps = {
  * is paused, a play button sits on the waveform, as one does on a paused video.
  */
 export function AudioPlayer(
-  { media, bust, onEnded, onStalled, onPlay, keysEnabled = true, transcript, compact = false, fullscreen, onToggleFullscreen }: AudioPlayerProps,
+  { media, bust, onEnded, onStalled, onPlay, keysEnabled = true, transcript, compact = false }: AudioPlayerProps,
 ) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioHomeRef = useRef<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
@@ -96,6 +96,7 @@ export function AudioPlayer(
     })
     .join(', ');
 
+  const { fullscreen, toggle: toggleFullscreen } = usePlayerFullscreen(rootRef);
   const pip = useAudioPictureInPicture(audioRef, audioHomeRef, { name: media.name, waveform });
   useHotkeys(
     keysEnabled
@@ -116,7 +117,17 @@ export function AudioPlayer(
   const keepFocus = (event: ReactMouseEvent) => event.preventDefault();
 
   return (
-    <Stack gap='md' style={{ width: '100%', maxWidth: PLAYER_MAX_WIDTH, alignItems: 'stretch' }}>
+    <Stack
+      ref={rootRef}
+      gap='md'
+      // In fullscreen the waveform and its controls sit in the middle of the screen, on the lightbox's background.
+      style={{
+        width: '100%',
+        maxWidth: PLAYER_MAX_WIDTH,
+        alignItems: 'stretch',
+        ...(fullscreen ? { justifyContent: 'center', padding: '0 5vw', background: 'var(--mrx-media-bg)' } : {}),
+      }}
+    >
       <Box style={{ position: 'relative' }}>
         <Scrubber
           transport={transport}
@@ -272,7 +283,7 @@ export function AudioPlayer(
           </Tooltip>
         )}
         <Tooltip label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} withArrow>
-          <ActionIcon variant='subtle' color='gray' size={buttonSize} onClick={onToggleFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
+          <ActionIcon variant='subtle' color='gray' size={buttonSize} onClick={toggleFullscreen} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}>
             <TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} color='white' />
           </ActionIcon>
         </Tooltip>
