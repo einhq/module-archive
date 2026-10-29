@@ -96,7 +96,7 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
   /** The zoom the picture is scaled by (`FaceOverlay`'s `scale`). */
   scale?: number;
 } & Pick<ComponentProps<typeof FaceOverlay>, 'drawing' | 'saving' | 'onCreateFace' | 'onRemoveFace' | 'onChangePerson' | 'onDraftChange'>) {
-  const tracks = useFaceTracks(useMemo(() => faces.map((face) => face.facePath), [faces]));
+  const tracks = useFaceTracks(useMemo(() => faces.filter((face) => face.tracked).map((face) => face.facePath), [faces]));
   const time = useVideoTime(mediaRef);
   const marks = useMemo(
     () =>

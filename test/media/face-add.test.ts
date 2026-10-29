@@ -144,10 +144,13 @@ Deno.test({
       const first = await vfs.get<{ appearances?: [number, number][] }>(ADMIN_ACCESS, atStart.facePath);
       assertEquals(first.attrs.appearances, [[0, 0.7]]);
 
-      const details = await client.execJson<{ faces: Array<{ facePath: string; atSeconds?: number; appearances?: [number, number][] }> }>('media-details /img/clip.mp4');
+      const details = await client.execJson<{ faces: Array<{ facePath: string; atSeconds?: number; appearances?: [number, number][]; tracked?: boolean }> }>(
+        'media-details /img/clip.mp4',
+      );
       const listed = details.faces.find((entry) => entry.facePath === drawn.facePath);
       assertEquals(listed?.atSeconds, 12.346);
       assertEquals(listed?.appearances, [[11.846, 12.846]]);
+      assertEquals(listed?.tracked, false);
     });
   } finally {
     client.close();

@@ -138,6 +138,8 @@ export type MediaFace = {
   faceBox: FaceBox;
   atSeconds?: number;
   appearances?: [number, number][];
+  /** On a video: the face has a track, its box a line per sampled frame; one drawn by hand has none. */
+  tracked?: boolean;
   /** A detected face with a vector; false for a tag — a box a human drew, an import carried, or a face too poor to vote. */
   hasFace: boolean;
   personId?: string;

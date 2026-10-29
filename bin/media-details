@@ -16,7 +16,7 @@
  */
 import { type CmdReturn, collectUnknownFlags, type Command, type CommentEntry, parseArgs, readComments, reportUnknownFlags } from '@ein/client';
 import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
-import { faceEmbeddingsOfRegions, regionsPathOf } from '@archive/media/regions';
+import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, regionsPathOf } from '@archive/media/regions';
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { basename, resolve } from '@std/path';
 import { isFingerprintName } from '@archive/media/fingerprints';
@@ -609,9 +609,16 @@ const readPeople = async (
       const facePath = `${regionsPathOf(path)}/${face.name}`;
       const hasFace = embeddings.has(face.node.id);
       const personId = face.node.attrs.personId;
-      // A video's face: the moment its box is of, and when it is on screen.
+      // A video's face: the moment its box is of, when it is on screen, and whether it has a
+      // track to follow (a box drawn by hand has none).
       const { atSeconds, appearances } = face.node.attrs;
-      const when = { ...(typeof atSeconds === 'number' ? { atSeconds } : {}), ...(Array.isArray(appearances) ? { appearances } : {}) };
+      const when = typeof atSeconds === 'number'
+        ? {
+          atSeconds,
+          ...(Array.isArray(appearances) ? { appearances } : {}),
+          tracked: await vfs.exists(access, `${facePath}/${FACE_TRACK_NAME}`, { follow: false }),
+        }
+        : {};
       if (!personId) {
         if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, ...when });
         continue;
