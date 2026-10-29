@@ -110,6 +110,8 @@ type VideoPlayerProps = {
   /** A phone's layout: the transport over the middle of the picture, larger targets, no mute. */
   compact: boolean;
   slideshow: boolean;
+  /** Boxes are being drawn on the paused picture: no play button lies over it, the bar's is enough. */
+  drawing?: boolean;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   /** Off while a dialog over the lightbox has the keys. */
@@ -151,6 +153,7 @@ export function VideoPlayer({
   chapters,
   compact,
   slideshow,
+  drawing = false,
   fullscreen,
   onToggleFullscreen,
   keysEnabled,
@@ -551,7 +554,7 @@ export function VideoPlayer({
         </Box>
       )}
 
-      {!compact && !playing && failure === null && !slideshow && (
+      {!compact && !playing && failure === null && !slideshow && !drawing && (
         <ActionIcon
           data-video-controls
           className='mrx-video-big-play'

@@ -1990,6 +1990,7 @@ export function MediaLightbox() {
                       : undefined}
                     compact={isMobile}
                     slideshow={slideshow}
+                    drawing={addingFace}
                     fullscreen={fullscreen}
                     onToggleFullscreen={toggleFullscreen}
                     keysEnabled={playerKeys}
