@@ -72,7 +72,7 @@ Deno.test('a suggested group is albums/<category>/<slug>, and what lies under it
 
 Deno.test('a staged file at any depth leaves staging for a library album, and stays for its own groups', () => {
   assertEquals(leavesStaging('/home/anna/staging/files/inbox/upload-2026-10-16/x.jpg', '/archive/albums/trip'), true);
-  assertEquals(leavesStaging('/home/anna/staging/files/inbox/legacy-import/x.jpg', '/archive/albums/trip/files'), true);
+  assertEquals(leavesStaging('/home/anna/staging/files/inbox/old-scans/x.jpg', '/archive/albums/trip/files'), true);
   assertEquals(leavesStaging('/home/anna/staging/files/inbox/x.jpg', '/home/anna/staging/albums/inbox/day'), false);
   assertEquals(leavesStaging('/archive/albums/other/x.jpg', '/archive/albums/trip'), false);
   // Another user's staging is not the file's own.

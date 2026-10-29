@@ -95,7 +95,7 @@ Each category's settings say how its files are grouped (`stagingCategory.group`,
 - **Seeds**: a folder below a batch folder (two or more levels under the category), holding at
   least three media, whose name a person gave it — not `DCIM`, `100CANON`, a year, a date, an
   `upload-…` batch, `Takeout` and the like — or a folder an export titled. Its media are held out of
-  the timeline. Batch folders (`upload-2026-10-01`, `legacy-import`) are never seeds.
+  the timeline. Batch folders (`upload-2026-10-01`, `old-scans`) are never seeds.
 - **Period and undated lanes**: a medium dated only to a year or a month (`takenAt` `1975`,
   `1975-06`) goes to a period lane per value and folder, and one with no time to an undated lane
   per folder. Neither is ever placed at an instant: `1975` is not 31 Dec 1974 anywhere.

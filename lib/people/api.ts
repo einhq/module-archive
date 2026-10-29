@@ -30,7 +30,7 @@ export type PersonFace = {
   pose?: { pitch: number; yaw: number; roll: number };
   confidence: number;
   personSource?: string;
-  /** Set when `face-audit` found another person's named face nearer than this person's own. */
+  /** Set when an audit found another person's named face nearer than this person's own. */
   doubt?: FaceDoubtView;
 };
 

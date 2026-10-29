@@ -37,7 +37,6 @@
     "@archive/media/exif-service": "./lib/media/exif-service.ts",
     "@archive/media/extracted-text": "./lib/media/extracted-text.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
-    "@archive/media/face-audit": "./lib/media/face-audit.ts",
     "@archive/media/face-cluster": "./lib/media/face-cluster.ts",
     "@archive/media/face-crop": "./lib/media/face-crop.ts",
     "@archive/media/face-crop-rebuild": "./lib/media/face-crop-rebuild.ts",

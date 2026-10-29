@@ -3,8 +3,8 @@
  * face-confirm — a human says these regions do show the person they are assigned to.
  *
  * The other half of "Not <name>" (`person-detach`): the region keeps its person, now as
- * `personSource: 'manual'`, which `face-reset` never undoes and `face-audit` never questions,
- * and any doubt the audit left on it goes.
+ * `personSource: 'manual'`, which `face-reset` never undoes and no audit questions, and any
+ * doubt an audit left on it goes.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';

@@ -6,11 +6,10 @@ description: Detect faces in an image and crop each one
 # waits on a transcript or a vector.
 #
 # The guard is a marker on the file node, not the `regions/` directory (once
-# `faces/`). Those are not the same predicate: the legacy importer creates
-# `manual-<n>` tags at import time, so `skipIfExists` on the directory skipped detection on exactly
-# the images carrying legacy identity — measured on the real corpus as 0 images
-# holding both a tag and a detection, which left `tag-transfer` inert and
-# recognition with no anchors. `facesAt` says the detector ran, which a directory
+# `faces/`). Those are not the same predicate: a person or an import can create
+# `manual-<n>` tags before detection runs, and `skipIfExists` on the directory would
+# skip detection on exactly the images that carry a name, leaving recognition no
+# anchors. `facesAt` says the detector ran, which a directory
 # someone else wrote never did — and it is the marker the staging organizer
 # reads to decide whether a file's people signal is complete.
 trigger:

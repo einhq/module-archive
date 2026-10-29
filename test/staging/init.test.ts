@@ -22,7 +22,7 @@ const testCtx = createTestContext({ modules: ['archive'] });
 const STAGING = '/home/anna/staging';
 const FILES = `${STAGING}/files`;
 const ALBUMS = `${STAGING}/albums`;
-const BATCH = `${FILES}/inbox/legacy-import`;
+const BATCH = `${FILES}/inbox/old-scans`;
 
 Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const { vfs } = await testCtx.setup();
@@ -86,7 +86,7 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
 
     await t.step('a dry run says what it would do, and writes nothing', async () => {
       let answer: StagingInitAnswer | undefined;
-      const events = await eventsDuring(async () => answer = await client.execJson<StagingInitAnswer>('staging init --user anna --loose-batch legacy-import --dry-run'));
+      const events = await eventsDuring(async () => answer = await client.execJson<StagingInitAnswer>('staging init --user anna --loose-batch old-scans --dry-run'));
       assertEquals(events, []);
       assertEquals(answer!.dryRun, true);
       const [user] = answer!.users;
@@ -100,7 +100,7 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
     });
 
     await t.step('loose entries move into the default category, with every link to them', async () => {
-      const answer = await client.execJson<StagingInitAnswer>('staging init --user anna --loose-batch legacy-import');
+      const answer = await client.execJson<StagingInitAnswer>('staging init --user anna --loose-batch old-scans');
       const [user] = answer.users;
       assertEquals({ ...user, created: undefined, repaired: undefined, relinked: undefined }, {
         ...user,

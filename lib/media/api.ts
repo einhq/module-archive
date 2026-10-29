@@ -260,22 +260,6 @@ export type VoiceSubclusterResult = {
   suggested: { threshold: number; groups: number };
 };
 
-/** `face-audit`: transferred faces whose nearest human-named face in another photo is somebody else. */
-export type FaceAuditResult = {
-  /** Faces a human named (`transfer`, `manual`) that have a vector. */
-  anchors: number;
-  /** The `transfer` faces among them, which are what the audit judges. */
-  audited: number;
-  doubtful: number;
-  /** Earlier doubts taken off faces that no longer warrant one. */
-  cleared: number;
-  dryRun: boolean;
-  /** People holding doubtful faces, most first. */
-  people: { id: string; path?: string; name: string; doubtful: number }[];
-  /** Every doubtful face, the widest gap between the other person and its own first. */
-  faces: { facePath: string; personId: string; likePersonId: string; similarity: number; ownSimilarity: number }[];
-};
-
 /** `face-confirm`: regions a human said show the person they are on. */
 export type FaceConfirmResult = { confirmed: string[] };
 

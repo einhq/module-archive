@@ -1,8 +1,8 @@
 /**
  * What a face crop is: the rendition EMS is asked for when one face is cut out of an image.
  *
- * Shared by `detect-faces`, the rebuild in `@archive/media/face-crop-rebuild`, the legacy importer and
- * `tag-transfer` so the four cannot drift. A crop is the one place a stored fractional box
+ * Shared by `detect-faces`, the rebuild in `@archive/media/face-crop-rebuild` and every module that
+ * crops a face, so they cannot drift. A crop is the one place a stored fractional box
  * becomes pixels, and it is EMS that does the cutting — rotating the whole raster into the
  * display frame first, then cropping with the display-frame box, then resolving the fraction
  * against the raster it actually decoded (`image.renditions` with `crop`). Cropping the raw

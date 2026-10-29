@@ -46,7 +46,7 @@ const doubtBadge = (likeName: string): ReactNode => (
  * The faces arrive a page at a time as the grid scrolls. Selection, select-all and the
  * lightbox cover the loaded ones, so the count above the grid says when that is not all.
  *
- * When `face-audit` found faces of this person that look more like somebody else, a switch
+ * When an audit found faces of this person that look more like somebody else, a switch
  * (`?faces=doubtful`) lists only those, clearest first, each labelled with who it looks like.
  * The reviewer takes the wrong ones off with "Not <name>", which offers the look-alike, and
  * keeps the rest with "Is <name>".

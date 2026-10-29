@@ -10,7 +10,7 @@ type UsePersonFacesResult = {
   faces: PersonFace[];
   /** Every face in the list asked for, loaded or not. */
   total: number;
-  /** The person's faces `face-audit` doubts, whichever list was asked for. */
+  /** The person's faces an audit doubts, whichever list was asked for. */
   doubtful: number;
   loading: boolean;
   loadingMore: boolean;

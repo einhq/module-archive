@@ -7,7 +7,6 @@
 #   stills        — pictures of every media file (sizes, posters, (1 slot, priority 60)
 #                   a video's storyboard)
 #   face-assign   — a kNN over every known face embedding      (1 slot, priority 40)
-#   face-transfer — legacy tag → detection, plus a crop each    (1 slot, priority 90)
 #   fingerprint   — perceptual hash calculation                    (1 slot, priority 30)
 #   dedupe        — a staged file's duplicate findings          (1 slot, priority 20)
 #   retime        — staged files dated by a category's rules     (1 slot, priority 20)
@@ -49,7 +48,6 @@ pipeline-worker --pool "${POOLS_PATH:-/var/pools}/media" \
   --kind ingest \
   --kind stills \
   --kind face-assign \
-  --kind face-transfer \
   --kind speaker-assign \
   --kind fingerprint \
   --kind dedupe \
@@ -60,7 +58,6 @@ pipeline-worker --pool "${POOLS_PATH:-/var/pools}/media" \
   --reserve-capacity cpu="${CFG_CPU_NON_ENTRY_SLOTS:-1}" \
   --reserve-kind stills \
   --reserve-kind face-assign \
-  --reserve-kind face-transfer \
   --reserve-kind speaker-assign \
   --reserve-kind fingerprint \
   --reserve-kind dedupe \

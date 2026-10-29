@@ -124,16 +124,11 @@ const detectFaces = async (cmd: Command): CmdReturn => {
 
   // Re-detecting means starting over: the boxes are what changed, and a stale face region would
   // keep its old crop and its old identity. Only *our* regions, though — `regions/` also holds
-  // `manual-<n>` boxes a human drew or the legacy import carried, with a real personId that no
-  // detector can reproduce. Dropping the whole directory destroyed them.
-  // A tag whose transfer target is deleted here is reopened with it, so a forced
-  // re-detect is repeatable rather than one-way; see @media/regions.
+  // `manual-<n>` boxes a human drew or an import carried, with a real personId that no
+  // detector can reproduce.
   if (force) {
-    const { removed, reopened } = await removeDetectedRegions(cmd.sys.vfs, cmd.access, inputPath);
-    log('removed previous detections', { removed, reopened });
-    if (verbose && reopened > 0) {
-      await cmd.writeLn(`Reopened ${reopened} legacy tag${reopened === 1 ? '' : 's'} whose transfer target was removed`);
-    }
+    const removed = await removeDetectedRegions(cmd.sys.vfs, cmd.access, inputPath);
+    log('removed previous detections', { removed });
   }
 
   if (verbose) await cmd.writeLn('Running InsightFace...');

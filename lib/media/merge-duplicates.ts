@@ -24,7 +24,7 @@ import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 import { albumsHolding } from '@archive/media/album-members';
 import { iou } from '@archive/media/face-match';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
-import { LIGHTBOX_MANUAL_DETECTOR, MANUAL_DETECTOR, nextManualName, REGION_TYPE, type RegionAttrs, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
+import { FACE_DETECTOR, LIGHTBOX_MANUAL_DETECTOR, nextManualName, REGION_TYPE, type RegionAttrs, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
 
 /** Paths per `trash put`, so a command line stays short however many drops there are. */
 const TRASH_CHUNK = 500;
@@ -286,7 +286,8 @@ const planPeople = (cmd: Command, keep: MergeFile, drops: MergeFile[]): Step[] =
         for (const from of add) {
           const name = nextManualName(names);
           names.push(name);
-          const legacy = from.attrs.detectedBy === MANUAL_DETECTOR;
+          // A detection becomes a box drawn by hand here; any other box keeps who drew it.
+          const drawnBy = from.attrs.detectedBy && from.attrs.detectedBy !== FACE_DETECTOR ? from.attrs.detectedBy : LIGHTBOX_MANUAL_DETECTOR;
           await vfs.create(access, REGION_TYPE, dir, name, {
             attrs: {
               fileId: keep.id,
@@ -294,8 +295,7 @@ const planPeople = (cmd: Command, keep: MergeFile, drops: MergeFile[]): Step[] =
               landmarks: null,
               confidence: 1,
               detectedAt: nowIso(),
-              detectedBy: legacy ? MANUAL_DETECTOR : LIGHTBOX_MANUAL_DETECTOR,
-              ...(legacy && from.attrs.legacyDetector ? { legacyDetector: from.attrs.legacyDetector } : {}),
+              detectedBy: drawnBy,
               personId: from.attrs.personId,
               ...(from.attrs.personSource ? { personSource: from.attrs.personSource } : {}),
               personAssignedAt: from.attrs.personAssignedAt ?? nowIso(),

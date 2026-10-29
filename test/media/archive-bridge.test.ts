@@ -55,7 +55,8 @@ Deno.test({
         'generate-derivatives',
         'compute-fingerprint',
         'detect-faces',
-        'tag-transfer',
+        'see-speakers',
+        'assign-speakers',
         'transcribe-file',
         'device-link',
         'geocode-position',
@@ -97,7 +98,7 @@ Deno.test({
           'media-fingerprint',
           'media-faces',
           'media-video-faces',
-          'media-face-transfer',
+          'media-speaker-faces',
           'media-face-assign',
           'media-transcribe',
           'media-album',
@@ -151,18 +152,26 @@ Deno.test({
       await waitFor(() => hasInstance('media-fingerprint', nodeId), 'media-fingerprint instance');
       await waitFor(() => hasInstance('media-faces', nodeId), 'media-faces instance');
       await waitFor(() => hasInstance('media-device', nodeId), 'media-device instance');
-      assertEquals(await hasInstance('media-face-transfer', nodeId), false, 'face transfer must wait for face completion');
     });
 
     await t.step('face completion starts its downstream jobs only after facesAt lands', async () => {
-      const path = `${ALBUMS_ROOT}/t/a.jpg`;
+      const path = `${ALBUMS_ROOT}/t/v.mp4`;
+      await makeMedia(path, 'video/mp4');
       const nodeId = await nodeIdOf(path);
+      // Indexed, or every write to it would still read as a discovery.
+      await client.exec(`mkdir -p ${path}/metadata`);
+      await vfs.ensure(ADMIN_ACCESS, 'exif', `${path}/metadata`, 'exif');
+      await vfs.update(ADMIN_ACCESS, `${path}/metadata/exif`, { attrs: { indexedAt: '2020-01-01T00:00:00Z', sourceSha256: 'sha-1' } });
+
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { speakersAt: '2026-09-07T06:00:00Z' } });
+      await new Promise((r) => setTimeout(r, 700));
+      assertEquals(await hasInstance('media-speaker-faces', nodeId), false, 'tying voices to faces must wait for face completion');
 
       await vfs.update(ADMIN_ACCESS, path, {
         attrs: { facesAt: '2026-09-07T07:00:00Z', faceCount: 0 },
       });
 
-      await waitFor(() => hasInstance('media-face-transfer', nodeId), 'media-face-transfer after faces completion');
+      await waitFor(() => hasInstance('media-speaker-faces', nodeId), 'media-speaker-faces after faces completion');
     });
 
     await t.step('mimetype filters keep video-only work off an image', async () => {

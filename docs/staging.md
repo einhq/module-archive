@@ -121,8 +121,7 @@ Every directory of a staging area is mode `0700` and yours: another user cannot
 traverse it. Background media pipelines can still index its contents because those
 jobs run with administrative VFS access.
 
-Files from your personal area in the legacy archive are imported into the inbox
-category's `legacy-import` folder. Existing files can be moved into a category with
+Existing files can be moved into a category with
 `mv <sources...> /home/<user>/staging/files/inbox/`, which preserves node identities
 and rewrites the links to them.
 

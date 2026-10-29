@@ -46,7 +46,6 @@ waits for rather than by a shared DAG:
    | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                           |
    | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                |
    | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                      |
-   | `media-face-transfer`  | `faces.completed` (image)                                                       | pool `face-transfer` (1 cpu)                                                                       |
    | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                              |
    | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`     | pool `transcribe` (1 model slot; priority 50/10)                                                   |
    | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                    | pool `diarize` (1 model slot; priority 30)                                                         |
@@ -103,7 +102,7 @@ waits for rather than by a shared DAG:
    `/pools/media`, and the two workers differ only
    in what they offer: the `models` service offers `models` slots and takes
    `faces`/`embed-picture`/`embed-text`/`transcribe`/`diarize`, the `cpu` service offers `cpu` slots and
-   takes `ingest`/`stills`/`fingerprint` plus `face-assign`/`face-transfer`/`speaker-assign`/`dedupe`/`retime`/`transcode`.
+   takes `ingest`/`stills`/`fingerprint` plus `face-assign`/`speaker-assign`/`dedupe`/`retime`/`transcode`.
    A `kind` no worker declares does not run slowly — it never runs at all, so the two
    lists have to be kept in step (`modules/archive/services/*/start.sh`).
    `assign-faces` also declares `exclusive: person-mint`, so two faces of the same
@@ -1085,7 +1084,7 @@ command that asks for it — `transcribe-file`, `detect-faces`, `embed-picture`,
 `compute-fingerprint`, `exif-extract`, `generate-derivatives`, `index-document` — first checks that
 the caller may write the file
 (`@archive/media/writable`, on `verifyAccess` from `@ein/client`), and the passes over the archive
-(`media-reembed`, `regenerate-face-crops`, `tag-transfer`) skip what the caller may not write. A
+(`media-reembed`, `regenerate-face-crops`) skip what the caller may not write. A
 write refused only after EMS answered would let anyone who may read a file, the guest included,
 spend the service's time on it as often as they asked. The pipeline runs these as the
 administrator, who is never refused.
@@ -1266,8 +1265,8 @@ with one batched `getParentLinksByIds`, and a region to its embedding with `getC
 Only detections that pass the **quality gate** (`@archive/media/face-quality`: confidence ≥
 `CFG_FACE_MIN_CONFIDENCE` 0.7, shorter side ≥ `CFG_FACE_MIN_SIZE` 24 px, head turn ≤
 `CFG_FACE_MAX_YAW` 80° estimated from the five landmarks) are stored at all; the measurements
-behind those numbers are in `wow/history/media-regions.md`. The legacy importer creates
-named manual regions and records their old detector in `legacyDetector`; `face-add` creates a
+behind those numbers are in `wow/history/media-regions.md`. An import may create named
+manual regions with a `detectedBy` of its own; `face-add` creates a
 manual region with a singleton unnamed person so the ordinary naming and merge tools can curate
 it; on a video it takes `--at`, the second of the frame the box was drawn on, which becomes the
 region's `atSeconds`, with an appearance of half a second either side and the crop cut from that
@@ -1277,8 +1276,7 @@ stops voting. `face-remove` recursively deletes one region and deletes its perso
 that person is still unnamed and has neither another region nor a voice; if other regions remain,
 a removed representative advances to one of them. Only the detected kind is reproducible, so
 the prefixes are load-bearing: `detect-faces -f`
-drops `face-*`, leaves `manual-*` alone, and reopens any tag whose `transferredTo` named a region
-(or, from before regions, its embedding) it just deleted, and "has detection run here?" is the
+drops `face-*` and leaves `manual-*` alone, and "has detection run here?" is the
 `facesAt` attr on the **file**, not the existence of `regions/` — a directory the importer also
 writes, and one a photo or video with nobody in it never gets. Which old boxes are named is decided by the
 legacy `tags/<faceId> -> /people/<slug>` links and not by the box's detector
@@ -1375,39 +1373,11 @@ on the region but searches only embeddings, so a tag — a hand-drawn box, a mov
 detection the gate found too weak to vote — names a person in a photo without pulling any other
 face toward them.
 
-Three paths write it, all sharing the voting logic in `@archive/media/face-cluster` so they cannot
-drift apart. `tag-transfer` pairs a legacy `regions/manual-N` tag (personId, no vector — whether
-a human or the old `face-recognition` detector drew it) with
-the face region in the same image by containment and copies the identity across, which is
-what gives recognition its anchors — it runs off `media.faces.completed`, per image,
-so a fresh import needs no sweep. The rule (`@archive/media/face-match`): a detection with any corner
-outside the manual box is not a candidate at all — a loose box around one head does not cut
-through the face it was drawn around, so whatever it cuts through is a neighbour, and a
-neighbour with a large overlap is exactly the pair IoU used to get wrong; of the detections
-wholly inside, the **largest** is the tagged person and the smaller ones are faces in the
-background behind them (`--margin` lets an edge stick out by a fraction of the box; default 0).
-Only faces are candidates: a detection without an embedding would be no anchor. Two coin flips
-are refused: an exact size tie inside one box, and two tags picking the same detection — and so
-is a tag whose largest face inside is narrower than `--min-scale` (0.15) of the box, which in
-production was wrong one time in five: a box drawn round the back of someone's head that holds a
-stranger's face behind them (`too-small`). Every detection takes part in the geometry, owned or not — if a human
-already named the largest face in the box someone else, the tag has lost that argument and
-must not fall through to a background face instead. A tag
-it does not consume keeps its identity and is given a crop instead, so a human can still see
-who it is. `tag-transfer` may overwrite an `auto`/`cluster` assignment — `assign-faces`
-triggers off the same face nodes and often gets there first, and a name a human typed outranks
-a kNN guess — but never `manual`/`transfer`; a tag whose detection already settled on the same
-person (a re-import after a prune, or a human who typed the same name) is a duplicate box and
-is pruned without touching the face. A consumed tag is **deleted in the same run**: its identity
-lives on the detection now, and a second box over the same face is only a duplicate in the
-lightbox. The tag is marked `transferredTo` before it is unlinked, so a run that dies between
-the two writes leaves a tag the next run finishes deleting rather than one it transfers twice.
-The marker only counts while the face it names still exists — `detect-faces -f` clears it on
-the tags whose target it deletes, and `tag-transfer` reopens any that survived a deletion
-instead, so a dangling marker is never read as a finished transfer. What is gone once a
-transferred tag is pruned is the hand-drawn box itself: a later `detect-faces -f` drops the
-detection carrying the identity with nothing left to reopen, the same way it already drops a
-`manual` assignment a human made on a detection.
+Two paths write it, both sharing the voting logic in `@archive/media/face-cluster` so they cannot
+drift apart, and an import may name a detection too, as `transfer`: by pairing a named box with
+the detection inside it (`@archive/media/face-match`, which takes the largest detection wholly
+inside the box, and none narrower than a fraction of it). A `transfer` is a name a human typed,
+so recognition treats it as an anchor and `face-reset` clears it only with `--source transfer` or `all`.
 `assign-faces` runs per image from `detect-faces`:
 `findSimilar` over the whole face space, attach on a clear win, otherwise mint an unnamed
 person — self-reinforcing, since the next photo of that stranger joins the person the first
@@ -1464,19 +1434,15 @@ A named person's **Faces** tab drives it (`NotThisPersonAction`, beside Download
 over a grid of that person's crops), with the other three modes as the alternatives; it then asks
 `person-cover` again, since the cover may have been one of the faces that left.
 
-**Auditing transfers.** A transfer that landed on the wrong face is an anchor like any other, and
-nothing in recognition questions an anchor. `face-audit` compares every human-named face
-(`transfer` and `manual`, with a vector) with every other one, leaving out faces of the same photo
-(`@archive/media/face-audit`). The search is exact and brute force: about a minute for twenty
-thousand anchors, in a worker off the server's own thread. A `transfer` face whose nearest anchor belongs to
-someone else gets a `doubt` on its region: who it was on, who it looks like, and both
-similarities. A face that is its person's only anchor is never doubted, because nothing of its
-own can agree with it. Each run replaces the last one's doubts. A doubt counts (`liveDoubt`) only
-while the face is still a `transfer` on the person it was audited on.
-`person-faces --doubtful --sort doubt` lists one person's doubtful faces, the widest gap first,
-and every answer counts them. The Faces tab switches to that list (`?faces=doubtful`), labelled
-with who each face looks like. "Not <name>" offers that person as the destination. `face-confirm`
-("Is <name>") keeps a face, now as `manual`, which the audit no longer questions.
+**Doubtful faces.** A `transfer` that landed on the wrong face is an anchor like any other, and
+nothing in recognition questions an anchor. An audit of the named faces may put a `doubt` on a
+region (`FaceDoubt` in `@archive/media/regions`): who it was on, who it looks like, and both
+similarities. A doubt counts (`liveDoubt`) only while the face is still a `transfer` on the
+person it was audited on. `person-faces --doubtful --sort doubt` lists one person's doubtful
+faces, the widest gap first, and every answer counts them. The Faces tab switches to that list
+(`?faces=doubtful`), labelled with who each face looks like. "Not <name>" offers that person as
+the destination. `face-confirm` ("Is <name>") keeps a face, now as `manual`, and drops its
+doubt.
 
 **Comments (convention).** Any node may carry `comments/<slug>` children: markdown `file` nodes (db
 tier) whose content is the body, author in `props.uid` and time in `props.birthtime` — no bespoke attrs. The core

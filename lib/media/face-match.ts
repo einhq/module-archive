@@ -1,11 +1,11 @@
 /**
  * Face box matching — pure geometry, no VFS/IO, so it is unit-testable in the
- * fast tier. Used by `tag-transfer` to pair a legacy manual face tag (a
- * hand-drawn box carrying a `personId` but no embedding) with the
- * auto-detected face in the same image (an aligned 512-d embedding but no
- * `personId`), so the tag's identity lands on a face the recognizer can match.
+ * fast tier. Pairs a hand-drawn face box (a `personId` but no embedding) with
+ * the detected face in the same image (an aligned 512-d embedding but no
+ * `personId`), so the box's identity can land on a face the recognizer can
+ * match; `iou` also tells whether two boxes are the same face.
  *
- * The rule is containment, not overlap. Manual boxes were drawn loosely around
+ * The rule is containment, not overlap. Hand-drawn boxes are drawn loosely around
  * a head, while InsightFace returns a tight box on the face, so the detection
  * for the tagged person sits wholly inside the manual box — and a detection
  * with a corner sticking out is somebody else's face brushing the edge. Among

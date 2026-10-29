@@ -476,9 +476,9 @@ Deno.test({
     });
 
     await t.step('person-fixup --delete-orphans clears unnamed people with no faces', async () => {
-      // The routine leftover of legacy tag transfer: assign-faces mints a person
-      // for a fresh detection, tag-transfer then gives that detection the name a
-      // human had already written on it, and the minted person holds nothing.
+      // The routine leftover of a name reaching a face after recognition: assign-faces
+      // mints a person for a fresh detection, the detection is then given the name it
+      // should have had, and the minted person holds nothing.
       const orphan = await seedUnknown('orphaned', 0);
       const keeper = await seedUnknown('keeper', 2);
 

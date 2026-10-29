@@ -10,10 +10,10 @@ const QUERY_LIMIT = 500000;
 /**
  * Delete the unnamed people nothing points at any more.
  *
- * `person-check` has always reported these as `unnamed-orphan`; nothing acted on them. They became
- * routine with legacy tag transfer: `assign-faces` mints a person for a fresh detection, then
- * `tag-transfer` gives that same detection the name a human had already written on it, and the
- * minted person is left holding nothing.
+ * `person-check` reports these as `unnamed-orphan`. They are routine wherever a name reaches a
+ * face after recognition: `assign-faces` mints a person for a fresh detection, then a human, a
+ * merge or an import gives that same detection the name it should have had, and the minted
+ * person is left holding nothing.
  *
  * Scoped to unnamed people with no region and no voice on purpose. `face-reset --delete-unnamed` deletes every
  * unnamed person, which throws away legitimate unidentified clusters along with the debris.

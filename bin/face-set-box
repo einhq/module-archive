@@ -5,8 +5,8 @@
  * A detected face's vector describes the box the detector drew. Once a human moves the box it
  * describes something else, so the region's embedding is deleted: the region keeps its person,
  * becomes a tag, and stops voting in recognition. Re-embedding the new box would ask the model
- * to find a face where a human said one is, which is the crop-embedding approach that mostly
- * came back empty (see `tag-transfer`).
+ * to find a face where a human said one is, and inside a loose hand-drawn box that mostly comes
+ * back empty.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';

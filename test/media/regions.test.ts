@@ -6,7 +6,15 @@
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestVfs } from '@ein/testing';
 import type { NodeVFS } from '@ein/testing';
-import { allRegions, faceEmbeddingsOfRegions, imageOfRegion, MANUAL_DETECTOR, nextManualName, regionsOfEmbeddings, removeDetectedRegions } from '../../lib/media/regions.ts';
+import {
+  allRegions,
+  faceEmbeddingsOfRegions,
+  imageOfRegion,
+  LIGHTBOX_MANUAL_DETECTOR,
+  nextManualName,
+  regionsOfEmbeddings,
+  removeDetectedRegions,
+} from '../../lib/media/regions.ts';
 
 const OWNER = { uid: 1000, gid: 1000, mode: 0o644 };
 
@@ -32,9 +40,9 @@ Deno.test('removeDetectedRegions drops detections and spares tags', async () => 
     await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
     // A detection that lost its vector is still a detection.
     await seedRegion(vfs, image, 'face-1', 'insightface-buffalo_l');
-    await seedRegion(vfs, image, 'manual-0', MANUAL_DETECTOR);
+    await seedRegion(vfs, image, 'manual-0', LIGHTBOX_MANUAL_DETECTOR);
 
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), { removed: 2, reopened: 0 });
+    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), 2);
 
     const left = (await vfs.children(ADMIN_ACCESS, `${image}/regions`)).map((c) => c.name);
     assertEquals(left, ['manual-0'], 'the hand-drawn tag survives a re-detect');
@@ -50,7 +58,7 @@ Deno.test('removeDetectedRegions takes the embedding and the crop with it', asyn
     await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
     await vfs.create(ADMIN_ACCESS, 'file', `${image}/regions/face-0`, 'image.avif', { props: OWNER, attrs: { mimetype: 'image/avif' } });
 
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), { removed: 1, reopened: 0 });
+    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), 1);
     assertEquals(await vfs.exists(ADMIN_ACCESS, `${image}/regions/face-0`), false);
   } finally {
     await dispose();
@@ -61,46 +69,7 @@ Deno.test('removeDetectedRegions is a no-op on an image never detected', async (
   const { vfs, dispose } = await createTestVfs();
   try {
     await vfs.create(ADMIN_ACCESS, 'file', '/', 'bare.jpg', { props: OWNER, attrs: { mimetype: 'image/jpeg' } });
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, '/bare.jpg'), { removed: 0, reopened: 0 });
-  } finally {
-    await dispose();
-  }
-});
-
-Deno.test('removeDetectedRegions reopens a tag whose transfer target it deletes, by region or embedding id', async () => {
-  const { vfs, dispose } = await createTestVfs();
-  try {
-    const image = await seedImage(vfs);
-    const first = await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
-    const second = await seedRegion(vfs, image, 'face-1', 'insightface-buffalo_l', { face: true });
-    await seedRegion(vfs, image, 'manual-0', MANUAL_DETECTOR, { attrs: { transferredTo: first.region.id } });
-    // A marker may name the face node, which is now the embedding.
-    await seedRegion(vfs, image, 'manual-1', MANUAL_DETECTOR, { attrs: { transferredTo: second.embedding!.id } });
-
-    // Without this the tag keeps pointing at a deleted node: tag-transfer reads
-    // it as a finished transfer and deletes it.
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), { removed: 2, reopened: 2 });
-
-    for (const name of ['manual-0', 'manual-1']) {
-      const tag = await vfs.get<{ transferredTo?: string }>(ADMIN_ACCESS, `${image}/regions/${name}`);
-      assertEquals(tag.attrs.transferredTo, undefined, 'the marker is removed, not blanked');
-    }
-  } finally {
-    await dispose();
-  }
-});
-
-Deno.test('removeDetectedRegions leaves a marker naming a region it did not delete', async () => {
-  const { vfs, dispose } = await createTestVfs();
-  try {
-    const image = await seedImage(vfs);
-    await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
-    await seedRegion(vfs, image, 'manual-0', MANUAL_DETECTOR, { attrs: { transferredTo: 'a-region-in-another-image' } });
-
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), { removed: 1, reopened: 0 });
-
-    const tag = await vfs.get<{ transferredTo?: string }>(ADMIN_ACCESS, `${image}/regions/manual-0`);
-    assertEquals(tag.attrs.transferredTo, 'a-region-in-another-image');
+    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, '/bare.jpg'), 0);
   } finally {
     await dispose();
   }
@@ -111,7 +80,7 @@ Deno.test('a face maps to its region and back; a tag has no embedding', async ()
   try {
     const image = await seedImage(vfs);
     const face = await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true, attrs: { personId: 'p1' } });
-    const tag = await seedRegion(vfs, image, 'manual-0', MANUAL_DETECTOR, { attrs: { personId: 'p2' } });
+    const tag = await seedRegion(vfs, image, 'manual-0', LIGHTBOX_MANUAL_DETECTOR, { attrs: { personId: 'p2' } });
 
     assertEquals(await regionsOfEmbeddings(vfs, ADMIN_ACCESS, [face.embedding!.id]), new Map([[face.embedding!.id, face.region.id]]));
     assertEquals(await faceEmbeddingsOfRegions(vfs, ADMIN_ACCESS, [face.region.id, tag.region.id]), new Map([[face.region.id, face.embedding!.id]]));

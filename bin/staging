@@ -1128,7 +1128,7 @@ staging.spec = {
     },
   ],
   examples: [
-    'staging init --all --loose-batch legacy-import --dry-run',
+    'staging init --all --loose-batch old-scans --dry-run',
     'staging status --user anna',
     'staging check',
     'staging detect',

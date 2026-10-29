@@ -220,11 +220,11 @@ Deno.test({
       assertEquals(res.results[0].reason, 'skipped-gate');
     });
 
-    await t.step('a legacy box-only tag is skipped, having no vector to search with', async () => {
+    await t.step('a box-only tag is skipped, having no vector to search with', async () => {
       await makeImage('/img/9.jpg');
       await vfs.create(ADMIN_ACCESS, 'media-region', '/img/9.jpg/regions', 'manual-0', {
         props: { uid: 1000, gid: 1000, mode: 0o644 },
-        attrs: { detectedBy: 'legacy-manual', confidence: 1, personId: null },
+        attrs: { detectedBy: 'manual', confidence: 1, personId: null },
       });
 
       const res = await client.execJson<Summary>('assign-faces /img/9.jpg');

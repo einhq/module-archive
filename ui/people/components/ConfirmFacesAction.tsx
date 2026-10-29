@@ -16,7 +16,7 @@ type Props = {
 
 /**
  * Say the selected faces are this person after all (`face-confirm`): the answer to a doubt that
- * turned out wrong. They stay, as a human's assignment, and the audit leaves them alone.
+ * turned out wrong. They stay, as a human's assignment, and no audit questions them again.
  */
 export function ConfirmFacesAction({ selection, items, person, onApplied }: Props) {
   const { reportError } = useSelectionBar();

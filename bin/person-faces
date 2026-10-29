@@ -21,7 +21,7 @@
  * also held under a byte budget, so long paths shorten the page rather than fail it;
  * `nextOffset` says where the next one starts.
  *
- * `--doubtful` lists only the faces `face-audit` found looking like somebody else, and
+ * `--doubtful` lists only the faces an audit found looking like somebody else, and
  * `--sort doubt` puts the clearest cases first; every answer says how many there are.
  */
 import type { CmdReturn, Command } from '@ein/client';
@@ -206,7 +206,7 @@ personFaces.spec = {
     { name: 'limit', type: 'string' as const, description: `max faces to return (default: all as text, ${DEFAULT_JSON_LIMIT} as JSON)` },
     { name: 'offset', type: 'string' as const, description: 'skip this many (default 0)' },
     { name: 'sort', type: 'string' as const, description: "'confidence' (default), 'file', chronological 'date', or 'doubt' (clearest doubts first)" },
-    { name: 'doubtful', type: 'bool' as const, description: 'only the faces face-audit found looking like somebody else' },
+    { name: 'doubtful', type: 'bool' as const, description: 'only the faces an audit found looking like somebody else' },
   ],
   examples: [
     'person-faces /archive/people/Anna_Exempel',

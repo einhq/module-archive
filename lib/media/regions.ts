@@ -39,9 +39,6 @@ export const FACE_EMBEDDING_TYPE = 'face';
 /** `detectedBy` on a region `detect-faces` wrote. */
 export const FACE_DETECTOR = 'insightface-buffalo_l';
 
-/** `detectedBy` on a tag imported from the legacy archive. */
-export const MANUAL_DETECTOR = 'legacy-manual';
-
 /** `detectedBy` on a box somebody drew in the lightbox. */
 export const LIGHTBOX_MANUAL_DETECTOR = 'manual';
 
@@ -67,7 +64,6 @@ export type RegionAttrs = {
   appearances?: [number, number][];
   detectedAt?: string;
   detectedBy?: string;
-  legacyDetector?: string;
   personId?: string | null;
   personSource?: string;
   personConfidence?: number | null;
@@ -75,13 +71,11 @@ export type RegionAttrs = {
   assignLocked?: boolean;
   /** People a human said this region is not; recognition never votes it back to them. */
   rejectedPersonIds?: string[];
-  /** On a legacy tag: the region its identity was handed to by `tag-transfer`. */
-  transferredTo?: string;
-  /** Set by `face-audit` when another person's anchor is nearer than this face's own; see `liveDoubt`. */
+  /** Set by an audit of the named faces when another person's anchor is nearer than this face's own; see `liveDoubt`. */
   doubt?: FaceDoubt | null;
 };
 
-/** `face-audit`'s finding on one face: it is assigned to `personId` but looks like `likePersonId`. */
+/** An audit's finding on one face: it is assigned to `personId` but looks like `likePersonId`. */
 export type FaceDoubt = {
   /** The person the face was assigned to when audited. */
   personId: string;
@@ -146,67 +140,29 @@ export const faceEmbeddingsOfRegions = async (vfs: NodeVFS, access: Access, regi
 };
 
 /**
- * What a re-detect threw away.
- *
- * `reopened` is the second half of the same job: a legacy tag records where its identity went in
- * `attrs.transferredTo` before `tag-transfer` deletes it, and a tag still carrying one is a
- * transfer that got as far as the marker — the next run finishes deleting it. Deleting the region
- * it names without clearing the marker strands the tag: the identity points at nothing, and the
- * tag would be pruned as if it had gone somewhere.
- */
-type RemovedDetections = {
-  /** Detected regions deleted. */
-  removed: number;
-  /** Legacy tags whose `transferredTo` named one of them, now cleared. */
-  reopened: number;
-};
-
-/**
- * Drop the regions a previous detection run created, leaving human and imported boxes alone.
+ * Drop the regions a previous detection run created, leaving human and imported boxes alone, and
+ * say how many went.
  *
  * Human-drawn and imported boxes are not reproducible by any detector, so asking for fresh
  * detections must not remove them.
- *
- * Reopening the transferred tags happens here because this is the only place that knows which
- * regions are going away, and the listing it already needs puts the tags in the same result. A
- * marker may name the region or the face node that is now the region's embedding; both ids
- * count.
  */
 export const removeDetectedRegions = async (
   vfs: NodeVFS,
   access: Access,
   imagePath: string,
-): Promise<RemovedDetections> => {
+): Promise<number> => {
   const regionsPath = regionsPathOf(imagePath);
   let entries;
   try {
     entries = await vfs.children<RegionAttrs>(access, regionsPath);
   } catch {
-    return { removed: 0, reopened: 0 }; // nothing detected here yet
+    return 0; // nothing detected here yet
   }
 
   const detected = entries.filter((entry) => entry.name.startsWith(DETECTED_PREFIX));
-  const embeddings = await faceEmbeddingsOfRegions(vfs, access, detected.map((entry) => entry.node.id));
-  const deleted = new Set<string>();
-  for (const entry of detected) {
-    deleted.add(entry.node.id);
-    const embeddingId = embeddings.get(entry.node.id);
-    if (embeddingId) deleted.add(embeddingId);
-    // Recursive: a region owns its embedding and its crop.
-    await vfs.unlink(access, `${regionsPath}/${entry.name}`, regionsPath, { recursive: true });
-  }
-
-  let reopened = 0;
-  for (const entry of entries) {
-    if (entry.name.startsWith(DETECTED_PREFIX)) continue;
-    const target = entry.node.attrs.transferredTo;
-    if (typeof target !== 'string' || !deleted.has(target)) continue;
-    // null removes the key, the way face-reset undoes an assignment.
-    await vfs.update(access, `${regionsPath}/${entry.name}`, { attrs: { transferredTo: null } });
-    reopened++;
-  }
-
-  return { removed: detected.length, reopened };
+  // Recursive: a region owns its embedding and its crop.
+  for (const entry of detected) await vfs.unlink(access, `${regionsPath}/${entry.name}`, regionsPath, { recursive: true });
+  return detected.length;
 };
 
 /** The next unused `manual-<n>` among `names`: a removed index is never reused, so a new box never looks like an old one returned. */
