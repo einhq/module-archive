@@ -19,7 +19,7 @@ type ChromePins = {
   hovered: boolean;
   /** A keyboard user is on one of the controls (`:focus-visible`, not a clicked button's focus). */
   focused: boolean;
-  /** A menu of the controls' is open: the speed, or a phone's settings. */
+  /** A menu of the controls' is open: a phone's, with what does not fit the bar. */
   menuOpen: boolean;
 };
 

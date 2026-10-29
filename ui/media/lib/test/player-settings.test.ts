@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { parseVolume, rateLabel, stepRate, volumeIcon, volumeKeyTarget } from '../player-settings.ts';
+import { parseVolume, volumeIcon, volumeKeyTarget } from '../player-settings.ts';
 
 const key = (name: string, mods: Partial<{ shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }> = {}) => ({
   key: name,
@@ -8,17 +8,6 @@ const key = (name: string, mods: Partial<{ shiftKey: boolean; ctrlKey: boolean; 
   altKey: false,
   metaKey: false,
   ...mods,
-});
-
-Deno.test('the speed steps through the menu, held at its ends', () => {
-  assertEquals(stepRate(1, 1), 1.25);
-  assertEquals(stepRate(1, -1), 0.75);
-  assertEquals(stepRate(2, 1), 2);
-  assertEquals(stepRate(0.5, -1), 0.5);
-  // A speed between the menu's steps goes to the nearest one in that direction.
-  assertEquals(stepRate(1.1, 1), 1.25);
-  assertEquals(stepRate(1.1, -1), 1);
-  assertEquals(rateLabel(0.75), '0.75×');
 });
 
 Deno.test('the volume slider takes the slider keys and leaves modified ones alone', () => {

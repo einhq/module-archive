@@ -1,5 +1,5 @@
 import { TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Box, Button, Group, Loader, Menu, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Group, Loader, Menu, Text, Tooltip } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
 import {
   type CSSProperties,
@@ -35,7 +35,7 @@ import {
 } from '../lib/player-chrome.ts';
 import { ZOOM_ANIMATION } from '../lib/lightbox-zoom.ts';
 import { chapterIndex, chapterLabel, chapterSeek, chapterSegments, nextChapterStart, previousChapterStart, segmentsFit } from '../lib/chapters.ts';
-import { PLAYBACK_RATES, rateLabel, stepRate, volumeIcon } from '../lib/player-settings.ts';
+import { volumeIcon } from '../lib/player-settings.ts';
 import { previewLeft, previewSize, tileBackground } from '../lib/storyboard.ts';
 import { speakerColor, speakerLabel } from '../lib/vtt.ts';
 import { Scrubber } from './Scrubber.tsx';
@@ -64,8 +64,6 @@ const VIDEO_SHORTCUTS = [
   { keys: 'shift+→', label: 'Next chapter' },
   { keys: 'c', label: 'Subtitles on or off' },
   { keys: 'm', label: 'Mute or unmute' },
-  { keys: '<', label: 'Slower' },
-  { keys: '>', label: 'Faster' },
   { keys: 'p', label: 'Picture-in-picture on or off, where the browser has it' },
 ];
 
@@ -134,9 +132,9 @@ type VideoPlayerProps = {
  * moving, or a tap; they stay while it is paused, scrubbed, pointed at or tabbed through. The bar
  * sits under the picture when the letterbox has the room, and over its bottom edge otherwise.
  *
- * What the browser's controls offered besides is kept: the speed, the volume (on a desktop; a
- * phone has its buttons), picture-in-picture and casting, the last two only where the browser has
- * them. On a phone they share one menu, for the bar's width.
+ * What the browser's controls offered besides is kept: the volume (on a desktop; a phone has its
+ * buttons), picture-in-picture and casting, the last two only where the browser has them. On a
+ * phone those two share one menu, for the bar's width.
  *
  * Subtitles are drawn here rather than by the browser, which drops the speaker of a `<v>` span. The
  * `<track>` is kept for one case: an iPhone's fullscreen is the system's player, where nothing of
@@ -270,39 +268,27 @@ export function VideoPlayer({
   // or a Tab would put the arrow keys on a timeline nobody can see.
   const unreachable = slideshow || failure !== null;
 
-  // --- the element's own state: sound, speed, readiness
-  // The volume is remembered across files and visits (useVolume); the speed is the video's own, as
-  // the browser's controls keep it.
+  // --- the element's own state: sound, readiness
+  // The volume is remembered across files and visits (useVolume).
   const { volume, muted, canSetVolume, toggleMute, changeVolume } = useVolume(videoElRef);
-  const [rate, setRate] = useState(1);
   const [ready, setReady] = useState(false);
-  const changeRate = useCallback((value: number) => {
-    const video = videoElRef.current;
-    if (!video) return;
-    // The default too, or the element falls back to it when it loads again.
-    video.defaultPlaybackRate = value;
-    video.playbackRate = value;
-  }, []);
   const pip = usePictureInPicture(videoElRef);
   const cast = useCast(videoElRef);
   useEffect(() => {
     const video = videoElRef.current;
     const source = sourceRef.current;
     if (!video) return;
-    const onRate = () => setRate(video.playbackRate);
     const onMetadata = () => setReady(true);
     // A `<source>` that fails reports it on itself, not on the video; a decode failure on the video.
     const fail = () => {
       setFailure(failureText(video, media.hasDerivatives));
       onStalledRef.current?.();
     };
-    video.addEventListener('ratechange', onRate);
     video.addEventListener('loadedmetadata', onMetadata);
     video.addEventListener('error', fail);
     source?.addEventListener('error', fail);
     if (video.readyState >= HTMLMediaElement.HAVE_METADATA) setReady(true);
     return () => {
-      video.removeEventListener('ratechange', onRate);
       video.removeEventListener('loadedmetadata', onMetadata);
       video.removeEventListener('error', fail);
       source?.removeEventListener('error', fail);
@@ -421,11 +407,6 @@ export function VideoPlayer({
         ['m', toggleMute],
         ['c', () => hasTranscript && toggleSubtitles()],
         ['p', () => pip.supported && ready && pip.toggle()],
-        // `<` is shifted on some layouts and not on others; its key's name is the same either way.
-        ['<', () => changeRate(stepRate(rate, -1))],
-        ['shift+<', () => changeRate(stepRate(rate, -1))],
-        ['>', () => changeRate(stepRate(rate, 1))],
-        ['shift+>', () => changeRate(stepRate(rate, 1))],
         // Plain ←/→ are the lightbox's previous and next; with Shift they go by chapter.
         ['shift+ArrowLeft', () => {
           goChapter('previous');
@@ -736,19 +717,15 @@ export function VideoPlayer({
             </Tooltip>
           )}
           {compact
-            ? (
+            ? (pip.supported || cast.available) && (
               <PlayerMenu
-                rate={rate}
-                onRate={changeRate}
                 onChange={setMenuOpen}
-                compact
                 target={
-                  <ActionIcon variant='subtle' color='gray' size={buttonSize} aria-label='Playback settings'>
-                    <TablerIcon name='settings' size={iconSize} color='white' />
+                  <ActionIcon variant='subtle' color='gray' size={buttonSize} aria-label='More'>
+                    <TablerIcon name='dots-vertical' size={iconSize} color='white' />
                   </ActionIcon>
                 }
               >
-                {(pip.supported || cast.available) && <Menu.Divider />}
                 {pip.supported && (
                   <Menu.Item leftSection={<TablerIcon name={pip.active ? 'picture-in-picture-off' : 'picture-in-picture'} size={18} />} disabled={!ready} onClick={pip.toggle}>
                     {pip.active ? 'Leave picture-in-picture' : 'Picture-in-picture'}
@@ -763,18 +740,6 @@ export function VideoPlayer({
             )
             : (
               <>
-                <PlayerMenu
-                  rate={rate}
-                  onRate={changeRate}
-                  onChange={setMenuOpen}
-                  target={
-                    <Tooltip label='Speed (< >)' withArrow disabled={menuOpen}>
-                      <Button variant='subtle' color='gray' size='compact-md' px={6} c='white' aria-label={`Speed: ${rateLabel(rate)}`}>
-                        {rateLabel(rate)}
-                      </Button>
-                    </Tooltip>
-                  }
-                />
                 {pip.supported && (
                   <Tooltip label={pip.active ? 'Leave picture-in-picture (p)' : 'Picture-in-picture (p)'} withArrow>
                     <ActionIcon
@@ -818,21 +783,18 @@ export function VideoPlayer({
 }
 
 /**
- * The speed menu, opening upward from the bar, with whatever else a phone's settings hold after it.
+ * A phone's menu of what does not fit the bar, opening upward from it, its items sized for a thumb
+ * as the lightbox's own phone menu has them.
  *
  * Kept inside the bar rather than in a portal, so it is part of the controls: a click in it is not
  * a click on the picture, and the swipe and tap handling leave it alone. The keys pressed in it stay
  * there — Escape closes the menu, not the lightbox, and the arrows move through the items, not
  * through the album.
  */
-function PlayerMenu({ rate, onRate, onChange, compact = false, target, children }: {
-  rate: number;
-  onRate: (rate: number) => void;
+function PlayerMenu({ onChange, target, children }: {
   onChange: (opened: boolean) => void;
-  /** Items sized for a thumb, as the lightbox's own phone menu has them. */
-  compact?: boolean;
   target: ReactNode;
-  children?: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <Menu
@@ -840,20 +802,10 @@ function PlayerMenu({ rate, onRate, onChange, compact = false, target, children 
       shadow='md'
       withinPortal={false}
       onChange={onChange}
-      styles={compact ? { item: { fontSize: 'var(--mantine-font-size-md)', padding: '12px 16px' } } : undefined}
+      styles={{ item: { fontSize: 'var(--mantine-font-size-md)', padding: '12px 16px' } }}
     >
       <Menu.Target>{target}</Menu.Target>
-      <Menu.Dropdown onKeyDown={(event: ReactKeyboardEvent) => event.stopPropagation()}>
-        <Menu.Label>Speed</Menu.Label>
-        <Menu.RadioGroup value={String(rate)} onChange={(value) => value !== null && onRate(Number(value))}>
-          {PLAYBACK_RATES.map((step) => (
-            <Menu.RadioItem key={step} value={String(step)} closeMenuOnClick>
-              {step === 1 ? 'Normal' : rateLabel(step)}
-            </Menu.RadioItem>
-          ))}
-        </Menu.RadioGroup>
-        {children}
-      </Menu.Dropdown>
+      <Menu.Dropdown onKeyDown={(event: ReactKeyboardEvent) => event.stopPropagation()}>{children}</Menu.Dropdown>
     </Menu>
   );
 }

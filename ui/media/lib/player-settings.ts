@@ -1,20 +1,8 @@
 /**
- * The video player's speed and volume: the steps they move in and what they read as.
+ * The lightbox players' volume: the steps it moves in and what it reads as.
  *
  * Pure, so it is tested without a browser.
  */
-
-/** The speeds the menu offers and `<`/`>` step through. */
-export const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-
-/** A speed as the controls write it: `1×`, `0.75×`. */
-export const rateLabel = (rate: number): string => `${rate}×`;
-
-/** The speed one step slower (`-1`) or faster (`1`) than `rate`, held at the ends of the list. */
-export const stepRate = (rate: number, direction: -1 | 1): number => {
-  if (direction > 0) return PLAYBACK_RATES.find((step) => step > rate + 1e-9) ?? PLAYBACK_RATES[PLAYBACK_RATES.length - 1];
-  return [...PLAYBACK_RATES].reverse().find((step) => step < rate - 1e-9) ?? PLAYBACK_RATES[0];
-};
 
 /** What an arrow key moves the volume by while its slider has focus. */
 const VOLUME_STEP = 0.05;
