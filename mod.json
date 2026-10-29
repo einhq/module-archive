@@ -2,7 +2,7 @@
   "name": "archive",
   "version": "0.2.0",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
-  "coreApi": "^0.5.0",
+  "coreApi": "^0.6.0",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -27,7 +27,7 @@
     "./timeline/api": "./lib/timeline/api.ts"
   },
   "dependencies": {
-    "ems": "^0.1.0"
+    "ems": "^0.2.0"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",

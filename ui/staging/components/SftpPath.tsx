@@ -1,10 +1,9 @@
 import { TablerIcon } from '@ein/ui/components';
-import { DOCS_GUIDE_PATH } from '@ein/paths';
 import { ActionIcon, Anchor, Code, CopyButton, Group, Tooltip } from '@mantine/core';
 import { Link } from 'react-router-dom';
 
-/** The guide's page on copying files in over SFTP. */
-const SFTP_GUIDE = `/docs/${encodeURIComponent(`${DOCS_GUIDE_PATH}/ssh-sftp.md`)}`;
+/** The guide's section on copying files in over SFTP. */
+const SFTP_GUIDE = '/docs/shell/ssh-sftp#copy-files-with-sftp';
 
 /**
  * A staging folder to copy files into over SFTP or scp, with a button that copies the path and a

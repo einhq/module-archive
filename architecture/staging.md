@@ -64,7 +64,7 @@ for (`--queue --if-pending`); each user and category is on its own, and one fail
 the others. A group pinned, or whose members no longer fit its `memberKey` (a hand edit), is left
 alone with its members.
 `auto-album-cluster <path>…` plans the same way and writes nothing: an analysis of any readable
-media (`modules/archive/docs/auto-albums.md`).
+media ([auto-albums.md](auto-albums.md)).
 
 Edits last: `staging split`, `regroup`, `merge`, `delete`, `rename` and `pin`
 ([`lib/staging/edits.ts`](../lib/staging/edits.ts)) change the groups at once

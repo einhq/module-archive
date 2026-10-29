@@ -74,7 +74,7 @@ waits for rather than by a shared DAG:
    (`albums/<category>/.request`, written by `staging organize --queue`) is announced, so the
    organizer's own writes start no run. `staging-organize` holds a category's facts two minutes and
    folds those arriving during a run into one more; the run reads what changed from the audit trail
-   (`audit --after`) and plans only those parts again ([auto-albums.md](../docs/auto-albums.md#the-organizer)).
+   (`audit --after`) and plans only those parts again ([auto-albums.md](auto-albums.md#the-organizer)).
    Person assignments, geocodes and tags make no fact: the `staging-organizer` service finds them
    in the trail every 15 minutes and asks for a run. The fact names the category, which is in no
    lane, so a bulk category's grouping does not wait behind its own indexing.
@@ -1051,7 +1051,7 @@ a print or other metadata stored under a file is never a copy, so twins among th
 reported: `within` does not reach them, and a store-wide lookup climbs each page's parent links,
 one batched level at a time, and drops what meets a file. Any other file with bytes is an original,
 a document as much as a picture. The staging inbox's Duplicates tab does not scan: it reads the stored
-findings (below) through `staging duplicates` ([staging.md](../docs/staging.md)).
+findings (below) through `staging duplicates` ([Duplicates](https://einhq.eu/docs/archive/duplicates.html) in the guide).
 
 **Merging duplicates.** `merge-duplicates <keep> <drop>… [--batch [<id>]] [--label <text>]
 [--dry-run]` (`@archive/media/merge-duplicates`, answering `MergeDuplicatesResult`) keeps one file of

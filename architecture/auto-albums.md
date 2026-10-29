@@ -332,7 +332,7 @@ recognised people, and only reports; `album add` puts a file in the album picked
 ## Matching
 
 Where a group goes is weighed against the library's albums, each summarised by its **profile**
-(`album-profile`, see [Media](media.md#album-profiles)): its capture instants and days, the
+(`album-profile`, see [media-ingestion.md](media-ingestion.md)): its capture instants and days, the
 0.01° cells and locations its photos were taken at, the people in them, and up to four of its
 pictures that stand for how it looks (by embedding id). The profiles are held in the process,
 indexed by day, person, cell, location and prototype; they are loaded whole once an hour and
