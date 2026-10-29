@@ -119,6 +119,19 @@ Deno.test({
       assertEquals((await run('-f')).skipped, 'ems-lacks-op');
     });
 
+    await t.step("a camera's take is held to a higher score; a film is left to EMS's default", async () => {
+      answer = found;
+      const clip = `${ALBUMS_ROOT}/t/MVI_0001.MP4`;
+      await client.exec(`mkfile ${clip} && mkdir -p ${clip}/thumbnails && printf mp4-bytes > ${clip}/thumbnails/1920x1080.mp4`);
+      await vfs.update(ADMIN_ACCESS, clip, { attrs: { mimetype: 'video/mp4', duration: 30 } });
+      await client.exec(`mkdir -p ${clip}/metadata && mknode -t exif ${clip}/metadata/exif`);
+      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/exif`, { attrs: { deviceinfo: { make: 'Canon', model: 'Canon EOS 200D' } } });
+      const before = asked.length;
+      await client.execJson<DetectChaptersAnswer>(`${env} JSON_OUTPUT=1 detect-chapters ${clip}`);
+      await run('-f');
+      assertEquals(asked.slice(before).map((body) => body.threshold), [0.85, undefined]);
+    });
+
     await t.step('anything but a video is passed over', async () => {
       const photo = `${ALBUMS_ROOT}/t/p.jpg`;
       await client.exec(`mkfile ${photo}`);

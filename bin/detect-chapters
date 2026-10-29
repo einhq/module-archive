@@ -4,8 +4,10 @@
  *
  * EMS finds them (`video.shots`: TransNetV2 over every frame, and its rules) in the rendition the
  * player plays, which is upright and on the player's own clock, so this runs after the transcode
- * and waits for one. The result is `metadata/chapters` (`@archive/media/chapters`): the chapters
- * as WebVTT, and on the node the cuts with their scores, what found them and with which rules.
+ * and waits for one. A video whose EXIF names its camera is one take, so a cut there must score
+ * higher (`CAMERA_THRESHOLD`). The result is `metadata/chapters` (`@archive/media/chapters`): the
+ * chapters as WebVTT, and on the node the cuts with their scores, what found them and with which
+ * rules.
  *
  * A video with no cut still gets its node, with no boundaries: "looked, found none" is what stops a
  * phone clip being looked at again. `detectedAt` marks the node done. A file EMS cannot decode, or
@@ -26,6 +28,23 @@ import { reportUnwritable } from '@archive/media/writable';
 
 /** EMS's codes that are the file's own fault, when permanent: no run can get past the same file. */
 const FILE_FAULTS = new Set(['undecodable', 'unsupported', 'refused']);
+
+/**
+ * The score a cut must reach in a video whose EXIF names the camera or phone that recorded it.
+ * Such a file is one take, so what scores as a cut there is the light, the exposure or a screen in
+ * the picture changing; a camera that joins clips into one file (Canon's Movie Digest) is the
+ * exception, and its cuts score high. On fry's archive (ein/core#718) the 801 camera clips
+ * that are one take had false cuts in 43 files at EMS's 0.6, and in 11 at 0.85, while 33 of the
+ * 34 Movie Digest cuts reached 0.85.
+ */
+const CAMERA_THRESHOLD = 0.85;
+
+/** Whether the file's EXIF names the device that recorded it (`exif-extract`'s `deviceinfo`). */
+const fromCamera = async (cmd: Command, path: string): Promise<boolean> => {
+  const exif = await cmd.sys.vfs.get(cmd.access, `${path}/metadata/exif`).catch(() => undefined);
+  const info = exif?.attrs.deviceinfo as { make?: unknown; model?: unknown } | null | undefined;
+  return Boolean(info && (info.make || info.model));
+};
 
 /** Write the node's body through the VFS, creating it first when it is not there. */
 const writeChapters = async (cmd: Command, path: string, body: string): Promise<boolean> => {
@@ -98,8 +117,9 @@ const detectChapters = async (cmd: Command): CmdReturn => {
 
   let shots;
   try {
-    if (verbose) await cmd.writeLn(`Looking for cuts in ${renditionPath}...`);
-    shots = await videoShots(cmd, renditionPath);
+    const camera = await fromCamera(cmd, inputPath);
+    if (verbose) await cmd.writeLn(`Looking for cuts in ${renditionPath}${camera ? ` (a camera's take: threshold ${CAMERA_THRESHOLD})` : ''}...`);
+    shots = await videoShots(cmd, renditionPath, camera ? { threshold: CAMERA_THRESHOLD } : {});
   } catch (error) {
     // An EMS from before the op has no route for it; the chapters wait for one that has.
     if (error instanceof EmsError && error.code === 'http_404') {
