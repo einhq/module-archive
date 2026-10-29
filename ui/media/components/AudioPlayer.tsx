@@ -1,10 +1,14 @@
 import { TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Box, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { useHotkeys } from '@mantine/hooks';
 import { useRef, useState } from 'react';
 import { MediaItem } from '@ein/ui/signals';
-import { formatClock, gridSrcSet, gridUrl, WAVEFORM_ASPECT } from '@ein/ui/lib';
+import { useShortcutHelp } from '@ein/ui/hooks';
+import { fileUrl, formatClock, gridSrcSet, gridUrl, WAVEFORM_ASPECT } from '@ein/ui/lib';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
+import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
+import { speakerColor, speakerLabel } from '../lib/vtt.ts';
 import { Scrubber } from './Scrubber.tsx';
 
 /** What the skip buttons move by, in seconds. */
@@ -13,6 +17,11 @@ const SKIP_SECONDS = 10;
 /** How wide the scrubber actually renders, so `srcset` picks the rendition it needs and no more. */
 const PLAYER_MAX_WIDTH = 1100;
 const WAVEFORM_SIZES = `(max-width: ${PLAYER_MAX_WIDTH}px) 100vw, ${PLAYER_MAX_WIDTH}px`;
+
+const AUDIO_SHORTCUTS = [
+  { keys: 'Space', label: 'Play or pause' },
+  { keys: 'c', label: 'Subtitles on or off' },
+];
 
 type AudioPlayerProps = {
   media: MediaItem;
@@ -25,6 +34,8 @@ type AudioPlayerProps = {
   onPlay?: () => void;
   /** Off while a dialog over the lightbox has the keys. */
   keysEnabled?: boolean;
+  /** The transcript's language and voices, when the recording has one. */
+  transcript?: PlayerTranscript;
 };
 
 /**
@@ -38,8 +49,10 @@ type AudioPlayerProps = {
  * The waveform is the same rendition the grid tile draws, so the lightbox needs no
  * derivative of its own — `srcset` just lets a wide viewport pull the 1600 rendition
  * instead of the 512.
+ *
+ * Subtitles are a line under the waveform, with the video player's switch and remembered choice.
  */
-export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabled = true }: AudioPlayerProps) {
+export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabled = true, transcript }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [failed, setFailed] = useState(false);
   // `media.duration` is the *source* length from exif and is there immediately; the element's
@@ -47,6 +60,10 @@ export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabl
   const transport = useMediaTransport(audioRef, { fallbackDuration: media.duration, startAt: media.atSeconds, autoPlay: true, onEnded, onPlay, onRefused: onStalled });
   const { playing, position, duration, toggle, skip } = transport;
   usePlayPauseKey(toggle, keysEnabled);
+
+  const subtitles = useSubtitles(transcript, bust(`${fileUrl(media.path)}/metadata/transcript`), position);
+  useShortcutHelp('Audio', AUDIO_SHORTCUTS);
+  useHotkeys(keysEnabled && transcript ? [['c', subtitles.toggle]] : []);
 
   const src = bust(media.fullUrl);
   const waveform = bust(gridUrl(media.path, media.hasDerivatives));
@@ -120,6 +137,26 @@ export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabl
         />
       </Scrubber>
 
+      {
+        /* Room for two lines while subtitles are on, so the transport does not jump between cues. */
+      }
+      {subtitles.on && (
+        <Text
+          aria-hidden
+          ta='center'
+          size='lg'
+          c='gray.2'
+          style={{ minHeight: '2.8em', lineHeight: 1.4 }}
+        >
+          {subtitles.namedVoices && subtitles.cue?.speaker && (
+            <b style={{ color: `var(--mantine-color-${speakerColor(subtitles.cue.speaker.speaker)}-4)`, marginRight: '0.4em' }}>
+              {speakerLabel(subtitles.cue.speaker)}
+            </b>
+          )}
+          {subtitles.cue?.text}
+        </Text>
+      )}
+
       {failed && (
         <Text ta='center' c='red.4' size='sm'>
           This rendition could not be played. It may still be transcoding.
@@ -144,6 +181,21 @@ export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabl
             <TablerIcon name='rewind-forward-10' size={22} color='white' />
           </ActionIcon>
         </Tooltip>
+
+        {transcript && (
+          <Tooltip label={`Subtitles: ${transcriptLabel(transcript.language)} (c)`} withArrow>
+            <ActionIcon
+              variant='subtle'
+              color='gray'
+              size='lg'
+              onClick={subtitles.toggle}
+              aria-label={`Subtitles: ${transcriptLabel(transcript.language)}`}
+              aria-pressed={subtitles.on}
+            >
+              <TablerIcon name={subtitles.on ? 'badge-cc-filled' : 'badge-cc'} size={22} color='white' />
+            </ActionIcon>
+          </Tooltip>
+        )}
 
         {
           /*

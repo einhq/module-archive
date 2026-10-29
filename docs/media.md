@@ -7,9 +7,10 @@ files, makes them fast to browse, and helps you find and organize them.
 
 - **Thumbnails and previews** — when you upload a photo or video, smaller
   versions are generated automatically so galleries load quickly.
-- **Videos with subtitles** — a video that has been transcribed can show what is
-  said as subtitles over the picture (the CC button, or `c`), with who says it
-  when there is more than one voice.
+- **Subtitles** — a video or recording that has been transcribed shows what is
+  said as subtitles, over the picture or under the waveform, with who says it
+  when there is more than one voice. They are on until you turn them off with the
+  CC button or `c`, and stay as you left them.
 - **Reads embedded details** — capture date, camera, and GPS location are pulled
   from the file so photos land on the right day and location without extra work.
 - **Locations on the map** — photos with a location are matched to nearby locations and

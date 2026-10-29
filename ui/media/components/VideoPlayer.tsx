@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { MediaDetails, MediaSpeaker } from '@archive/media/api';
+import type { MediaDetails } from '@archive/media/api';
 import { usePersistedState, useShortcutHelp } from '@ein/ui/hooks';
 import { bust, displayDims, fileUrl, formatClock, posterUrl, VIDEO_SOURCE_TYPE } from '@ein/ui/lib';
 import type { MediaItem } from '@ein/ui/signals';
@@ -21,7 +21,7 @@ import { useCast } from '../hooks/useCast.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePictureInPicture } from '../hooks/usePictureInPicture.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
-import { useTranscriptCues } from '../hooks/useTranscriptCues.ts';
+import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
 import {
   barPlacement,
   CHROME_IDLE_MS,
@@ -37,7 +37,7 @@ import { ZOOM_ANIMATION } from '../lib/lightbox-zoom.ts';
 import { chapterIndex, chapterLabel, chapterSeek, chapterSegments, nextChapterStart, previousChapterStart, segmentsFit } from '../lib/chapters.ts';
 import { parseVolume, PLAYBACK_RATES, rateLabel, stepRate, volumeIcon } from '../lib/player-settings.ts';
 import { previewLeft, previewSize, tileBackground } from '../lib/storyboard.ts';
-import { attachSpeakers, cueAt, speakerColor, speakerLabel } from '../lib/vtt.ts';
+import { speakerColor, speakerLabel } from '../lib/vtt.ts';
 import { Scrubber } from './Scrubber.tsx';
 import { VolumeSlider } from './VolumeSlider.tsx';
 import './video-player.css';
@@ -85,21 +85,6 @@ type WebkitVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
 /** Orientation locking, which TypeScript's DOM types no longer carry; Android's Chrome has it. */
 type LockableOrientation = ScreenOrientation & { lock?: (orientation: string) => Promise<void> };
 
-/**
- * What the subtitle button and the native track call the transcript's language.
- *
- * Whisper reports an ISO-639-1 code; `Intl.DisplayNames` turns it into the viewer's own word for
- * that language. It throws on a code it does not know, so the code itself is the fallback.
- */
-function transcriptLabel(language?: string): string {
-  if (!language) return 'Transcript';
-  try {
-    return new Intl.DisplayNames(undefined, { type: 'language' }).of(language) ?? language;
-  } catch {
-    return language;
-  }
-}
-
 /** The rendition's picture alone, to tell a browser without AV1 from one without the sound's codec. */
 const AV1_ONLY = 'video/mp4; codecs="av01.0.08M.08"';
 
@@ -127,7 +112,7 @@ type VideoPlayerProps = {
   /** What is drawn on the picture and moves with it under the zoom: the face boxes. */
   pictureOverlay?: ReactNode;
   /** The transcript's language and voices, when the video has one. */
-  transcript?: { language?: string; speakers: MediaSpeaker[] };
+  transcript?: PlayerTranscript;
   /** The video's storyboard sheet and where to fetch it, for the frame shown over the timeline. */
   storyboard?: NonNullable<MediaDetails['storyboard']> & { url: string };
   /** Where the video's chapters start, the first at 0: its cuts. */
@@ -210,18 +195,8 @@ export function VideoPlayer({
   usePlayPauseKey(toggle, keysEnabled && failure === null);
 
   // --- subtitles
-  // Off unless asked for: on home video the transcript is a reading and search aid, not an
-  // accessibility need the viewer has declared. Remembered once turned on.
-  const [subtitlePreference, setSubtitlePreference] = usePersistedState<'on' | 'off'>('lightbox.subtitles', 'off');
-  const subtitles = transcript !== undefined && subtitlePreference === 'on';
-  const toggleSubtitles = useCallback(() => setSubtitlePreference(subtitlePreference === 'on' ? 'off' : 'on'), [setSubtitlePreference, subtitlePreference]);
   const transcriptUrl = bust(`${fileUrl(media.path)}/metadata/transcript`, reloadToken);
-  const { cues } = useTranscriptCues(subtitles ? transcriptUrl : null);
-  const speakers = transcript?.speakers;
-  const spoken = useMemo(() => (cues ? attachSpeakers(cues, speakers ?? []) : null), [cues, speakers]);
-  const cue = spoken ? cueAt(spoken, position) : undefined;
-  // One voice needs no name on every line.
-  const namedVoices = (speakers?.length ?? 0) >= 2;
+  const { on: subtitles, toggle: toggleSubtitles, setPreference: setSubtitlePreference, cue, namedVoices } = useSubtitles(transcript, transcriptUrl, position);
 
   // --- the frame over the timeline: where the pointer is on it, and the sheet fetched once the video can play
   const scrubberRef = useRef<HTMLDivElement | null>(null);

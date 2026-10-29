@@ -1937,6 +1937,7 @@ export function MediaLightbox() {
                     onStalled={() => setStalledId(media.id)}
                     onPlay={() => setStalledId(null)}
                     keysEnabled={playerKeys}
+                    transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
                   />
                 )
                 : isVideo
