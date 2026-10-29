@@ -8,8 +8,11 @@ import { fileUrl, formatClock, gridSrcSet, gridUrl, WAVEFORM_ASPECT } from '@ein
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
 import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
+import { useVolume } from '../hooks/useVolume.ts';
+import { volumeIcon } from '../lib/player-settings.ts';
 import { speakerColor, speakerLabel } from '../lib/vtt.ts';
 import { Scrubber } from './Scrubber.tsx';
+import { VolumeSlider } from './VolumeSlider.tsx';
 
 /** What the skip buttons move by, in seconds. */
 const SKIP_SECONDS = 10;
@@ -21,6 +24,7 @@ const WAVEFORM_SIZES = `(max-width: ${PLAYER_MAX_WIDTH}px) 100vw, ${PLAYER_MAX_W
 const AUDIO_SHORTCUTS = [
   { keys: 'Space', label: 'Play or pause' },
   { keys: 'c', label: 'Subtitles on or off' },
+  { keys: 'm', label: 'Mute or unmute' },
 ];
 
 type AudioPlayerProps = {
@@ -50,7 +54,8 @@ type AudioPlayerProps = {
  * derivative of its own — `srcset` just lets a wide viewport pull the 1600 rendition
  * instead of the 512.
  *
- * Subtitles are a line under the waveform, with the video player's switch and remembered choice.
+ * Subtitles are a line under the waveform, and the volume a mute button and slider; both are the
+ * video player's, with the same keys and the same remembered choices.
  */
 export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabled = true, transcript }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -63,7 +68,8 @@ export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabl
 
   const subtitles = useSubtitles(transcript, bust(`${fileUrl(media.path)}/metadata/transcript`), position);
   useShortcutHelp('Audio', AUDIO_SHORTCUTS);
-  useHotkeys(keysEnabled && transcript ? [['c', subtitles.toggle]] : []);
+  const { volume, muted, canSetVolume, toggleMute, changeVolume } = useVolume(audioRef);
+  useHotkeys(keysEnabled ? [['m', toggleMute], ['c', () => transcript && subtitles.toggle()]] : []);
 
   const src = bust(media.fullUrl);
   const waveform = bust(gridUrl(media.path, media.hasDerivatives));
@@ -181,6 +187,15 @@ export function AudioPlayer({ media, bust, onEnded, onStalled, onPlay, keysEnabl
             <TablerIcon name='rewind-forward-10' size={22} color='white' />
           </ActionIcon>
         </Tooltip>
+
+        <Group gap={4} wrap='nowrap'>
+          <Tooltip label={muted ? 'Unmute (m)' : 'Mute (m)'} withArrow>
+            <ActionIcon variant='subtle' color='gray' size='lg' onClick={toggleMute} aria-label={muted ? 'Unmute' : 'Mute'} aria-pressed={muted}>
+              <TablerIcon name={volumeIcon(volume, muted)} size={22} color='white' />
+            </ActionIcon>
+          </Tooltip>
+          {canSetVolume && <VolumeSlider volume={volume} muted={muted} onChange={changeVolume} />}
+        </Group>
 
         {transcript && (
           <Tooltip label={`Subtitles: ${transcriptLabel(transcript.language)} (c)`} withArrow>

@@ -8,12 +8,11 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from 'react';
 import type { MediaDetails } from '@archive/media/api';
-import { usePersistedState, useShortcutHelp } from '@ein/ui/hooks';
+import { useShortcutHelp } from '@ein/ui/hooks';
 import { bust, displayDims, fileUrl, formatClock, posterUrl, VIDEO_SOURCE_TYPE } from '@ein/ui/lib';
 import type { MediaItem } from '@ein/ui/signals';
 import { useContentRect } from '../hooks/useContentRect.ts';
@@ -21,6 +20,7 @@ import { useCast } from '../hooks/useCast.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePictureInPicture } from '../hooks/usePictureInPicture.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
+import { useVolume } from '../hooks/useVolume.ts';
 import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
 import {
   barPlacement,
@@ -35,7 +35,7 @@ import {
 } from '../lib/player-chrome.ts';
 import { ZOOM_ANIMATION } from '../lib/lightbox-zoom.ts';
 import { chapterIndex, chapterLabel, chapterSeek, chapterSegments, nextChapterStart, previousChapterStart, segmentsFit } from '../lib/chapters.ts';
-import { parseVolume, PLAYBACK_RATES, rateLabel, stepRate, volumeIcon } from '../lib/player-settings.ts';
+import { PLAYBACK_RATES, rateLabel, stepRate, volumeIcon } from '../lib/player-settings.ts';
 import { previewLeft, previewSize, tileBackground } from '../lib/storyboard.ts';
 import { speakerColor, speakerLabel } from '../lib/vtt.ts';
 import { Scrubber } from './Scrubber.tsx';
@@ -68,16 +68,6 @@ const VIDEO_SHORTCUTS = [
   { keys: '>', label: 'Faster' },
   { keys: 'p', label: 'Picture-in-picture on or off, where the browser has it' },
 ];
-
-/**
- * Whether a page can set the volume: an iPhone's or iPad's Safari leaves it to the device's own
- * buttons, ignores the assignment and always reads 1.
- */
-const volumeSettable = (): boolean => {
-  const probe = document.createElement('audio');
-  probe.volume = 0.5;
-  return probe.volume === 0.5;
-};
 
 /** Safari's own fullscreen for a video element, the only one an iPhone has. */
 type WebkitVideo = HTMLVideoElement & { webkitEnterFullscreen?: () => void };
@@ -278,30 +268,11 @@ export function VideoPlayer({
   const unreachable = slideshow || failure !== null;
 
   // --- the element's own state: sound, speed, readiness
-  // The volume is remembered across videos and visits; the speed is the video's own, as the
-  // browser's controls keep it.
-  const [storedVolume, setStoredVolume] = usePersistedState<string>('lightbox.volume', '1');
-  const initialVolumeRef = useRef(parseVolume(storedVolume));
-  const [volume, setVolume] = useState(initialVolumeRef.current);
-  const [muted, setMuted] = useState(false);
+  // The volume is remembered across files and visits (useVolume); the speed is the video's own, as
+  // the browser's controls keep it.
+  const { volume, muted, canSetVolume, toggleMute, changeVolume } = useVolume(videoElRef);
   const [rate, setRate] = useState(1);
   const [ready, setReady] = useState(false);
-  const canSetVolume = useMemo(volumeSettable, []);
-  const toggleMute = useCallback(() => {
-    const video = videoElRef.current;
-    if (!video) return;
-    // Dragged down to nothing, unmuting would still be silent.
-    if (video.muted && video.volume === 0) video.volume = 1;
-    video.muted = !video.muted;
-  }, []);
-  const changeVolume = useCallback((value: number) => {
-    const video = videoElRef.current;
-    if (!video) return;
-    video.volume = value;
-    video.muted = value === 0;
-    // Silence is a mute, not a volume for the next video to open with.
-    if (value > 0) setStoredVolume(String(value));
-  }, [setStoredVolume]);
   const changeRate = useCallback((value: number) => {
     const video = videoElRef.current;
     if (!video) return;
@@ -315,11 +286,6 @@ export function VideoPlayer({
     const video = videoElRef.current;
     const source = sourceRef.current;
     if (!video) return;
-    if (canSetVolume) video.volume = initialVolumeRef.current;
-    const onVolume = () => {
-      setMuted(video.muted);
-      setVolume(video.volume);
-    };
     const onRate = () => setRate(video.playbackRate);
     const onMetadata = () => setReady(true);
     // A `<source>` that fails reports it on itself, not on the video; a decode failure on the video.
@@ -327,20 +293,18 @@ export function VideoPlayer({
       setFailure(failureText(video, media.hasDerivatives));
       onStalledRef.current?.();
     };
-    video.addEventListener('volumechange', onVolume);
     video.addEventListener('ratechange', onRate);
     video.addEventListener('loadedmetadata', onMetadata);
     video.addEventListener('error', fail);
     source?.addEventListener('error', fail);
     if (video.readyState >= HTMLMediaElement.HAVE_METADATA) setReady(true);
     return () => {
-      video.removeEventListener('volumechange', onVolume);
       video.removeEventListener('ratechange', onRate);
       video.removeEventListener('loadedmetadata', onMetadata);
       video.removeEventListener('error', fail);
       source?.removeEventListener('error', fail);
     };
-  }, [canSetVolume, media.hasDerivatives]);
+  }, [media.hasDerivatives]);
 
   // --- fullscreen
   // An iPhone has no fullscreen for a page, only Safari's player for the video itself, which throws

@@ -1,6 +1,7 @@
 import { Box } from '@mantine/core';
 import { type CSSProperties, type KeyboardEvent, type PointerEvent, useRef } from 'react';
 import { volumeKeyTarget } from '../lib/player-settings.ts';
+import './video-player.css';
 
 type VolumeSliderProps = {
   /** 0–1; drawn as none while muted. */
@@ -10,7 +11,7 @@ type VolumeSliderProps = {
 };
 
 /**
- * The video player's volume: drag or click along it, or the slider keys while it has focus.
+ * The lightbox players' volume: drag or click along it, or the slider keys while it has focus.
  *
  * Like the timeline, a click leaves the focus where it was, so the lightbox's arrow keys stay its
  * previous and next; a keyboard user tabs to it, and then it keeps the arrows it handles.
