@@ -71,9 +71,10 @@ Everyday or clutter lane switches to monthly lanes, once and for good, when it h
 400 items; a month over 1,000 is chunked at day boundaries (`#2`, `#3`). Lane names: `Everyday ·
 2014`, `Screenshots and saved images · 2019`, `1987 · <folder>`, `Undated · <folder>`.
 
-A lane is no album of its own: its proposal on the Sort page is the category's destination when
-you may file into it, else none. It is not split, merged or deleted; a picture leaves it by
-`staging regroup`.
+A lane is no album of its own. On the Sort page an Everyday lane whose days were matched to
+library albums proposes filing those days, each into its album; clutter proposes discarding; else
+a lane's proposal is the category's destination when you may file into it, else none. It is not
+split, merged or deleted; a picture leaves it by `staging regroup`.
 
 ## The strategy
 
@@ -130,9 +131,9 @@ Those rules give _parts_ — a morning, an afternoon. They are rolled up:
 - **Days at home together**: consecutive days at home (or of unknown place) are joined when the
   night between is at most 36 h, the run stays within 4 days, and they share something — the same
   guest on both; both at one place 5 km or more from home and within 2 km of each other (a
-  cottage); a holiday pair (Christmas Eve and Day, New Year's Eve and Day, Midsummer Eve and Day,
-  Easter Saturday and Sunday); or both significant on their own and not apart. The household alone
-  never joins days.
+  cottage); two days of one holiday (Christmas Eve, Christmas Day and Boxing Day; New Year's Eve
+  and Day; Midsummer Eve and Day; Easter Saturday and Sunday); or both significant on their own
+  and not apart. The household alone never joins days.
 
 **Home** is decided per year: `--home` (the analysis only), else the owner's residence covering
 most of that year (`/etc/users/<user>/person` and that person's `homes/`), else the densest 0.05°

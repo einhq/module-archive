@@ -7,7 +7,7 @@ such decision can be undone. The
 one thing that waits is reading text: a scanned letter or a sign in a photo is
 read when promoting or **Add to album** files it, not while it is here.
 
-The albums suggested for your inbox are auto albums; see
+The albums suggested for your staged files are auto albums; see
 [Auto albums](auto-albums.md). They exist only here: the shared library holds
 none until you promote one.
 
@@ -26,8 +26,8 @@ still being read), **to sort**, **needs a date** (read, but with no capture time
 **other files** (not pictures, videos or recordings) — how many files and bytes, and where
 the files on their way in are: **arriving** (uploading from this browser, so many of so
 many), **being prepared**, with about how long that takes, and **being grouped** (read, and
-waiting for the organizer to put them in a group). **Continue** opens the category,
-**Import** imports into it, and the gear opens its settings. The **New category** card
+waiting for the organizer to put them in a group). **Continue** (**Open** while it is empty)
+opens the category, **Import** imports into it, and the gear opens its settings. The **New category** card
 starts one of a kind: a Google Photos export, scans, a phone, a camera, messaging,
 screenshots, or another. Below the cards the page says when a GPS track waits for its
 device, and where to copy files over SFTP. The page reads `staging status` once, again
@@ -41,17 +41,16 @@ one and they go into its folder of today, folders and all.
 
 A category's page has the category's name as its title: click it to switch to another
 category, to **All categories**, or to **New category…**. The same thin bar of its files,
-and what is arriving, being prepared and being grouped, stands above its tabs, which cover
-five jobs:
+and what is arriving, being prepared and being grouped, stands above its four tabs:
 
 - **Sort** shows the category's suggested albums one after another, oldest first, and is
-  where you decide them: see [Sorting](#sorting) below. Groups are suggested for the inbox
-  only; another category's files are sorted from **Files**.
-- **Files** shows the category a folder at a time, its subfolders as cards above
-  (see [Files](#files) below).
+  where you decide them: see [Sorting](#sorting) below. Every category's files are grouped
+  and sorted here.
 - **Duplicates** lists the category's exact copies and look-alikes — of photos already in the
   library, and of photos elsewhere in staging — and resolves them: see [Duplicates](#duplicates)
   below.
+- **Files** shows the category a folder at a time, its subfolders as cards above
+  (see [Files](#files) below).
 - **Done** lists what was decided in the category and how its groups were changed, newest
   first, with **Undo** on each not undone yet (**Regrouping** shows the changes of the groups
   alone): see [Undo and the journal](#undo-and-the-journal).
@@ -66,8 +65,9 @@ and a name already taken in a folder is stored as `name (2).ext`, never replaced
 
 ## Importing
 
-**Import media**, in the top bar's **Create** menu, on the overview and in a category's ⋮
-menu, opens a dialog: choose the category, or make a new one there (what it holds and
+**Import media** — in the top bar's **Create** menu, on the overview, on a category's card
+(**Import**), in a category's ⋮ menu, in an empty **Files** tab, and on the Home page while it
+has no news — opens a dialog: choose the category, or make a new one there (what it holds and
 what it is called; its folder name is made from that), then **Choose files** or **Choose a
 folder**, and **Upload**. The files go to the category's folder of today, a folder keeping
 its structure there, and upload in the background, with their progress, per category, under
@@ -77,7 +77,7 @@ folders it needs.
 
 For more files than a browser should carry — a whole export — the dialog gives the
 category's folder to copy them into over SFTP or scp instead, folders and all, with a
-button that copies the path; see the user guide's _SSH and SFTP_ page. A zip copied or
+button that copies the path; see [Over SFTP](#over-sftp) below. A zip copied or
 uploaded into a category is expanded where it lands, once its upload has ended, and removed
 (`staging-unzip`); a Takeout's parts can be copied in as they are (see
 [Takeout and sidecars](#takeout-and-sidecars)).
@@ -161,13 +161,14 @@ place.
 
 On the Staging page, **New category** makes one and a category's **Category settings**
 (the gear on its card, or its ⋮ menu) change what it is called, what it holds and the
-album its files go to; **Remove category** there removes an empty one.
+album its files go to; a change of what it holds also puts its grouping, time rules, lane and
+sidecars back to the new kind's. **Remove category** there removes an empty one.
 
 | Command                                                                                             | What it does                                                                                                                                                                                                                       |
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `staging category <name>`                                                                           | shows a category                                                                                                                                                                                                                   |
 | `staging category <name> --create [--kind K] [--label L]`                                           | makes one, with its folder of groups; the name is lowercase letters, digits and dashes                                                                                                                                             |
-| `staging category <name> --kind K` / `--label L`                                                    | changes it; a new kind resets the label to the kind's, unless the same call sets one                                                                                                                                               |
+| `staging category <name> --kind K` / `--label L`                                                    | changes it; a new kind resets every other setting to the kind's — label, grouping, time rules, lane and sidecars — but the destination and what the same call sets                                                                 |
 | `staging category <name> --destination <album>` / `--no-destination`                                | sets or clears where its files go by default                                                                                                                                                                                       |
 | `staging category <name> --strategy S` / `--significance P`                                         | how its files are grouped (`events`, `folders`, `none`) and how readily a day is a group of its own (`fewer`, `normal`, `more`); a run of the organizer is asked for, which follows them                                           |
 | `staging category <name> --lane bulk` / `--lane normal`                                             | puts its files' processing behind everything else, for a large import, or back among the rest                                                                                                                                      |
@@ -294,7 +295,7 @@ two switches its kind sets and you can change:
 Each staged picture, video and recording carries what its category's rules made of it:
 `digitized: true`, and `whenName`, the date its name spells where names are dates. They are
 written as it is indexed, and they go with it when it is filed into the library, so a scan
-stays undated there too and `media-resolve-time` keeps it so. The Info panel's time source
+stays undated there too and `media-resolve-time` keeps it so. The viewer's **Time source**
 says which source dated a file, and that a scan's clocks were set aside.
 
 When files move into a category with other time rules — a folder moved from the inbox into a
@@ -332,10 +333,14 @@ it brings its first photo from then up under the group's header.
 
 On a page wide enough, the **destination column** stands beside the stream: where the open
 group can go. First its **proposal** — what **Enter** does — with how sure it is (three dots:
-sure, likely, unsure): the library album it was [matched](#candidates-and-compare) to when you
-may add to it and the match is likely, else the category's destination album when it has one
-you may add to, else a new album under the group's name. Then its **candidates**, up to three
-library albums it may belong in, best first, each with how likely and why, and the pictures of
+sure, likely, unsure). A group made mostly of copies of library photos is proposed to keep the
+library copies (see [Duplicates](#duplicates)); clutter, to be discarded; an Everyday lane, to
+file its matched days (see below). An event or a trip goes to the library album it was
+[matched](#candidates-and-compare) to when you may add to it and the match is likely or sure,
+else to the category's destination album when it has one you may add to, else to a new album
+under the group's name. A folder you named takes only a sure match, else becomes a new album
+under its name; a scan run takes only a sure match, else the destination, else a new album.
+Then its **candidates**, up to three library albums it may belong in, best first, each with how likely and why, and the pictures of
 the highlighted one around the group's days (see [Candidates and compare](#candidates-and-compare)). Then a new album (**N**), a new private one (**P**), the
 **target** that **B** files into, the albums you filed into lately, **Add to album…** (**A**,
 any album you may add to, or a new one), the neighbouring groups to merge with, **Later** and
@@ -478,9 +483,9 @@ What is found is kept on the group: up to three **candidates**, best first, each
 it is, how far ahead of the next, and its reasons in words ("within 40 min of its photos for 12
 of 12", "same places for 8 of 10 located photos", "2 of 3 people appear in it", "looks alike",
 "3 exact copies are in it"); how likely it is that none of them is right, a **new album**; and
-how sure the best is, which the proposal shows as dots: likely when it is at least even odds and
-clearly ahead of the next, unsure otherwise. Sure is held back until the weights are measured
-against albums people made. Nothing is ever filed by a match: the person decides.
+how sure the best is, which the proposal shows as dots: sure when it is at least 0.85 likely and
+0.25 ahead of the next, likely when it is at least even odds and 0.1 ahead, unsure otherwise.
+Nothing is ever filed by a match: the person decides.
 
 In the destination column the candidates are listed under the proposal, the highlighted one
 marked; **1**, **2** and **3** (or a click) file into one, **,** and **.** move the highlight, and
@@ -556,8 +561,8 @@ other suggested albums, as a file added to an album does; every other link to a
 moved file — another album's, a relation's — is rewritten to its new path. A group they
 leave empty is deleted; one that loses its cover shows another of its photos.
 
-A new album then receives the default sharing (Settings → Users and sharing), narrowed or
-widened by its creator's own preference, as an album created directly in the shared library
+A new album then receives the default sharing (the **Sharing** card under Settings →
+Permissions), narrowed or widened by its creator's own preference, as an album created directly in the shared library
 does, unless it was made private. It is no longer marked as machine-generated, so the
 organizer will not rewrite it later.
 
@@ -694,7 +699,8 @@ said under the set.
 
 In a set within the import, and in a set of look-alikes, **Keep this one** on another staged photo keeps it instead.
 A library photo is always kept, and nothing in the library is changed but filled in. **J** and
-**K** move between sets, **Enter** removes the marked set's copies, **Z** undoes.
+**K** move between sets, **C** compares the marked set, **Enter** removes its copies, **Z**
+undoes.
 
 **Remove all** resolves every set of the list on screen, with a bar of its progress, in calls of
 at most 500 sets and 2,000 copies, each read again as it runs. It leaves alone, and says so, a
@@ -793,10 +799,13 @@ of your own, such as one for a box of scanned prints, is made on the Staging
 page (**New category**) or with `staging category box-3 --create --kind scans`;
 the page's **Import media** dialog shows the folder to copy into, with a button
 that copies its path. Copy whole folders into a category, keeping their names,
-and they wait there, seen only by you:
+and they wait there, seen only by you. A folder directly in the category is a batch, as an
+upload's `upload-YYYY-MM-DD` is; the names of the folders inside a batch help grouping, so
+copy a named folder into a batch folder of your own:
 
 ```
-scp -P {{ssh.port}} -r "Summer 2020" {{user}}@{{host}}:/home/{{user}}/staging/files/inbox/
+ssh -p {{ssh.port}} {{user}}@{{host}} 'mkdir -p /home/{{user}}/staging/files/inbox/from-laptop'
+scp -P {{ssh.port}} -r "Summer 2020" {{user}}@{{host}}:/home/{{user}}/staging/files/inbox/from-laptop/
 ```
 
 `staging status` says what each category holds and how much of it is still being

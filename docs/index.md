@@ -2,8 +2,8 @@
 
 The archive is everything your collection holds and the ways into it: the people in it
 and their family tree, the photos, videos and documents, the locations and tracks, the
-cameras and phones that took them — and search, the timeline, the year view and the map
-for finding things among them.
+cameras and phones that took them — and search, the year view and the map for finding
+things among them.
 
 - [People](people.md) — profiles, family relationships, homes and the faces that tie
   people to their photos.
@@ -23,6 +23,6 @@ point is the photo's `position`, and the route a device recorded is the device's
 
 ## Organizing content
 
-- Group related photos into an **album** (a folder).
+- Group related photos into an **album**.
 - Connect a photo or event to the **people** and **locations** it involves.
 - Give an album a cover image so it stands out in listings — select one picture and choose **Set as cover**; an album without one gets a random picture of its own.

@@ -22,9 +22,10 @@ files, makes them fast to browse, and helps you find and organize them.
 
 ## Albums
 
-Photos and videos live in **albums** — folders under `/albums`. Give an album a
-cover image to make it recognizable in listings, and drag files in from the
-Upload control to add to it.
+Photos and videos live in **albums** — `album` nodes under `/archive/albums`. Give an album a
+cover image to make it recognizable in listings. To add files, use **Upload** in the album's
+header or drop them anywhere on the album page; both are there when you may change the album,
+and both put the files straight into it rather than into [staging](staging.md).
 
 `album create <path> [--name <title>] [--share default|private|shared|everyone]` makes
 one, shared as your new albums are unless `--share` says otherwise: `private` is yours
@@ -54,10 +55,11 @@ even when nothing changed. A staging suggestion has none.
 ## Capture times
 
 Every photo, video and recording is dated by the best source it has, and its **time source**
-(`takenAtSource`, in the Info panel) says which:
+(`takenAtSource`) says which; the viewer's details panel (`i`) shows it in words, as **Time
+source** under its **Details** fold:
 
-- `manual` — a date someone typed (**Set time**, `file-set-time`), as vague as it really is
-  (`1975`, `2004-03`); it always wins;
+- `manual` — a date someone typed: with **Set time**, to the second, or with `file-set-time` in
+  the shell, as vague as it really is (`1975`, `2004-03`); it always wins;
 - `sidecar` — what the file's [sidecar](#sidecars) says: a date an editor wrote into an XMP
   file, at its own precision, next after a typed one; a date someone set in Google Photos
   (a Takeout time more than 26 hours from the camera's clock, or with no camera clock from the
