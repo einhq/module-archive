@@ -33,6 +33,8 @@ export const MAX_ZOOM = 5;
 export const DOUBLE_TAP_ZOOM = 2.5;
 /** How much one keyboard or button step changes the scale. */
 const ZOOM_STEP = 1.5;
+/** How a double-tap, a key or a button glides to its new zoom; a wheel or a pinch follows at once. */
+export const ZOOM_ANIMATION = 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)';
 
 const WHEEL_SENSITIVITY = 0.0025;
 const ZOOMED_EPSILON = 0.001;

@@ -35,6 +35,7 @@ import {
   type TapPoint,
   toggleZoom,
   wheelZoomScale,
+  ZOOM_ANIMATION,
   ZOOM_IDENTITY,
   zoomAt,
   zoomedSizes,
@@ -114,7 +115,6 @@ const SHEET_VARIABLES = [
   '--sheet-p',
   '--sheet-transition',
 ];
-const ZOOM_ANIMATION_MS = 200;
 const SWIPE_FRAME_GAP_PX = 10;
 /** The settled frame's inset on a desktop, each side, clear of the arrows. */
 const SWIPE_ARROW_INSET_PX = 60;
@@ -1571,8 +1571,8 @@ export function MediaLightbox() {
   );
   const kenBurnsClass = kenBurnsClassForIndex(currentMediaIndex.value, kenBurns);
   const zoomed = zoomable && isZoomed(zoom);
-  const zoomTransition = zoomAnimating ? `transform ${ZOOM_ANIMATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1)` : 'none';
-  // A video's zoom moves its picture inside the player (`pictureStyle`), so its controls stay put.
+  const zoomTransition = zoomAnimating ? ZOOM_ANIMATION : 'none';
+  // A video's zoom moves its picture inside the player (`zoom`), and its controls with the picture's edge.
   const zoomInPlayer = isVideo;
   const activeSlideshowPhotoTransition = slideshowPhotoTransition?.incomingId === media.id ? slideshowPhotoTransition : undefined;
   // Both neighbours are kept mounted beside the frame once it has loaded, so the first
@@ -1946,11 +1946,7 @@ export function MediaLightbox() {
                     media={media}
                     reloadToken={reloadToken}
                     videoRef={attachMediaElement}
-                    pictureStyle={{
-                      transform: `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`,
-                      transition: zoomTransition,
-                      willChange: zoomed ? 'transform' : undefined,
-                    }}
+                    zoom={{ ...zoom, animate: zoomAnimating }}
                     pictureOverlay={videoFaces.length > 0 && (!slideshow || showFaces) && (
                       <VideoFaces
                         key={`video-faces-${media.id}-${reloadToken}`}

@@ -22,7 +22,18 @@ import { useMediaTransport } from '../hooks/useMediaTransport.ts';
 import { usePictureInPicture } from '../hooks/usePictureInPicture.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
 import { useTranscriptCues } from '../hooks/useTranscriptCues.ts';
-import { barPlacement, CHROME_IDLE_MS, chromeVisible, fittedPicture, subtitleBottom, subtitleClearOfCentre, subtitleFontPx } from '../lib/player-chrome.ts';
+import {
+  barPlacement,
+  CHROME_IDLE_MS,
+  chromeVisible,
+  fittedPicture,
+  type PictureZoom,
+  subtitleBottom,
+  subtitleClearOfCentre,
+  subtitleFontPx,
+  visiblePicture,
+} from '../lib/player-chrome.ts';
+import { ZOOM_ANIMATION } from '../lib/lightbox-zoom.ts';
 import { chapterIndex, chapterLabel, chapterSeek, chapterSegments, nextChapterStart, previousChapterStart, segmentsFit } from '../lib/chapters.ts';
 import { parseVolume, PLAYBACK_RATES, rateLabel, stepRate, volumeIcon } from '../lib/player-settings.ts';
 import { previewLeft, previewSize, tileBackground } from '../lib/storyboard.ts';
@@ -30,6 +41,8 @@ import { attachSpeakers, cueAt, speakerColor, speakerLabel } from '../lib/vtt.ts
 import { Scrubber } from './Scrubber.tsx';
 import { VolumeSlider } from './VolumeSlider.tsx';
 import './video-player.css';
+
+const NO_ZOOM = { scale: 1, x: 0, y: 0, animate: false };
 
 /** What the skip buttons and `j`/`l` move by, in seconds. */
 const SKIP_SECONDS = 10;
@@ -106,8 +119,11 @@ type VideoPlayerProps = {
   reloadToken: number;
   /** Hands the element to the lightbox, whose zoom, face boxes and details sheet measure it. */
   videoRef: (el: HTMLVideoElement | null) => void;
-  /** The lightbox's zoom, a transform about the player's centre: it moves the picture and not the controls. */
-  pictureStyle?: CSSProperties;
+  /**
+   * The lightbox's zoom of the picture, about the player's centre; `animate` glides to it. It moves
+   * the picture, and the controls and subtitles follow the picture's edge as far as the view's.
+   */
+  zoom?: PictureZoom & { animate: boolean };
   /** What is drawn on the picture and moves with it under the zoom: the face boxes. */
   pictureOverlay?: ReactNode;
   /** The transcript's language and voices, when the video has one. */
@@ -153,7 +169,7 @@ export function VideoPlayer({
   media,
   reloadToken,
   videoRef,
-  pictureStyle,
+  zoom = NO_ZOOM,
   pictureOverlay,
   transcript,
   storyboard,
@@ -270,14 +286,16 @@ export function VideoPlayer({
   const contentRect = useContentRect(videoElRef);
   const dims = displayDims(media);
   // Before the video knows its size, the metadata's: the controls and subtitles have somewhere to be.
-  const picture = contentRect ?? fittedPicture(box, dims && dims.width / dims.height);
+  const fitted = contentRect ?? fittedPicture(box, dims && dims.width / dims.height);
+  // What of it is on screen under the lightbox's zoom: the controls and subtitles go by that.
+  const picture = visiblePicture(fitted, box, zoom);
   const pictureBottom = picture.top + picture.height;
   const placement = barPlacement(picture, box.height, barHeight);
   const barShown = failure === null && !slideshow && (visible || placement === 'below');
   const barOverPicture = barShown && placement === 'overlay' ? barHeight : 0;
   const centre: CSSProperties = { left: picture.left + picture.width / 2, top: picture.top + picture.height / 2, transform: 'translate(-50%, -50%)' };
   const centreShown = compact && visible && failure === null && !slideshow;
-  const subtitlePx = subtitleFontPx(picture);
+  const subtitlePx = subtitleFontPx(fitted);
   const belowSubtitles = subtitleBottom(picture, box.height, barOverPicture, slideshow ? coveredBottom : 0);
   const subtitlesAt = centreShown ? subtitleClearOfCentre(belowSubtitles, picture, box.height, subtitlePx, CENTRE_HALF_PX) : belowSubtitles;
   // The bar cannot show in a slideshow or over a video that failed; then it leaves the tab order,
@@ -534,7 +552,15 @@ export function VideoPlayer({
       style={{ cursor: fullscreen && !active && !hovered ? 'none' : undefined }}
     >
       {/* The picture alone takes the zoom; the subtitles and controls stay where they are. */}
-      <Box data-video-picture className='mrx-video-picture' style={pictureStyle}>
+      <Box
+        data-video-picture
+        className='mrx-video-picture'
+        style={{
+          transform: `translate3d(${zoom.x}px, ${zoom.y}px, 0) scale(${zoom.scale})`,
+          transition: zoom.animate ? ZOOM_ANIMATION : 'none',
+          willChange: zoom.scale > 1 ? 'transform' : undefined,
+        }}
+      >
         <video
           ref={attachVideo}
           playsInline
@@ -658,7 +684,12 @@ export function VideoPlayer({
         onPointerLeave={() => setHovered(false)}
         onFocus={trackFocus}
         onBlur={trackFocus}
-        style={placement === 'below' ? { top: pictureBottom } : { bottom: box.height - pictureBottom }}
+        // Moved by a transform from the top, below or over the picture's bottom edge alike, so a
+        // zoom that changes both where it goes and which side of the edge it sits on glides there.
+        style={{
+          transform: placement === 'below' ? `translateY(${pictureBottom}px)` : `translateY(calc(${pictureBottom}px - 100%))`,
+          transition: zoom.animate ? `opacity var(--mrx-dur-base) var(--mrx-ease), ${ZOOM_ANIMATION}` : undefined,
+        }}
       >
         <Box ref={scrubberRef} style={{ position: 'relative' }}>
           <Scrubber

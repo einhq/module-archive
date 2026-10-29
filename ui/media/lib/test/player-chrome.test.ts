@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { barPlacement, chromeVisible, fittedPicture, subtitleBottom, subtitleClearOfCentre, subtitleFontPx } from '../player-chrome.ts';
+import { barPlacement, chromeVisible, fittedPicture, subtitleBottom, subtitleClearOfCentre, subtitleFontPx, visiblePicture } from '../player-chrome.ts';
 
 const idle = { paused: false, scrubbing: false, hovered: false, focused: false, menuOpen: false };
 
@@ -58,4 +58,32 @@ Deno.test('the subtitle size follows the picture, within readable bounds', () =>
   assertEquals(subtitleFontPx({ left: 0, top: 0, width: 390, height: 219 }), 14);
   assertEquals(subtitleFontPx({ left: 0, top: 0, width: 800, height: 400 }), 18);
   assertEquals(subtitleFontPx({ left: 0, top: 0, width: 2400, height: 1350 }), 30);
+});
+
+Deno.test('unzoomed, the visible picture is the picture', () => {
+  const picture = { left: 0, top: 300, width: 390, height: 220 };
+  assertEquals(visiblePicture(picture, { width: 390, height: 820 }, { scale: 1, x: 0, y: 0 }), picture);
+});
+
+Deno.test("a zoomed picture is seen as far as the box, and the bar goes to the view's bottom", () => {
+  // A landscape picture on an upright phone, zoomed 5x: it overflows the box on every side.
+  const box = { width: 390, height: 820 };
+  const shown = visiblePicture({ left: 0, top: 300, width: 390, height: 220 }, box, { scale: 5, x: 0, y: 0 });
+  assertEquals(shown, { left: 0, top: 0, width: 390, height: 820 });
+  assertEquals(barPlacement(shown, box.height, 60), 'overlay');
+});
+
+Deno.test('a little zoom keeps the picture inside the box, its bottom edge lower', () => {
+  const shown = visiblePicture({ left: 0, top: 300, width: 390, height: 220 }, { width: 390, height: 820 }, { scale: 2, x: 0, y: 0 });
+  assertEquals(shown, { left: 0, top: 190, width: 390, height: 440 });
+});
+
+Deno.test('a panned picture is cut where it leaves the box', () => {
+  const shown = visiblePicture({ left: 0, top: 300, width: 390, height: 220 }, { width: 390, height: 820 }, { scale: 2, x: 0, y: 300 });
+  assertEquals(shown, { left: 0, top: 490, width: 390, height: 330 });
+});
+
+Deno.test('before the box is measured the picture is taken as it is', () => {
+  const picture = { left: 0, top: 0, width: 100, height: 50 };
+  assertEquals(visiblePicture(picture, { width: 0, height: 0 }, { scale: 3, x: 10, y: 0 }), picture);
 });

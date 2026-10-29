@@ -36,6 +36,28 @@ export const chromeVisible = (pins: ChromePins, active: boolean, slideshow: bool
 export const barPlacement = (picture: PictureRect, boxHeight: number, barHeight: number): 'below' | 'overlay' =>
   barHeight > 0 && boxHeight - (picture.top + picture.height) >= barHeight ? 'below' : 'overlay';
 
+/** The lightbox's zoom of the picture: scaled about the player box's centre, then moved. */
+export type PictureZoom = { scale: number; x: number; y: number };
+
+/**
+ * The part of a zoomed picture that is on screen: the picture scaled and moved as the lightbox zooms
+ * it, cut to the box. The bar, the subtitles and a phone's centre buttons are placed by it, so a
+ * zoomed picture takes the bar down to the bottom of the view instead of leaving it where the
+ * unzoomed picture ended. Before the box is measured the picture is all there is to go by.
+ */
+export const visiblePicture = (picture: PictureRect, box: { width: number; height: number }, zoom: PictureZoom): PictureRect => {
+  if (box.width <= 0 || box.height <= 0 || (zoom.scale === 1 && zoom.x === 0 && zoom.y === 0)) return picture;
+  const left = box.width / 2 + (picture.left - box.width / 2) * zoom.scale + zoom.x;
+  const top = box.height / 2 + (picture.top - box.height / 2) * zoom.scale + zoom.y;
+  const shown = {
+    left: Math.max(0, left),
+    top: Math.max(0, top),
+    right: Math.min(box.width, left + picture.width * zoom.scale),
+    bottom: Math.min(box.height, top + picture.height * zoom.scale),
+  };
+  return { left: shown.left, top: shown.top, width: Math.max(0, shown.right - shown.left), height: Math.max(0, shown.bottom - shown.top) };
+};
+
 /** The picture's rect before the video has its own size: the metadata's aspect, contain-fitted into the box. */
 export const fittedPicture = (box: { width: number; height: number }, aspect: number | undefined): PictureRect => {
   if (!aspect || !Number.isFinite(aspect) || aspect <= 0 || box.width <= 0 || box.height <= 0) {
