@@ -465,13 +465,15 @@ export type StagingInitUser = {
   adopted: string[];
   moved: number;
   movedTo: string | null;
+  /** Loose files of `files/` left where they are, changed within `--idle-minutes`. */
+  recent: number;
   groups: number;
   routes: number;
   relinked: number;
   failed: { path: string; error: string }[];
 };
 
-/** `staging init [--user u | --all] [--loose-batch name] [--dry-run]`: each user's staging area made whole. */
+/** `staging init [--user u | --all] [--loose-batch name] [--layout-only] [--idle-minutes n] [--dry-run]`: each user's staging area made whole. */
 export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingInitUser[] };
 
 /**

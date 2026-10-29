@@ -6,16 +6,17 @@
 # the pipeline makes. Then the groups due a match are matched (`staging match --stale`): no
 # matches for their members as they are, or a candidate album's profile newer than them.
 #
-# Hourly, each user's staging area is made whole (its layout only: nothing moves), and every
-# inbox's duplicate findings are checked against where their files are now, which a move made
-# outside staging's own verbs can leave wrong. Live uploads are indexed by archive-bridge's
-# pipelines; this loop does not run media-scan, since repeating a gap-recovery producer while the
-# pipeline is behind creates duplicate trigger events.
+# Hourly, each user's staging area is made whole: a file copied loose into `files/` moves into the
+# default category's `unsorted` batch once nothing has changed on it for six hours, so a copy
+# still being written is left alone. Then every inbox's duplicate findings are checked against
+# where their files are now, which a move made outside staging's own verbs can leave wrong. Live
+# uploads are indexed by archive-bridge's pipelines; this loop does not run media-scan, since
+# repeating a gap-recovery producer while the pipeline is behind creates duplicate trigger events.
 echo staging-organizer: starting
 round=0
 while true; do
   if [ $(( round % 4 )) -eq 0 ]; then
-    staging init --all --layout-only
+    staging init --all --idle-minutes 360
     staging duplicates --repair --all
   fi
   staging organize --all --queue --if-pending

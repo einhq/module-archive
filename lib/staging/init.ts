@@ -10,7 +10,9 @@
  *    to it following (`renameMany`): a GPX file waiting for a device into `routes/`; any other
  *    entry of `files/` that is not a directory into the default category's loose batch; an entry
  *    of `albums/` that is not a directory (a group from before categories) into the default
- *    category's groups. A name taken there gets `-2`, `-3`, … before its extension.
+ *    category's groups. A name taken there gets `-2`, `-3`, … before its extension. With `idleMs`,
+ *    a loose file of `files/` changed more recently than that stays where it is (`recent`), since
+ *    a copy still being written by path would break if it moved.
  *
  * On an area already whole it reads and writes nothing else. With `dryRun` it writes nothing and
  * answers what it would do.
@@ -38,6 +40,8 @@ type InitOptions = {
   dryRun?: boolean;
   /** Only the directories and categories (steps 1 and 2): nothing moves. */
   layoutOnly?: boolean;
+  /** Leave the loose entries of `files/` changed within this many milliseconds. */
+  idleMs?: number;
 };
 
 /** `name`, or `name-2`, `name-3`, … before its extension — the first not in `used`, which it joins. */
@@ -70,7 +74,7 @@ export const initStaging = async (vfs: Vfs, access: Access, user: string, option
   const looseBatch = options.looseBatch ?? DEFAULT_LOOSE_BATCH;
   if (!looseBatch || looseBatch === '.' || looseBatch === '..' || looseBatch.includes('/')) throw new Error(`invalid loose batch '${looseBatch}'`);
   const dryRun = options.dryRun === true;
-  const answer: StagingInitUser = { user, created: [], repaired: [], adopted: [], moved: 0, movedTo: null, groups: 0, routes: 0, relinked: 0, failed: [] };
+  const answer: StagingInitUser = { user, created: [], repaired: [], adopted: [], moved: 0, movedTo: null, recent: 0, groups: 0, routes: 0, relinked: 0, failed: [] };
 
   const home = await vfs.get(access, roots.homePath);
   const owner = { uid: home.props.uid, gid: home.props.gid, mode: STAGING_MODE };
@@ -142,8 +146,15 @@ export const initStaging = async (vfs: Vfs, access: Access, user: string, option
     for (const path of [...waiting].sort()) moves.push({ from: path, to: `${roots.routesPath}/${freeName(basename(path), used)}`, kind: 'routes' });
   }
 
+  const changedSince = options.idleMs === undefined ? Infinity : Date.now() - options.idleMs;
   const loose = (await allChildren(vfs, access, roots.filesPath))
-    .filter((entry) => entry.node.type !== 'directory' && !waiting.has(`${roots.filesPath}/${entry.name}`));
+    .filter((entry) => entry.node.type !== 'directory' && !waiting.has(`${roots.filesPath}/${entry.name}`))
+    .filter((entry) => {
+      const { birthtime, changetime, modtime } = entry.node.props;
+      const idle = Math.max(birthtime.timestamp, changetime.timestamp, modtime.timestamp) <= changedSince;
+      if (!idle) answer.recent++;
+      return idle;
+    });
   if (loose.length > 0) {
     const batchPath = `${inboxPath}/${looseBatch}`;
     await ensureDir(inboxPath, looseBatch);

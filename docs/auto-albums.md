@@ -312,7 +312,7 @@ category's grouping settings (`staging category <c> --strategy|--significance`) 
 run did not apply (a face named, a geocode, a tag: writes the bridge does not announce), writes to
 its groups by others, edits made or undone, a category never organized or whose settings changed,
 or a week since its last full build — then `staging match --all --stale`. Hourly it also runs
-`staging init --all --layout-only` and `staging duplicates --repair --all`
+`staging init --all --idle-minutes 360` and `staging duplicates --repair --all`
 ([staging.md](staging.md)). The hourly album sweeps of `album-metadata` leave suggestions out:
 `media-album` follows each change the organizer makes.
 

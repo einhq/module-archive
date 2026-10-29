@@ -5,7 +5,8 @@
  * in the default category's loose batch, the folder is a category, the groups are the default
  * category's, the waiting GPX files are in `routes/`, every link still resolves, and `staging/` is
  * unlisted. A dry run changes nothing; a second run finds nothing to do; a lost mark is reported
- * by `staging check` and put back by the layout alone.
+ * by `staging check` and put back by the layout alone; `--idle-minutes` leaves a file changed
+ * within them where it is.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { StagingCheckAnswer, StagingInitAnswer } from '@archive/staging/api';
@@ -168,7 +169,19 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
       let answer: StagingInitAnswer | undefined;
       const events = await eventsDuring(async () => answer = await client.execJson<StagingInitAnswer>('staging init --user anna'));
       assertEquals(events, []);
-      assertEquals(answer!.users, [{ user: 'anna', created: [], repaired: [], adopted: [], moved: 0, movedTo: null, groups: 0, routes: 0, relinked: 0, failed: [] }]);
+      assertEquals(answer!.users, [{
+        user: 'anna',
+        created: [],
+        repaired: [],
+        adopted: [],
+        moved: 0,
+        movedTo: null,
+        recent: 0,
+        groups: 0,
+        routes: 0,
+        relinked: 0,
+        failed: [],
+      }]);
     });
 
     await t.step('a lost mark is reported, and the layout alone puts it back', async () => {
@@ -190,6 +203,17 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
       const [user] = answer!.users;
       assertEquals([user.moved, user.movedTo], [1, `${FILES}/inbox/unsorted`]);
       assertEquals((await client.execJson<string[]>(`ls ${FILES}/inbox/unsorted`)).sort(), ['beach-2.jpg', 'beach.jpg']);
+    });
+
+    await t.step('with --idle-minutes, a loose file changed within them stays, and one left alone moves', async () => {
+      await cmd.shouldSucceed(`mknode -t file ${FILES}/dune.jpg --as mimetype=image/jpeg`);
+      const kept = await client.execJson<StagingInitAnswer>('staging init --user anna --idle-minutes 60');
+      assertEquals([kept.users[0].moved, kept.users[0].recent], [0, 1]);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${FILES}/dune.jpg`), true);
+      const moved = await client.execJson<StagingInitAnswer>('staging init --user anna --idle-minutes 0');
+      assertEquals([moved.users[0].moved, moved.users[0].recent], [1, 0]);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${FILES}/inbox/unsorted/dune.jpg`), true);
+      await cmd.shouldFailWith('staging init --user anna --idle-minutes soon', '--idle-minutes is a number of minutes');
     });
 
     await t.step('another user may set up only their own staging area', async () => {

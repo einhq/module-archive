@@ -255,6 +255,7 @@ const staging = async (cmd: Command): CmdReturn => {
       'limit',
       'cursor',
       'loose-batch',
+      'idle-minutes',
       'kind',
       'label',
       'destination',
@@ -310,12 +311,15 @@ const staging = async (cmd: Command): CmdReturn => {
     if (subcommand === 'init') {
       const users = await selectedUsers(cmd, flags);
       const dryRun = Boolean(flags['dry-run']);
+      const idleMinutes = flags['idle-minutes'] === undefined ? undefined : Number(flags['idle-minutes']);
+      if (idleMinutes !== undefined && !(Number.isFinite(idleMinutes) && idleMinutes >= 0)) throw new Error('--idle-minutes is a number of minutes, such as 360');
       const answer: StagingInitAnswer = { ok: true, dryRun, users: [] };
       for (const user of users) {
         const result = await initStaging(cmd.sys.vfs, cmd.access, user, {
           looseBatch: flags['loose-batch'] as string | undefined,
           dryRun,
           layoutOnly: Boolean(flags['layout-only']),
+          ...(idleMinutes !== undefined ? { idleMs: idleMinutes * 60_000 } : {}),
         });
         answer.users.push(result);
         if (result.failed.length > 0) answer.ok = false;
@@ -325,7 +329,9 @@ const staging = async (cmd: Command): CmdReturn => {
         for (const result of answer.users) {
           await cmd.writeLn(
             `${result.user}: ${result.created.length} created, ${result.repaired.length} repaired, ${result.adopted.length} adopted, ` +
-              `${result.moved} moved${result.movedTo ? ` to ${result.movedTo}` : ''}, ${result.groups} groups, ${result.routes} routes, ` +
+              `${result.moved} moved${result.movedTo ? ` to ${result.movedTo}` : ''}${
+                result.recent ? ` (${result.recent} too recent)` : ''
+              }, ${result.groups} groups, ${result.routes} routes, ` +
               `${result.relinked} relinked${dryRun ? ' (dry run, nothing written)' : ''}`,
           );
         }
@@ -1065,6 +1071,7 @@ staging.spec = {
     { name: 'near', type: 'bool' as const, description: 'duplicates, dedupe --apply: only look-alikes: the same picture in other bytes' },
     { name: 'loose-batch', type: 'string' as const, description: "init: the default category's folder that loose entries of files/ move into (default unsorted)" },
     { name: 'layout-only', type: 'bool' as const, description: 'init: make the directories and categories only; move nothing' },
+    { name: 'idle-minutes', type: 'string' as const, description: 'init: leave the loose files of files/ changed within this many minutes, which may still be being copied' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: `${DRY_RUNS.join(', ')} --refresh: say what would be done, and do none of it` },
     { name: 'create', writes: true, type: 'bool' as const, description: 'category: make it, with its directory of groups' },
     { name: 'remove', writes: true, type: 'bool' as const, description: 'category: remove it, which only an empty one other than the default can be' },
