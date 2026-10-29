@@ -1,6 +1,7 @@
 import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.tsx';
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
+import type { FaceAddResult } from '@archive/media/api';
 import { ActionIcon, Box, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect } from '@preact/signals-react';
@@ -758,12 +759,17 @@ export function MediaLightbox() {
   }, [refetch]);
 
   const createFace = useCallback(async (box: { x: number; y: number; width: number; height: number }) => {
-    if (!media || media.type !== 'photo') return;
+    if (!media || (media.type !== 'photo' && media.type !== 'video')) return;
+    // A box on a video is of the frame on screen.
+    const video = mediaRef.current;
+    const at = media.type === 'video' ? (video instanceof HTMLVideoElement ? video.currentTime : undefined) : undefined;
+    if (media.type === 'video' && at === undefined) return;
     setSavingFace(true);
     setFaceMessage(null);
     try {
       const encoded = [box.x, box.y, box.width, box.height].map((value) => value.toFixed(6)).join(',');
-      const result = await execCommand<{ personId: string; cropError?: string }>(`face-add ${shq(media.path)} --box ${encoded}`);
+      const atFlag = at !== undefined ? ` --at ${at.toFixed(3)}` : '';
+      const result = await execCommand<FaceAddResult>(`face-add ${shq(media.path)} --box ${encoded}${atFlag}`);
       await refetch();
       setAddingFace(false);
       setFaceDraftReady(false);
@@ -1618,7 +1624,11 @@ export function MediaLightbox() {
       orienting={orienting}
       onTurn={turn}
       addingFace={addingFace}
-      onAddFace={() => {
+      // A video's box is drawn on a still frame, so the video stops for it; one that cannot be
+      // played has no frame to draw on.
+      onAddFace={media.type === 'video' && faceDetails?.undecodable ? undefined : () => {
+        const video = mediaRef.current;
+        if (!addingFace && video instanceof HTMLVideoElement) video.pause();
         setAddingFace((value) => !value);
         setFaceDraftReady(false);
         setFaceMessage(null);
@@ -1948,7 +1958,7 @@ export function MediaLightbox() {
                     reloadToken={reloadToken}
                     videoRef={attachMediaElement}
                     zoom={{ ...zoom, animate: zoomAnimating }}
-                    pictureOverlay={videoFaces.length > 0 && (!slideshow || showFaces) && (
+                    pictureOverlay={(videoFaces.length > 0 || addingFace) && (!slideshow || showFaces) && (
                       <VideoFaces
                         key={`video-faces-${media.id}-${reloadToken}`}
                         mediaRef={mediaRef}
@@ -1960,6 +1970,12 @@ export function MediaLightbox() {
                         onOpenPerson={goTo}
                         onNamePerson={namePerson}
                         scale={zoom.scale}
+                        drawing={addingFace}
+                        saving={savingFace}
+                        onCreateFace={createFace}
+                        onRemoveFace={removeFace}
+                        onChangePerson={setPersonFacePath}
+                        onDraftChange={setFaceDraftReady}
                       />
                     )}
                     transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
@@ -2041,7 +2057,7 @@ export function MediaLightbox() {
                 /* Always mounted: the boxes are invisible hit targets until one is hovered,
                 and `showFaces` only pins them permanently on. */
               }
-              {(faces.length > 0 || addingFace) && (!slideshow || showFaces) && (
+              {media.type === 'photo' && (faces.length > 0 || addingFace) && (!slideshow || showFaces) && (
                 <FaceOverlay
                   // The media element is keyed too. Remount the observer with it so its
                   // load/resize listeners never stay attached to the image we just left.

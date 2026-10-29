@@ -122,7 +122,32 @@ Deno.test({
       await cmd.shouldFailWith('face-add /img/photo.jpg --box 0.1,0.2,0,0.4 --no-crop', '--box must be');
       await client.exec('mkfile /img/note.txt');
       await vfs.update(ADMIN_ACCESS, '/img/note.txt', { attrs: { mimetype: 'text/plain' } });
-      await cmd.shouldFailWith('face-add /img/note.txt --box 0.1,0.2,0.3,0.4 --no-crop', 'not an image');
+      await cmd.shouldFailWith('face-add /img/note.txt --box 0.1,0.2,0.3,0.4 --no-crop', 'not an image or a video');
+      await cmd.shouldFailWith('face-add /img/photo.jpg --box 0.1,0.2,0.3,0.4 --at 2 --no-crop', '--at is for a video');
+    });
+
+    await t.step('on a video the box is of the frame at --at, on screen around it', async () => {
+      await client.exec('mkfile /img/clip.mp4');
+      await vfs.update(ADMIN_ACCESS, '/img/clip.mp4', { attrs: { mimetype: 'video/mp4', width: 1280, height: 720 } });
+      await cmd.shouldFailWith('face-add /img/clip.mp4 --box 0.1,0.2,0.3,0.4 --no-crop', 'needs --at');
+      await cmd.shouldFailWith('face-add /img/clip.mp4 --box 0.1,0.2,0.3,0.4 --at=-1 --no-crop', 'needs --at');
+
+      const drawn = await client.execJson<Result & { atSeconds?: number }>('face-add /img/clip.mp4 --box 0.1,0.2,0.3,0.4 --at 12.3456 --no-crop');
+      assertEquals(drawn.facePath, '/img/clip.mp4/regions/manual-0');
+      assertEquals(drawn.atSeconds, 12.346);
+      const face = await vfs.get<{ atSeconds?: number; appearances?: [number, number][]; detectedBy?: string }>(ADMIN_ACCESS, drawn.facePath);
+      assertEquals(face.attrs.atSeconds, 12.346);
+      assertEquals(face.attrs.appearances, [[11.846, 12.846]]);
+      assertEquals(face.attrs.detectedBy, 'manual');
+
+      const atStart = await client.execJson<Result>('face-add /img/clip.mp4 --box 0.5,0.2,0.2,0.3 --at 0.2 --no-crop');
+      const first = await vfs.get<{ appearances?: [number, number][] }>(ADMIN_ACCESS, atStart.facePath);
+      assertEquals(first.attrs.appearances, [[0, 0.7]]);
+
+      const details = await client.execJson<{ faces: Array<{ facePath: string; atSeconds?: number; appearances?: [number, number][] }> }>('media-details /img/clip.mp4');
+      const listed = details.faces.find((entry) => entry.facePath === drawn.facePath);
+      assertEquals(listed?.atSeconds, 12.346);
+      assertEquals(listed?.appearances, [[11.846, 12.846]]);
     });
   } finally {
     client.close();

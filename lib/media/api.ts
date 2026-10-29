@@ -305,6 +305,8 @@ export type MediaSpeaker = {
 /** `face-add`: the face created on a picture by hand, and the person it went to. */
 export type FaceAddResult = {
   personId: string;
+  /** On a video: the second the box was drawn at. */
+  atSeconds?: number;
   /** Set when the crop could not be cut; the face exists regardless. */
   cropError?: string;
 };

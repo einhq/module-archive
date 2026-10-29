@@ -545,7 +545,7 @@ export function MediaSidebar(
                   </Menu.Item>
                 )}
                 {addToAlbumPath && <LightboxActionItems path={addToAlbumPath} iconSize={menuIcon} />}
-                {canEdit && !mobile && media.type === 'photo' && onAddFace && (
+                {canEdit && !mobile && (media.type === 'photo' || media.type === 'video') && onAddFace && (
                   <Menu.Item
                     leftSection={<TablerIcon name='user-square-rounded' size={menuIcon} />}
                     rightSection={addingFace ? <TablerIcon name='check' size={menuCheck} /> : undefined}

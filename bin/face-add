@@ -1,5 +1,9 @@
 #!ts
-/** Add one human-drawn box to an image as a manual region, and give it a new unnamed person. */
+/**
+ * Add one human-drawn box to an image or a video as a manual region, and give it a new unnamed
+ * person. On a video the box is of the frame at `--at`: the region holds it at that second, is on
+ * screen for a moment around it, and its crop is cut from that frame.
+ */
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
@@ -17,8 +21,25 @@ type Result = {
   personPath: string;
   personName: string;
   box: FracBox;
+  atSeconds?: number;
   cropWritten: boolean;
   cropError?: string;
+};
+
+/**
+ * How long either side of its second a box drawn on a video is taken to be on screen: one frame
+ * is all the hand saw, and half a second each way is about what one of the detector's samples
+ * stands for, so the box overlaps a detected face seen at that moment.
+ */
+const DRAWN_APPEARANCE_SECONDS = 0.5;
+
+/** A second to the millisecond. */
+const toMillis = (second: number): number => Math.round(second * 1000) / 1000;
+
+const parseSecond = (value: string | undefined): number | undefined => {
+  if (value === undefined || value.trim() === '') return undefined;
+  const second = Number(value);
+  return Number.isFinite(second) && second >= 0 ? toMillis(second) : undefined;
 };
 
 const parseBox = (value: string | undefined): FracBox | undefined => {
@@ -31,7 +52,7 @@ const parseBox = (value: string | undefined): FracBox | undefined => {
 const faceAdd = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
-    string: ['box'],
+    string: ['box', 'at'],
     boolean: ['no-crop'],
     unknown: collectUnknownFlags(unknown),
   });
@@ -62,8 +83,18 @@ const faceAdd = async (cmd: Command): CmdReturn => {
     return 1;
   }
   const mimetype = typeof file.attrs.mimetype === 'string' ? file.attrs.mimetype : '';
-  if (!mimetype.startsWith('image/')) {
-    await cmd.writeError(`face-add: ${inputPath}: not an image (is ${mimetype || 'unknown'})\n`);
+  const video = mimetype.startsWith('video/');
+  if (!video && !mimetype.startsWith('image/')) {
+    await cmd.writeError(`face-add: ${inputPath}: not an image or a video (is ${mimetype || 'unknown'})\n`);
+    return 1;
+  }
+  const atSeconds = parseSecond(flags.at);
+  if (video && atSeconds === undefined) {
+    await cmd.writeError('face-add: a video needs --at, the second of the frame the box is drawn on\n');
+    return 1;
+  }
+  if (!video && flags.at !== undefined) {
+    await cmd.writeError(`face-add: ${inputPath}: --at is for a video; an image has one frame\n`);
     return 1;
   }
 
@@ -79,6 +110,12 @@ const faceAdd = async (cmd: Command): CmdReturn => {
       faceBox: storedBox,
       landmarks: null,
       confidence: 1,
+      ...(atSeconds !== undefined
+        ? {
+          atSeconds,
+          appearances: [[toMillis(Math.max(0, atSeconds - DRAWN_APPEARANCE_SECONDS)), toMillis(atSeconds + DRAWN_APPEARANCE_SECONDS)]],
+        }
+        : {}),
       detectedAt,
       detectedBy: LIGHTBOX_MANUAL_DETECTOR,
       personId: null,
@@ -109,7 +146,7 @@ const faceAdd = async (cmd: Command): CmdReturn => {
     await vfs.create(access, 'file', facePath, FACE_CROP_NAME, {
       attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: file.id },
     });
-    if (!flags['no-crop']) cropError = (await writeFaceCrop(cmd, inputPath, cropPath, storedBox, file.attrs)) ?? undefined;
+    if (!flags['no-crop']) cropError = (await writeFaceCrop(cmd, inputPath, cropPath, storedBox, file.attrs, atSeconds)) ?? undefined;
   } catch (error) {
     cropError = error instanceof Error ? error.message : String(error);
   }
@@ -121,6 +158,7 @@ const faceAdd = async (cmd: Command): CmdReturn => {
     personPath: person.path,
     personName: person.name,
     box: storedBox,
+    ...(atSeconds !== undefined ? { atSeconds } : {}),
     cropWritten: !flags['no-crop'] && !cropError,
     ...(cropError ? { cropError } : {}),
   };
@@ -138,14 +176,16 @@ const faceAdd = async (cmd: Command): CmdReturn => {
 faceAdd.spec = {
   name: 'face-add',
   effect: 'write' as const,
-  description: 'Add a human-drawn face box to an image as a new unidentified person',
-  args: [{ name: 'input', type: 'path' as const, description: 'VFS path to an image file' }],
+  description: 'Add a human-drawn face box to an image or a video frame as a new unidentified person',
+  args: [{ name: 'input', type: 'path' as const, description: 'VFS path to an image or a video file' }],
   flags: [
     { name: 'box', type: 'string' as const, description: 'display-frame fractions: x,y,width,height' },
+    { name: 'at', type: 'string' as const, description: 'on a video, required: the second of the frame the box is drawn on' },
     { name: 'no-crop', type: 'bool' as const, description: 'create the crop node without rendering it' },
   ],
   examples: [
     'face-add --box 0.1,0.2,0.3,0.4 /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
+    'face-add --box 0.4,0.1,0.2,0.3 --at 12.5 /archive/albums/Exempelalbum_2019/files/MVI_0012.mp4',
   ],
   returns: 'the new face and the unidentified person created for it.',
 };

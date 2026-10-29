@@ -67,6 +67,8 @@ type FaceOverlayProps = {
   scale?: number;
   /** Desktop edit mode: the whole rendered picture becomes a drag surface. */
   drawing?: boolean;
+  /** Edit mode selects an existing face without moving or resizing its box; new boxes stay adjustable. */
+  fixedBoxes?: boolean;
   saving?: boolean;
   onCreateFace?: (box: FaceBox) => Promise<void>;
   onUpdateFace?: (facePath: string, box: FaceBox) => Promise<void>;
@@ -151,6 +153,7 @@ export function FaceOverlay(
     motionRunning = true,
     scale = 1,
     drawing = false,
+    fixedBoxes = false,
     saving = false,
     onCreateFace,
     onUpdateFace,
@@ -187,6 +190,7 @@ export function FaceOverlay(
   };
   const px = (value: number) => value / scale;
   const draftBox = pendingDraft?.box ?? (drag?.edit === 'draw' ? faceBoxFromDrag(drag.start, drag.current, rect, 0) : null);
+  const draftAdjustable = pendingDraft !== null && !(fixedBoxes && pendingDraft.face);
   // The selected face as it is now, so a change of person shows while it stays selected.
   const draftFace = pendingDraft?.face && (faces.find((face) => face.facePath === pendingDraft.face!.facePath) ?? pendingDraft.face);
 
@@ -208,6 +212,8 @@ export function FaceOverlay(
       setRemoveArmed(false);
       onDraftChange?.(true);
     }
+    // A fixed box is selected, never dragged.
+    if (fixedBoxes && edit !== 'draw' && (selectedFace || pendingDraft?.face)) return;
     const next: DraftDrag = { pointerId: event.pointerId, start: point, current: point, edit, initialBox };
     dragRef.current = next;
     setDrag(next);
@@ -249,9 +255,11 @@ export function FaceOverlay(
     if (!pendingDraft) return;
     try {
       if (pendingDraft.face?.facePath) {
-        if (!onUpdateFace) return;
         // Selecting a face to change who it is leaves its box where it was: nothing to save.
-        if (!sameFaceBox(pendingDraft.box, pendingDraft.face.box)) await onUpdateFace(pendingDraft.face.facePath, pendingDraft.box);
+        if (!sameFaceBox(pendingDraft.box, pendingDraft.face.box)) {
+          if (!onUpdateFace) return;
+          await onUpdateFace(pendingDraft.face.facePath, pendingDraft.box);
+        }
       } else {
         if (!onCreateFace) return;
         await onCreateFace(pendingDraft.box);
@@ -310,6 +318,10 @@ export function FaceOverlay(
         userSelect: drawing ? 'none' : undefined,
         animationPlayState: motionRunning ? 'running' : 'paused',
       }}
+      // A click while drawing ends a drag on the picture, not a click on it: a video under the
+      // overlay would play, or a double click go fullscreen.
+      onClick={drawing ? (event) => event.stopPropagation() : undefined}
+      onDoubleClick={drawing ? (event) => event.stopPropagation() : undefined}
       onPointerDown={startDrawing}
       onPointerMove={moveDrawing}
       onPointerUp={finishDrawing}
@@ -362,7 +374,7 @@ export function FaceOverlay(
           borderRadius: px(3),
           boxShadow: !labelsOnly && active ? '0 0 0 9999px rgba(0,0,0,0.25)' : undefined,
           pointerEvents: labelsOnly ? 'none' : 'auto',
-          cursor: labelsOnly ? undefined : drawing ? 'move' : 'pointer',
+          cursor: labelsOnly ? undefined : drawing && !fixedBoxes ? 'move' : 'pointer',
           visibility: selected ? 'hidden' : undefined,
           // Entering slideshow must drop the boxes immediately; carrying the normal
           // border transition over would leave a brief outline around each label.
@@ -417,10 +429,10 @@ export function FaceOverlay(
             borderRadius: px(3),
             background: 'rgba(0, 0, 0, 0.18)',
             boxShadow: `0 0 0 ${px(1)}px rgba(0, 0, 0, 0.65)`,
-            cursor: pendingDraft ? 'move' : 'crosshair',
+            cursor: draftAdjustable ? 'move' : pendingDraft ? undefined : 'crosshair',
           }}
         >
-          {pendingDraft && (['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map((handle) => {
+          {draftAdjustable && (['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'] as const).map((handle) => {
             const positions: Record<Exclude<FaceBoxEdit, 'move'>, React.CSSProperties> = {
               nw: { left: 0, top: 0 },
               n: { left: '50%', top: 0 },

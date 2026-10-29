@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useMemo, useState } from 'react';
+import { type ComponentProps, type RefObject, useEffect, useMemo, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { fileUrl } from '@ein/ui/lib';
 import type { FaceBox, MediaFace } from '@archive/media/api';
@@ -78,8 +78,12 @@ const boxNow = (face: MediaFace, track: TrackPoint[] | undefined, time: number):
  * them while `pinned`; `followed` is drawn as if hovered.
  *
  * Its own component, so a playhead read every frame redraws these boxes and not the lightbox.
+ *
+ * While `drawing`, a new box is drawn on the frame on screen, and a face boxed there can be
+ * selected to change who it is or to remove it. Its box stays where it is: it holds at its own
+ * second and along its track, not on whatever frame is paused on.
  */
-export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onNamePerson, scale }: {
+export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onNamePerson, scale, ...editing }: {
   mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | null>;
   faces: MediaFace[];
   /** The face the sidebar follows, by path. */
@@ -91,7 +95,7 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
   onNamePerson: (personPath: string, name: string) => Promise<void>;
   /** The zoom the picture is scaled by (`FaceOverlay`'s `scale`). */
   scale?: number;
-}) {
+} & Pick<ComponentProps<typeof FaceOverlay>, 'drawing' | 'saving' | 'onCreateFace' | 'onRemoveFace' | 'onChangePerson' | 'onDraftChange'>) {
   const tracks = useFaceTracks(useMemo(() => faces.map((face) => face.facePath), [faces]));
   const time = useVideoTime(mediaRef);
   const marks = useMemo(
@@ -102,9 +106,11 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
       })),
     [faces, tracks, time],
   );
-  if (marks.length === 0) return null;
+  if (marks.length === 0 && !editing.drawing) return null;
   return (
     <FaceOverlay
+      {...editing}
+      fixedBoxes
       mediaRef={mediaRef}
       faces={marks}
       pinned={pinned}

@@ -1269,7 +1269,9 @@ Only detections that pass the **quality gate** (`@archive/media/face-quality`: c
 behind those numbers are in `wow/history/media-regions.md`. The legacy importer creates
 named manual regions and records their old detector in `legacyDetector`; `face-add` creates a
 manual region with a singleton unnamed person so the ordinary naming and merge tools can curate
-it. `face-set-box` updates stored geometry, regenerates its crop and, on a detection, deletes the
+it; on a video it takes `--at`, the second of the frame the box was drawn on, which becomes the
+region's `atSeconds`, with an appearance of half a second either side and the crop cut from that
+frame. `face-set-box` updates stored geometry, regenerates its crop and, on a detection, deletes the
 embedding: the vector described the box the detector drew, so a moved face keeps its person and
 stops voting. `face-remove` recursively deletes one region and deletes its person only when
 that person is still unnamed and has neither another region nor a voice; if other regions remain,
