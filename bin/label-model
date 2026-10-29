@@ -10,7 +10,7 @@
  */
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
+import { collectUnknownFlags, parseArgs, readSettings, reportUnknownFlags, stepPhase } from '@ein/client';
 import { TAGS_ROOT } from '@ein/paths';
 import type { LabelModelSummary, LabelTrainResult } from '@archive/labels/api';
 import { dropStaleWords, readLabelModel, setRejected, trainLabel } from '@archive/labels/label-model';
@@ -87,7 +87,10 @@ const labelModel = async (cmd: Command): CmdReturn => {
     switch (sub) {
       case 'train': {
         if (rest.length === 0 && !flags.all) break;
-        const prompts = new Map(vocabularyFor(cmd.env.CFG_LANGUAGE || 'en').map((word) => [word.label, word.prompt]));
+        // Read now rather than from the environment: the label-models service trains in a loop that
+        // keeps the environment it started with.
+        const language = (await readSettings(cmd, cmd.access, { user: false })).CFG_LANGUAGE;
+        const prompts = new Map(vocabularyFor(language || 'en').map((word) => [word.label, word.prompt]));
         if (flags.all) {
           for (const label of await dropStaleWords(cmd, new Set(prompts.keys()))) {
             if (!cmd.json) await cmd.writeLn(`${label}: no longer a word of the vocabulary, dropped`);

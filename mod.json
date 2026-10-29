@@ -435,7 +435,10 @@
         "default": "0.75",
         "label": "Stack similarity",
         "description": "How alike two neighbouring photos in an album must look to be stacked as one burst. Higher stacks only near-identical shots.",
-        "group": "Albums"
+        "group": "Albums",
+        "restarts": [
+          "album-metadata"
+        ]
       },
       {
         "key": "CFG_ALBUM_STACK_MAX_GAP_SECONDS",
@@ -444,7 +447,10 @@
         "default": "10",
         "label": "Stack time gap (seconds)",
         "description": "How far apart in capture time two neighbouring photos may be and still be stacked together.",
-        "group": "Albums"
+        "group": "Albums",
+        "restarts": [
+          "album-metadata"
+        ]
       }
     ]
   },
