@@ -1948,6 +1948,9 @@ export function MediaLightbox() {
                     onPlay={() => setStalledId(null)}
                     keysEnabled={playerKeys}
                     transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
+                    compact={isMobile}
+                    fullscreen={fullscreen}
+                    onToggleFullscreen={toggleFullscreen}
                   />
                 )
                 : isVideo
