@@ -28,7 +28,7 @@ export function transcriptLabel(language?: string): string {
  * players. `on` is false without a transcript, and nothing is fetched while it is.
  */
 export function useSubtitles(transcript: PlayerTranscript | undefined, transcriptUrl: string, position: number) {
-  const [preference, setPreference] = usePersistedState<'on' | 'off'>('lightbox.subtitles', 'on');
+  const [preference, setPreference] = usePersistedState<'on' | 'off'>('player.subtitles', 'on');
   const on = transcript !== undefined && preference === 'on';
   const toggle = useCallback(() => setPreference(preference === 'on' ? 'off' : 'on'), [setPreference, preference]);
   const { cues } = useTranscriptCues(on ? transcriptUrl : null);
