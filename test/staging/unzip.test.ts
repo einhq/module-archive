@@ -91,10 +91,11 @@ Deno.test({
       await run(`mkdir -p ${inbox}/sftp`);
       const handle = await sftp.open(path, 'w');
       await sftp.write(handle, body.subarray(0, half), 0, half, 0);
-      // A mode set through the open handle changes the node while half its bytes are there.
+      // A mode set through the open handle changes the node while half its bytes are there; until
+      // the close it is untyped bytes with no sha256.
       await sftp.fchmod(handle, 0o640);
       const zip = await vfs.get(ADMIN_ACCESS, path);
-      assertEquals([zip.attrs.mimetype, zip.attrs.sha256], ['application/zip', undefined]);
+      assertEquals([zip.attrs.mimetype, zip.attrs.sha256], ['application/octet-stream', undefined]);
       const instance = `/var/pipelines/instances/staging-unzip/${zip.id}`;
       await new Promise((r) => setTimeout(r, 1500));
       assertEquals(await vfs.exists(ADMIN_ACCESS, instance), false);
