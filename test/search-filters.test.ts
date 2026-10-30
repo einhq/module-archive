@@ -8,6 +8,7 @@
 
 import { DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
+import { TAGS_ROOT } from '@ein/paths';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext, testCommands } from '@ein/testing';
 
@@ -78,6 +79,19 @@ Deno.test({
     await t.step('multiple tags intersect', async () => {
       const res = await client.execJson<Results>('search --tag vacation --tag beach');
       assertEquals(paths(res), ['/media/new.jpg']);
+    });
+
+    await t.step('a label is what the node carries, as the label counts read it, not a link in its folder', async () => {
+      await cmd.shouldSucceed(`rm ${TAGS_ROOT}/beach/other.jpg`);
+      await cmd.shouldSucceed(`ln -s /media/scan.jpg ${TAGS_ROOT}/beach/scan.jpg`);
+      try {
+        assertEquals(paths(await client.execJson<Results>('search --tag beach')), ['/media/new.jpg', '/media/other.jpg']);
+        const facets = await client.execJson<{ labels: { label: string; count: number }[] }>('search --tag beach --facets');
+        assertEquals(facets.labels.find((entry) => entry.label === 'beach')?.count, 2);
+      } finally {
+        await cmd.shouldSucceed(`rm ${TAGS_ROOT}/beach/scan.jpg`);
+        await cmd.shouldSucceed('label add /media/other.jpg beach');
+      }
     });
 
     await t.step('tag paging advances instead of re-serving the first page', async () => {

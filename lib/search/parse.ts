@@ -14,8 +14,11 @@
  * A name resolves to one person when it is one person, a partial name (the union
  * `search --subject-name person:…` defines) when it is several, a location node, or — a country, a
  * city — a geocoded box (`names.ts`). A name that resolves to nothing stays in the text and is
- * reported, so the UI can say it was searched as words; a kin word is reported so too, since a
- * relation is not something the search box can name.
+ * reported, so the UI can say it was searched as words. The user and their family are read from
+ * the user's own words, not the model's: "me", "mig", "my mother", "min mammas syster" are the
+ * person the account is linked to, or who the family tree says is that relation of them. One that
+ * resolves to nobody — no linked person, no such relative, two kin phrases — is reported the same
+ * way.
  *
  * It never fails to produce a parse: without a model, or with an answer that does not hold up,
  * the rules pass is the answer (`source: 'rules'`).
@@ -24,9 +27,9 @@
 import type { Command } from '@ein/client';
 import type { SearchParse, SearchParseRegion } from '@ein/api';
 import { askForProposal } from './proposal.ts';
-import { namesFor, resolveLocation, resolvePerson } from './names.ts';
+import { namesFor, resolveLocation, resolvePerson, selfInMessage } from './names.ts';
 import { contentWords, parseWithRules, type RuleKind, stripNamedFilters } from './rules.ts';
-import { KIN_WORDS } from '@archive/people/kin';
+import { KIN_WORDS, kinInMessage } from '@archive/people/kin';
 
 type PersonMatch = { name: string; slug: string };
 
@@ -59,9 +62,8 @@ type ParseOptions = {
 };
 
 /**
- * A kin word in a search — "pappa", "moster" — that no proposed person carries. A relation is a
- * question about the family, which names alone cannot answer, so it is reported rather than left
- * out: whoever reads the parse knows it is not the whole of what was asked.
+ * A kin word in a search — "pappa", "moster" — that no person asked for carries. It is reported
+ * rather than left out: whoever reads the parse knows it is not the whole of what was asked.
  */
 const KIN = new RegExp(`(?<![\\p{L}\\p{N}])(?:${KIN_WORDS.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
 
@@ -160,14 +162,22 @@ export const parseSearch = async (cmd: Command, input: string, options: ParseOpt
   const { request } = parsed;
   const names = namesFor(query);
 
+  // The model proposes no pronoun or kin word, so the user's own are added to its people.
+  const asker = [selfInMessage(query), kinInMessage(query)].filter((phrase): phrase is string =>
+    phrase !== undefined && !request.people.some((name) => name.toLowerCase().includes(phrase.toLowerCase()))
+  );
+  const wanted = [...request.people, ...asker];
+
   const unresolved: string[] = [];
   /** A proposed person who is nobody, but whose name is a location node: typed bare, two names are hard to tell apart. */
   const asLocation: LocationRef[] = [];
   const [people, locations] = await Promise.all([
-    Promise.all(request.people.map(async (name): Promise<PersonRef | undefined> => {
+    Promise.all(wanted.map(async (name): Promise<PersonRef | undefined> => {
       try {
         const person = await resolvePerson(cmd, name, names);
-        return 'slug' in person ? { name, slug: person.slug, matches: [{ name: person.name, slug: person.slug }] } : { name, matches: person.matches };
+        // "mig" or "min mamma" is shown as who it turned out to be.
+        if ('slug' in person) return { name: asker.includes(name) ? person.name : name, slug: person.slug, matches: [{ name: person.name, slug: person.slug }] };
+        return { name, matches: person.matches };
       } catch {
         // Only a location node, never a geocoded area: a misspelt name is somewhere on Earth.
         const location = await resolveLocation(cmd, name, names, { geocode: false }).catch(() => undefined);
@@ -186,10 +196,13 @@ export const parseSearch = async (cmd: Command, input: string, options: ParseOpt
       }
     })),
   ]);
-  const resolvedPeople = people.filter((person): person is PersonRef => person !== undefined);
+  // One person asked for twice, "Anna and me" when the user is Anna, is one subject.
+  const resolvedPeople = people.filter((person, i): person is PersonRef =>
+    person !== undefined && (person.slug === undefined || people.findIndex((other) => other?.slug === person.slug) === i)
+  );
   for (const [kin] of query.matchAll(KIN)) {
     const word = kin.toLowerCase();
-    if (!request.people.some((name) => name.toLowerCase().includes(word)) && !unresolved.includes(kin)) unresolved.push(kin);
+    if (!wanted.some((name) => name.toLowerCase().includes(word)) && !unresolved.includes(kin)) unresolved.push(kin);
   }
   // `search` takes one box: a second area is reported rather than silently dropped.
   let region: SearchParseRegion | undefined;
@@ -214,7 +227,9 @@ export const parseSearch = async (cmd: Command, input: string, options: ParseOpt
   // The words that describe the pictures: the model's, when they are the user's own; otherwise
   // the user's words with the kinds, years and resolved names taken out.
   const named = [...request.people, ...request.locations].filter((name) => !unresolved.includes(name));
-  const described = writtenText(query, request.text, rules.text) ?? contentWords(stripNamedFilters(rules.text, named));
+  // The user's pronoun and kin phrase are not something the pictures show, resolved or not: one
+  // that is nobody comes back below, as what was not found.
+  const described = stripNamedFilters(writtenText(query, request.text, rules.text) ?? contentWords(stripNamedFilters(rules.text, named)), asker);
   const text = [described, ...new Set(unresolved)].filter(Boolean).join(' ');
 
   return done({

@@ -26,7 +26,17 @@ import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'r
 import { useSearchParams } from 'react-router-dom';
 import { usePeople } from '../people/hooks/usePeople.ts';
 import { useLocations } from '../location/hooks/useLocations.ts';
-import { FILE_KINDS, hasAnyFilter, MEDIA_KIND_FILTERS, type MediaKindFilter, type SearchFilters, type SearchOutcome, usePersistedState, useSearchBox } from '@ein/ui/hooks';
+import {
+  FILE_KINDS,
+  hasAnyFilter,
+  MEDIA_KIND_FILTERS,
+  type MediaKindFilter,
+  type SearchFilters,
+  type SearchOutcome,
+  useNodeNames,
+  usePersistedState,
+  useSearchBox,
+} from '@ein/ui/hooks';
 import { filtersFromParams, naturalSearchDetails, paramsFromFilters } from '@ein/ui/lib';
 import { currentUser } from '@ein/ui/signals';
 import { LOCATIONS_ROOT } from '@archive/paths';
@@ -121,11 +131,14 @@ export default function MediaPage() {
   const { people } = usePeople();
   // Names only: the chips turn a slug back into a name.
   const { locations } = useLocations(LOCATIONS_ROOT, { withCoordinates: false });
+  // An album is a path, named by its node.
+  const albumNames = useNodeNames(filters.under ? [filters.under] : []);
   const nameOf = useCallback((kind: PillKind, value: string): string | undefined => {
     if (kind === 'person') return people.find((person) => person.id === value)?.name;
     if (kind === 'location') return locations.find((location) => location.id === value)?.name;
+    if (kind === 'album') return albumNames.get(value);
     return undefined;
-  }, [people, locations]);
+  }, [people, locations, albumNames]);
 
   // Words and a picture to look like are two questions: words asked while a picture is the
   // question replace it.
@@ -158,6 +171,9 @@ export default function MediaPage() {
   // The kind control alone does not leave the feed: "just the videos" is still
   // the newest-first list. Anything the box produced does.
   const filtered = hasAnyFilter({ ...filters, kinds: undefined });
+  // Words or a picture to look like are what a hit can match better or worse; chips alone only
+  // admit or leave out, so their hits stay in time order.
+  const ranked = Boolean(filters.query?.trim() || filters.like);
 
   /**
    * Files, always, when the search runs — this page is the half of search that
@@ -299,7 +315,7 @@ export default function MediaPage() {
             ? (
               <MediaTimeline
                 filters={effective}
-                rankByRelevance
+                rankByRelevance={ranked}
                 reloadToken={labeled}
                 onOutcome={setOutcome}
                 grouped={false}

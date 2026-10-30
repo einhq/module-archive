@@ -5,10 +5,9 @@
  * Discovered by `search` like every other `search-*` on PATH. Its rows are in the `name` channel
  * (name, make and model, serial number, id) and the `description` channel.
  *
- * A substring ladder, the same shape `search-people` and `search-location` use,
- * and for the same reason: `NodeQuery` has no `contains` operator
- * (src/vfs/query.ts), only prefix, so a scan is the only option. `/devices` is a
- * flat listing of tens of entries, not thousands, so the scan is the cheap part.
+ * A substring ladder, the same shape `search-people` and `search-location` use, over a
+ * scan of `/devices`: one listing of tens of entries, not thousands, with several fields to
+ * score in each.
  *
  * The serial number is matched too. It reads like an implementation detail, but
  * it is the one field that tells two identical camera bodies apart, and it is

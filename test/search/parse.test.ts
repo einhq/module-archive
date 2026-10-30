@@ -209,6 +209,36 @@ Deno.test({
       assertEquals(parsed.unresolved, ['pappa']);
     });
 
+    await t.step("the user's own pronoun and kin phrase are the people the account and the tree say", async () => {
+      await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/astrid --name Astrid --gender female --born 1950`);
+      await cmd.shouldSucceed(`person-set-parent ${PEOPLE_ROOT}/olof ${PEOPLE_ROOT}/astrid`);
+      await cmd.shouldSucceed(`ln -s ${PEOPLE_ROOT}/olof /etc/users/admin/person`);
+      const OLOF = { kind: 'person', name: 'Olof', ref: 'olof', matches: [{ name: 'Olof', ref: 'olof' }] };
+      const ASTRID = { kind: 'person', name: 'Astrid', ref: 'astrid', matches: [{ name: 'Astrid', ref: 'astrid' }] };
+      try {
+        const me = await withModel(answer({ from: '2019', to: '2019' }), "'bilder på mig 2019'");
+        assertEquals(me.parsed.subjects, [OLOF]);
+        assertEquals([me.parsed.unresolved, me.parsed.text], [[], '']);
+
+        const mother = await withModel(answer({ text: 'beach' }), "'my mother at the beach'");
+        assertEquals(mother.parsed.subjects, [ASTRID]);
+        assertEquals([mother.parsed.unresolved, mother.parsed.text], [[], 'beach']);
+
+        const both = await withModel(answer({ people: ['Olof Junior'] }), "'Olof Junior och min mamma'");
+        assertEquals(both.parsed.subjects.map((subject) => subject.ref), ['olof-junior', 'astrid']);
+
+        // A relation nobody is recorded as is reported, and searched as words.
+        const father = await withModel(answer({}), "'photos of my father'");
+        assertEquals([father.parsed.subjects, father.parsed.unresolved, father.parsed.text], [[], ['father'], 'father']);
+
+        // A request's own "show me" asks for no one.
+        const show = await withModel(answer({ text: 'sailboat' }), "'show me a sailboat'");
+        assertEquals([show.parsed.subjects, show.parsed.text], [[], 'sailboat']);
+      } finally {
+        await cmd.shouldSucceed('rm /etc/users/admin/person');
+      }
+    });
+
     await t.step('--rules skips the model entirely', async () => {
       const { parsed, asked } = await withModel(answer({ people: ['Olof'] }), "'filmer 2010 Olof'", '--rules ');
       assertObjectMatch(parsed, { source: 'rules', kinds: ['video'], from: '2010', to: '2010', subjects: [], text: 'Olof' });

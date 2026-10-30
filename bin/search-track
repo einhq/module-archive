@@ -2,12 +2,13 @@
 /**
  * search-track — find recorded tracks by what they are called.
  *
- * Discovered by `search` like every other `search-*` on PATH. Its rows are in the `name` channel
- * (the track's name and id) and the `description` channel.
+ * Discovered by `search` like every other `search-*` on PATH, when no kind is asked for or
+ * `--kind track` is. Tracks are not among the node types this module declares, so the Search page
+ * has no **Show** choice for them and `@` does not complete them. Its rows are in the `name`
+ * channel (the track's name and id) and the `description` channel.
  *
- * The same substring ladder `search-people` and `search-device` use — `NodeQuery`
- * has no `contains` operator, only prefix, so a scan of the devices' tracks
- * (`track-list`) is the only option. A track is named by its device.
+ * The same substring ladder `search-people` and `search-device` use, over a scan of the devices'
+ * tracks (`track-list`): a track is named by its device, which is not an attr a query can match.
  *
  * A track *does* have a time (`firstTs`), unlike the other timeless kinds, so it
  * is reported: it is the one field that tells apart two tracks along the same

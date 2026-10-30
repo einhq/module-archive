@@ -77,6 +77,16 @@ const subjectSearch = async (cmd: Command, provider: string, name: string, table
 const SELF_WORDS = new Set(['i', 'me', 'my', 'myself', 'jag', 'mig', 'min', 'mitt', 'mina', 'mig själv']);
 
 /**
+ * The user as a search names them in a sentence: an object pronoun, "pictures of me", "bilder på
+ * mig". Not "I", "jag" or "my": "photos I took" and "my car" do not ask who is in the picture, and
+ * neither does the one a request starts with, "show me", "visa mig".
+ */
+const SELF_IN_MESSAGE = /(?<![\p{L}\p{N}])(?<!(?<![\p{L}\p{N}])(?:show|give|find|get|let|visa|ge|hitta|leta|låt)\s+)(me|myself|mig)(?![\p{L}\p{N}])/iu;
+
+/** The pronoun naming the user in a search, as written, when there is one. */
+export const selfInMessage = (message: string): string | undefined => SELF_IN_MESSAGE.exec(message)?.[1];
+
+/**
  * A name no location node carries, as an area: a country or a city is a box, not a point. Nothing
  * found is undefined: an area that cannot be located is reported as unknown, never widened to the
  * world.
