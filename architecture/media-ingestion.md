@@ -895,7 +895,10 @@ chromaprint as little-endian uint32s in a db-tier `file` typed `application/x-ch
 2.5 s has none, and `fingerprintedAt` on the file says `compute-fingerprint` ran all the same, so the
 gap scan does not re-announce it), `metadata/content` (text extracted by `index-document`, a
 db-tier `file`), `metadata/transcript` (a db-tier `file` holding **WebVTT**, written by
-`transcribe-file` for audio and video) and a video's `metadata/chapters` (below). Keeping these here deliberately separates them from the
+`transcribe-file` for audio and video, or by hand with `file-set-transcript`, the lightbox's
+subtitle editor, which rewrites the cues in place under the voices, re-embeds the chunks and
+stamps `editedAt`: `transcribe-file` then skips it even with `-f`, and the staleness rule passes
+it by) and a video's `metadata/chapters` (below). Keeping these here deliberately separates them from the
 **manual** `description` file attr (shown in the lightbox sidebar) so no extraction ever overwrites
 a hand-written one.
 

@@ -58,7 +58,7 @@ export const parseVtt = (vtt: string): TranscriptCue[] => {
 };
 
 /** A cue with whoever was talking over it attached. */
-type SpokenCue = TranscriptCue & { speaker?: MediaSpeaker };
+type SpokenCue<T extends TranscriptCue> = T & { speaker?: MediaSpeaker };
 
 /**
  * Attach a speaker to each cue by time overlap.
@@ -72,7 +72,7 @@ type SpokenCue = TranscriptCue & { speaker?: MediaSpeaker };
  * WebVTT already, so sending them a second time inside the details response would duplicate an
  * hour of speech to save this loop.
  */
-export const attachSpeakers = (cues: TranscriptCue[], speakers: MediaSpeaker[]): SpokenCue[] => {
+export const attachSpeakers = <T extends TranscriptCue>(cues: T[], speakers: MediaSpeaker[]): SpokenCue<T>[] => {
   if (speakers.length === 0) return cues;
   return cues.map((cue) => {
     let best: { speaker: MediaSpeaker; overlap: number } | undefined;

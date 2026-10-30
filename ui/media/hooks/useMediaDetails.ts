@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { execCommand, onOutsideEdit } from '@ein/ui/signals';
-import { shq } from '@ein/ui/lib';
+import { fileUrl, shq } from '@ein/ui/lib';
+import { forgetTranscript } from './useTranscriptCues.ts';
 import type { CommentEntry } from '@ein/api';
 import type { MediaDetails } from '@archive/media/api';
 export type {
@@ -46,6 +47,8 @@ export type UseMediaDetailsResult = {
   setTextLanguage: (language: string) => Promise<void>;
   /** Writes the text in a picture by hand (`file-set-text`); empty removes it. */
   setText: (text: string) => Promise<void>;
+  /** Write a video's or a recording's transcript by hand, as WebVTT. */
+  setTranscript: (vtt: string) => Promise<void>;
   /** The full exiftool dump, fetched on demand — it is far larger than everything else. */
   rawExif: Record<string, unknown> | null;
   loadRawExif: () => Promise<void>;
@@ -163,6 +166,13 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
     await fetchDetails();
   }, [path, fetchDetails]);
 
+  const setTranscript = useCallback(async (vtt: string) => {
+    if (!path) return;
+    await execCommand(`file-set-transcript ${shq(path)} --vtt-base64 ${encodeBody(vtt)}`);
+    forgetTranscript(`${fileUrl(path)}/metadata/transcript`);
+    await fetchDetails();
+  }, [path, fetchDetails]);
+
   const setDescription = useCallback(async (text: string) => {
     if (!path) return;
     await execCommand(`file-set-description ${shq(path)} --text-base64 ${encodeBody(text)}`);
@@ -182,6 +192,7 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
     orienting,
     setTextLanguage,
     setText,
+    setTranscript,
     rawExif,
     loadRawExif,
     rawExifLoading,

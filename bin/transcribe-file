@@ -15,6 +15,9 @@
  *
  * `transcribedAt` is written once the cues are, and marks the transcript done: the skip below,
  * the scan's gaps and `media.transcript.generated` all read it.
+ *
+ * A transcript a person wrote or corrected (`editedAt`, `file-set-transcript`) is never
+ * transcribed again, not even with `-f`.
  */
 
 import { resolve } from '@std/path';
@@ -138,8 +141,9 @@ const transcribeFile = async (cmd: Command): CmdReturn => {
   // in a sweep most files have been here before. A node without `transcribedAt` is one an
   // interrupted run left, and is transcribed again. A skip answers with the transcript it found.
   const transcriptAttrs = (await cmd.sys.vfs.get(cmd.access, transcriptPath).catch(() => undefined))?.attrs as Record<string, unknown> | undefined;
-  if (!force && typeof transcriptAttrs?.transcribedAt === 'string') {
-    if (verbose) await cmd.writeLn('Already transcribed, skipping (use -f to force)');
+  const edited = typeof transcriptAttrs?.editedAt === 'string';
+  if (edited || (!force && typeof transcriptAttrs?.transcribedAt === 'string')) {
+    if (verbose) await cmd.writeLn(edited ? 'Transcript written by hand, skipping' : 'Already transcribed, skipping (use -f to force)');
     const existing = await readExisting(cmd, transcriptPath, transcriptAttrs);
     if (cmd.json) await cmd.writeJSON({ ...existing, path: inputPath, skipped: true });
     else await cmd.writeLn(existing.text || 'No speech detected');
@@ -228,7 +232,7 @@ transcribeFile.spec = {
   ],
   flags: [
     { name: 'v', type: 'bool' as const, description: 'Verbose output' },
-    { name: 'f', type: 'bool' as const, description: 'Force re-transcription even if a transcript exists' },
+    { name: 'f', type: 'bool' as const, description: 'Force re-transcription even if a transcript exists, unless it was written by hand' },
   ],
   examples: [
     'transcribe-file /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',

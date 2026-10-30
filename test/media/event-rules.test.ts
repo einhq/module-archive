@@ -988,6 +988,12 @@ Deno.test('transcript: the current decode settings are not a gap', async () => {
   assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
 });
 
+Deno.test('transcript: one a person corrected is not a gap, whatever it was decoded with', async () => {
+  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE, editedAt: '2026-01-01T00:00:00Z' });
+
+  assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
+});
+
 Deno.test('transcript: a file with no audio track is not a gap', async () => {
   // transcribe-file writes the node with both provenance attrs null when whisper never ran, and
   // transcribing again writes the same nulls back — so comparing it would re-announce forever.

@@ -20,6 +20,11 @@ type TransportOptions = {
   onPlay?: () => void;
   /** The browser would not start playing without a gesture (an autoplay policy). */
   onRefused?: () => void;
+  /**
+   * Whether this is the lightbox's player, whose playhead and seek the transcript panel follows;
+   * false for a second player over it, the subtitle editor's, which must leave them to the first.
+   */
+  publish?: boolean;
 };
 
 /** What a player's controls drive, from one `<audio>` or `<video>`. */
@@ -56,7 +61,7 @@ export type MediaTransport = {
  * and a seek per pointer move only queues work.
  *
  * It publishes the playhead and a seek for the transcript panel (`signals/playback.ts`) for as long
- * as it is mounted.
+ * as it is mounted, unless told not to (`publish`).
  */
 export function useMediaTransport(elRef: RefObject<HTMLMediaElement | null>, options: TransportOptions): MediaTransport {
   const [playing, setPlaying] = useState(false);
@@ -181,7 +186,7 @@ export function useMediaTransport(elRef: RefObject<HTMLMediaElement | null>, opt
     };
     const onPause = () => setPlaying(false);
     const onTime = () => {
-      publishPosition(el.currentTime);
+      if (optionsRef.current.publish !== false) publishPosition(el.currentTime);
       if (scrubRef.current) return;
       setPosition(el.currentTime);
       paint(el.currentTime);
@@ -260,11 +265,14 @@ export function useMediaTransport(elRef: RefObject<HTMLMediaElement | null>, opt
 
   // Cleared on unmount, so a transcript panel outliving the player cannot seek an element
   // that is gone.
-  useEffect(() =>
-    attachPlayback((seconds) => {
+  const publish = options.publish !== false;
+  useEffect(() => {
+    if (!publish) return;
+    return attachPlayback((seconds) => {
       seek(seconds);
       play();
-    }), [play, seek]);
+    });
+  }, [play, seek, publish]);
 
   return {
     // A drag pauses underneath; the controls keep showing what it will go back to.

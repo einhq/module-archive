@@ -720,14 +720,15 @@ export async function deriveGaps(
   // A transcript an interrupted run left without `transcribedAt`, or one decoded with other
   // whisper settings than EMS runs now. Only a transcript that names a model is compared with the
   // settings: one with `transcribedBy` null was written for a file with no audio track, and
-  // transcribing it again would write the same nulls back on every scan.
+  // transcribing it again would write the same nulls back on every scan. One a person corrected
+  // (`editedAt`) is never stale: `transcribe-file` keeps it whatever the settings.
   const transcript = !isImage && !missingTranscript && !undecodable ? await ctx.getNode(`${filePath}/metadata/transcript`) : undefined;
 
   if (transcript) {
     const transcribedWith = str(transcript.attrs.transcribedWith);
     const unfinished = !str(transcript.attrs.transcribedAt);
     const superseded = ctx.transcriptGeneration !== undefined && str(transcript.attrs.transcribedBy) !== undefined &&
-      transcribedWith !== ctx.transcriptGeneration;
+      transcribedWith !== ctx.transcriptGeneration && !str(transcript.attrs.editedAt);
 
     if (unfinished || superseded) {
       events.push({

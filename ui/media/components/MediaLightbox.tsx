@@ -77,6 +77,7 @@ import { FaceOverlay, toFaceMarks } from './FaceOverlay.tsx';
 import { VideoFaces } from './VideoFaces.tsx';
 import { type FacePersonChange, FacePersonDialog } from './FacePersonDialog.tsx';
 import { MediaSidebar, SIDEBAR_WIDTH } from './MediaSidebar.tsx';
+import { SubtitleEditDialog } from './SubtitleEditDialog.tsx';
 import { TextEditDialog } from './TextEditDialog.tsx';
 import { TextOverlay } from './TextOverlay.tsx';
 import { VideoPlayer } from './VideoPlayer.tsx';
@@ -402,7 +403,7 @@ export function MediaLightbox() {
   // One `media-details` read for the whole lightbox: the sidebar and the face overlay draw
   // from the same response, and the overlay needs it whether the sidebar is open or not.
   const detailsResult = useMediaDetails(media?.path, albumMedia?.stackAlbumPath);
-  const { details, detailsPath, refetch, setOrientation, orienting, setText } = detailsResult;
+  const { details, detailsPath, refetch, setOrientation, orienting, setText, setTranscript } = detailsResult;
   const canEdit = details?.ownership !== undefined && canWrite(details.ownership, access);
   // Only this file's details: straight after a swipe `details` still describes the previous one,
   // whose faces would be drawn over the new picture, and whose state would be taken for this one's,
@@ -439,10 +440,21 @@ export function MediaLightbox() {
     setEditingText(false);
     setShowText(text.trim() !== '');
   }, [setText]);
+  // What is said in a video or a recording, opened for correcting, beside a player of its own, to
+  // whoever may write the file. One with no transcript yet gets its first lines there.
+  const mayWriteSubtitles = withDetails && (media?.type === 'video' || media?.type === 'audio') && faceDetails !== null && !faceDetails.undecodable && canEdit;
+  const [editingSubtitles, setEditingSubtitles] = useState(false);
+  const saveSubtitles = useCallback(async (vtt: string) => {
+    await setTranscript(vtt);
+    setEditingSubtitles(false);
+  }, [setTranscript]);
+  /** A dialog over the picture has the keys: the text's or the subtitles'. */
+  const editing = editingText || editingSubtitles;
   useEffect(() => {
     if (isOpen) return;
     setShowText(false);
     setEditingText(false);
+    setEditingSubtitles(false);
   }, [isOpen]);
 
   // Opened by its URL alone, a file is known by its path only and shown as a picture; its
@@ -568,6 +580,8 @@ export function MediaLightbox() {
       setEditingText(false);
       return;
     }
+    // The subtitle editor owns Escape: it asks before throwing away changes.
+    if (editingSubtitles) return;
     // The unknown-person review dialog is layered above this modal and owns
     // Escape while it is open. Let its capture handler close only that layer.
     if (reviewPersonId) return;
@@ -581,7 +595,7 @@ export function MediaLightbox() {
     }
     if (slideshow) stopSlideshow();
     else requestClose();
-  }, [addingFace, editingText, mapOpen, requestClose, reviewPersonId, sidebarLayer, slideshow, stopSlideshow]);
+  }, [addingFace, editingSubtitles, editingText, mapOpen, requestClose, reviewPersonId, sidebarLayer, slideshow, stopSlideshow]);
 
   // Mounted with the lightbox's route, already open: that is an opening too.
   const infoPreviousOpenRef = useRef(false);
@@ -1451,14 +1465,14 @@ export function MediaLightbox() {
 
   useShortcutHelp('Lightbox', withDetails ? LIGHTBOX_SHORTCUTS : LIGHTBOX_SHORTCUTS.filter((entry) => entry.keys !== 'i'));
   useHotkeys([
-    // The text dialog is over the picture: the keys are its own while it is open.
-    ['ArrowLeft', () => !addingFace && !editingText && slideToMedia('previous')],
-    ['ArrowRight', () => !addingFace && !editingText && slideToMedia('next')],
+    // The text and subtitle dialogs are over the picture: the keys are theirs while one is open.
+    ['ArrowLeft', () => !addingFace && !editing && slideToMedia('previous')],
+    ['ArrowRight', () => !addingFace && !editing && slideToMedia('next')],
     ['Escape', handleEscape],
-    ['i', () => !sidebarLayer && !editingText && toggleSheet(!infoSidebarOpen.value)],
-    ['f', () => !sidebarLayer && !editingText && toggleFacesVisible()],
-    ['t', () => !sidebarLayer && !editingText && pictureText && toggleText()],
-    ['s', () => !sidebarLayer && !editingText && toggleStar()],
+    ['i', () => !sidebarLayer && !editing && toggleSheet(!infoSidebarOpen.value)],
+    ['f', () => !sidebarLayer && !editing && toggleFacesVisible()],
+    ['t', () => !sidebarLayer && !editing && pictureText && toggleText()],
+    ['s', () => !sidebarLayer && !editing && toggleStar()],
     // `+` is shifted on most layouts and `=` is its unshifted key on a US one. These keys
     // have no default worth suppressing, so they are left alone for whatever else listens.
     ['plus', () => zoomable && setZoom(stepZoom(zoomRef.current, 1, zoomFrame()), true), { preventDefault: false }],
@@ -1469,7 +1483,7 @@ export function MediaLightbox() {
   ]);
 
   // The players' keys rest while a layer over the lightbox has the keyboard, as the lightbox's own do.
-  const playerKeys = !sidebarLayer && !editingText && !addingFace && !mapOpen && reviewPersonId === null && personFacePath === null;
+  const playerKeys = !sidebarLayer && !editing && !addingFace && !mapOpen && reviewPersonId === null && personFacePath === null;
   const attachMediaElement = useCallback((el: HTMLVideoElement | null) => {
     mediaRef.current = el;
   }, []);
@@ -1565,6 +1579,11 @@ export function MediaLightbox() {
       {mayWriteText && (
         <Menu.Item leftSection={<TablerIcon name='pencil' size={iconSize} />} onClick={() => setEditingText(true)}>
           {pictureText ? 'Edit text' : 'Add text'}
+        </Menu.Item>
+      )}
+      {mayWriteSubtitles && (
+        <Menu.Item leftSection={<TablerIcon name='badge-cc' size={iconSize} />} onClick={() => setEditingSubtitles(true)}>
+          {faceDetails?.hasTranscript ? 'Edit subtitles' : 'Add subtitles'}
         </Menu.Item>
       )}
       <Menu.Item leftSection={<TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} />} onClick={toggleFullscreen}>
@@ -2374,6 +2393,16 @@ export function MediaLightbox() {
           truncated={faceDetails?.contentTruncated ?? false}
           onSave={saveText}
           onClose={() => setEditingText(false)}
+        />
+      )}
+      {mayWriteSubtitles && (
+        <SubtitleEditDialog
+          opened={editingSubtitles}
+          media={media}
+          reloadToken={reloadToken}
+          transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
+          onSave={saveSubtitles}
+          onClose={() => setEditingSubtitles(false)}
         />
       )}
       <FacePersonDialog face={personFace} named={namedPeople} onClose={() => setPersonFacePath(null)} onChanged={facePersonChanged} />

@@ -1,0 +1,154 @@
+#!ts
+/**
+ * file-set-transcript — write what is said in a video or a recording by hand, for good.
+ *
+ * Replaces the cues of `<file>/metadata/transcript` with WebVTT a person wrote or corrected, given
+ * on stdin or as `--vtt-base64` (the UI's way, as for `file-set-text`). The node is written in
+ * place, so the voices under it (`speakers/`) stay; a file with no transcript gets one. A cue that
+ * is unchanged keeps the word timings whisper gave it. The chunks are cut and embedded again, so
+ * search finds the corrected words.
+ *
+ * The node is stamped `editedAt`, which `transcribe-file` leaves alone, even with `-f`, and which
+ * `media-scan` never calls stale. `transcribedBy` stays: it says where the first draft came from.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { storeCurrentChunks } from '@ems/text-embedding';
+import { CHUNK_TARGET_SECONDS, chunkSegments, chunkVectors, parseVtt, segmentsToVtt, type TranscriptSegment } from '@archive/media/transcript';
+import { reportUnwritable } from '@archive/media/writable';
+import { decodeBase64 } from '@std/encoding/base64';
+import { resolve } from '@std/path';
+import { toText } from '@std/streams/to-text';
+
+const USAGE = 'file-set-transcript: usage: file-set-transcript <file> [--vtt-base64 <b64>] (WebVTT on stdin without it)';
+
+/** A cue's identity for keeping its word timings: its times to the millisecond and its words. */
+const cueKey = (segment: TranscriptSegment): string => `${Math.round(segment.start * 1000)}|${Math.round(segment.end * 1000)}|${segment.text}`;
+
+const readVtt = async (cmd: Command, path: string): Promise<string> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+  try {
+    return await toText(handle.readable);
+  } finally {
+    await handle.close();
+  }
+};
+
+const fileSetTranscript = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['vtt-base64'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError(`${USAGE}\n`);
+    return 1;
+  }
+
+  let given: string;
+  if (flags['vtt-base64'] !== undefined) {
+    try {
+      given = new TextDecoder().decode(decodeBase64(flags['vtt-base64']));
+    } catch {
+      await cmd.writeError('file-set-transcript: --vtt-base64: not valid base64\n');
+      return 1;
+    }
+  } else {
+    given = await cmd.stdin.text();
+  }
+  if (!/^﻿?WEBVTT(?:[ \t\n\r]|$)/.test(given)) {
+    await cmd.writeError('file-set-transcript: not WebVTT: it must begin with WEBVTT\n');
+    return 1;
+  }
+
+  const path = resolve(cmd.cwd, target);
+  let node;
+  try {
+    node = await cmd.sys.vfs.get<{ mimetype?: unknown }>(cmd.access, path);
+  } catch (error) {
+    await cmd.writeError(`file-set-transcript: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const mimetype = typeof node.attrs.mimetype === 'string' ? node.attrs.mimetype : '';
+  if (node.type !== 'file' || !(mimetype.startsWith('video/') || mimetype.startsWith('audio/'))) {
+    await cmd.writeError(`file-set-transcript: ${path}: not a video or a recording (${mimetype || node.type})\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, path, node)) return 1;
+
+  const cues = parseVtt(given).sort((a, b) => a.start - b.start || a.end - b.end);
+  const backwards = cues.find((cue) => !(cue.end > cue.start));
+  if (backwards) {
+    await cmd.writeError(`file-set-transcript: the cue at ${backwards.start} s ends before it starts\n`);
+    return 1;
+  }
+
+  const transcriptPath = `${path}/metadata/transcript`;
+  const existing = await cmd.sys.vfs.get(cmd.access, transcriptPath).catch(() => undefined);
+  const editedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  // A transcript without `transcribedAt` (none, or one an interrupted run left) gets it now: it is
+  // finished, and the voices start from it (`media.transcript.generated`).
+  const transcribedAt = typeof existing?.attrs.transcribedAt === 'string' ? existing.attrs.transcribedAt : editedAt;
+
+  let segments: TranscriptSegment[];
+  let unembedded: string | undefined;
+  try {
+    const before = existing ? parseVtt(await readVtt(cmd, transcriptPath)) : [];
+    const words = new Map(before.filter((segment) => segment.words?.length).map((segment) => [cueKey(segment), segment.words]));
+    segments = cues.map(({ words: _, ...cue }) => {
+      const kept = words.get(cueKey(cue));
+      return kept ? { ...cue, words: kept } : cue;
+    });
+
+    if (!existing) {
+      await cmd.execute(`mkdir -p ${shq(`${path}/metadata`)}`);
+      const made = await cmd.execute(`mknode -t file --as "mimetype=text/vtt" --tier db ${shq(transcriptPath)}`);
+      if (made.code !== 0) throw new Error(made.stderr.trim() || `failed to create ${transcriptPath}`);
+    }
+    const handle = await cmd.sys.vfs.open(cmd.access, transcriptPath, { mode: 'w' });
+    try {
+      await handle.write(new TextEncoder().encode(segmentsToVtt(segments)));
+    } finally {
+      await handle.close();
+    }
+    await cmd.sys.vfs.update(cmd.access, transcriptPath, {
+      attrs: {
+        mimetype: 'text/vtt',
+        transcribedAt,
+        editedAt,
+        segmentCount: segments.length,
+        speech: segments.length > 0,
+      },
+    });
+    unembedded = await storeCurrentChunks(cmd, transcriptPath, chunkVectors(chunkSegments(segments)), { transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS });
+  } catch (error) {
+    await cmd.writeError(`file-set-transcript: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (unembedded) await cmd.writeError(`file-set-transcript: ${path}: saved, but not yet searchable: ${unembedded}\n`);
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, path, segmentCount: segments.length });
+  } else {
+    await cmd.writeLn(`Set ${segments.length} line${segments.length === 1 ? '' : 's'} of ${path}`);
+  }
+  return 0;
+};
+
+fileSetTranscript.spec = {
+  name: 'file-set-transcript',
+  effect: 'write' as const,
+  description: 'Write what is said in a video or a recording by hand, in place of the transcript',
+  args: [
+    { name: 'file', type: 'path' as const, description: 'VFS path to a video or a recording' },
+  ],
+  flags: [
+    { name: 'vtt-base64', type: 'string' as const, description: 'the transcript as WebVTT, base64-encoded; without it, WebVTT is read from stdin' },
+  ],
+  examples: [
+    'cat /home/admin/rattad.vtt | file-set-transcript /archive/albums/Exempelalbum_2019/files/MVI_0042.MOV',
+  ],
+  returns: 'nothing; the transcript is written, searchable, and not transcribed again.',
+};
+
+export default fileSetTranscript;
