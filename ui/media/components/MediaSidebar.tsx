@@ -26,6 +26,7 @@ import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
 import { ShowFace } from './ShowFace.tsx';
+import { FaceDoubt } from './FaceDoubt.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
@@ -367,6 +368,7 @@ export function MediaSidebar(
     onReviewUnknown,
     onShowFace,
     followedFace,
+    onNotThem,
     onOpenMap,
     canEdit,
     addToAlbumPath,
@@ -393,6 +395,8 @@ export function MediaSidebar(
     onShowFace?: (facePath: string) => void;
     /** The face being followed, whose button shows it. */
     followedFace?: string | null;
+    /** A doubtful face is not the person it is on: ask who it is. */
+    onNotThem: (facePath: string) => void;
     /** Open the lightbox-owned, enlarged view of this media location. */
     onOpenMap?: () => void;
     canEdit: boolean;
@@ -419,10 +423,12 @@ export function MediaSidebar(
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   const [editing, setEditing] = useState(false);
+  /** The person row whose doubt question is open. */
+  const [asking, setAsking] = useState<string | null>(null);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || sharing), [editing, sharing]);
+  useEffect(() => onLayer(editing || sharing || asking !== null), [editing, sharing, asking]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
   // a folder above it, changes.
   const changed = sharingChanged.value;
@@ -666,6 +672,15 @@ export function MediaSidebar(
                   name={person.name}
                   onShow={onShowFace}
                   followed={followedFace}
+                />
+                <FaceDoubt
+                  face={faces.find((face) => face.personPath === person.path && face.doubt) ?? faces.find((face) => face.personPath === person.path)}
+                  name={person.name}
+                  canEdit={canEdit}
+                  opened={asking === person.path}
+                  onOpen={(open) => setAsking(open ? person.path : null)}
+                  onChanged={result.refetch}
+                  onNotThem={onNotThem}
                 />
               </Group>
             ))}

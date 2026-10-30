@@ -146,7 +146,12 @@ export type MediaFace = {
   personPath?: string;
   personName?: string;
   unnamed?: boolean;
+  /** Present while the face's person is in question (`face-doubt`, or an audit). */
+  doubt?: MediaFaceDoubt;
 };
+
+/** Why a face in the lightbox is in question: who asked, or who it looks like instead. */
+export type MediaFaceDoubt = { markedBy: string } | { likeName: string };
 
 /** What `detect-chapters` says of one file: the cuts it found, or why it looked for none. */
 export type DetectChaptersAnswer = {
@@ -262,6 +267,9 @@ export type VoiceSubclusterResult = {
 
 /** `face-confirm`: regions a human said show the person they are on. */
 export type FaceConfirmResult = { confirmed: string[] };
+
+/** `face-doubt`: regions whose person was questioned, or with `--clear` no longer is. */
+export type FaceDoubtResult = { marked: string[] } | { cleared: string[] };
 
 /**
  * One agglomeration step as it comes over the wire: `[a, b, similarity, size]`.

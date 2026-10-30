@@ -11,7 +11,7 @@
  *
  * Three VFS calls, whatever the face count: one `get` for the person, one query
  * for the regions, one batched child lookup for which of the page's are faces. A page with
- * doubtful faces adds two batched reads for who they look like and where they are. Chronological order adds one batched node read for the source
+ * an audit's doubts adds two batched reads for who they look like and where they are. Chronological order adds one batched node read for the source
  * photos' capture times — and, from the same read, their type and size, which is
  * what opening one in the lightbox needs; it never becomes one read per face.
  *
@@ -21,13 +21,14 @@
  * also held under a byte budget, so long paths shorten the page rather than fail it;
  * `nextOffset` says where the next one starts.
  *
- * `--doubtful` lists only the faces an audit found looking like somebody else, and
- * `--sort doubt` puts the clearest cases first; every answer says how many there are.
+ * `--doubtful` lists only the faces in question — somebody asked (`face-doubt`), or an audit
+ * found them looking like somebody else — and `--sort doubt` puts the ones a person asked
+ * about first, then the audit's clearest cases; every answer says how many there are.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { faceCropSize, faceEmbeddingsOf, type FaceView, faceView, type PersonNodeAttrs, personPathOf, regionsOf } from '@archive/people/person';
-import { type FaceDoubt, liveDoubt, type RegionAttrs } from '@archive/media/regions';
+import { type AuditDoubt, type FaceDoubt, isMarkedDoubt, liveDoubt, type RegionAttrs } from '@archive/media/regions';
 import type { FaceListResult } from '@archive/people/api';
 
 /** Faces per JSON page when the caller names no `--limit`. */
@@ -96,7 +97,8 @@ const personFaces = async (cmd: Command): CmdReturn => {
 
     const margin = (face: FaceView) => {
       const doubt = doubtOf.get(regionIds.get(face)!);
-      return doubt ? doubt.similarity - doubt.ownSimilarity : -Infinity;
+      if (!doubt) return -Infinity;
+      return isMarkedDoubt(doubt) ? Number.MAX_VALUE : doubt.similarity - doubt.ownSimilarity;
     };
     faces.sort((a, b) => {
       if (sort === 'doubt') return margin(b) - margin(a) || a.facePath.localeCompare(b.facePath);
@@ -114,13 +116,18 @@ const personFaces = async (cmd: Command): CmdReturn => {
     const embeddings = await faceEmbeddingsOf(cmd.sys.vfs, cmd.access, page.map((face) => regionIds.get(face)!));
     for (const face of page) face.hasFace = embeddings.has(regionIds.get(face)!);
     const pageDoubts = page.map((face) => doubtOf.get(regionIds.get(face)!));
-    const likeIds = [...new Set(pageDoubts.filter((doubt) => doubt !== undefined).map((doubt) => doubt.likePersonId))];
+    const audits = pageDoubts.filter((doubt): doubt is AuditDoubt => doubt !== undefined && !isMarkedDoubt(doubt));
+    const likeIds = [...new Set(audits.map((doubt) => doubt.likePersonId))];
     const [likes, likePaths] = likeIds.length > 0
       ? await Promise.all([cmd.sys.vfs.getNodesByIds<PersonNodeAttrs>(cmd.access, likeIds), cmd.sys.vfs.resolveIdPaths(cmd.access, likeIds)])
       : [new Map(), new Map<string, string[]>()];
     page.forEach((face, index) => {
       const doubt = pageDoubts[index];
       if (!doubt) return;
+      if (isMarkedDoubt(doubt)) {
+        face.doubt = { markedBy: doubt.markedBy, markedAt: doubt.markedAt };
+        return;
+      }
       const like = likes.get(doubt.likePersonId);
       face.doubt = {
         likePersonId: doubt.likePersonId,
@@ -179,7 +186,11 @@ const personFaces = async (cmd: Command): CmdReturn => {
     }
     await cmd.writeLn(`${result.person.name}: ${faces.length} face${faces.length === 1 ? '' : 's'}`);
     for (const face of page) {
-      const doubt = face.doubt ? `  (looks like ${face.doubt.likeName}: ${face.doubt.similarity.toFixed(3)} > ${face.doubt.ownSimilarity.toFixed(3)})` : '';
+      const doubt = !face.doubt
+        ? ''
+        : 'markedBy' in face.doubt
+        ? `  (doubted by ${face.doubt.markedBy})`
+        : `  (looks like ${face.doubt.likeName}: ${face.doubt.similarity.toFixed(3)} > ${face.doubt.ownSimilarity.toFixed(3)})`;
       await cmd.writeLn(`  ${face.confidence.toFixed(3)}  ${face.filePath ?? face.facePath}${face.hasFace ? '' : '  (tag)'}${doubt}`);
     }
     return 0;
@@ -205,8 +216,12 @@ personFaces.spec = {
   flags: [
     { name: 'limit', type: 'string' as const, description: `max faces to return (default: all as text, ${DEFAULT_JSON_LIMIT} as JSON)` },
     { name: 'offset', type: 'string' as const, description: 'skip this many (default 0)' },
-    { name: 'sort', type: 'string' as const, description: "'confidence' (default), 'file', chronological 'date', or 'doubt' (clearest doubts first)" },
-    { name: 'doubtful', type: 'bool' as const, description: 'only the faces an audit found looking like somebody else' },
+    {
+      name: 'sort',
+      type: 'string' as const,
+      description: "'confidence' (default), 'file', chronological 'date', or 'doubt' (the ones a person asked about, then the clearest)",
+    },
+    { name: 'doubtful', type: 'bool' as const, description: 'only the faces in question: questioned by somebody, or found looking like somebody else' },
   ],
   examples: [
     'person-faces /archive/people/Anna_Exempel',

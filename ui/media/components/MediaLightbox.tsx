@@ -1617,6 +1617,7 @@ export function MediaLightbox() {
       onReviewUnknown={setReviewPersonId}
       onShowFace={media.type === 'video' ? followFace : undefined}
       followedFace={followedFacePath}
+      onNotThem={setPersonFacePath}
       onOpenMap={mapPoint ? () => setMapOpen(true) : undefined}
       canEdit={canEdit}
       addToAlbumPath={actionPath}

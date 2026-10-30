@@ -16,7 +16,7 @@
  */
 import { type CmdReturn, collectUnknownFlags, type Command, type CommentEntry, parseArgs, readComments, reportUnknownFlags } from '@ein/client';
 import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
-import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, regionsPathOf } from '@archive/media/regions';
+import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, isMarkedDoubt, liveDoubt, type RegionAttrs, regionsPathOf } from '@archive/media/regions';
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { basename, resolve } from '@std/path';
 import { isFingerprintName } from '@archive/media/fingerprints';
@@ -28,12 +28,12 @@ import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@archi
 import type {
   AlbumRef,
   DeviceRef,
-  FaceBox,
   FingerprintRef,
   LocationRef,
   MediaDetails,
   MediaExif,
   MediaFace,
+  MediaFaceDoubt,
   MediaHashes,
   MediaPosition,
   MediaSpeaker,
@@ -574,6 +574,15 @@ const toPersonTag = async (
  * ones would fill every sidebar with "Unknown 3PW8M9" — as identities they are
  * a prompt to go and name someone, not a fact about the photo.
  */
+/** A face's live doubt as the lightbox shows it: who asked, or who it looks like. */
+const doubtOf = async (vfs: Vfs, access: Access, attrs: RegionAttrs): Promise<MediaFaceDoubt | undefined> => {
+  const doubt = liveDoubt(attrs);
+  if (!doubt) return undefined;
+  if (isMarkedDoubt(doubt)) return { markedBy: doubt.markedBy };
+  const like = await vfs.getNodesByIds<{ name?: string }>(access, [doubt.likePersonId]).catch(() => new Map());
+  return { likeName: like.get(doubt.likePersonId)?.attrs.name ?? doubt.likePersonId };
+};
+
 const readPeople = async (
   vfs: Vfs,
   access: Access,
@@ -596,9 +605,7 @@ const readPeople = async (
   }
 
   try {
-    const regions = await vfs.children<
-      { personId?: string; faceBox?: FaceBox; transferredTo?: string; atSeconds?: number; appearances?: [number, number][] }
-    >(access, regionsPathOf(path));
+    const regions = await vfs.children<RegionAttrs & { transferredTo?: string }>(access, regionsPathOf(path));
     // Which boxes are faces and which are tags, in one lookup for the whole photo.
     const embeddings = await faceEmbeddingsOfRegions(vfs, access, regions.map((region) => region.node.id));
     for (const face of regions) {
@@ -631,6 +638,7 @@ const readPeople = async (
       }
 
       const result = await toPersonTag(vfs, access, target, 'face', takenAt);
+      const doubt = activeFaceBox ? await doubtOf(vfs, access, face.node.attrs) : undefined;
       if (!result) {
         if (activeFaceBox) faces.push({ faceId: face.node.id, facePath, faceBox: activeFaceBox, hasFace, personId, personPath: target, ...when });
         continue;
@@ -645,6 +653,7 @@ const readPeople = async (
           personPath: target,
           personName: result.tag.name,
           unnamed: result.unnamed,
+          ...(doubt ? { doubt } : {}),
           ...when,
         });
       }

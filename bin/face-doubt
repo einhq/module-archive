@@ -1,0 +1,77 @@
+#!ts
+/**
+ * face-doubt — a human asks whether these regions really show the person they are assigned to.
+ *
+ * The face keeps its person; the region carries a `doubt` naming who asked, which the person's
+ * Faces tab lists under Doubtful for somebody who knows to answer: `face-confirm` if it is them,
+ * "Not <name>" (`person-detach`) if not. `--clear` withdraws a doubt without answering it.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { type MarkedDoubt, REGION_TYPE, type RegionAttrs } from '@archive/media/regions';
+import type { FaceDoubtResult } from '@archive/media/api';
+
+const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+
+const faceDoubt = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['clear', 'dry-run'], alias: { n: 'dry-run' }, unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const clear = !!flags.clear;
+
+  const paths = (flags._ as string[]).map((arg) => resolve(cmd.cwd, String(arg)));
+  if (paths.length === 0) {
+    await cmd.writeError('face-doubt: usage: face-doubt [--clear] <region...>\n');
+    return 1;
+  }
+
+  const done: string[] = [];
+  try {
+    // Every region is checked before any is written, so a bad path changes nothing.
+    const people = new Map<string, string>();
+    for (const path of paths) {
+      const node = await cmd.sys.vfs.get<RegionAttrs>(cmd.access, path, { follow: false });
+      if (node.type !== REGION_TYPE) throw new Error(`${path}: not a region (is ${node.type})`);
+      if (!clear && !node.attrs.personId) throw new Error(`${path}: assigned to nobody`);
+      if (node.attrs.personId) people.set(path, node.attrs.personId);
+    }
+    const markedAt = nowIso();
+    for (const path of paths) {
+      if (!flags['dry-run']) {
+        // null removes the key.
+        const doubt: MarkedDoubt | null = clear ? null : { personId: people.get(path)!, markedBy: cmd.env.USER ?? String(cmd.access.uid), markedAt };
+        await cmd.sys.vfs.update(cmd.access, path, { follow: false, attrs: { doubt } });
+      }
+      done.push(path);
+    }
+  } catch (error) {
+    await cmd.writeError(`face-doubt: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON((clear ? { cleared: done } : { marked: done }) satisfies FaceDoubtResult);
+    return 0;
+  }
+  const verb = clear ? (flags['dry-run'] ? 'would clear the doubt on' : 'cleared the doubt on') : (flags['dry-run'] ? 'would mark as doubtful' : 'marked as doubtful');
+  await cmd.writeLn(`${verb} ${done.length} region${done.length === 1 ? '' : 's'}`);
+  return 0;
+};
+
+faceDoubt.spec = {
+  name: 'face-doubt',
+  effect: 'write' as const,
+  description: 'Question whether regions show the person they are assigned to',
+  args: [
+    { name: 'region', type: 'path' as const, variadic: true, description: 'region paths, <image>/regions/<name>' },
+  ],
+  flags: [
+    { name: 'clear', type: 'bool' as const, description: 'withdraw the doubt instead, leaving the person as it is' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'check the regions without changing them' },
+  ],
+  examples: ['face-doubt /archive/photos/2001/IMG_0001.jpg/regions/face-0', 'face-doubt --clear /archive/photos/2001/IMG_0001.jpg/regions/face-0'],
+  returns: 'the regions marked, or with --clear the regions cleared.',
+};
+
+export default faceDoubt;

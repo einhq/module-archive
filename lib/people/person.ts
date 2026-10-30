@@ -318,7 +318,7 @@ export type FaceView = {
   pose?: { pitch: number; yaw: number; roll: number };
   confidence: number;
   personSource?: string;
-  /** Who an audit found this face looks like; `person-faces` fills it for a page. */
+  /** Why the face's person is in question; `person-faces` fills it for a page. */
   doubt?: FaceDoubtView;
 };
 

@@ -30,21 +30,23 @@ export type PersonFace = {
   pose?: { pitch: number; yaw: number; roll: number };
   confidence: number;
   personSource?: string;
-  /** Set when an audit found another person's named face nearer than this person's own. */
+  /** Set while the face's person is in question: somebody asked, or an audit found another person nearer. */
   doubt?: FaceDoubtView;
 };
 
-/** Who a doubtful face looks like, and how much more than its own person. */
-export type FaceDoubtView = {
-  likePersonId: string;
-  likeName: string;
-  /** Absent when the person cannot be reached. */
-  likePath?: string;
-  /** Cosine similarity to the other person's nearest named face. */
-  similarity: number;
-  /** Cosine similarity to this person's nearest named face. */
-  ownSimilarity: number;
-};
+/** Why a face is doubtful: who questioned it, or who it looks like and how much more than its own person. */
+export type FaceDoubtView =
+  | { markedBy: string; markedAt: string }
+  | {
+    likePersonId: string;
+    likeName: string;
+    /** Absent when the person cannot be reached. */
+    likePath?: string;
+    /** Cosine similarity to the other person's nearest named face. */
+    similarity: number;
+    /** Cosine similarity to this person's nearest named face. */
+    ownSimilarity: number;
+  };
 
 export type FacePerson = {
   id: string;

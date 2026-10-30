@@ -11,6 +11,7 @@ import { FACE_CROP_NAME } from '../lib/face-crop.ts';
 import { mediaItemFrom, shq } from '@ein/ui/lib';
 import { execCommand, MediaItem } from '@ein/ui/signals';
 import { NotThisPersonAction } from './NotThisPersonAction.tsx';
+import type { FaceDoubtView } from '@archive/people/api';
 import { ConfirmFacesAction } from './ConfirmFacesAction.tsx';
 
 /** Faces are small pictures; at the photo grid's row height a crop is upscaled past its pixels. */
@@ -28,10 +29,10 @@ const cropName = (face: PersonFace): string => {
   return `${photo.replace(/\.[^.]+$/, '')}-${faceName}.avif`;
 };
 
-/** Under a doubtful face: who it looks like. */
-const doubtBadge = (likeName: string): ReactNode => (
+/** Under a doubtful face: who asked, or who it looks like. */
+const doubtBadge = (doubt: FaceDoubtView): ReactNode => (
   <Text className='mrx-tile-badge' component='span' size='xs' fw={600} px={7} py={2} truncate>
-    like {likeName}
+    {'markedBy' in doubt ? `asked by ${doubt.markedBy}` : `like ${doubt.likeName}`}
   </Text>
 );
 
@@ -46,10 +47,11 @@ const doubtBadge = (likeName: string): ReactNode => (
  * The faces arrive a page at a time as the grid scrolls. Selection, select-all and the
  * lightbox cover the loaded ones, so the count above the grid says when that is not all.
  *
- * When an audit found faces of this person that look more like somebody else, a switch
- * (`?faces=doubtful`) lists only those, clearest first, each labelled with who it looks like.
- * The reviewer takes the wrong ones off with "Not <name>", which offers the look-alike, and
- * keeps the rest with "Is <name>".
+ * When faces of this person are in question — somebody marked them doubtful, or an audit found
+ * them looking more like somebody else — a switch (`?faces=doubtful`) lists only those, the ones
+ * somebody asked about first, each labelled with who asked or who it looks like. The reviewer
+ * takes the wrong ones off with "Not <name>", which offers the look-alike, and keeps the rest
+ * with "Is <name>".
  */
 export function PersonFacesTab({ person, named }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -111,13 +113,16 @@ export function PersonFacesTab({ person, named }: Props) {
 
   const selection = useMediaSelection(crops);
   const tags = useMemo(() => new Set(faces.filter((face) => !face.hasFace).map((face) => face.facePath)), [faces]);
-  const likeOf = useMemo(() => new Map(faces.filter((face) => face.doubt).map((face) => [`${face.facePath}/${FACE_CROP_NAME}`, face.doubt!])), [faces]);
+  const doubtOf = useMemo(() => new Map(faces.filter((face) => face.doubt).map((face) => [`${face.facePath}/${FACE_CROP_NAME}`, face.doubt!])), [faces]);
   // The person the whole selection looks like, if it is one person.
   const suggested = useMemo(() => {
-    const likes = new Set([...selection.selected].map((path) => likeOf.get(path)?.likePath));
+    const likes = new Set([...selection.selected].map((path) => {
+      const doubt = doubtOf.get(path);
+      return doubt && 'likePath' in doubt ? doubt.likePath : undefined;
+    }));
     const [only] = likes;
     return likes.size === 1 ? only : undefined;
-  }, [selection.selected, likeOf]);
+  }, [selection.selected, doubtOf]);
 
   if (error) {
     return <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />} variant='light'>{error.message}</Alert>;
@@ -148,7 +153,7 @@ export function PersonFacesTab({ person, named }: Props) {
           {listSwitch}
           {onlyDoubtful && (
             <Text size='sm' c='dimmed'>
-              Faces whose closest named face in another photo is somebody else.
+              Faces somebody is not sure of, or that look more like somebody else. Select the ones that are {person.name}, or take the rest off.
             </Text>
           )}
           {hasMore && (
@@ -164,7 +169,7 @@ export function PersonFacesTab({ person, named }: Props) {
         selection={selection}
         targetRowHeight={FACE_ROW_HEIGHT}
         loading={loading}
-        renderOverlay={likeOf.size > 0 ? (item) => likeOf.has(item.path) ? doubtBadge(likeOf.get(item.path)!.likeName) : null : undefined}
+        renderOverlay={doubtOf.size > 0 ? (item) => doubtOf.has(item.path) ? doubtBadge(doubtOf.get(item.path)!) : null : undefined}
         bleed
       />
       {hasMore && !loading && !loadingMore && <Box ref={sentinelRef} h={1} />}

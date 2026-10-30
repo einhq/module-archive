@@ -1434,15 +1434,19 @@ A named person's **Faces** tab drives it (`NotThisPersonAction`, beside Download
 over a grid of that person's crops), with the other three modes as the alternatives; it then asks
 `person-cover` again, since the cover may have been one of the faces that left.
 
-**Doubtful faces.** A `transfer` that landed on the wrong face is an anchor like any other, and
-nothing in recognition questions an anchor. An audit of the named faces may put a `doubt` on a
-region (`FaceDoubt` in `@archive/media/regions`): who it was on, who it looks like, and both
-similarities. A doubt counts (`liveDoubt`) only while the face is still a `transfer` on the
-person it was audited on. `person-faces --doubtful --sort doubt` lists one person's doubtful
-faces, the widest gap first, and every answer counts them. The Faces tab switches to that list
-(`?faces=doubtful`), labelled with who each face looks like. "Not <name>" offers that person as
-the destination. `face-confirm` ("Is <name>") keeps a face, now as `manual`, and drops its
-doubt.
+**Doubtful faces.** A face's person can be put in question with a `doubt` on its region
+(`FaceDoubt` in `@archive/media/regions`), of one of two kinds. A person marks it with
+`face-doubt` — the lightbox's people list does, for anyone who may write the photo — and it
+names who asked and when (`MarkedDoubt`). An audit of the named faces may find that a `transfer`
+looks like somebody else (`AuditDoubt`: who it looks like, and both similarities); an audit
+neither repeats nor clears a person's doubt. A doubt counts (`liveDoubt`) only while the face is
+on the person it was raised on, and an audit's only while the face is still a `transfer`.
+`person-faces --doubtful --sort doubt` lists one person's doubtful faces, those a person asked
+about first and then the audit's widest gap, and every answer counts them. The Faces tab switches
+to that list (`?faces=doubtful`), labelled with who asked or who each face looks like. The answers
+are `face-confirm` ("Is <name>"), which keeps a face, now as `manual`, and drops its doubt, and
+"Not <name>", which offers the look-alike as the destination; the lightbox asks the same for one
+face ("Is this <name>?"). `face-doubt --clear` withdraws a doubt unanswered.
 
 **Comments (convention).** Any node may carry `comments/<slug>` children: markdown `file` nodes (db
 tier) whose content is the body, author in `props.uid` and time in `props.birthtime` — no bespoke attrs. The core

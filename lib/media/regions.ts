@@ -71,12 +71,24 @@ export type RegionAttrs = {
   assignLocked?: boolean;
   /** People a human said this region is not; recognition never votes it back to them. */
   rejectedPersonIds?: string[];
-  /** Set by an audit of the named faces when another person's anchor is nearer than this face's own; see `liveDoubt`. */
+  /** Set when somebody questions the face's person, or an audit of the named faces finds another person nearer; see `liveDoubt`. */
   doubt?: FaceDoubt | null;
 };
 
+/** Why a face's person is in question: somebody said so, or an audit found it. */
+export type FaceDoubt = MarkedDoubt | AuditDoubt;
+
+/** A person asked whether the face really is `personId` (`face-doubt`). */
+export type MarkedDoubt = {
+  /** The person the face was assigned to when it was questioned. */
+  personId: string;
+  /** The user who questioned it. */
+  markedBy: string;
+  markedAt: string;
+};
+
 /** An audit's finding on one face: it is assigned to `personId` but looks like `likePersonId`. */
-export type FaceDoubt = {
+export type AuditDoubt = {
   /** The person the face was assigned to when audited. */
   personId: string;
   /** The person of the nearest anchor in another photo. */
@@ -88,14 +100,19 @@ export type FaceDoubt = {
   auditedAt: string;
 };
 
+/** A doubt a person raised, which an audit neither repeats nor clears. */
+export const isMarkedDoubt = (doubt: FaceDoubt): doubt is MarkedDoubt => typeof (doubt as MarkedDoubt).markedBy === 'string';
+
 /**
- * The region's doubt while it still applies: the face is still on the person it was audited on
- * and nobody has confirmed it since. Moving a face off a person leaves its doubt behind, inert,
- * until the next audit clears it.
+ * The region's doubt while it still applies: the face is still on the person it was questioned
+ * on, and nobody has confirmed it since. An audit questions only transferred faces, so its doubt
+ * also ends when a human assigns the face. Moving a face off a person leaves its doubt behind,
+ * inert, until it is cleared or the face comes back.
  */
 export const liveDoubt = (attrs: RegionAttrs): FaceDoubt | undefined => {
   const doubt = attrs.doubt;
-  if (!doubt || typeof doubt !== 'object' || doubt.personId !== attrs.personId || attrs.personSource !== 'transfer') return undefined;
+  if (!doubt || typeof doubt !== 'object' || doubt.personId !== attrs.personId) return undefined;
+  if (!isMarkedDoubt(doubt) && attrs.personSource !== 'transfer') return undefined;
   return doubt;
 };
 

@@ -6,11 +6,11 @@ export type { PersonFace } from '@archive/people/api';
 
 type UsePersonFacesResult = {
   person: FacePerson | null;
-  /** The faces loaded so far: in date order, or the clearest doubts first. */
+  /** The faces loaded so far: in date order, or the doubts first, those somebody asked about leading. */
   faces: PersonFace[];
   /** Every face in the list asked for, loaded or not. */
   total: number;
-  /** The person's faces an audit doubts, whichever list was asked for. */
+  /** The person's faces in question, whichever list was asked for. */
   doubtful: number;
   loading: boolean;
   loadingMore: boolean;
@@ -31,8 +31,8 @@ type UsePersonFacesResult = {
  * four-crop preview, but a person with thousands of faces is more than the API shell will
  * carry in one answer. So `person-faces` pages and `loadMore` appends, and `total` says how
  * many there are while only some are loaded. A null path is the idle state and runs nothing,
- * so a modal driven by this only reads while it is open. `doubtful` lists only the faces that
- * look like somebody else, clearest first.
+ * so a modal driven by this only reads while it is open. `doubtful` lists only the faces in
+ * question, those somebody asked about first.
  */
 export function usePersonFaces(personPath: string | null, { doubtful: onlyDoubtful = false }: { doubtful?: boolean } = {}): UsePersonFacesResult {
   const [person, setPerson] = useState<FacePerson | null>(null);
