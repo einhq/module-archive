@@ -293,8 +293,10 @@ export const promoteGroups = async (cmd: Command, paths: string[], options: Prom
       const settings = await readSettings(cmd, cmd.access);
       const preference = options.share === 'private' ? 'private' : settings.CFG_USER_DEFAULT_SHARE;
       const mode = applySharePreference(ownership.mode, preference);
+      // A private album stays its creator's: the default owner would take it from them.
+      const owner = preference === 'private' ? '' : ' --default-owner';
       const share = await cmd.execute(
-        `share-set ${shq(albumPath)} --mode=${mode.toString(8).padStart(4, '0')} --default-owner${preference === 'everyone' ? ' -m g:users:rx' : ''}`,
+        `share-set ${shq(albumPath)} --mode=${mode.toString(8).padStart(4, '0')}${owner}${preference === 'everyone' ? ' -m g:users:rx' : ''}`,
       );
       if (share.code !== 0) throw new Error(share.stderr.trim() || 'failed to apply shared album access');
     }

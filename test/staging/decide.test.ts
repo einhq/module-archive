@@ -48,11 +48,16 @@ Deno.test({ name: 'staging decisions', sanitizeResources: false, sanitizeOps: fa
     });
 
     await t.step('a title taken in the library is numbered, and a private album is its owner alone', async () => {
+      // Not even a configured default owner takes it from the person who made it.
+      await cmd.shouldSucceed('user-create bo --uid 3200');
+      await cmd.shouldSucceed('config set CFG_DEFAULT_SHARE_OWNER bo');
       const photos = await stagePhotos(vfs, BATCH, 'cove', 2, owner);
       await makeGroup(vfs, `${GROUPS}/2019-06-15`, 'Lake weekend', photos, owner);
       const result = await client.execJson<StagingPromoteResult>('staging promote 2019-06-15 --share private');
+      await cmd.shouldSucceed('config unset CFG_DEFAULT_SHARE_OWNER');
       assertEquals(result.album?.path, `${ALBUMS_ROOT}/Lake weekend (2)`);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/Lake weekend (2)`)).props.mode & 0o777, 0o700);
+      const album = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/Lake weekend (2)`);
+      assertEquals([album.props.mode & 0o777, album.props.uid], [0o700, owner.uid]);
       assertEquals((await journal()).entries[0].share, 'private');
     });
 

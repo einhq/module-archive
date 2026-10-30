@@ -115,6 +115,11 @@ Deno.test({
         const album = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/picnic`);
         assertEquals([album.props.uid, album.props.gid], [0, 7300]);
 
+        // A private one stays hers.
+        await asAnna.shouldSucceed(`album create ${ALBUMS_ROOT}/diary --share private`);
+        const diary = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/diary`);
+        assertEquals([diary.props.uid, diary.props.mode & 0o777], [3100, 0o700]);
+
         // Neither as she likes: not to another user, not into a group she is not in.
         await asAnna.shouldSucceed(`mkdir ${ALBUMS_ROOT}/own`);
         assertEquals((await anna.exec(`chown admin ${ALBUMS_ROOT}/own`)).success, false);

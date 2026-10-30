@@ -132,7 +132,7 @@ const SHARES = ['default', 'private', 'shared', 'everyone'] as const;
 /**
  * Make an album at `path` titled `name` (its slug by default), owned and shared as the creator's
  * new albums are, or as `share` asks. The configured owner and group may be ones the creator could
- * not give it themselves; the server applies them.
+ * not give it themselves; the server applies them. A private album keeps its creator as owner.
  */
 const createAlbum = async (cmd: Command, path: string, name: string | undefined, share: string | undefined, description?: string): Promise<void> => {
   if (share !== undefined && !(SHARES as readonly string[]).includes(share)) throw new Error(`--share is one of ${SHARES.join(', ')}`);
@@ -154,6 +154,8 @@ const createAlbum = async (cmd: Command, path: string, name: string | undefined,
     props: { gid: cmd.access.gid, mode },
     attrs,
   });
+  // A private album stays its creator's, as created: the default owner would take it from them.
+  if (preference === 'private') return;
   const result = await cmd.execute(`share-set ${shq(path)} --default-owner --no-recursive${preference === 'everyone' ? ' -m g:users:rx' : ''}`);
   if (result.code !== 0) throw new Error(result.stderr.trim() || 'failed to apply the default owner');
 };
