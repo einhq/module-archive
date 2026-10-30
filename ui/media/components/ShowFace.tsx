@@ -7,16 +7,16 @@ import type { MediaFace } from '@archive/media/api';
 const SPANS_LISTED = 3;
 
 /** `0:00–0:39, 0:42–1:28`, and how many more after the first few. */
-const onScreen = (appearances: [number, number][]): string => {
+export const onScreen = (appearances: [number, number][]): string => {
   const listed = appearances.slice(0, SPANS_LISTED).map(([start, end]) => `${formatClock(start)}–${formatClock(end)}`).join(', ');
   const more = appearances.length - SPANS_LISTED;
   return more > 0 ? `${listed} and ${more} more` : listed;
 };
 
 /**
- * A button beside a person or a face in a video's sidebar: the video paused on the frame the
- * face was seen most clearly in, with the face boxed, and the box following it from there.
- * Pressed again, it stops following. Nothing for a face no video moment holds.
+ * A button in a person's or a face's row in a video's sidebar (`FaceRow`): the video paused on the
+ * frame the face was seen most clearly in, with the face boxed, and the box following it from
+ * there. Pressed again, it stops following. Nothing for a face no video moment holds.
  */
 export function ShowFace({ face, name, onShow, followed }: {
   face?: MediaFace;

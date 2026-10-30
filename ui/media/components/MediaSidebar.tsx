@@ -25,8 +25,7 @@ import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChan
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
-import { ShowFace } from './ShowFace.tsx';
-import { FaceDoubt } from './FaceDoubt.tsx';
+import { FaceRow } from './FaceRow.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
@@ -425,8 +424,6 @@ export function MediaSidebar(
   const [editing, setEditing] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
-  /** The person row under the pointer or holding the focus, which shows its question mark. */
-  const [pointedRow, setPointedRow] = useState<string | null>(null);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
@@ -646,27 +643,21 @@ export function MediaSidebar(
         {(people.length > 0 || unknownFaces.length > 0) && (
           <IconRow icon={<TablerIcon name='users' size={SECTION_ICON_SIZE} />}>
             {people.map((person) => (
-              <Group
+              <FaceRow
                 key={person.path}
-                gap='xs'
-                wrap='nowrap'
+                name={person.name}
+                videoFace={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)}
+                personFace={faces.find((face) => face.personPath === person.path && face.doubt) ?? faces.find((face) => face.personPath === person.path)}
+                canEdit={canEdit}
+                mobile={mobile}
                 // Hovering a name lights up that person's box on the image, and vice versa.
-                onMouseEnter={() => {
-                  setPointedRow(person.path);
-                  if (person.faceBox) onHoverFace?.(faceKeyForPerson(person.path));
-                }}
-                onMouseLeave={() => {
-                  setPointedRow(null);
-                  if (person.faceBox) onHoverFace?.(null);
-                }}
-                onFocus={() => setPointedRow(person.path)}
-                onBlur={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPointedRow(null);
-                }}
-                style={{
-                  borderRadius: 4,
-                  background: hoveredFace === faceKeyForPerson(person.path) ? 'var(--mrx-surface-overlay)' : undefined,
-                }}
+                highlighted={hoveredFace === faceKeyForPerson(person.path)}
+                onPointer={(inside) => person.faceBox && onHoverFace?.(inside ? faceKeyForPerson(person.path) : null)}
+                asking={asking === person.path}
+                onAsk={(open) => setAsking(open ? person.path : null)}
+                onShowFace={onShowFace}
+                followed={followedFace}
+                onChanged={result.refetch}
               >
                 {/* The initial rather than a generic icon: in a list of names it identifies. */}
                 <CoverAvatar
@@ -684,23 +675,7 @@ export function MediaSidebar(
                     {person.age === 0 && person.ageMonths !== undefined ? `${person.ageMonths} months` : `${person.age} years`}
                   </Badge>
                 )}
-                <ShowFace
-                  face={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)}
-                  name={person.name}
-                  onShow={onShowFace}
-                  followed={followedFace}
-                />
-                <FaceDoubt
-                  face={faces.find((face) => face.personPath === person.path && face.doubt) ?? faces.find((face) => face.personPath === person.path)}
-                  name={person.name}
-                  canEdit={canEdit}
-                  // A phone has no pointer to point with, so there it is always shown.
-                  revealed={mobile || pointedRow === person.path || hoveredFace === faceKeyForPerson(person.path)}
-                  opened={asking === person.path}
-                  onOpen={(open) => setAsking(open ? person.path : null)}
-                  onChanged={result.refetch}
-                />
-              </Group>
+              </FaceRow>
             ))}
 
             {
@@ -709,16 +684,17 @@ export function MediaSidebar(
                   hovering one lights up its box, exactly like a named person's row. */
             }
             {unknownFaces.map((face) => (
-              <Group
+              <FaceRow
                 key={face.faceId}
-                gap='xs'
-                wrap='nowrap'
-                onMouseEnter={() => face.faceBox && onHoverFace?.(`u-${face.faceId}`)}
-                onMouseLeave={() => face.faceBox && onHoverFace?.(null)}
-                style={{
-                  borderRadius: 4,
-                  background: hoveredFace === `u-${face.faceId}` ? 'var(--mrx-surface-overlay)' : undefined,
-                }}
+                name={face.personName}
+                videoFace={faces.find((candidate) => candidate.faceId === face.faceId)}
+                canEdit={canEdit}
+                mobile={mobile}
+                highlighted={hoveredFace === `u-${face.faceId}`}
+                onPointer={(inside) => face.faceBox && onHoverFace?.(inside ? `u-${face.faceId}` : null)}
+                onShowFace={onShowFace}
+                followed={followedFace}
+                onChanged={result.refetch}
               >
                 <FaceCrop facePath={face.facePath} size={32} alt={face.personName} lazy />
                 <Anchor
@@ -728,8 +704,7 @@ export function MediaSidebar(
                 >
                   {face.personName}
                 </Anchor>
-                <ShowFace face={faces.find((candidate) => candidate.faceId === face.faceId)} name={face.personName} onShow={onShowFace} followed={followedFace} />
-              </Group>
+              </FaceRow>
             ))}
           </IconRow>
         )}
