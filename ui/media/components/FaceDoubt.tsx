@@ -16,11 +16,16 @@ const reason = (doubt: MediaFaceDoubt): string => 'markedBy' in doubt ? `${doubt
  * somebody answers. On a doubtful face it is lit and asks "Is this <name>?": yes keeps the face
  * as a human's assignment (`face-confirm`), no hands it to `onNotThem` to say who it is instead.
  * Somebody who may not edit the photo sees only that it is in question.
+ *
+ * Until the face is doubtful it stays invisible, though in place and focusable, while `revealed`
+ * is false, so a list of names is not a column of question marks.
  */
-export function FaceDoubt({ face, name, canEdit, opened, onOpen, onChanged, onNotThem }: {
+export function FaceDoubt({ face, name, canEdit, revealed, opened, onOpen, onChanged, onNotThem }: {
   face?: MediaFace;
   name: string;
   canEdit: boolean;
+  /** The row is pointed at or focused. */
+  revealed: boolean;
   opened: boolean;
   onOpen: (open: boolean) => void;
   /** After the face's doubt or person changed here, to read the photo again. */
@@ -64,6 +69,7 @@ export function FaceDoubt({ face, name, canEdit, opened, onOpen, onChanged, onNo
             variant={doubt ? 'light' : 'subtle'}
             color={doubt ? 'orange' : 'gray'}
             aria-label={doubt ? `Is this ${name}?` : `Doubt that this is ${name}`}
+            style={doubt || opened || revealed ? undefined : { opacity: 0 }}
             onClick={() => toggle(!opened)}
           >
             <TablerIcon name='help-circle' size={16} />

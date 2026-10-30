@@ -425,6 +425,8 @@ export function MediaSidebar(
   const [editing, setEditing] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
+  /** The person row under the pointer or holding the focus, which shows its question mark. */
+  const [pointedRow, setPointedRow] = useState<string | null>(null);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
@@ -644,8 +646,18 @@ export function MediaSidebar(
                 gap='xs'
                 wrap='nowrap'
                 // Hovering a name lights up that person's box on the image, and vice versa.
-                onMouseEnter={() => person.faceBox && onHoverFace?.(faceKeyForPerson(person.path))}
-                onMouseLeave={() => person.faceBox && onHoverFace?.(null)}
+                onMouseEnter={() => {
+                  setPointedRow(person.path);
+                  if (person.faceBox) onHoverFace?.(faceKeyForPerson(person.path));
+                }}
+                onMouseLeave={() => {
+                  setPointedRow(null);
+                  if (person.faceBox) onHoverFace?.(null);
+                }}
+                onFocus={() => setPointedRow(person.path)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPointedRow(null);
+                }}
                 style={{
                   borderRadius: 4,
                   background: hoveredFace === faceKeyForPerson(person.path) ? 'var(--mrx-surface-overlay)' : undefined,
@@ -677,6 +689,8 @@ export function MediaSidebar(
                   face={faces.find((face) => face.personPath === person.path && face.doubt) ?? faces.find((face) => face.personPath === person.path)}
                   name={person.name}
                   canEdit={canEdit}
+                  // A phone has no pointer to point with, so there it is always shown.
+                  revealed={mobile || pointedRow === person.path || hoveredFace === faceKeyForPerson(person.path)}
                   opened={asking === person.path}
                   onOpen={(open) => setAsking(open ? person.path : null)}
                   onChanged={result.refetch}
