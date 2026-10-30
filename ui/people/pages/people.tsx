@@ -25,9 +25,9 @@ const COMPACT_COUNT = new Intl.NumberFormat(undefined, { notation: 'compact' });
 
 export const handle = { fullBleed: true };
 
-/** Under a person's name: how often they are pictured, or their full name when it says more. */
+/** Under a person's name: how many pictures they are in, or their full name when it says more. */
 const describe = (person: PersonListEntry): string | undefined =>
-  person.holdings > 0 ? countOf(person.holdings, 'picture', 'pictures') : person.fullname && person.fullname !== person.name ? person.fullname : undefined;
+  person.pictures > 0 ? countOf(person.pictures, 'picture', 'pictures') : person.fullname && person.fullname !== person.name ? person.fullname : undefined;
 
 export default function PeoplePage() {
   const navigate = useNavigate();

@@ -93,7 +93,7 @@ Deno.test({ name: 'library views leave staging out', sanitizeResources: false, s
       assertEquals((await client.execJson<{ results: unknown[] }>('search boat')).results, []);
     });
 
-    await t.step('person-list counts the faces and voices of the library only', async () => {
+    await t.step('person-list counts the files of the library only', async () => {
       const person = await vfs.create(ADMIN_ACCESS, 'person', PEOPLE_ROOT, 'anna-andersson', { props: { mode: 0o755 }, attrs: { name: 'Anna Andersson' } });
       const holder = async (path: string, type: string, name: string, attrs: Record<string, unknown>) => {
         const file = await vfs.get(ADMIN_ACCESS, path);
@@ -106,7 +106,7 @@ Deno.test({ name: 'library views leave staging out', sanitizeResources: false, s
       await vfs.create(ADMIN_ACCESS, REGION_TYPE, `${ALBUMS_ROOT}/harbour-day/harbour.jpg/regions`, 'manual-0', { attrs: { personId: person.id } });
 
       const listed = await client.execJson<PersonListEntry[]>('person-list');
-      assertEquals(listed.map((entry) => [entry.id, entry.holdings]), [['anna-andersson', 2]]);
+      assertEquals(listed.map((entry) => [entry.id, entry.pictures]), [['anna-andersson', 1]]);
     });
 
     await t.step('staging still lists what it holds', async () => {

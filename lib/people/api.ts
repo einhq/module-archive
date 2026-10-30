@@ -164,8 +164,8 @@ export type PersonListEntry = {
   fullname?: string;
   born?: string;
   died?: string;
-  /** Faces and voice turns assigned to the person: how often the archive shows or hears them. */
-  holdings: number;
+  /** Files of the library with a face, box or voice of theirs, each once (`picturesByPerson`). */
+  pictures: number;
 };
 
 /** Everything `person-info` knows about one person. */

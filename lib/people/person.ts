@@ -185,39 +185,49 @@ export const regionsOf = (vfs: Vfs, access: Access, personId: string) =>
     limit: FACE_QUERY_LIMIT,
   });
 
+/** A voice turn assigned to someone. */
+const VOICE_HOLDINGS: AttrCondition[] = [{ ref: 'embeddingType', op: 'eq', value: 'voice' }, { ref: 'personId', op: 'exists' }];
+
 /**
  * How many regions and voices each person holds, `personId → count`, in two aggregates. A
  * person missing from the map holds nothing: an orphan, if nobody named them.
- *
- * `listed` counts only what the library shows, leaving out the faces and voices of files in an
- * unlisted tree (staging). They sit under their file, where no `notWithin` reaches, so while there
- * is such a tree they are counted per file and the files looked up (`unlistedIds`); one that names
- * no file is counted.
  */
-export const holdingsByPerson = async (cmd: Pick<Command, 'sys' | 'access'>, opts: { listed?: boolean } = {}): Promise<Map<string, number>> => {
+export const holdingsByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Promise<Map<string, number>> => {
   const counts = new Map<string, number>();
   const add = (buckets: { key: string[]; count: number }[]) => {
     for (const bucket of buckets) if (bucket.key[0]) counts.set(bucket.key[0], (counts.get(bucket.key[0]) ?? 0) + bucket.count);
   };
-  const regions: AttrCondition[] = [{ ref: 'personId', op: 'exists' }];
-  const voices: AttrCondition[] = [{ ref: 'embeddingType', op: 'eq', value: 'voice' }, { ref: 'personId', op: 'exists' }];
-  const roots = opts.listed ? await unlistedRoots(cmd.sys.vfs) : [];
-  if (roots.length === 0) {
-    add(await cmd.sys.vfs.aggregate(cmd.access, { types: [REGION_TYPE], where: regions, group: [{ ref: 'personId' }] }));
-    add(await cmd.sys.vfs.aggregate(cmd.access, { types: ['embedding'], where: voices, group: [{ ref: 'personId' }] }));
-    return counts;
-  }
-
-  const byFile = [
-    ...await cmd.sys.vfs.aggregate(cmd.access, { types: [REGION_TYPE], where: regions, group: [{ ref: 'personId' }, { ref: 'fileId' }] }),
-    ...await cmd.sys.vfs.aggregate(cmd.access, { types: ['embedding'], where: voices, group: [{ ref: 'personId' }, { ref: 'fileId' }] }),
-  ];
-  const hidden = await unlistedIds(cmd.sys.vfs, [...new Set(byFile.map((bucket) => bucket.key[1]))]);
-  add(byFile.filter((bucket) => !hidden.has(bucket.key[1])));
-  const unfiled: AttrCondition = { ref: 'fileId', op: 'missing' };
-  add(await cmd.sys.vfs.aggregate(cmd.access, { types: [REGION_TYPE], where: [...regions, unfiled], group: [{ ref: 'personId' }] }));
-  add(await cmd.sys.vfs.aggregate(cmd.access, { types: ['embedding'], where: [...voices, unfiled], group: [{ ref: 'personId' }] }));
+  add(await cmd.sys.vfs.aggregate(cmd.access, { types: [REGION_TYPE], where: [{ ref: 'personId', op: 'exists' }], group: [{ ref: 'personId' }] }));
+  add(await cmd.sys.vfs.aggregate(cmd.access, { types: ['embedding'], where: VOICE_HOLDINGS, group: [{ ref: 'personId' }] }));
   return counts;
+};
+
+/**
+ * How many files of the library each person is seen or heard in, `personId → count`: a picture
+ * with a face or box of theirs, a recording with their voice, each once however many of them it
+ * holds. Files in an unlisted tree (staging) are left out, as search leaves them out; so is a box
+ * that names no file.
+ */
+export const picturesByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Promise<Map<string, number>> => {
+  const byFile = [
+    ...await cmd.sys.vfs.aggregate(cmd.access, {
+      types: [REGION_TYPE],
+      where: [{ ref: 'personId', op: 'exists' }, { ref: 'fileId', op: 'exists' }],
+      group: [{ ref: 'personId' }, { ref: 'fileId' }],
+    }),
+    ...await cmd.sys.vfs.aggregate(cmd.access, {
+      types: ['embedding'],
+      where: [...VOICE_HOLDINGS, { ref: 'fileId', op: 'exists' }],
+      group: [{ ref: 'personId' }, { ref: 'fileId' }],
+    }),
+  ];
+  const hidden = (await unlistedRoots(cmd.sys.vfs)).length > 0 ? await unlistedIds(cmd.sys.vfs, [...new Set(byFile.map((bucket) => bucket.key[1]))]) : new Set<string>();
+  const files = new Map<string, Set<string>>();
+  for (const { key: [personId, fileId] } of byFile) {
+    if (!personId || !fileId || hidden.has(fileId)) continue;
+    files.set(personId, (files.get(personId) ?? new Set()).add(fileId));
+  }
+  return new Map([...files].map(([personId, held]) => [personId, held.size]));
 };
 
 /**

@@ -1,4 +1,4 @@
-/** `person-list`: the named people with their face and voice counts, by name or by count. */
+/** `person-list`: the named people with the number of files each is in, by name or by count. */
 
 import { PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
@@ -16,10 +16,10 @@ Deno.test({ name: 'person-list', sanitizeResources: false, sanitizeOps: false },
 
   /** `count` face regions on one picture, all assigned to `personId`. */
   const faces = async (picture: string, personId: string, count: number) => {
-    await vfs.ensure(ADMIN_ACCESS, 'directory', '/tmp', picture);
+    const file = await vfs.ensure(ADMIN_ACCESS, 'directory', '/tmp', picture);
     await vfs.ensure(ADMIN_ACCESS, 'directory', `/tmp/${picture}`, 'regions');
     for (let i = 0; i < count; i++) {
-      await vfs.create(ADMIN_ACCESS, REGION_TYPE, `/tmp/${picture}/regions`, `face-${i}`, { attrs: { personId } });
+      await vfs.create(ADMIN_ACCESS, REGION_TYPE, `/tmp/${picture}/regions`, `face-${i}`, { attrs: { personId, fileId: file.id } });
     }
   };
 
@@ -29,21 +29,22 @@ Deno.test({ name: 'person-list', sanitizeResources: false, sanitizeOps: false },
     await mkperson('placeholder', { name: '? Carlsson' });
     await vfs.ensure(ADMIN_ACCESS, 'directory', PEOPLE_ROOT, 'unknown');
     await faces('a.jpg', anna.id, 2);
-    await faces('b.jpg', bert.id, 5);
+    await faces('b.jpg', bert.id, 1);
+    await faces('c.jpg', bert.id, 1);
 
-    await t.step('lists named people by name, placeholder names last', async () => {
+    await t.step('lists named people by name, placeholder names last, a picture counted once', async () => {
       const people = await client.execJson<PersonListEntry[]>('person-list');
       assertEquals(people.map((p) => p.id), ['anna', 'bert', 'placeholder']);
-      assertEquals(people[0], { id: 'anna', path: `${PEOPLE_ROOT}/anna`, name: 'Anna Andersson', born: '1950-03-01', holdings: 2 });
-      assertEquals(people[2].holdings, 0);
+      assertEquals(people[0], { id: 'anna', path: `${PEOPLE_ROOT}/anna`, name: 'Anna Andersson', born: '1950-03-01', pictures: 1 });
+      assertEquals(people[2].pictures, 0);
     });
 
     await t.step('sorts by count and limits', async () => {
       const people = await client.execJson<PersonListEntry[]>('person-list --sort count --limit 2');
-      assertEquals(people.map((p) => [p.id, p.holdings]), [['bert', 5], ['anna', 2]]);
+      assertEquals(people.map((p) => [p.id, p.pictures]), [['bert', 2], ['anna', 1]]);
     });
 
-    await t.step('leaves out people with fewer than --min holdings', async () => {
+    await t.step('leaves out people in fewer than --min files', async () => {
       const people = await client.execJson<PersonListEntry[]>('person-list --min 1');
       assertEquals(people.map((p) => p.id), ['anna', 'bert']);
     });

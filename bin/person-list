@@ -1,8 +1,8 @@
 #!ts
 /**
- * person-list — the named people, each with how often the archive shows or hears them.
+ * person-list — the named people, each with how many files of the library show or let you hear them.
  *
- * One listing of `/people` and the aggregates of `holdingsByPerson`, so the answer costs the
+ * One listing of `/people` and the aggregates of `picturesByPerson`, so the answer costs the
  * same for a handful of people as for thousands. `--sort count` puts the most pictured first;
  * `--sort name` (the default) is alphabetical, with placeholder names (`? Surname`, someone known
  * only from a family record) after everyone with a real first name.
@@ -11,7 +11,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { PersonListEntry } from '@archive/people/api';
-import { holdingsByPerson, type PersonAttrs } from '@archive/people/person';
+import { type PersonAttrs, picturesByPerson } from '@archive/people/person';
 
 const string = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
 
@@ -38,9 +38,9 @@ const personList = async (cmd: Command): CmdReturn => {
   }
 
   try {
-    const [children, holdings] = await Promise.all([
+    const [children, pictures] = await Promise.all([
       cmd.sys.vfs.children<PersonAttrs>(cmd.access, PEOPLE_ROOT),
-      holdingsByPerson(cmd, { listed: true }),
+      picturesByPerson(cmd),
     ]);
 
     const people = children
@@ -54,18 +54,18 @@ const personList = async (cmd: Command): CmdReturn => {
           fullname: string(attrs.fullname),
           born: string(attrs.born),
           died: string(attrs.died),
-          holdings: holdings.get(entry.node.id) ?? 0,
+          pictures: pictures.get(entry.node.id) ?? 0,
         };
       })
-      .filter((person) => person.holdings >= min)
-      .toSorted(sort === 'count' ? (a, b) => b.holdings - a.holdings || byName(a, b) : byName);
+      .filter((person) => person.pictures >= min)
+      .toSorted(sort === 'count' ? (a, b) => b.pictures - a.pictures || byName(a, b) : byName);
 
     const answer = limit === undefined ? people : people.slice(0, limit);
 
     if (cmd.json) {
       await cmd.writeJSON(answer satisfies PersonListEntry[]);
     } else {
-      for (const person of answer) await cmd.writeLn(`${String(person.holdings).padStart(6)} ${person.name}`);
+      for (const person of answer) await cmd.writeLn(`${String(person.pictures).padStart(6)} ${person.name}`);
     }
     return 0;
   } catch (error) {
@@ -77,13 +77,13 @@ const personList = async (cmd: Command): CmdReturn => {
 personList.spec = {
   name: 'person-list',
   effect: 'read' as const,
-  description: 'List the named people, with how many faces and voice turns each has',
+  description: 'List the named people, with how many files of the library each is seen or heard in',
   flags: [
     { name: 'sort', type: 'string' as const, description: 'name (default; placeholder names last) or count (most pictured first)' },
     { name: 'limit', type: 'number' as const, description: 'at most this many people' },
-    { name: 'min', type: 'number' as const, description: 'only people with at least this many faces and voice turns' },
+    { name: 'min', type: 'number' as const, description: 'only people in at least this many files' },
   ],
-  returns: 'the named people with their face and voice counts, as JSON (PersonListEntry[]).',
+  returns: 'the named people with the number of files each is in, as JSON (PersonListEntry[]).',
 };
 
 export default personList;
