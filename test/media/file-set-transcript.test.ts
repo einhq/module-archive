@@ -2,12 +2,14 @@
  * file-set-transcript: a recording's cues are replaced by a person's in place, the voices under the
  * transcript kept, and an unchanged cue keeps its word timings; the transcript is stamped `editedAt`
  * and `transcribe-file` leaves it alone even forced. A file with no transcript gets one from stdin.
- * Anything but WebVTT, a cue that ends before it starts, and a picture are refused.
+ * Anything but WebVTT, a cue that ends before it starts, and a picture are refused. The chunks are
+ * embedded ahead of batch work, and an absent EMS does not hold the save up.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
+import { startStubEms } from '@ems/testing';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -106,6 +108,28 @@ Deno.test({
       await cmd.shouldSucceed(`file-set-transcript ${RECORDING} --vtt-base64 ${base64('WEBVTT\n')}`);
       const { attrs } = await vfs.get(ADMIN_ACCESS, `${RECORDING}/metadata/transcript`);
       assertEquals([attrs.segmentCount, attrs.speech], [0, false]);
+    });
+
+    await t.step('the chunks are embedded ahead of batch work, and an absent EMS does not hold the save up', async () => {
+      const JINA = 'jina-embeddings-v5-text-small';
+      const stub = startStubEms({
+        ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0]), dimension: 2 }, producer: JINA }) },
+      });
+      try {
+        await cmd.shouldSucceed(`CFG_EMS_URL=${stub.url} file-set-transcript ${CLIP} --vtt-base64 ${base64(CORRECTED)}`);
+        const embed = stub.requests.find((request) => request.op === 'text.embed');
+        assertEquals((embed?.body.options as { priority?: string } | undefined)?.priority, 'interactive');
+        assertEquals((await vfs.get(ADMIN_ACCESS, `${TRANSCRIPT}/text_jina5s`)).attrs.embeddedBy, JINA);
+      } finally {
+        await stub.close();
+      }
+
+      // A batch call would retry the refused connection for the whole 90 s budget.
+      const started = Date.now();
+      const out = await client.exec(`CFG_EMS_URL=http://127.0.0.1:1 CFG_EMS_CONNECT_RETRY=90 file-set-transcript ${CLIP} --vtt-base64 ${base64(CORRECTED)} 2>&1`);
+      assert(out.success, out.error);
+      assertStringIncludes(String(out.data), 'saved, but not yet searchable');
+      assert(Date.now() - started < 5000, `the save took ${Date.now() - started} ms`);
     });
 
     await t.step('anything but WebVTT, a backwards cue, or a picture is refused', async () => {

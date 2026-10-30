@@ -6,7 +6,9 @@
  * on stdin or as `--vtt-base64` (the UI's way, as for `file-set-text`). The node is written in
  * place, so the voices under it (`speakers/`) stay; a file with no transcript gets one. A cue that
  * is unchanged keeps the word timings whisper gave it. The chunks are cut and embedded again, so
- * search finds the corrected words.
+ * search finds the corrected words. The embed goes ahead of batch work and does not wait for an
+ * absent EMS: a transcript it could not embed is still saved, said so on stderr, and
+ * `media-reembed` embeds it later.
  *
  * The node is stamped `editedAt`, which `transcribe-file` leaves alone, even with `-f`, and which
  * `media-scan` never calls stale. `transcribedBy` stays: it says where the first draft came from.
@@ -120,7 +122,9 @@ const fileSetTranscript = async (cmd: Command): CmdReturn => {
         speech: segments.length > 0,
       },
     });
-    unembedded = await storeCurrentChunks(cmd, transcriptPath, chunkVectors(chunkSegments(segments)), { transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS });
+    unembedded = await storeCurrentChunks(cmd, transcriptPath, chunkVectors(chunkSegments(segments)), { transcribedAt, chunkSeconds: CHUNK_TARGET_SECONDS }, {
+      interactive: true,
+    });
   } catch (error) {
     await cmd.writeError(`file-set-transcript: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;

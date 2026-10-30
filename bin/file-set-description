@@ -61,7 +61,7 @@ const fileSetDescription = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  const unembedded = await storeAuthoredText(cmd, path, description);
+  const unembedded = await storeAuthoredText(cmd, path, description, { interactive: true });
   if (unembedded) await cmd.writeError(`file-set-description: ${path}: saved, but not yet searchable: ${unembedded}\n`);
 
   if (cmd.json) {

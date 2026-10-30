@@ -11,7 +11,7 @@
 
 import type { Command } from '@ein/client';
 import { shq } from '@ein/client';
-import { storeCurrentContent } from '@ems/text-embedding';
+import { storeCurrentContent, type StoreOptions } from '@ems/text-embedding';
 
 /** The extracted text's node under a file. */
 const contentPath = (file: string): string => `${file}/metadata/content`;
@@ -27,6 +27,7 @@ export const storeExtractedText = async (
   text: string,
   attrs: Record<string, unknown>,
   vectorAttrs: Record<string, unknown> = {},
+  opts: StoreOptions = {},
 ): Promise<string | undefined> => {
   const path = contentPath(file);
   await cmd.execute(`mkdir -p ${shq(`${file}/metadata`)}`);
@@ -42,7 +43,7 @@ export const storeExtractedText = async (
     await handle.close();
   }
   if (Object.keys(attrs).length > 0) await cmd.sys.vfs.update(cmd.access, path, { attrs });
-  return await storeCurrentContent(cmd, path, text, vectorAttrs);
+  return await storeCurrentContent(cmd, path, text, vectorAttrs, opts);
 };
 
 /** Remove `file`'s extracted text and its vectors, for a file read again that holds no text now. */

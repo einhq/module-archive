@@ -3,7 +3,9 @@
  * file-set-text — write the text in a picture by hand, for good.
  *
  * Replaces the picture's extracted text (`<file>/metadata/content`) with a person's own words and
- * embeds it, so search finds them. The read lines (`lines`) go with the reading they came from.
+ * embeds it, so search finds them. The embed goes ahead of batch work and does not wait for an
+ * absent EMS: a text it could not embed is still saved, said so on stderr, and `media-reembed`
+ * embeds it later. The read lines (`lines`) go with the reading they came from.
  * The file is marked `textManual`, which `read-text` leaves alone, and loses `ocrBy`, since no
  * engine's reading is kept any more. Empty text removes the text, and the mark keeps it removed.
  *
@@ -64,7 +66,7 @@ const fileSetText = async (cmd: Command): CmdReturn => {
   const wordCount = text ? text.split(/\s+/).length : 0;
   let unembedded: string | undefined;
   try {
-    if (text) unembedded = await storeExtractedText(cmd, path, text, { lines: null });
+    if (text) unembedded = await storeExtractedText(cmd, path, text, { lines: null }, {}, { interactive: true });
     else await clearExtractedText(cmd, path);
     await cmd.sys.vfs.update(cmd.access, path, {
       attrs: {
