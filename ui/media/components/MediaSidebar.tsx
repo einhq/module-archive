@@ -376,6 +376,7 @@ export function MediaSidebar(
     onTurn,
     addingFace = false,
     onAddFace,
+    onEditSubtitles,
     stackBusy = false,
     onStackPreview,
     onStackAction,
@@ -405,6 +406,8 @@ export function MediaSidebar(
     addingFace?: boolean;
     /** Desktop-only hand-off: the lightbox image itself owns the draw gesture. */
     onAddFace?: () => void;
+    /** Open the subtitle editor: given for a video or a recording the reader may change. */
+    onEditSubtitles?: () => void;
     stackBusy?: boolean;
     onStackPreview: (member: StackMemberRef) => void;
     onStackAction: (action: 'front' | 'separate' | 'allow', member: StackMemberRef) => Promise<void>;
@@ -535,7 +538,7 @@ export function MediaSidebar(
             <Menu position='bottom-end' withinPortal shadow='md' keepMounted keepMountedMode='display-none' styles={mobile ? THUMB_MENU_STYLES : undefined}>
               <Menu.Target>
                 <ActionIcon variant='subtle' color='gray' size={mobile ? 'xl' : 'lg'} loading={orienting} aria-label='Edit media'>
-                  <TablerIcon name='pencil' size={mobile ? 24 : 20} />
+                  <TablerIcon name='settings' size={mobile ? 24 : 20} />
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
@@ -558,6 +561,11 @@ export function MediaSidebar(
                     onClick={onAddFace}
                   >
                     Edit faces
+                  </Menu.Item>
+                )}
+                {canEdit && onEditSubtitles && (
+                  <Menu.Item leftSection={<TablerIcon name='badge-cc' size={menuIcon} />} disabled={!details} onClick={onEditSubtitles}>
+                    {details?.hasTranscript ? 'Edit subtitles' : 'Add subtitles'}
                   </Menu.Item>
                 )}
                 {canEdit && canOrient && (

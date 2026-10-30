@@ -1581,11 +1581,6 @@ export function MediaLightbox() {
           {pictureText ? 'Edit text' : 'Add text'}
         </Menu.Item>
       )}
-      {mayWriteSubtitles && (
-        <Menu.Item leftSection={<TablerIcon name='badge-cc' size={iconSize} />} onClick={() => setEditingSubtitles(true)}>
-          {faceDetails?.hasTranscript ? 'Edit subtitles' : 'Add subtitles'}
-        </Menu.Item>
-      )}
       <Menu.Item leftSection={<TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} />} onClick={toggleFullscreen}>
         {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
       </Menu.Item>
@@ -1652,6 +1647,7 @@ export function MediaLightbox() {
         setFaceDraftReady(false);
         setFaceMessage(null);
       }}
+      onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
       stackBusy={stackBusy}
       onStackPreview={previewStackMember}
       onStackAction={mutateStack}
