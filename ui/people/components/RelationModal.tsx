@@ -1,3 +1,4 @@
+import { PEOPLE_ROOT } from '@archive/paths';
 import { Dialog, DialogActions, TablerIcon } from '@ein/ui/components';
 import { Alert, Button, Group, SegmentedControl, Select, Stack, TextInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
@@ -81,10 +82,10 @@ export function RelationModal({ subject, kind, people, onClose, onApplied }: Rel
       if (mode === 'new') {
         if (!name.trim()) throw new Error('a name is needed');
         // A name of nothing but punctuation slugs to the empty string, which
-        // would create `/people/` — the person node itself, not a person.
+        // would name the people folder itself, not a person.
         const segment = personSlug(name);
         if (!segment) throw new Error('that name has no letters or digits to make a path from');
-        other = `/people/${segment}`;
+        other = `${PEOPLE_ROOT}/${segment}`;
         await execCommand(`person-create ${shq(other)} --name ${shq(name.trim())}`);
       }
       if (!other) throw new Error('pick somebody, or create them');

@@ -109,9 +109,9 @@ personAddEvent.spec = {
     { name: 'writer', type: 'path' as const, description: "the person who wrote the text, linked as the event's `writer`; without it, whoever adds the event" },
   ],
   examples: [
-    "person-add-event --date 1998-06 --body 'Flyttade till Lund' /archive/people/Anna_Exempel",
-    'person-add-event --type marriage --date 1972-05-20 /archive/people/Anna_Exempel wedding',
-    "person-add-event --date 2019-07-14 --body 'A day on the water' --writer /archive/people/Anna_Exempel /archive/albums/Exempelalbum_2019",
+    "person-add-event --date 1998-06 --body 'Flyttade till Lund' /archive/people/anna-exempel",
+    'person-add-event --type marriage --date 1972-05-20 /archive/people/anna-exempel wedding',
+    "person-add-event --date 2019-07-14 --body 'A day on the water' --writer /archive/people/anna-exempel /archive/albums/Exempelalbum_2019",
   ],
   returns: 'the event path; the event is written, and for a dated birth/death the born/died attr.',
 };

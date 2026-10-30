@@ -3,8 +3,8 @@ arg --desc "People and family tree management"
 arg --group
 arg '<subcommand>' string "Subcommand: list, create, name, merge, detach, discard, unknown, faces, set-parent, set-partner, remove, add-event, info, children, family-tree, graph, timeline, how-related, check, fixup"
 arg --rest
-arg --example "person info /archive/people/Anna_Exempel"
-arg --example "person create /archive/people/Cecilia_Exempel --name 'Cecilia Exempel'"
+arg --example "person info /archive/people/anna-exempel"
+arg --example "person create /archive/people/cecilia-exempel --name 'Cecilia Exempel'"
 arg --returns "whatever the subcommand answers with; 'person' alone lists the subcommands."
 arg --export
 

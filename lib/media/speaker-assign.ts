@@ -124,7 +124,7 @@ type SpeakerAssignResult = {
 /**
  * Process-wide lock around find → decide → create → write. Two new voices decided at once would
  * each mint a person; the pipeline's `exclusive: person-mint` — shared with faces, which mint
- * under /people/unknown too — is the deployment-level backstop.
+ * under /archive/people/unknown too — is the deployment-level backstop.
  */
 let queue: Promise<unknown> = Promise.resolve();
 const withLock = <T>(fn: () => Promise<T>): Promise<T> => {

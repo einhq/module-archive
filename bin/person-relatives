@@ -118,9 +118,9 @@ personRelatives.spec = {
     { name: 'age', type: 'number' as const, description: 'also give the capture-date span in which each relative was this many years old' },
   ],
   examples: [
-    'person-relatives /archive/people/Anna_Exempel --relation moster',
-    "person-relatives Anna_Exempel --relation 'mammas syster'",
-    'person-relatives Anna_Exempel --relation dotter --age 6',
+    'person-relatives /archive/people/anna-exempel --relation moster',
+    "person-relatives anna-exempel --relation 'mammas syster'",
+    'person-relatives anna-exempel --relation dotter --age 6',
   ],
   returns:
     'each relative the phrase reaches, with their path, name, birth and death dates and what they are to the person in Swedish and English; with --age, the capture-date span to search in.',

@@ -211,7 +211,7 @@ personFaces.spec = {
   effect: 'read' as const,
   description: 'Every face and tag assigned to a person, with the photo each came from',
   args: [
-    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /archive/people/unknown' },
   ],
   flags: [
     { name: 'limit', type: 'string' as const, description: `max faces to return (default: all as text, ${DEFAULT_JSON_LIMIT} as JSON)` },
@@ -224,9 +224,9 @@ personFaces.spec = {
     { name: 'doubtful', type: 'bool' as const, description: 'only the faces in question: questioned by somebody, or found looking like somebody else' },
   ],
   examples: [
-    'person-faces /archive/people/Anna_Exempel',
-    'person-faces --limit 20 --sort date /archive/people/Anna_Exempel',
-    'person-faces --doubtful --sort doubt /archive/people/Anna_Exempel',
+    'person-faces /archive/people/anna-exempel',
+    'person-faces --limit 20 --sort date /archive/people/anna-exempel',
+    'person-faces --doubtful --sort doubt /archive/people/anna-exempel',
   ],
   returns: 'the faces assigned to the person, with the photo each came from; JSON pages, and nextOffset starts the next page.',
 };

@@ -124,7 +124,7 @@ personCover.spec = {
     { name: 'verbose', type: 'bool' as const, description: 'print each person as it is written' },
   ],
   examples: [
-    'person-cover /archive/people/Anna_Exempel',
+    'person-cover /archive/people/anna-exempel',
     'person-cover --file /archive/media/2019/IMG_0001.jpg',
     'person-cover --all --limit 50',
     'person-cover --all --repick',

@@ -237,9 +237,9 @@ personGraph.spec = {
     { name: 'to', type: 'path' as const, repeatable: true, description: 'draw the line of relations from the person to this one: how the two are related (repeatable)' },
   ],
   examples: [
-    'person-graph --up 2 --down 2 /archive/people/Anna_Exempel',
-    'person-graph /archive/people/Anna_Exempel --only /archive/people/Bo_Exempel --only /archive/people/Cecilia_Exempel',
-    'person-graph /archive/people/Anna_Exempel --to /archive/people/Bo_Exempel',
+    'person-graph --up 2 --down 2 /archive/people/anna-exempel',
+    'person-graph /archive/people/anna-exempel --only /archive/people/bo-exempel --only /archive/people/cecilia-exempel',
+    'person-graph /archive/people/anna-exempel --to /archive/people/bo-exempel',
   ],
   returns: 'the family graph around the person as nodes and edges, for drawing.',
 };

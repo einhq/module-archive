@@ -14,8 +14,8 @@ Deno.test({ name: "the archive's lines are judged by their specs", sanitizeResou
   const client = await testCtx.server.createShellClient();
   try {
     const cases: [string, 'read' | 'write'][] = [
-      ['person info /archive/people/Anna_Exempel', 'read'],
-      ['person set-parent /archive/people/Anna_Exempel /archive/people/Bo_Exempel', 'write'],
+      ['person info /archive/people/anna-exempel', 'read'],
+      ['person set-parent /archive/people/anna-exempel /archive/people/bo-exempel', 'write'],
       ['album info /archive/albums/Exempelalbum_2019', 'read'],
       ['album create /archive/albums/Nytt', 'write'],
       ['person-fixup --dry-run', 'read'],

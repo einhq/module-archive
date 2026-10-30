@@ -58,7 +58,7 @@ fileSetPhotographer.spec = {
   ],
   flags: [],
   examples: [
-    'file-set-photographer /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg /archive/people/Anna_Exempel',
+    'file-set-photographer /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg /archive/people/anna-exempel',
   ],
   returns: 'nothing; the photographer link is written.',
 };

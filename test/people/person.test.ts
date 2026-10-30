@@ -77,9 +77,9 @@ Deno.test({
       assertEquals(parentTarget.softlink, `${PEOPLE_ROOT}/mia`);
     });
 
-    await t.step('set-parent stores kind for non-blood ties', async () => {
+    await t.step('set-parent stores kind for non-blood ties, the flag before or after the people', async () => {
       await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/sten --name Sten --gender male --born 1970`);
-      await cmd.shouldSucceed(`person-set-parent ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/sten --kind step`);
+      await cmd.shouldSucceed(`person-set-parent --kind step ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/sten`);
       const link = await client.execJson<{ relation: { kind: string } }>(`attrs -L ${PEOPLE_ROOT}/john/parents/sten`);
       assertEquals(link.relation.kind, 'step');
       await cmd.shouldSucceed(`person-remove ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/sten`);
@@ -92,7 +92,7 @@ Deno.test({
     });
 
     await t.step('set-partner stores kind + dates on both links', async () => {
-      await cmd.shouldSucceed(`person-set-partner ${PEOPLE_ROOT}/anna ${PEOPLE_ROOT}/erik --kind married --from 1972-05-20`);
+      await cmd.shouldSucceed(`person-set-partner --kind married --from 1972-05-20 ${PEOPLE_ROOT}/anna ${PEOPLE_ROOT}/erik`);
       const a = await client.execJson<{ relation: { kind: string; from: string } }>(`attrs -L ${PEOPLE_ROOT}/anna/partners/erik`);
       assertEquals(a.relation.kind, 'married');
       assertEquals(a.relation.from, '1972-05-20');
@@ -106,7 +106,7 @@ Deno.test({
 
     await t.step('how-related: lineal (English + Swedish + env var)', async () => {
       assertStringIncludes(await client.execString(`person-how-related ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/anna`), 'grandmother');
-      assertStringIncludes(await client.execString(`person-how-related ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/anna --lang sv`), 'mormor');
+      assertStringIncludes(await client.execString(`person-how-related --lang sv ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/anna`), 'mormor');
       assertStringIncludes(await client.execString(`person-how-related ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/erik --lang sv`), 'morfar');
       assertStringIncludes(
         await client.execString(`export CFG_LANGUAGE=sv && person-how-related ${PEOPLE_ROOT}/john ${PEOPLE_ROOT}/anna`),

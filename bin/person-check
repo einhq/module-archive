@@ -104,10 +104,10 @@ const personCheck = async (cmd: Command): CmdReturn => {
     }
   }
 
-  // Auto-created people, which live one level down in /people/unknown and are
+  // Auto-created people, which live one level down in UNKNOWN_ROOT and are
   // therefore invisible to the walk above. Only their own integrity is checked:
   // an unnamed person with no faces left is dead weight, and the marker and the
-  // location must agree or the unidentified view and `ls /people` disagree.
+  // location must agree or the unidentified view and the people list disagree.
   const unnamed = await cmd.sys.vfs.query(cmd.access, {
     types: ['person'],
     where: [{ ref: 'unnamed', op: 'exists' }],
@@ -128,7 +128,7 @@ const personCheck = async (cmd: Command): CmdReturn => {
       }
     }
   }
-  // A person parked under /people/unknown without the marker is invisible to
+  // A person parked under UNKNOWN_ROOT without the marker is invisible to
   // both the unidentified view and the people list.
   for (const c of await cmd.sys.vfs.children(cmd.access, UNKNOWN_ROOT).catch(() => [])) {
     if (c.node.type !== 'person') continue;
@@ -156,10 +156,10 @@ personCheck.spec = {
   effect: 'read' as const,
   description: 'Check family-tree integrity (dangling links, reciprocity, cycles, dates, birth/death events not on born/died)',
   args: [
-    { name: 'root', type: 'path' as const, description: 'people root (default /people)' },
+    { name: 'root', type: 'path' as const, description: `people root (default ${PEOPLE_ROOT})` },
   ],
   flags: [
-    { name: 'json', type: 'string' as const, description: 'JSON output' },
+    { name: 'json', type: 'bool' as const, description: 'JSON output' },
   ],
   examples: [
     'person-check /archive/people',

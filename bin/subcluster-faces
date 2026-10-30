@@ -139,7 +139,7 @@ subclusterFaces.spec = {
   effect: 'read' as const,
   description: "Re-cluster one person's faces with average linkage, to find two people fused into one",
   args: [
-    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /archive/people/unknown' },
   ],
   flags: [
     { name: 'threshold', type: 'string' as const, description: 'min average similarity to keep faces together (default: the largest gap in the dendrogram)' },
@@ -147,7 +147,7 @@ subclusterFaces.spec = {
     { name: 'verbose', type: 'bool' as const, description: 'list the photos in each group' },
   ],
   examples: [
-    'subcluster-faces /archive/people/Anna_Exempel',
+    'subcluster-faces /archive/people/anna-exempel',
   ],
   returns: "the sub-clusters the person's faces fall into, which is how two people fused into one show up.",
 };

@@ -190,7 +190,7 @@ const personUnknown = async (cmd: Command): CmdReturn => {
   }
 
   // 1. The unnamed people as (id, createdAt) buckets, which is all the ranking reads. Queried
-  //    by attr rather than by listing /people/unknown, so one that ended up elsewhere is still
+  //    by attr rather than by listing /archive/people/unknown, so one that ended up elsewhere is still
   //    found; every unnamed person is created with a createdAt.
   // 2. Region and recording counts, one aggregate each: for every person when the order or the
   //    filter needs them, otherwise for the page's people once the page is known. A region or

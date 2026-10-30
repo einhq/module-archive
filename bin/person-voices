@@ -118,7 +118,7 @@ personVoices.spec = {
   effect: 'read' as const,
   description: 'Every recording a person is heard in, with how long they speak and a moment to hear them',
   args: [
-    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /archive/people/unknown' },
   ],
   flags: [
     { name: 'limit', type: 'string' as const, description: 'max voices to return (default: all)' },
@@ -126,7 +126,7 @@ personVoices.spec = {
     { name: 'sort', type: 'string' as const, description: "'duration' (most spoken first, default), 'file', or chronological 'date'" },
   ],
   examples: [
-    'person-voices /archive/people/Anna_Exempel',
+    'person-voices /archive/people/anna-exempel',
   ],
   returns: 'every recording voice assigned to the person, with its talk time and the moment to play.',
 };

@@ -53,7 +53,7 @@ personRemoveHome.spec = {
   ],
   flags: [],
   examples: [
-    'person-remove-home /archive/people/Anna_Exempel /archive/locations/Exempelstad',
+    'person-remove-home /archive/people/anna-exempel /archive/locations/Exempelstad',
   ],
   returns: 'nothing; the residence relation is removed from both sides.',
 };

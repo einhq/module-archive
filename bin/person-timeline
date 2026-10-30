@@ -369,7 +369,7 @@ personTimeline.spec = {
     { name: 'no-albums', type: 'bool' as const, description: 'skip the albums, which are most of the cost — the life itself in a few round trips' },
   ],
   examples: [
-    'person-timeline /archive/people/Anna_Exempel',
+    'person-timeline /archive/people/anna-exempel',
   ],
   returns: "the person's life in order: events, homes, partnerships, children and the albums they appear in.",
 };

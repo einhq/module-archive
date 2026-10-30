@@ -148,7 +148,7 @@ personFixup.spec = {
   effect: 'write' as const,
   description: 'Repair family-tree links (recreate missing reciprocals, rewrite stale reciprocal paths, drop dangling)',
   args: [
-    { name: 'root', type: 'path' as const, description: 'people root (default /people)' },
+    { name: 'root', type: 'path' as const, description: `people root (default ${PEOPLE_ROOT})` },
   ],
   flags: [
     { name: 'dry-run', dryRun: true, type: 'string' as const, description: 'report without changing' },

@@ -8,7 +8,7 @@
 
 import { PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { collapseFamilyNodes, mergeFamilyNodes } from '../family-graph.ts';
+import { collapseFamilyNodes, mergeFamilyNodes, replayFamilyExpansions } from '../family-graph.ts';
 import type { FamilyNode } from '@archive/people/api';
 
 const node = (name: string, over: Partial<FamilyNode> = {}): FamilyNode => ({
@@ -119,4 +119,32 @@ Deno.test('family graph collapse: another expand left incomplete is forgotten', 
   assertEquals(folded.nodes[p('nils')], undefined);
   // Hedda no longer shows all her children, so she offers to expand again.
   assertEquals(folded.expansions, []);
+});
+
+Deno.test('family graph replay: expands are made again on a fresh slice, and one whose card is gone is dropped', () => {
+  const p = (name: string) => `${PEOPLE_ROOT}/${name}`;
+  // Fresh opening slice after an edit: anna and her mother; her father was removed.
+  const base = {
+    [p('anna')]: node('anna', { parents: [p('mor')], parentCount: 1 }),
+    [p('mor')]: node('mor', { children: [p('anna')], childCount: 1, parentCount: 1 }),
+  };
+  const expansions = [
+    { path: p('mor'), direction: 'up' as const, added: [p('mormor')] },
+    { path: p('far'), direction: 'up' as const, added: [p('farmor')] },
+    { path: p('mormor'), direction: 'up' as const, added: [] },
+  ];
+  const slices = [
+    { [p('mor')]: node('mor', { parents: [p('mormor')], parentCount: 1 }), [p('mormor')]: node('mormor', { children: [p('mor')], parentCount: 1 }) },
+    { [p('far')]: node('far'), [p('farmor')]: node('farmor') },
+    { [p('mormor')]: node('mormor', { parents: [p('mormorsmor')], parentCount: 1 }), [p('mormorsmor')]: node('mormorsmor', { children: [p('mormor')] }) },
+  ];
+
+  const replayed = replayFamilyExpansions(base, expansions, slices);
+
+  assertEquals(Object.keys(replayed.nodes).sort(), [p('anna'), p('mor'), p('mormor'), p('mormorsmor')].sort());
+  assertEquals(replayed.expansions, [
+    { path: p('mor'), direction: 'up', added: [p('mormor')] },
+    { path: p('mormor'), direction: 'up', added: [p('mormorsmor')] },
+  ]);
+  assertEquals(replayed.nodes[p('mor')].children, [p('anna')]);
 });

@@ -84,7 +84,7 @@ personSetHome.spec = {
     { name: 'update', type: 'bool' as const, description: 'rewrite the span of a residence that already exists; the flags given are the new span' },
   ],
   examples: [
-    'person-set-home --from 2001-01 /archive/people/Anna_Exempel /archive/locations/Exempelstad',
+    'person-set-home --from 2001-01 /archive/people/anna-exempel /archive/locations/Exempelstad',
   ],
   returns: 'nothing; the residence relation is written on both sides.',
 };

@@ -174,7 +174,7 @@ personInfo.spec = {
   ],
   flags: [],
   examples: [
-    'person-info /archive/people/Bo_Exempel',
+    'person-info /archive/people/bo-exempel',
   ],
   returns: "the person's name, birth and death dates, their parents, partners and children, and their events.",
 };

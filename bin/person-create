@@ -8,7 +8,7 @@ arg -g --gender string "Gender: male, female, other, unknown"
 arg -b --born string "Birth date (YYYY[-MM[-DD]])"
 arg -d --died string "Death date (YYYY[-MM[-DD]])"
 arg -a --allergies string "Allergy notes"
-arg --example "person-create /archive/people/Disa_Exempel --name 'Disa Exempel' --born 2019-01-01"
+arg --example "person-create /archive/people/disa-exempel --name 'Disa Exempel' --born 2019-01-01"
 arg --returns "nothing; the person node is created."
 arg --export
 

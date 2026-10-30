@@ -121,7 +121,7 @@ subclusterVoices.spec = {
   effect: 'read' as const,
   description: "Re-cluster one person's voices with average linkage, to find two people fused into one",
   args: [
-    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /people/unknown' },
+    { name: 'person', type: 'path' as const, description: 'person path, or a bare id under /archive/people/unknown' },
   ],
   flags: [
     { name: 'threshold', type: 'string' as const, description: 'min average similarity to keep voices together (default: the largest gap in the dendrogram)' },
@@ -129,7 +129,7 @@ subclusterVoices.spec = {
     { name: 'verbose', type: 'bool' as const, description: 'list the recordings in each group' },
   ],
   examples: [
-    'subcluster-voices /archive/people/Anna_Exempel',
+    'subcluster-voices /archive/people/anna-exempel',
   ],
   returns: "the sub-clusters the person's voices fall into, which is how two speakers fused into one show up.",
 };

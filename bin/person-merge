@@ -35,7 +35,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
   const dstArg = positional[positional.length - 1];
   const srcArgs = positional.slice(0, -1);
 
-  // Bare ids resolve against /people/unknown, which is where merges start.
+  // Bare ids resolve against /archive/people/unknown, which is where merges start.
   const toPath = (arg: string) => personPathOf(arg, cmd.cwd);
   const dst = toPath(dstArg);
 
@@ -117,7 +117,7 @@ personMerge.spec = {
     { name: 'verbose', type: 'bool' as const, description: 'print detail' },
   ],
   examples: [
-    'person-merge /archive/people/unnamed-1 /archive/people/Anna_Exempel',
+    'person-merge /archive/people/unnamed-1 /archive/people/anna-exempel',
   ],
   returns: 'what moved; with --dry-run, what would move.',
 };

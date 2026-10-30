@@ -1,19 +1,15 @@
 #!ts
-import type { CmdReturn, Command } from '@ein/client';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
 import { basename, resolve } from '@std/path';
 import { comparableDate, createRelationPair, PARTNERS_DIR, readRelationDir, type RelationAttrs, validDate } from '@archive/people/genealogy';
 
-const flagValue = (args: string[], name: string): string | undefined => {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-};
-
 const personSetPartner = async (cmd: Command): CmdReturn => {
-  const rest = cmd.args.filter((a) => !a.startsWith('-'));
-  const [firstArg, secondArg] = rest;
-  const kind = flagValue(cmd.args, '--kind') ?? 'partner';
-  const from = flagValue(cmd.args, '--from');
-  const to = flagValue(cmd.args, '--to');
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['kind', 'from', 'to'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [firstArg, secondArg] = flags._.map(String);
+  const kind = flags.kind ?? 'partner';
+  const { from, to } = flags;
 
   if (!firstArg || !secondArg) {
     await cmd.writeError('person-set-partner: usage: person set-partner <a> <b> [--kind partner|married] [--from D] [--to D]\n');
@@ -102,7 +98,7 @@ personSetPartner.spec = {
     { name: 'to', type: 'string' as const, description: 'partnership end date' },
   ],
   examples: [
-    'person-set-partner --kind married --from 2001-01-01 /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+    'person-set-partner --kind married --from 2001-01-01 /archive/people/anna-exempel /archive/people/bo-exempel',
   ],
   returns: 'nothing; the link is written in both directions.',
 };

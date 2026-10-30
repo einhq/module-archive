@@ -4,7 +4,7 @@
  *
  * Searches each unassigned face against the whole face-embedding space: a clear
  * match to a face that already belongs to someone reuses that person, otherwise
- * a new unnamed person is minted under /people/unknown. `detect-faces` calls
+ * a new unnamed person is minted under /archive/people/unknown. `detect-faces` calls
  * this after it writes its faces, so recognition keeps up with the crawl
  * instead of waiting for a batch pass.
  *

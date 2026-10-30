@@ -112,3 +112,24 @@ export function collapseFamilyNodes(
 
   return { nodes: kept, expansions: expansions.filter((expansion) => !dropped.has(expansion) && whole(expansion)) };
 }
+
+/**
+ * Rebuild a tree from a fresh opening slice and the expands made on it, in the order they were made:
+ * `slices[i]` is the fresh answer for `expansions[i]`. An expand whose card is no longer on the tree
+ * (an edit took the person off it) is dropped, and each kept one records who it brings in now.
+ */
+export function replayFamilyExpansions(
+  base: Record<string, FamilyNode>,
+  expansions: readonly FamilyExpansion[],
+  slices: readonly Record<string, FamilyNode>[],
+): { nodes: Record<string, FamilyNode>; expansions: FamilyExpansion[] } {
+  let nodes = base;
+  const kept: FamilyExpansion[] = [];
+  expansions.forEach((expansion, index) => {
+    if (!nodes[expansion.path]) return;
+    const incoming = slices[index];
+    kept.push({ ...expansion, added: Object.keys(incoming).filter((key) => !nodes[key]) });
+    nodes = mergeFamilyNodes(nodes, incoming);
+  });
+  return { nodes, expansions: kept };
+}

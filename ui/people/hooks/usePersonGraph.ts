@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { FamilyGraph, shq } from '@ein/ui/lib';
 import type { FamilyDirection } from '@ein/ui/components';
-import { collapseFamilyNodes, type FamilyExpansion, mergeFamilyNodes } from '../lib/family-graph.ts';
+import { collapseFamilyNodes, type FamilyExpansion, mergeFamilyNodes, replayFamilyExpansions } from '../lib/family-graph.ts';
 import type { FamilyNode, GraphResponse } from '@archive/people/api';
 
 type UsePersonGraphResult = {
@@ -17,9 +17,7 @@ type UsePersonGraphResult = {
   expanded: Readonly<Record<FamilyDirection, ReadonlySet<string>>>;
   /** Currently fetching from this path that way, so its card can say so. */
   expanding: { path: string; direction: FamilyDirection } | null;
-  /** Throw away every expansion and go back to the opening slice. */
-  reset: () => void;
-  /** Re-read everything, keeping the expansions — after an edit. */
+  /** Re-read everything, keeping the expansions whose cards are still on the tree — after an edit. */
   refetch: () => void;
 };
 
@@ -31,6 +29,10 @@ const NOTHING: Held = { nodes: {}, expansions: [] };
 const INITIAL_UP = 2;
 const INITIAL_DOWN = 2;
 
+/** One generation from `path` the way it is expanded. */
+const sliceCommand = (path: string, direction: FamilyDirection): string =>
+  `person-graph ${shq(path)} --up ${direction === 'up' ? 1 : 0} --down ${direction === 'down' ? 1 : 0}`;
+
 /**
  * The family around one person, grown a generation at a time and folded back the same way.
  *
@@ -39,7 +41,7 @@ const INITIAL_DOWN = 2;
  * card asks `person-graph` again rooted *there*, one generation the way it was
  * expanded, and merges the answer, so the command stays stateless and each
  * click costs one exec. Each expand remembers who it brought in, which is what
- * collapsing it takes off again.
+ * collapsing it takes off again, and what a refetch asks for again.
  *
  * Slices accumulate through `mergeFamilyNodes`, which unions the edges rather
  * than replacing them — see there for why replacing detaches rows that are
@@ -51,6 +53,9 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // The expands a refetch replays; a new root starts from the opening slice alone.
+  const replay = useRef<{ root: string | null; expansions: FamilyExpansion[] }>({ root: null, expansions: [] });
+  replay.current = { root: replay.current.root, expansions: held.expansions };
 
   useEffect(() => {
     if (!rootPath) {
@@ -58,14 +63,19 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
       return;
     }
 
+    const expansions = replay.current.root === rootPath ? replay.current.expansions : [];
+    replay.current.root = rootPath;
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
         setError(null);
-        const answer = await execCommand<GraphResponse>(`person-graph ${shq(rootPath)} --up ${INITIAL_UP} --down ${INITIAL_DOWN}`);
+        const [answer, ...slices] = await Promise.all([
+          execCommand<GraphResponse>(`person-graph ${shq(rootPath)} --up ${INITIAL_UP} --down ${INITIAL_DOWN}`),
+          ...expansions.map((expansion) => execCommand<GraphResponse>(sliceCommand(expansion.path, expansion.direction))),
+        ]);
         if (cancelled) return;
-        setHeld({ nodes: answer.nodes ?? {}, expansions: [] });
+        setHeld(replayFamilyExpansions(answer.nodes ?? {}, expansions, slices.map((slice) => slice.nodes ?? {})));
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err : new Error(String(err)));
@@ -83,8 +93,7 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
   const expand = useCallback(async (path: string, direction: FamilyDirection) => {
     setExpanding({ path, direction });
     try {
-      const [up, down] = direction === 'up' ? [1, 0] : [0, 1];
-      const answer = await execCommand<GraphResponse>(`person-graph ${shq(path)} --up ${up} --down ${down}`);
+      const answer = await execCommand<GraphResponse>(sliceCommand(path, direction));
       const incoming = answer.nodes ?? {};
       setHeld((current) => ({
         nodes: mergeFamilyNodes(current.nodes, incoming),
@@ -102,7 +111,7 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
     setHeld((current) => collapseFamilyNodes(rootPath, current.nodes, current.expansions, path, direction));
   }, [rootPath]);
 
-  const reset = useCallback(() => setReloadKey((key) => key + 1), []);
+  const refetch = useCallback(() => setReloadKey((key) => key + 1), []);
 
   const expanded = useMemo(() => ({
     up: new Set(held.expansions.filter((expansion) => expansion.direction === 'up').map((expansion) => expansion.path)),
@@ -122,7 +131,6 @@ export function usePersonGraph(rootPath: string | null): UsePersonGraphResult {
     collapse,
     expanded,
     expanding,
-    reset,
-    refetch: reset,
+    refetch,
   };
 }

@@ -4,7 +4,7 @@
  *
  * Searches each undecided speaker's voiceprint against every other recording's speakers: a
  * clear match to one that already belongs to someone reuses that person, otherwise a voice that
- * spoke long enough mints a new unnamed person under /people/unknown. The voice counterpart of
+ * spoke long enough mints a new unnamed person under /archive/people/unknown. The voice counterpart of
  * `assign-faces`, run once per recording by `media-speaker-assign` when its voices are written.
  *
  * Standalone rather than folded into `voiceprint-file` so it can be re-run on one recording,

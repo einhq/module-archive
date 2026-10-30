@@ -79,7 +79,7 @@ personFamilyTree.spec = {
     { name: 'down', type: 'number' as const, description: 'descendant generations (default 2)' },
   ],
   examples: [
-    'person-family-tree --up 2 --down 2 /archive/people/Anna_Exempel',
+    'person-family-tree --up 2 --down 2 /archive/people/anna-exempel',
   ],
   returns: "the person's ancestors and descendants to the given depth.",
 };

@@ -3,7 +3,7 @@
  * people, naming and merging.
  *
  * Face recognition mints a person for every identity it finds, long before
- * anyone has said who that is. Those live under `/people/unknown/<ulid>` marked
+ * anyone has said who that is. Those live under `/archive/people/unknown/<ulid>` marked
  * `attrs.unnamed`, and are ordinary `person` nodes in every other respect. The
  * separate directory is what keeps them out of the way for free: everything
  * that lists people (`ls -l /people`, `search-people`) reads the *direct*
@@ -112,7 +112,7 @@ const ensureDir = async (vfs: Vfs, access: Access, path: string): Promise<void> 
   await vfs.ensure(access, NODE_TYPE_DIRECTORY, dirname(path), basename(path));
 };
 
-/** `/people` then `/people/unknown` — `ensure` needs the parent to exist. */
+/** `/archive/people` then `/archive/people/unknown` — `ensure` needs the parent to exist. */
 const ensureUnknownRoot = async (vfs: Vfs, access: Access): Promise<void> => {
   await ensureDir(vfs, access, PEOPLE_ROOT);
   await ensureDir(vfs, access, UNKNOWN_ROOT);
@@ -135,7 +135,7 @@ type CreateUnnamedOptions = {
 export type UnnamedPerson = { id: string; path: string; name: string };
 
 /**
- * Create an unnamed person under `/people/unknown`.
+ * Create an unnamed person under `/archive/people/unknown`.
  *
  * The display name is never empty, since an empty string would render as a
  * blank row. A short ULID-derived suffix makes it unique and stable without
@@ -459,7 +459,7 @@ export async function withRecordings(vfs: Vfs, access: Access, voices: VoiceView
 }
 
 /**
- * Resolve a person argument: bare ids go under `/people/unknown`, which is where
+ * Resolve a person argument: bare ids go under `/archive/people/unknown`, which is where
  * the ids in curation workflows come from. Anything with a slash is a path.
  */
 export const personPathOf = (arg: string, cwd: string): string => arg.includes('/') ? resolve(cwd, arg) : `${UNKNOWN_ROOT}/${arg}`;
@@ -484,7 +484,7 @@ type NamedPerson = { id: string; path: string; slug: string };
 /**
  * Give an unnamed person a name and move them into `/people`.
  *
- * Restricted to persons under `/people/unknown` on purpose. Renaming a person
+ * Restricted to persons under `/archive/people/unknown` on purpose. Renaming a person
  * who is already named would strand every `<file>/people/<slug>` softlink and
  * every `attrs.relation.peerLink` pointing at them, because those record an
  * absolute path. Auto-created people have neither, which is what makes this

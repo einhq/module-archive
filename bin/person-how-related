@@ -1,13 +1,8 @@
 #!ts
-import type { CmdReturn, Command } from '@ein/client';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
 import { basename, resolve } from '@std/path';
 import { kinship, type Lang, makeCtx, render } from '@archive/people/genealogy';
 import type { PersonAttrs } from '@archive/people/types';
-
-const flagValue = (args: string[], name: string): string | undefined => {
-  const i = args.indexOf(name);
-  return i >= 0 ? args[i + 1] : undefined;
-};
 
 async function displayName(cmd: Command, path: string): Promise<string> {
   try {
@@ -19,11 +14,12 @@ async function displayName(cmd: Command, path: string): Promise<string> {
 }
 
 const personHowRelated = async (cmd: Command): CmdReturn => {
-  const rest = cmd.args.filter((a) => !a.startsWith('-'));
-  const [aArg, bArg] = rest;
-  const json = cmd.args.includes('--json') || cmd.json;
-  const langFlag = flagValue(cmd.args, '--lang');
-  const lang: Lang = (langFlag ?? cmd.env.CFG_LANGUAGE) === 'sv' ? 'sv' : 'en';
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['json'], string: ['lang'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [aArg, bArg] = flags._.map(String);
+  const json = flags.json || cmd.json;
+  const lang: Lang = (flags.lang ?? cmd.env.CFG_LANGUAGE) === 'sv' ? 'sv' : 'en';
 
   if (!aArg || !bArg) {
     await cmd.writeError('person-how-related: usage: person how-related <a> <b> [--lang en|sv] [--json]\n');
@@ -87,8 +83,8 @@ personHowRelated.spec = {
     { name: 'json', type: 'bool' as const, description: 'JSON output' },
   ],
   examples: [
-    'person-how-related /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
-    'person-how-related --lang sv /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+    'person-how-related /archive/people/anna-exempel /archive/people/bo-exempel',
+    'person-how-related --lang sv /archive/people/anna-exempel /archive/people/bo-exempel',
   ],
   returns: 'the kinship term in English and Swedish, as a sentence to repeat as it comes.',
 };

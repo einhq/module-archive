@@ -44,7 +44,7 @@ personRemove.spec = {
   ],
   flags: [],
   examples: [
-    'person-remove /archive/people/Anna_Exempel /archive/people/Bo_Exempel',
+    'person-remove /archive/people/anna-exempel /archive/people/bo-exempel',
   ],
   returns: 'nothing; the relation is removed from both sides.',
 };

@@ -41,7 +41,7 @@ personChildren.spec = {
   ],
   flags: [],
   examples: [
-    'person-children /archive/people/Bo_Exempel',
+    'person-children /archive/people/bo-exempel',
   ],
   returns: "each child's name and slug.",
 };
