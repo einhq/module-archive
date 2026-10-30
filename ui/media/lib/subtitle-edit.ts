@@ -15,7 +15,7 @@ export type DraftCue = TranscriptCue & { id: number };
 const NEW_CUE_SECONDS = 2;
 
 /** The shortest a line can be made by splitting or retiming, in seconds. */
-export const MIN_CUE_SECONDS = 0.1;
+const MIN_CUE_SECONDS = 0.1;
 
 const byStart = (a: DraftCue, b: DraftCue): number => a.start - b.start || a.end - b.end || a.id - b.id;
 
@@ -23,7 +23,7 @@ const byStart = (a: DraftCue, b: DraftCue): number => a.start - b.start || a.end
 export const draftFrom = (cues: TranscriptCue[]): DraftCue[] => cues.map((cue, index) => ({ start: cue.start, end: cue.end, text: cue.text, id: index + 1 })).sort(byStart);
 
 /** An id no line in `cues` has. */
-export const nextId = (cues: DraftCue[]): number => cues.reduce((max, cue) => Math.max(max, cue.id), 0) + 1;
+const nextId = (cues: DraftCue[]): number => cues.reduce((max, cue) => Math.max(max, cue.id), 0) + 1;
 
 /** A time as the editor shows it: `m:ss.s`, with hours when there are any. */
 export const formatCueTime = (seconds: number): string => {
