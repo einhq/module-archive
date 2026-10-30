@@ -1,0 +1,23 @@
+/* An unidentified person's card while its name is saved: it fades in and out, and is gone from
+ * the grid once saving is done. */
+.mrx-unknown-card[data-saving] {
+  animation: mrx-unknown-saving 1.2s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+@keyframes mrx-unknown-saving {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mrx-unknown-card[data-saving] {
+    animation: none;
+    opacity: 0.6;
+  }
+}

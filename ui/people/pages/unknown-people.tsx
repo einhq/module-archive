@@ -7,11 +7,12 @@ import { useHotkeys } from '@mantine/hooks';
 import { usePeople } from '../hooks/usePeople.ts';
 import { UnknownPerson, UnknownSort, useUnknownPeople, useUnknownPerson } from '../hooks/useUnknownPeople.ts';
 import { useSelection } from '@ein/ui/hooks';
-import { useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { FaceCrop } from '../components/FaceCrop.tsx';
 import { VoiceClip } from '../components/VoiceClip.tsx';
 import { stopClip } from '../lib/clip-player.ts';
+import './unknown-people.css';
 
 /** What a card shows of someone, a face or a voice: one big, then up to three small. */
 type Glimpse = { key: string; face?: string; voice?: UnknownPerson['voices'][number] };
@@ -108,6 +109,15 @@ export default function UnknownPeoplePage() {
 
   const paths = useMemo(() => people.map((p) => p.path), [people]);
   const selection = useSelection(paths);
+  /** The cards whose name box is saving: they pulse until they leave the grid. */
+  const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
+  const markSaving = useCallback((path: string, busy: boolean) =>
+    setSaving((current) => {
+      const next = new Set(current);
+      if (busy) next.add(path);
+      else next.delete(path);
+      return next;
+    }), []);
   const selected = useMemo(() => people.filter((p) => selection.selected.has(p.path)), [people, selection.selected]);
 
   // The review modal binds Escape itself; clearing the selection from under it would make one
@@ -169,7 +179,9 @@ export default function UnknownPeoplePage() {
                         key={person.id}
                         radius='md'
                         p='md'
+                        className='mrx-unknown-card'
                         data-selected={selection.isSelected(person.path) || undefined}
+                        data-saving={saving.has(person.path) || undefined}
                         style={{
                           position: 'relative',
                           // A column, so the name box sits at the foot of every card in a row,
@@ -221,7 +233,15 @@ export default function UnknownPeoplePage() {
                               </Badge>
                             )}
                           </Group>
-                          {!selection.active && <QuickName path={person.path} named={named} onName={namePerson} onMerge={mergeInto} />}
+                          {!selection.active && (
+                            <QuickName
+                              path={person.path}
+                              named={named}
+                              onName={namePerson}
+                              onMerge={mergeInto}
+                              onBusy={(busy) => markSaving(person.path, busy)}
+                            />
+                          )}
                         </Stack>
                       </Card>
                     ))}
