@@ -87,6 +87,13 @@ export function SetTimeAction({ selection, items, onApplied, opened: openedByPag
   );
 
   /**
+   * The rows that are written: those `retime` produced a time for. A row known only to a year is
+   * absent from that map on purpose — writing it would replace "some time in 1975" with a specific
+   * minute of a specific afternoon, which nobody ever knew.
+   */
+  const timed = useMemo(() => order.filter((path) => times.has(path)), [order, times]);
+
+  /**
    * Snapshot the selection on open. The dialog is about a fixed set of files, and the grid
    * underneath stays live — paging in another screenful must not grow the list being edited.
    */
@@ -139,16 +146,7 @@ export function SetTimeAction({ selection, items, onApplied, opened: openedByPag
     setError(null);
     setBusy(true);
     try {
-      // Only the rows `retime` produced a time for. A row known only to a year is absent from
-      // that map on purpose — writing it would replace "some time in 1975" with a specific
-      // minute of a specific afternoon, which nobody ever knew.
-      const pairs = order
-        .filter((path) => times.has(path))
-        .map((path) => `${shq(path)} ${shq(formatNaive(times.get(path)!))}`);
-      if (pairs.length === 0) {
-        close();
-        return;
-      }
+      const pairs = timed.map((path) => `${shq(path)} ${shq(formatNaive(times.get(path)!))}`);
       for (let i = 0; i < pairs.length; i += APPLY_CHUNK) {
         await execCommand(`file-set-time ${pairs.slice(i, i + APPLY_CHUNK).join(' ')}`);
       }
@@ -327,12 +325,18 @@ export function SetTimeAction({ selection, items, onApplied, opened: openedByPag
             </Droppable>
           </DragDropContext>
 
+          {timed.length === 0 && order.length > 0 && (
+            <Text size='sm' c='dimmed'>
+              {order.length === 1 ? 'This picture is' : 'These pictures are'} known only to a year or a month and keep that date. Click a row to give it a time.
+            </Text>
+          )}
+
           {error && <Alert color='red' variant='light' icon={<TablerIcon name='alert-circle' size={16} />}>{error}</Alert>}
         </Stack>
         <DialogActions>
           <Button variant='default' onClick={close} disabled={busy}>Cancel</Button>
-          <Button onClick={apply} loading={busy} disabled={order.length === 0}>
-            Set time on {countOf(order.length, 'file', 'files')}
+          <Button onClick={apply} loading={busy} disabled={timed.length === 0}>
+            Set time on {countOf(timed.length, 'file', 'files')}
           </Button>
         </DialogActions>
       </Dialog>
