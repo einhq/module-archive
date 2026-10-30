@@ -98,7 +98,7 @@ personAddEvent.spec = {
   description: 'Add an event (blob) to a person, album, location or device',
   args: [
     { name: 'target', type: 'path' as const, description: 'VFS path to the person, album, location or device' },
-    { name: 'name', type: 'string' as const, description: 'optional event name (e.g. birth, wedding); without one, it is made from the type and date' },
+    { name: 'name', type: 'string' as const, description: 'optional event name (e.g. birth, wedding); without one, it is made from the type and date', optional: true },
   ],
   flags: [
     { name: 'type', type: 'string' as const, description: 'event type: birth, death, marriage, engagement, generic; a dated birth/death also sets born/died' },

@@ -68,7 +68,7 @@ dayinhistory.spec = {
   effect: 'read' as const,
   description: 'List media taken on a given day (MM-DD, default today) in past years',
   args: [
-    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today)' },
+    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today)', optional: true },
   ],
   flags: [
     { name: 'years', type: 'number' as const, description: `years with media to collect, newest first (default ${DEFAULT_YEARS})` },

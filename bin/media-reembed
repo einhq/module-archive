@@ -408,7 +408,7 @@ mediaReembed.spec = {
   effect: 'write' as const,
   description: 'Embed the extracted texts, transcripts and hand-written descriptions already stored into the current text space, from the stored text alone',
   args: [
-    { name: 'path', type: 'path' as const, variadic: true, description: 'files to embed the texts of (default: every text the archive holds)' },
+    { name: 'path', type: 'path' as const, variadic: true, description: 'files to embed the texts of (default: every text the archive holds)', optional: true },
   ],
   flags: [
     { name: 'l', type: 'number' as const, description: 'stop after this many texts or transcripts (default: all); a run resumes where the last stopped' },

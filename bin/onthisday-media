@@ -67,7 +67,7 @@ onthisdayMedia.spec = {
   effect: 'read' as const,
   description: 'The years with pictures taken on a day (MM-DD, default today), as onthisday entries (core onthisday gathers them)',
   args: [
-    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today, UTC)' },
+    { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today, UTC)', optional: true },
   ],
   flags: [
     { name: 'limit', type: 'number' as const, description: `years returned, newest first (default ${DEFAULT_LIMIT})` },
