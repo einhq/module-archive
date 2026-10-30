@@ -2,8 +2,9 @@
  * Who is in an album: the one place media's album rules are applied, from the album's side
  * (`albumMembers`) or from its members' (`albumsHolding`).
  *
- * - An album's media are its children — or, for an album imported from the old system, the
- *   children of its lone `files/` directory, which holds everything while the album holds none.
+ * - An album's media are its children — or, for an album that keeps them in a `files/` directory
+ *   (one imported from the old system, or made from a staging group), that directory's children,
+ *   while the album holds none of its own.
  * - A softlink child is a member too: a file added to an album, and a staging suggestion's
  *   members, are links, not files. The link is
  *   kept as `memberPath`, since removing it (not the file) is what takes a photo out.

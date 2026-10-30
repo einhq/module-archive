@@ -126,7 +126,7 @@ const freeAlbumPath = async (vfs: Vfs, access: Access, root: string, title: stri
 
 /**
  * Where an album keeps the members filed into it: in its `files/` when it has one and holds no
- * media or member links of its own, as an imported album does; in itself otherwise.
+ * media or member links of its own, as an imported album and one made here do; in itself otherwise.
  */
 const memberDirOf = async (vfs: Vfs, access: Access, album: string): Promise<string> => {
   const children = await vfs.children(access, album);
