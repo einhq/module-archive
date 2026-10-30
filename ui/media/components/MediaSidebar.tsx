@@ -368,7 +368,6 @@ export function MediaSidebar(
     onReviewUnknown,
     onShowFace,
     followedFace,
-    onNotThem,
     onOpenMap,
     canEdit,
     addToAlbumPath,
@@ -395,8 +394,6 @@ export function MediaSidebar(
     onShowFace?: (facePath: string) => void;
     /** The face being followed, whose button shows it. */
     followedFace?: string | null;
-    /** A doubtful face is not the person it is on: ask who it is. */
-    onNotThem: (facePath: string) => void;
     /** Open the lightbox-owned, enlarged view of this media location. */
     onOpenMap?: () => void;
     canEdit: boolean;
@@ -694,7 +691,6 @@ export function MediaSidebar(
                   opened={asking === person.path}
                   onOpen={(open) => setAsking(open ? person.path : null)}
                   onChanged={result.refetch}
-                  onNotThem={onNotThem}
                 />
               </Group>
             ))}
