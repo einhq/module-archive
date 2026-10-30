@@ -1,5 +1,5 @@
 import { Autocomplete, Button, Group, type OptionsFilter } from '@mantine/core';
-import { useMemo, useState } from 'react';
+import { type KeyboardEvent, useMemo, useState } from 'react';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { namesHaveWords, nameWords } from '@archive/people/name-match';
 import { notify } from '@ein/ui/signals';
@@ -24,8 +24,8 @@ type Props = {
 
 /**
  * "Who is this?" for an unidentified person: Enter names them — or, when the name is someone
- * already named, folds this person into them. On a card it is the box alone, and a click in it
- * stays in it, so it does not open the card.
+ * already named, folds this person into them, as picking someone from the list does at once. On a
+ * card it is the box alone, and a click in it stays in it, so it does not open the card.
  */
 export function QuickName({ path, named, onName, onMerge, onDone, form = false }: Props) {
   const [value, setValue] = useState('');
@@ -48,16 +48,18 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
   const name = value.trim();
   const existing = useMemo(() => named.find((person) => person.name.toLocaleLowerCase() === name.toLocaleLowerCase()), [named, name]);
 
-  const submit = async () => {
-    if (!name || busy) return;
+  /** Names the person `typed`, or folds them into whoever already has that name. */
+  const submit = async (typed = name) => {
+    if (!typed || busy) return;
+    const match = named.find((person) => person.name.toLocaleLowerCase() === typed.toLocaleLowerCase());
     setBusy(true);
     try {
-      if (existing) {
-        await onMerge(path, `${PEOPLE_ROOT}/${existing.id}`);
-        notify({ message: `Added to ${existing.name}`, color: 'green' });
+      if (match) {
+        await onMerge(path, `${PEOPLE_ROOT}/${match.id}`);
+        notify({ message: `Added to ${match.name}`, color: 'green' });
       } else {
-        await onName(path, name);
-        notify({ message: `Named ${name}`, color: 'green' });
+        await onName(path, typed);
+        notify({ message: `Named ${typed}`, color: 'green' });
       }
       setValue('');
       onDone?.();
@@ -86,13 +88,19 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
       }}
       disabled={busy}
       data-autofocus={form || undefined}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
+      // On the wrapper, so it runs after the box's own Enter: when that picked a highlighted person
+      // it has already been submitted, and the typed text is not.
+      wrapperProps={{
+        onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key !== 'Enter' || event.defaultPrevented) return;
           event.preventDefault();
           void submit();
-        }
+        },
       }}
-      onOptionSubmit={(option) => setValue(option)}
+      onOptionSubmit={(option) => {
+        setValue(option);
+        void submit(option);
+      }}
       onClick={(event) => event.stopPropagation()}
       onPointerDown={(event) => event.stopPropagation()}
       aria-label='Name this person'
@@ -104,7 +112,7 @@ export function QuickName({ path, named, onName, onMerge, onDone, form = false }
   return (
     <Group align='flex-end' gap='xs' wrap='nowrap'>
       {box}
-      <Button onClick={submit} loading={busy} disabled={!name} style={{ flexShrink: 0 }}>
+      <Button onClick={() => submit()} loading={busy} disabled={!name} style={{ flexShrink: 0 }}>
         {existing ? `Add to ${existing.name}` : 'Name'}
       </Button>
     </Group>
