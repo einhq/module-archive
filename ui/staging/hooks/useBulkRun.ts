@@ -179,7 +179,7 @@ export function useBulkRun(host: BulkHost): (spec: BulkSpec) => BulkHandle {
           hostRef.current.changed();
           progress.finish(
             failed.length > 0
-              ? { message: `Undone in part: ${failed[0]}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ''}`, color: 'red' }
+              ? { message: `Undone in part: ${failed[0]}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ''}`, color: 'yellow' }
               : { message: `Undone: ${spec.label}`, color: 'green' },
           );
         },

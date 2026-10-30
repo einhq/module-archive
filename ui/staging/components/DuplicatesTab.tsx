@@ -113,7 +113,7 @@ export function DuplicatesTab({ category, onChanged }: Props) {
       return next;
     });
 
-  const say = useCallback((message: string, undo?: () => void, color?: 'red' | 'green') => {
+  const say = useCallback((message: string, undo?: () => void, color?: 'red' | 'yellow' | 'green') => {
     if (toast.current !== null) dismissToast(toast.current);
     toast.current = notify({ message, ...(color ? { color } : {}), ...(undo ? { action: { label: 'Undo', onClick: undo } } : {}) });
   }, []);
@@ -136,7 +136,7 @@ export function DuplicatesTab({ category, onChanged }: Props) {
         const failed = answers.flatMap((answer) => answer.failed);
         hide(entry.keys, false);
         if (entry.keys.length === 0) void load(null);
-        say(failed.length > 0 ? `Undone in part: ${failed[0].reason}` : `Undone: ${entry.label}`, undefined, failed.length > 0 ? 'red' : undefined);
+        say(failed.length > 0 ? `Undone in part: ${failed[0].reason}` : `Undone: ${entry.label}`, undefined, failed.length > 0 ? 'yellow' : undefined);
         onChanged();
       },
       onFail: (err) => say(`Couldn't undo: ${err.message}`, undefined, 'red'),

@@ -421,7 +421,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const toast = useRef<number | null>(null);
   const takenIds = useRef(0);
 
-  const say = useCallback((message: string, undo?: () => void, color?: 'red' | 'green') => {
+  const say = useCallback((message: string, undo?: () => void, color?: 'red' | 'yellow' | 'green') => {
     if (toast.current !== null) dismissToast(toast.current);
     toast.current = notify({ message, ...(color ? { color } : {}), ...(undo ? { action: { label: 'Undo', onClick: undo } } : {}) });
   }, []);
@@ -450,7 +450,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         forgetMediaSet(entry.row.path);
         moveTo(entry.row.name);
         const failed = 'failed' in answer ? answer.failed : [];
-        say(failed.length > 0 ? `Undone in part: ${failed[0].reason}` : `Undone: ${entry.label}`, undefined, failed.length > 0 ? 'red' : undefined);
+        say(failed.length > 0 ? `Undone in part: ${failed[0].reason}` : `Undone: ${entry.label}`, undefined, failed.length > 0 ? 'yellow' : undefined);
         changed();
       },
       onFail: (error) => say(`Couldn't undo: ${error.message}`, undefined, 'red'),
@@ -963,24 +963,38 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   }, [decide]);
 
   /**
-   * Enter: the proposal, as displayed; a new album asks for its name first. On a part of a lane
-   * whose day matches an album, that album.
+   * What Enter does with `files` of `row` (none: the whole group), in the words of its button;
+   * undefined when nothing is proposed. On a part of a lane whose day matches an album, that album;
+   * otherwise the group's proposal, where a new album asks for its name first. Filing the matched
+   * days and keeping the library copies are the whole group's, so for some of its pictures they
+   * propose nothing.
    */
-  const apply = useCallback((row: GroupRow, files: string[]) => {
+  const enterFor = useCallback((row: GroupRow, files: string[]): { label: string; run: () => void } | undefined => {
     const dayMatch = files.length > 0 && part && files === partPaths ? details.get(row.path)?.parts.find((each) => each.day === part.key)?.match : undefined;
     if (dayMatch?.album.writable) {
-      fileInto(row, { path: dayMatch.album.path, title: dayMatch.album.title }, files);
-      return;
+      const album = { path: dayMatch.album.path, title: dayMatch.album.title };
+      return { label: `Add to “${album.title}”`, run: () => fileInto(row, album, files) };
     }
     const proposal = proposalFor(row);
-    if (proposal.action === 'existing') fileInto(row, { path: proposal.album.path, title: proposal.album.title }, files);
-    else if (proposal.action === 'new') setNaming({ row, private: false, files });
-    else if (proposal.action === 'discard') askDiscard(row, files);
-    else if (proposal.action === 'parts' && files.length === 0) acceptParts(row, proposal);
-    else if (proposal.action === 'dedupe' && files.length === 0) {
-      resolveSets(row, duplicatesView.library.keys, `Keeping the library copies of ${photos(proposal.files)} in “${row.title}”`);
+    const label = proposalLabel(proposal);
+    if (label === undefined) return undefined;
+    if (proposal.action === 'existing') return { label, run: () => fileInto(row, { path: proposal.album.path, title: proposal.album.title }, files) };
+    if (proposal.action === 'new') return { label, run: () => setNaming({ row, private: false, files }) };
+    if (proposal.action === 'discard') return { label, run: () => askDiscard(row, files) };
+    if (files.length > 0) return undefined;
+    if (proposal.action === 'parts') return { label, run: () => acceptParts(row, proposal) };
+    if (proposal.action === 'dedupe') {
+      return { label, run: () => resolveSets(row, duplicatesView.library.keys, `Keeping the library copies of ${photos(proposal.files)} in “${row.title}”`) };
     }
+    return undefined;
   }, [proposalFor, fileInto, askDiscard, acceptParts, resolveSets, duplicatesView, details, part, partPaths]);
+
+  /** Enter: what `enterFor` proposes, or saying that nothing is. */
+  const apply = useCallback((row: GroupRow, files: string[]) => {
+    const enter = enterFor(row, files);
+    if (enter) enter.run();
+    else say('No proposal: N, A, B or X.');
+  }, [enterFor, say]);
 
   /** The album each day of `row` is matched to, and filing the day there. */
   const partMatchOf = useCallback((row: GroupRow): PartMatch => (key: string) => {
@@ -1513,6 +1527,9 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const openKeys = useMemo(() => new Set(cursor === null ? [] : [cursor]), [cursor]);
   const skeleton = useMemo(() => skeletonImage(phone), [phone]);
   const cursorProposal = cursorRow ? proposalFor(cursorRow) : undefined;
+  /** What Enter does where the keys are: on the open day or the selected pictures, or the whole group. */
+  const cursorEnter = cursorRow ? enterFor(cursorRow, filing) : undefined;
+  const canEnter = cursorEnter !== undefined;
   const cursorCandidates = useMemo(() => cursorRow ? candidatesOf(cursorRow) : [], [cursorRow, candidatesOf]);
   const legendContext = useMemo(() => ({
     candidates: cursorCandidates.map((candidate) => candidate.album.title),
@@ -1521,13 +1538,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     title: cursorRow?.title,
     previous: previousRow?.title,
     next: nextRow?.title,
-    proposal: cursorProposal ? proposalLabel(cursorProposal) : undefined,
+    proposal: cursorEnter?.label,
     target: target?.title,
     selected: regrouping.length,
     later: across ? allLater : cursorRow?.staging.later !== undefined,
     lane: cursorRow !== undefined && isLaneGroup(cursorRow),
     groups: chosenCount.groups,
-  }), [cursorRow, previousRow, nextRow, cursorProposal, target, regrouping.length, across, allLater, chosenCount.groups, cursorCandidates, highlight, comparing]);
+  }), [cursorRow, previousRow, nextRow, cursorEnter?.label, target, regrouping.length, across, allLater, chosenCount.groups, cursorCandidates, highlight, comparing]);
   /** S can cut here: in a lane anything, elsewhere not before the group's first picture. */
   const canCut = cursorRow !== undefined && regrouping.length > 0 && (isLaneGroup(cursorRow) || regrouping[0] !== openItems[0]?.path);
   const available = useCallback((action: TriageAction) => {
@@ -1539,14 +1556,14 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     if (action === 'reject' || action === 'compare' || action === 'candidate-next' || action === 'candidate-previous') return cursorCandidates.length > 0;
     if (action === 'merge-up') return previousRow !== undefined && cursorRow !== undefined && mergeable(previousRow, cursorRow);
     if (action === 'merge-down') return nextRow !== undefined && cursorRow !== undefined && mergeable(cursorRow, nextRow);
-    if (action === 'apply') return cursorProposal !== undefined && cursorProposal.action !== 'none';
+    if (action === 'apply') return canEnter;
     if (action === 'part-next' || action === 'part-previous') return parts.sections.length > 1;
     if (action === 'split') return canCut;
     if (action === 'move-up') return previousRow !== undefined && regrouping.length > 0;
     if (action === 'move-down') return nextRow !== undefined && regrouping.length > 0;
     if (action === 'move-to') return regrouping.length > 0;
     return cursorRow !== undefined;
-  }, [scope, chosen, selectedGroups, cursorRow, previousRow, nextRow, cursorProposal, parts.sections.length, canCut, regrouping.length, cursorCandidates]);
+  }, [scope, chosen, selectedGroups, cursorRow, previousRow, nextRow, canEnter, parts.sections.length, canCut, regrouping.length, cursorCandidates]);
   const backlog = queue.items.filter((item) => item.state !== 'failed');
   const column = !phone && width >= COLUMN_MIN_WIDTH && cursorRow !== undefined && cursorProposal !== undefined;
 
