@@ -1823,13 +1823,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         opened={dating !== null}
         onClose={() => setDating(null)}
         items={dating?.items ?? []}
-        onApplied={() => {
+        onApplied={(written) => {
           const asked = dating;
           if (!asked) return;
           forgetMediaSet(asked.row.path);
           index.reread([asked.row.path]);
           leaveInside();
-          say(`The time is set on ${photos(asked.items.length)} of “${asked.row.title}”`, undefined, 'green');
+          say(`The time is set on ${photos(written)} of “${asked.row.title}”`, undefined, 'green');
           changed();
         }}
       />

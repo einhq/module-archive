@@ -36,8 +36,8 @@ type Props = {
   selection?: MediaSelection;
   /** Everything loaded, in list order. The selection is read out of this. */
   items: MediaItem[];
-  /** Called once the batch is written, so the list can re-sort itself. */
-  onApplied: () => void;
+  /** Called once the batch is written, with how many files were given a time, so the list can re-sort itself. */
+  onApplied: (written: number) => void;
   /** Opened by the page (a key), not by a button of its own: none is drawn, and `onClose` closes it. */
   opened?: boolean;
   onClose?: () => void;
@@ -156,7 +156,7 @@ export function SetTimeAction({ selection, items, onApplied, opened: openedByPag
       forgetSubjectFacets();
       close();
       selection?.clear();
-      onApplied();
+      onApplied(timed.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
