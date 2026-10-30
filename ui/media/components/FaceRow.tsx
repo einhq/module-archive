@@ -10,18 +10,22 @@ import { onScreen, ShowFace } from './ShowFace.tsx';
 const OPEN_DELAY = 300;
 /** How long the card outlives the pointer, to cross the gap between the row and the card. */
 const CLOSE_DELAY = 150;
+const CARD_WIDTH = 300;
 
 /**
- * A person or a face in the lightbox's sidebar, and what can be done with the face from the row:
- * follow it in a video (`ShowFace`) and question who it is (`FaceDoubtForm`).
+ * A person or a face in the lightbox's sidebar, and a card about them: who they are (`glance`),
+ * and what can be done with the face from the row — follow it in a video (`ShowFace`) and
+ * question who it is (`FaceDoubtForm`).
  *
- * With a pointer the actions stand in a card beside the row, opened by pointing at the row for a
- * moment or focusing it, so nothing in the row moves under the pointer. On a phone, which has
- * nothing to point with, they stand in the row. What is on — a face followed, a face in doubt —
- * stays in the row either way, and is turned off or answered there.
+ * With a pointer the card opens above the row after pointing at it for a moment, or on focusing
+ * it, so nothing in the row moves under the pointer. On a phone, which has nothing to point with,
+ * the actions stand in the row instead, and the card opens only for the question. What is on — a
+ * face followed, a face in doubt — stays in the row either way, and is turned off or answered there.
  */
-export function FaceRow({ name, videoFace, personFace, canEdit, mobile, highlighted, asking = false, onAsk, onShowFace, followed, onPointer, onChanged, children }: {
+export function FaceRow({ name, glance, videoFace, personFace, canEdit, mobile, highlighted, asking = false, onAsk, onShowFace, followed, onPointer, onChanged, children }: {
   name: string;
+  /** Who it is, at the top of the card: a larger picture and what places them. */
+  glance?: ReactNode;
   /** The face as a video moment holds it, to follow. */
   videoFace?: MediaFace;
   /** A named person's face, to question. */
@@ -69,7 +73,7 @@ export function FaceRow({ name, videoFace, personFace, canEdit, mobile, highligh
   const following = follow !== undefined && followed === follow.facePath;
   const question = personFace?.personId && (personFace.doubt || canEdit) ? personFace : undefined;
   const doubt = question?.doubt;
-  const opened = asking || (!mobile && (pointed || focused) && (follow !== undefined || question !== undefined));
+  const opened = asking || (!mobile && (pointed || focused) && (glance !== undefined || follow !== undefined || question !== undefined));
 
   const close = () => {
     clearTimeout(timer.current);
@@ -100,11 +104,12 @@ export function FaceRow({ name, videoFace, personFace, canEdit, mobile, highligh
     <Popover
       opened={opened}
       onChange={(open) => !open && close()}
-      // Its top on the row's, so what it holds can change without moving the button pointed at.
-      position={mobile ? 'bottom-end' : 'left-start'}
+      // Above the row, its foot on it: what loads or changes in the card grows it upwards, and the
+      // buttons at its foot stay where the pointer is going.
+      position={mobile ? 'bottom-end' : 'top-start'}
       withArrow
       shadow='md'
-      width={asking ? 280 : undefined}
+      width={CARD_WIDTH}
       // Right after the row in the page, so its buttons follow the row on Tab; fixed, so the
       // sidebar's scrolling does not clip it.
       withinPortal={false}
@@ -150,41 +155,45 @@ export function FaceRow({ name, videoFace, personFace, canEdit, mobile, highligh
       </Popover.Target>
       <Popover.Dropdown
         ref={card}
-        p={asking ? 'sm' : 4}
+        p='xs'
         onMouseEnter={stay}
         onMouseLeave={() => point(false)}
         onFocus={focus}
         onBlur={(event) => leaves(event) && setFocused(false)}
       >
-        {asking && question ? <FaceDoubtForm face={question} name={name} canEdit={canEdit} onDone={close} onChanged={onChanged} /> : (
-          <Stack gap={2}>
-            {follow && (
-              <Button
-                size='xs'
-                variant='subtle'
-                color={following ? 'marine' : 'gray'}
-                justify='flex-start'
-                leftSection={<TablerIcon name='user-square-rounded' size={16} />}
-                onClick={() => onShowFace?.(follow.facePath)}
-              >
-                {following ? `Stop following ${name}` : `Show at ${formatClock(follow.atSeconds ?? 0)}`}
-              </Button>
-            )}
-            {follow && follow.appearances && follow.appearances.length > 0 && <Text size='xs' c='dimmed' px='xs' maw={240}>On screen {onScreen(follow.appearances)}</Text>}
-            {question && (
-              <Button
-                size='xs'
-                variant='subtle'
-                color={doubt ? 'orange' : 'gray'}
-                justify='flex-start'
-                leftSection={<TablerIcon name='help-circle' size={16} />}
-                onClick={() => onAsk?.(true)}
-              >
-                {doubt ? `Is this ${name}?` : `Not sure this is ${name}?`}
-              </Button>
-            )}
-          </Stack>
-        )}
+        <Stack gap='xs'>
+          {/* Not on a phone, whose sheet has no room above or below the row for it and the question. */}
+          {!mobile && glance}
+          {asking && question ? <FaceDoubtForm face={question} name={name} canEdit={canEdit} onDone={close} onChanged={onChanged} /> : (
+            <Stack gap={2}>
+              {follow?.appearances && follow.appearances.length > 0 && <Text size='xs' c='dimmed' px='xs'>On screen {onScreen(follow.appearances)}</Text>}
+              {follow && (
+                <Button
+                  size='xs'
+                  variant='subtle'
+                  color={following ? 'marine' : 'gray'}
+                  justify='flex-start'
+                  leftSection={<TablerIcon name='user-square-rounded' size={16} />}
+                  onClick={() => onShowFace?.(follow.facePath)}
+                >
+                  {following ? 'Stop following' : `Show at ${formatClock(follow.atSeconds ?? 0)}`}
+                </Button>
+              )}
+              {question && (
+                <Button
+                  size='xs'
+                  variant='subtle'
+                  color={doubt ? 'orange' : 'gray'}
+                  justify='flex-start'
+                  leftSection={<TablerIcon name='help-circle' size={16} />}
+                  onClick={() => onAsk?.(true)}
+                >
+                  {doubt ? 'Is this them?' : 'Not sure this is them?'}
+                </Button>
+              )}
+            </Stack>
+          )}
+        </Stack>
       </Popover.Dropdown>
     </Popover>
   );

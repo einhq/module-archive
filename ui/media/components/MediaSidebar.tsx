@@ -26,6 +26,7 @@ import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
 import { FaceRow } from './FaceRow.tsx';
+import { PersonGlance, UnknownGlance } from './FaceGlance.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
@@ -646,6 +647,7 @@ export function MediaSidebar(
               <FaceRow
                 key={person.path}
                 name={person.name}
+                glance={<PersonGlance person={person} />}
                 videoFace={faces.find((face) => face.personPath === person.path && face.atSeconds !== undefined)}
                 personFace={faces.find((face) => face.personPath === person.path && face.doubt) ?? faces.find((face) => face.personPath === person.path)}
                 canEdit={canEdit}
@@ -687,6 +689,7 @@ export function MediaSidebar(
               <FaceRow
                 key={face.faceId}
                 name={face.personName}
+                glance={<UnknownGlance face={face} />}
                 videoFace={faces.find((candidate) => candidate.faceId === face.faceId)}
                 canEdit={canEdit}
                 mobile={mobile}

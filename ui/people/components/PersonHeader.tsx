@@ -17,7 +17,7 @@ const year = (date?: string): string | undefined => date?.slice(0, 4);
  * cannot support an exact age, and quietly rounding it would be the header
  * asserting something it guessed.
  */
-function lifeLine(person: PersonInfo): string | undefined {
+export function lifeLine(person: PersonInfo): string | undefined {
   const born = year(person.born);
   const died = year(person.died);
   const age = person.age;
@@ -30,7 +30,7 @@ function lifeLine(person: PersonInfo): string | undefined {
 }
 
 /** Where they live now: a home whose span has not been closed. */
-function currentHome(person: PersonInfo): { path: string; label: string } | undefined {
+export function currentHome(person: PersonInfo): { path: string; label: string } | undefined {
   const open = person.homes.find((home) => !home.to);
   if (!open) return undefined;
   return { path: open.path, label: open.name ?? open.path.split('/').pop() ?? open.path };
