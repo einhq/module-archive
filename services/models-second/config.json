@@ -1,5 +1,5 @@
 {
-  "description": "A second worker for the model-bound media steps, over the same backlogs in the reverse order, so the media service runs a second model family beside the first worker's",
+  "description": "A second worker for the model-bound media steps, over the same backlogs in the reverse order, so the media service runs a second model family beside the first worker's; idle while CFG_MODEL_SECOND_SLOTS is 0",
   "restartPolicy": "on-failure",
   "workClass": "background"
 }
