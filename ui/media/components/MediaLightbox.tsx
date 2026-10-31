@@ -101,7 +101,7 @@ const SLIDE_CROSSFADE_DURATION_MS = 550;
  * ratio so a viewer choosing 10 seconds per slide gets a pan that still fits.
  */
 const KEN_BURNS_SLIDES = 2;
-const SWIPE_ANIMATION_MS = 180;
+const SWIPE_ANIMATION_MS = 215;
 const SWIPE_SETTLE_EASING = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 /** A phone's details panel opened or closed by a button rather than a finger. */
 const SHEET_TOGGLE_MS = 340;

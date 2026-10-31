@@ -45,7 +45,7 @@ Deno.test('lightbox swipe finish lands without overshooting', () => {
   for (const [distance, speed] of [[400, 0], [300, 1.5], [100, 10], [1400, 0]]) {
     const { durationMs, easing } = lightboxSwipeFinish(distance, speed);
     const points = springPoints(easing);
-    assert(durationMs <= 500, `${distance}px at ${speed}px/ms takes ${durationMs}ms`);
+    assert(durationMs <= 600, `${distance}px at ${speed}px/ms takes ${durationMs}ms`);
     assertEquals(points[0], 0);
     assertEquals(points.at(-1), 1);
     assert(points.every((p, i) => p >= 0 && p <= 1 && (i === 0 || p >= points[i - 1])), easing);
@@ -53,10 +53,10 @@ Deno.test('lightbox swipe finish lands without overshooting', () => {
 });
 
 Deno.test('lightbox swipe finish carries most of the way at once, whatever the release speed', () => {
-  // 100ms in, however the finger let go, most of the way is behind it.
+  // 120ms in, however the finger let go, most of the way is behind it.
   for (const speed of [0, 0.4, 1.5, 3]) {
     const { leftAt } = lightboxSwipeFinish(400, speed);
-    assert(leftAt(100) < 0.2 * 400, `at ${speed}px/ms ${leftAt(100)}px are left after 100ms`);
+    assert(leftAt(120) < 0.15 * 400, `at ${speed}px/ms ${leftAt(120)}px are left after 120ms`);
   }
 });
 
@@ -71,7 +71,7 @@ Deno.test('lightbox swipe finish leaves at the finger speed', () => {
 Deno.test('lightbox swipe finish hands over a few pixels from the end and eases over them', () => {
   const { durationMs, handoverMs, leftAt } = lightboxSwipeFinish(290, 1);
   assert(leftAt(handoverMs) <= 8 && leftAt(handoverMs) > 7, `${leftAt(handoverMs)}px left at the handover`);
-  assert(handoverMs < 220, `hands over after ${handoverMs}ms`);
+  assert(handoverMs < 250, `hands over after ${handoverMs}ms`);
   // The picture goes on easing in for a while after the handover, at no more than a crawl: under
   // 2.5px a frame.
   assert(durationMs - handoverMs >= 120, `${durationMs - handoverMs}ms after the handover`);

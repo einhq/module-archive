@@ -64,11 +64,11 @@ const VELOCITY_WINDOW_MS = 100;
  * A release is finished by two critically damped springs pulling the picture together: a stiff one
  * over most of the way, which has it nearly there at once, and a soft one over the last
  * `SOFT_SHARE` of it, which slows it into place. Natural frequencies in radians per millisecond: a
- * typical flick is nearly 90% of the way in after 100ms, eases over the rest, and is at rest after
- * about 350ms.
+ * typical flick is nearly 90% of the way in after 120ms, eases over the rest, and is at rest after
+ * about 430ms.
  */
-const STIFF_SPRING = 0.045;
-const SOFT_SPRING = 0.018;
+const STIFF_SPRING = 0.0375;
+const SOFT_SPRING = 0.015;
 const SOFT_SHARE = 0.15;
 /** The slide ends this close to rest, in px; its last sample covers what is left, too little to see. */
 const REST_PX = 0.5;
@@ -124,7 +124,7 @@ const easingOf = (left: (t: number) => number, from: number, to: number): string
 
 /**
  * The slide that carries a released swipe the rest of the way: it leaves at the finger's speed,
- * like a flung photo rather than a fresh animation, has the picture nearly there in about 100ms
+ * like a flung photo rather than a fresh animation, has the picture nearly there in about 120ms
  * however slow the release, and slows it into place over the last few pixels. Nothing overshoots:
  * a release faster than the stiff spring's pull starts at the pull.
  *
