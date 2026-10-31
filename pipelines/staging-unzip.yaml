@@ -5,7 +5,8 @@ description: Expand a zip that lands in a staging category beside it, then remov
 # Takeout fill one tree, and removed once every entry is there. `unzip -n` leaves a file already
 # there at its entry's size, so a run cut off goes on where it was on the next attempt; an entry
 # it cannot write, a refused archive (an entry outside the folder, too little free space) or a
-# failed attempt keeps the zip, and the step's error says why.
+# failed attempt keeps the zip, and the step's error says why. What it takes out came in with the
+# upload, so `--as-upload` freezes a picture or a film as an upload of it would be frozen.
 #
 # Only a zip whose upload has ended is expanded. An upload or an SFTP put records the file's size,
 # sha256 and mimetype once its last byte is written, and that write is the `updated` event matched
@@ -23,7 +24,7 @@ trigger:
 
 steps:
   expand:
-    command: unzip -n -d "$(dirname $NODE_PATH)" $NODE_PATH && rm $NODE_PATH
+    command: unzip -n --as-upload -d "$(dirname $NODE_PATH)" $NODE_PATH && rm $NODE_PATH
     description: Expand the zip beside it and remove it
     pool: media
     kind: unzip

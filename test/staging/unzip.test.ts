@@ -1,7 +1,8 @@
 /**
  * staging-unzip: a zip uploaded into a staging category is expanded into the folder it lies in, by
  * a worker of the media pool, and removed once it is; over HTTP and over SFTP alike, and never
- * while its upload is still going on, whatever the upload changes on it meanwhile.
+ * while its upload is still going on, whatever the upload changes on it meanwhile. What it takes out
+ * is frozen when `/etc/frozen-uploads` lists its type, as an upload of it is.
  *
  * The definition is the module's own, defined into a booted instance with a worker that takes
  * only its kind. `fixtures/trip.zip` holds two invented text files, one deflated, in folders two
@@ -105,6 +106,23 @@ Deno.test({
       await waitFor(() => vfs.exists(ADMIN_ACCESS, `${inbox}/sftp/Exempelresa/dag-2/väder.txt`), 'the expanded files');
       await waitFor(async () => !(await vfs.exists(ADMIN_ACCESS, path)), 'the zip to be removed');
       assertEquals((await client.execString(`cat ${inbox}/sftp/Exempelresa/dag-1/anteckningar.txt`)).trim(), 'En segelbåt vid bryggan.');
+    });
+
+    await t.step('what it takes out is frozen as an upload of it would be', async () => {
+      // The seed lists pictures, films and sound; the fixture holds text, so the policy takes text in.
+      const before = `${inbox}/web/Exempelresa/dag-1/anteckningar.txt`;
+      assertEquals((await vfs.get(ADMIN_ACCESS, before)).attrs.frozen, undefined);
+      await writeFile('/etc/frozen-uploads', new TextEncoder().encode('text/plain\n'));
+
+      const { cookie } = await harness.createHttpSession();
+      await run(`mkdir -p ${inbox}/frozen`);
+      const res = await fetch(`${harness.primary!.baseUrl}/file${inbox}/frozen/?name=frozen.zip`, { method: 'POST', headers: { cookie }, body: await Deno.readFile(ZIP) });
+      assertEquals(res.status, 201);
+      await waitFor(async () => !(await vfs.exists(ADMIN_ACCESS, `${inbox}/frozen/frozen.zip`)), 'the zip to be expanded and removed');
+
+      for (const path of ['Exempelresa/dag-1/anteckningar.txt', 'Exempelresa/dag-2/väder.txt']) {
+        assertEquals((await vfs.get(ADMIN_ACCESS, `${inbox}/frozen/${path}`)).attrs.frozen, true, path);
+      }
     });
   } finally {
     client.close();
