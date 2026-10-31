@@ -62,12 +62,12 @@ export function lightboxSwipeAction(
 const VELOCITY_WINDOW_MS = 100;
 /**
  * The stiffness of the slide that finishes a release: a critically damped spring's natural
- * frequency in radians per millisecond. At 0.03 a picture is most of the way in after 100ms and
- * at rest after about 250ms, whatever the distance.
+ * frequency in radians per millisecond. At 0.036 a picture is nearly 90% of the way in after
+ * 100ms and at rest after about 220ms, whatever the distance.
  */
-const SPRING_FREQUENCY = 0.03;
-/** The slide ends this close to rest, in px; what is left is too little to see. */
-const SPRING_REST_PX = 0.5;
+const SPRING_FREQUENCY = 0.036;
+/** The slide ends this close to rest, in px; its last sample covers what is left, too little to see. */
+const SPRING_REST_PX = 1;
 /** Time between the samples of the slide's easing, which `linear()` joins with straight lines. */
 const SPRING_STEP_MS = 8;
 
