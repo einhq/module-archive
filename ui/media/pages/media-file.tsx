@@ -3,6 +3,7 @@ import { effect } from '@preact/signals-react';
 import { useEffect, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { MediaLightbox } from '../components/MediaLightbox.tsx';
+import { lightboxRestedPath } from '../signals/lightbox.ts';
 import { useSurface } from '@ein/ui/hooks';
 import { lightboxRoute } from '@ein/ui/lib';
 import { currentMediaItem, endLightbox, showLightboxPath } from '@ein/ui/signals';
@@ -25,11 +26,13 @@ export default function MediaPage() {
   }, [path]);
 
   // The route follows the lightbox: arrowing to the next picture replaces it, so the URL names
-  // what is shown and Back still closes the whole visit in one step.
+  // what is shown and Back still closes the whole visit in one step. It follows once the viewer
+  // has stopped on the picture (`lightboxRestedPath`): a replace renders the page behind and the
+  // shell again, which a run of swipes would otherwise pay for every picture it passes.
   useEffect(() =>
     effect(() => {
       const item = currentMediaItem.value;
-      if (item && item.path !== path) navigate(lightboxRoute(item.path), { replace: true });
+      if (item && item.path !== path && lightboxRestedPath.value === item.path) navigate(lightboxRoute(item.path), { replace: true });
     }), [navigate, path]);
 
   // Gone — Back, or the surface closed under it — while a picture was still open: the grid

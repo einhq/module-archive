@@ -11,7 +11,9 @@ import {
   type ImgHTMLAttributes,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
   type Ref,
+  startTransition,
   type TouchEvent,
   useCallback,
   useEffect,
@@ -20,6 +22,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { bumpDerivativeVersion, bust, canWrite, displayDims, fileUrl, forgetAspect, isGuest, mediaItemFrom, posterUrl, shq, versionOf } from '@ein/ui/lib';
 import { zoomFromTile, zoomToTile } from '../lib/lightbox-tile-zoom.ts';
 import { itemAtAngle, lightboxPhotoSources } from '../lib/lightbox-image.ts';
@@ -83,7 +86,7 @@ import { TextOverlay } from './TextOverlay.tsx';
 import { VideoPlayer } from './VideoPlayer.tsx';
 import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } from '../lib/capture-time.ts';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
-import { facesVisible, infoSidebarOpen, lightboxCountHidden, toggleFacesVisible, toggleInfoSidebar } from '../signals/lightbox.ts';
+import { facesVisible, infoSidebarOpen, lightboxCountHidden, lightboxRestedPath, toggleFacesVisible, toggleInfoSidebar } from '../signals/lightbox.ts';
 
 /** Slide duration when the person has not set `CFG_USER_SLIDESHOW_SECONDS`. */
 const DEFAULT_SLIDE_SECONDS = 3;
@@ -120,6 +123,15 @@ const SHEET_VARIABLES = [
 const SWIPE_FRAME_GAP_PX = 10;
 /** The settled frame's inset on a desktop, each side, clear of the arrows. */
 const SWIPE_ARROW_INSET_PX = 60;
+/** How many pictures on each side of the shown one are fetched ahead, so a run of quick swipes finds them there. */
+const PRELOAD_DEPTH = 3;
+/** How many of those load at once, nearest first, so the next picture does not share the line with the farthest. */
+const PRELOAD_PARALLEL = 2;
+/**
+ * How long a picture is on screen, with no finger on it, before the viewer counts as stopped on it
+ * (`lightboxRestedPath`). A run of swipes is quicker than this from one picture to the next.
+ */
+const LIGHTBOX_REST_MS = 600;
 const NATIVE_EDGE_GESTURE_PX = 24;
 const GESTURE_CONTROL_SELECTOR = 'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-mark], [data-text-overlay], [data-video-controls]';
 
@@ -162,6 +174,39 @@ function LightboxPhoto({ media, reloadToken, imageRef, sizes = '100vw', onError,
       }}
     />
   );
+}
+
+/**
+ * Fetches `item`'s picture into the browser's cache through the source ladder the frame and the
+ * swipe preview ask for, and calls `done` once it has arrived or cannot. Null when there is no
+ * picture to fetch: audio, or a video without a poster.
+ */
+function preloadPicture(item: MediaItem, done: () => void): HTMLImageElement | null {
+  const token = versionOf(item.path);
+  const image = new Image();
+  image.onload = done;
+  if (item.type !== 'photo') {
+    const poster = posterUrl(item.path, item.type, item.hasDerivatives, displayDims(item));
+    if (!poster) return null;
+    image.onerror = done;
+    image.src = bust(poster, token);
+    return image;
+  }
+  const sources = lightboxPhotoSources(item, token);
+  let usingFallback = false;
+  image.onerror = () => {
+    if (usingFallback || !sources.fallback) return done();
+    usingFallback = true;
+    image.srcset = '';
+    image.removeAttribute('sizes');
+    image.src = sources.fallback.src;
+  };
+  if (sources.primary.srcSet) {
+    image.srcset = sources.primary.srcSet;
+    image.sizes = '100vw';
+  }
+  image.src = sources.primary.src;
+  return image;
 }
 
 /**
@@ -678,41 +723,42 @@ export function MediaLightbox() {
     return () => globalThis.clearTimeout(timer);
   }, [advanceSlideshow, loadedPhotoId, media?.id, media?.type, slideDurationMs, slideshow]);
 
-  // Warm the browser cache with the neighbours a swipe or arrow key reaches next, using the
-  // same source ladder the settled frame and the swipe preview will request. It waits for
-  // the current photo so the visible picture never competes with invisible ones; a
-  // slideshow's dwell timer still starts from the next slide's own load event, so a slow
-  // network never spends the dwell on an invisible image.
+  // Warm the browser cache with the pictures a run of swipes or arrow presses reaches next,
+  // `PRELOAD_DEPTH` on each side, nearest first and `PRELOAD_PARALLEL` at a time; those already
+  // passed on the way are in the cache and come back at once. It waits for the current photo so
+  // the visible picture never competes with invisible ones; a slideshow's dwell timer still
+  // starts from the next slide's own load event, so a slow network never spends the dwell on an
+  // invisible image.
   useEffect(() => {
     const list = albumMediaList.value;
     if (!media || list.length < 2) return;
     if (media.type === 'photo' && loadedPhotoId !== media.id) return;
     const index = currentMediaIndex.value;
-    const neighbours = [list[nextMediaIndex(index, list.length)], list[prevMediaIndex(index, list.length)]]
-      .filter((item, i, all): item is MediaItem => item !== undefined && item.id !== media.id && all.indexOf(item) === i);
-    neighbourPreloadRef.current = neighbours.map((item) => {
-      const token = versionOf(item.path);
-      const preload = new Image();
-      if (item.type !== 'photo') {
-        preload.src = bust(posterUrl(item.path, item.type, item.hasDerivatives, displayDims(item)), token);
-        return preload;
+    const queue: MediaItem[] = [];
+    for (let step = 1; step <= PRELOAD_DEPTH; step++) {
+      for (const at of [index + step, index - step]) {
+        // Navigation goes round the list, and so does what is fetched for it.
+        const item = list[((at % list.length) + list.length) % list.length];
+        if (item.id !== media.id && !queue.includes(item)) queue.push(item);
       }
-      const sources = lightboxPhotoSources(item, token);
-      let usingFallback = false;
-      preload.onerror = () => {
-        if (usingFallback || !sources.fallback) return;
-        usingFallback = true;
-        preload.srcset = '';
-        preload.removeAttribute('sizes');
-        preload.src = sources.fallback.src;
-      };
-      if (sources.primary.srcSet) {
-        preload.srcset = sources.primary.srcSet;
-        preload.sizes = '100vw';
+    }
+    let stopped = false;
+    const loading: HTMLImageElement[] = [];
+    neighbourPreloadRef.current = loading;
+    const loadNext = () => {
+      while (!stopped && queue.length > 0) {
+        const image = preloadPicture(queue.shift()!, loadNext);
+        if (image) {
+          loading.push(image);
+          return;
+        }
       }
-      preload.src = sources.primary.src;
-      return preload;
-    });
+    };
+    for (let i = 0; i < PRELOAD_PARALLEL; i++) loadNext();
+    // Moving on starts no more of these; those on the way still arrive, mostly for the next one.
+    return () => {
+      stopped = true;
+    };
   }, [loadedPhotoId, media?.id, media?.type]);
 
   // Hotkeys remain available while presenting. A direct navigation interrupts the automatic
@@ -1037,6 +1083,40 @@ export function MediaLightbox() {
   // effect, so the frame is moved back in the same paint that first shows the new media.
   useLayoutEffect(() => resetSwipe(), [media?.id, resetSwipe]);
 
+  // The viewer has stopped on the picture once it has been shown for `LIGHTBOX_REST_MS` with no step
+  // and no finger on it. What can wait for that waits: the route moving to it
+  // (`lightboxRestedPath`), and a phone's closed details panel, which is kept mounted (see the
+  // panel below) and whose drawing is most of what a step to the next picture costs. Closed, the
+  // panel draws the picture the viewer stops on, so a run of swipes draws none of those it passes;
+  // open, or starting to move, it draws the current one at once.
+  const [detailsMediaId, setDetailsMediaId] = useState<string | null>(null);
+  const mediaId = media?.id ?? null;
+  if (sidebarOpen && detailsMediaId !== mediaId) setDetailsMediaId(mediaId);
+  const detailsCurrent = detailsMediaId === mediaId;
+  useEffect(() => {
+    if (!mediaId) return;
+    let timer: number | undefined;
+    const rest = () => {
+      if (touchStartRef.current || swipePendingRef.current) {
+        timer = globalThis.setTimeout(rest, LIGHTBOX_REST_MS);
+        return;
+      }
+      lightboxRestedPath.value = currentMediaItem.peek()?.path ?? null;
+      startTransition(() => setDetailsMediaId(mediaId));
+    };
+    timer = globalThis.setTimeout(rest, LIGHTBOX_REST_MS);
+    return () => {
+      globalThis.clearTimeout(timer);
+      lightboxRestedPath.value = null;
+    };
+  }, [mediaId]);
+  const undrawnDetailsRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    undrawnDetailsRef.current = detailsCurrent ? null : mediaId;
+  });
+  /** The details last drawn, shown as they are while a run of swipes passes. */
+  const drawnDetailsRef = useRef<ReactNode>(null);
+
   const clearSheet = useCallback(() => {
     globalThis.clearTimeout(sheetTimerRef.current);
     sheetDragRef.current = null;
@@ -1053,13 +1133,15 @@ export function MediaLightbox() {
    * closed layout and CSS variables on the lightbox root slide the panel in, the info row and
    * date along with it, and shift and shrink the picture to where the open layout puts it; at
    * rest the variables are removed and the real layout, which those transforms reproduce at
-   * either end, takes over.
+   * either end, takes over. A panel that has not drawn the picture shown draws it first.
    */
   const beginSheet = useCallback((progress: number): boolean => {
     const root = sheetRootRef.current;
     const panel = sheetPanelRef.current;
     const info = infoRowRef.current;
     if (!root || !panel || !info) return false;
+    const undrawn = undrawnDetailsRef.current;
+    if (undrawn) flushSync(() => setDetailsMediaId(undrawn));
     globalThis.clearTimeout(sheetTimerRef.current);
     const upright = mobilePortrait;
     const panelPx = upright ? panel.offsetHeight : panel.offsetWidth;
@@ -1292,21 +1374,24 @@ export function MediaLightbox() {
     }
 
     // The slide carries on at the speed the finger let go with, over what is left of the way,
-    // and ends with the incoming neighbour exactly centred.
+    // and ends with the incoming neighbour exactly centred. Nothing renders until it is over: a
+    // render here would hold the slide's first frame back by as long as it takes.
     const travel = direction * swipeFrameWidth();
     const finish = lightboxSwipeFinish(Math.abs(travel) - Math.abs(releaseOffset), releaseVelocity * direction);
-    // Marked now rather than at the switch, so the sliding neighbour's element is the one kept
-    // as the handoff and is never remounted.
-    setSwipeTarget(target);
     moveSwipe(travel, finish);
     const complete = () => {
       swipePendingRef.current = null;
       // The incoming preview is centred and the old frame beyond the edge. Freeze them there, so
       // nothing slides while the media switches, then let the switch recentre the frame on the
-      // new media above the preview, which stays until the frame has loaded.
+      // new media above the preview, which stays until the frame has loaded. One render both
+      // marks the preview as that handoff and switches to its media, so its element is kept
+      // rather than remounted.
       moveSwipe(travel);
-      if (action === 'next') goToNextMedia();
-      else goToPrevMedia();
+      flushSync(() => {
+        setSwipeTarget(target);
+        if (action === 'next') goToNextMedia();
+        else goToPrevMedia();
+      });
     };
     swipePendingRef.current = complete;
     swipeTimerRef.current = globalThis.setTimeout(complete, finish.durationMs);
@@ -1595,15 +1680,17 @@ export function MediaLightbox() {
   // A video's zoom moves its picture inside the player (`zoom`), and its controls with the picture's edge.
   const zoomInPlayer = isVideo;
   const activeSlideshowPhotoTransition = slideshowPhotoTransition?.incomingId === media.id ? slideshowPhotoTransition : undefined;
-  // Both neighbours are kept mounted beside the frame once it has loaded, so the first
-  // movement of a drag finds their pictures ready instead of mounting them. With two media the
-  // neighbours are one and the same, placed on whichever side the drag goes (`--swipe-side`).
-  // Keyed by media, so the one a swipe slides in is the same element that then covers the
-  // handoff.
+  // Both neighbours are kept mounted beside the frame once it has loaded, or once a swipe has
+  // brought its picture in, so the first movement of a drag finds their pictures ready instead of
+  // mounting them. With two media the neighbours are one and the same, placed on whichever side
+  // the drag goes (`--swipe-side`). Keyed by media, so the one a swipe slides in is the same
+  // element that then covers the handoff; it moves with the frame, so a swipe that starts before
+  // the frame has loaded takes the picture along rather than leaving it behind.
   const swipePreviews: { item: MediaItem; location: 'previous' | 'next' | 'either' | 'handoff' }[] = [];
-  if (swipeTarget?.id === media.id) swipePreviews.push({ item: swipeTarget, location: 'handoff' });
+  const handoff = swipeTarget?.id === media.id;
+  if (handoff) swipePreviews.push({ item: swipeTarget, location: 'handoff' });
   const swipeList = albumMediaList.value;
-  if (!slideshow && swipeList.length > 1 && (media.type !== 'photo' || loadedPhotoId === media.id)) {
+  if (!slideshow && swipeList.length > 1 && (media.type !== 'photo' || loadedPhotoId === media.id || handoff)) {
     const previous = swipeList[prevMediaIndex(currentMediaIndex.value, swipeList.length)];
     const next = swipeList[nextMediaIndex(currentMediaIndex.value, swipeList.length)];
     if (previous && next && previous.id === next.id) swipePreviews.push({ item: next, location: 'either' });
@@ -1617,7 +1704,12 @@ export function MediaLightbox() {
   // details sidebar opens or closes the surface resizes without a render, and a measured width
   // would leave the neighbours peeking in at its edges.
   const swipeFrame = `(100% + ${isMobile ? 0 : 2 * SWIPE_ARROW_INSET_PX}px + ${SWIPE_FRAME_GAP_PX}px)`;
-  const swipePreviewBase = { previous: `calc(-1 * ${swipeFrame})`, next: `calc${swipeFrame}`, either: `calc(var(--swipe-side, 1) * ${swipeFrame})` };
+  const swipePreviewBase = {
+    previous: `calc(-1 * ${swipeFrame})`,
+    next: `calc${swipeFrame}`,
+    either: `calc(var(--swipe-side, 1) * ${swipeFrame})`,
+    handoff: '0px',
+  };
 
   const detailsSidebar = (mobile: boolean) => (
     <MediaSidebar
@@ -1654,6 +1746,9 @@ export function MediaLightbox() {
       onLayer={setSidebarLayer}
     />
   );
+  // The same element while the phone's closed panel waits to draw the picture shown, which React
+  // passes over without rendering it again.
+  if (detailsCurrent) drawnDetailsRef.current = isMobile && !slideshow ? detailsSidebar(mobilePortrait) : null;
 
   return (
     <>
@@ -1890,8 +1985,8 @@ export function MediaLightbox() {
                     alignItems: 'center',
                     justifyContent: 'center',
                     pointerEvents: 'none',
-                    transform: location === 'handoff' ? 'none' : `translate3d(calc(${swipePreviewBase[location]} + var(--swipe-x, 0px)), 0, 0)`,
-                    transition: location === 'handoff' ? 'none' : 'var(--swipe-transition, none)',
+                    transform: `translate3d(calc(${swipePreviewBase[location]} + var(--swipe-x, 0px)), 0, 0)`,
+                    transition: 'var(--swipe-transition, none)',
                     willChange: 'transform',
                   }}
                 >
@@ -2290,7 +2385,8 @@ export function MediaLightbox() {
           ? withDetails && (
             // A phone keeps its details panel mounted, off screen when closed, so that it can
             // move with a finger or slide (see `beginSheet`): upright a sheet over the bottom
-            // half, sideways a panel over the right.
+            // half, sideways a panel over the right. Closed, it draws the picture the viewer
+            // stays on rather than each one passed (`detailsMediaId`).
             <Box
               ref={sheetPanelRef}
               data-lightbox-mobile-bottom-bar={mobilePortrait ? '' : undefined}
@@ -2331,7 +2427,7 @@ export function MediaLightbox() {
                   }),
               }}
             >
-              {detailsSidebar(mobilePortrait)}
+              {drawnDetailsRef.current}
             </Box>
           )
           : sideMounted && !slideshow && (

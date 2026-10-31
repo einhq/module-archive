@@ -8,6 +8,13 @@ export const toggleInfoSidebar = () => {
 };
 
 /**
+ * The path of the picture the lightbox's viewer has stopped on: shown for a moment
+ * (`LIGHTBOX_REST_MS`) with no step and no finger on it. Null while a run of swipes goes on. The
+ * route waits for it before it moves to the picture.
+ */
+export const lightboxRestedPath = signal<string | null>(null);
+
+/**
  * Pins the face boxes over the lightbox image. Off by default: boxes are drawn on hover, so
  * the picture is unobstructed until someone goes looking for faces. Pinning keeps them up,
  * which is also the only way to see them on a touch screen, where there is no hover.

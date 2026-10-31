@@ -1,4 +1,4 @@
-import { assertEquals } from '@std/assert';
+import { assert, assertEquals } from '@std/assert';
 import { lightboxSheetOpens, lightboxSwipeAction, lightboxSwipeFinish, type LightboxTouchPoint, releaseVelocityX, releaseVelocityY } from '../lightbox-gesture.ts';
 
 const swipe = (dx: number, dy: number, duration = 250) => {
@@ -34,15 +34,43 @@ Deno.test('lightbox release velocity reads only the last moments of the drag', (
   assertEquals(releaseVelocityX(samples, { x: 250, y: 0, time: 700 }), 0);
 });
 
-Deno.test('lightbox swipe finish starts at the release speed and decelerates', () => {
-  // 1px/ms over 300px: constant deceleration, 600ms clamped to 400ms, start slope 400/300.
-  assertEquals(lightboxSwipeFinish(300, 1), { durationMs: 400, easing: 'cubic-bezier(0.333, 0.444, 0.667, 1)' });
-  // 3px/ms over 300px: 200ms at slope 2, exactly the finger's speed at the start.
-  assertEquals(lightboxSwipeFinish(300, 3), { durationMs: 200, easing: 'cubic-bezier(0.333, 0.667, 0.667, 1)' });
-  // A hard flick is capped at the steepest monotonic start instead of overshooting.
-  assertEquals(lightboxSwipeFinish(100, 10), { durationMs: 100, easing: 'cubic-bezier(0.333, 1.000, 0.667, 1)' });
-  // A finger that stopped before lifting eases in and out.
-  assertEquals(lightboxSwipeFinish(300, 0), { durationMs: 400, easing: 'cubic-bezier(0.333, 0.000, 0.667, 1)' });
+/** The progress samples of a `linear()` easing, evenly spaced over the slide. */
+const springPoints = (easing: string): number[] => {
+  const match = /^linear\((.*)\)$/.exec(easing);
+  if (!match) throw new Error(`not a linear() easing: ${easing}`);
+  return match[1].split(', ').map(Number);
+};
+
+Deno.test('lightbox swipe finish is a spring that comes to rest within 350ms and never overshoots', () => {
+  for (const [distance, speed] of [[400, 0], [300, 1.5], [100, 10], [1400, 0]]) {
+    const { durationMs, easing } = lightboxSwipeFinish(distance, speed);
+    const points = springPoints(easing);
+    assert(durationMs <= 350, `${distance}px at ${speed}px/ms takes ${durationMs}ms`);
+    assertEquals(points[0], 0);
+    assertEquals(points.at(-1), 1);
+    assert(points.every((p, i) => p >= 0 && p <= 1 && (i === 0 || p >= points[i - 1])), easing);
+  }
+});
+
+Deno.test('lightbox swipe finish carries most of the way at once, whatever the release speed', () => {
+  // 100ms in, however the finger let go, most of the way is behind it.
+  for (const speed of [0, 0.4, 1.5, 3]) {
+    const { durationMs, easing } = lightboxSwipeFinish(400, speed);
+    const points = springPoints(easing);
+    const third = points[Math.round(((points.length - 1) * 100) / durationMs)];
+    assert(third > 0.75, `at ${speed}px/ms only ${third} after 100ms`);
+  }
+});
+
+Deno.test('lightbox swipe finish leaves at the finger speed', () => {
+  // 2px/ms over 300px: the first sample's average speed is the finger's, plus the spring's pull
+  // over those few milliseconds.
+  const { durationMs, easing } = lightboxSwipeFinish(300, 2);
+  const points = springPoints(easing);
+  const first = (points[1] * 300) / (durationMs / (points.length - 1));
+  assert(first >= 2 && first < 3, `starts at ${first}px/ms`);
+  // A faster release lands sooner.
+  assert(lightboxSwipeFinish(300, 3).durationMs < lightboxSwipeFinish(300, 0).durationMs);
 });
 
 const release = (dx: number, dy: number, velocityX: number, duration = 250) => {

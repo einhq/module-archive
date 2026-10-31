@@ -60,10 +60,16 @@ export function lightboxSwipeAction(
 
 /** How far back the release velocity looks; older samples describe a finger that has since slowed. */
 const VELOCITY_WINDOW_MS = 100;
-const MIN_FINISH_MS = 100;
-const MAX_FINISH_MS = 400;
-/** The steepest start the curve below can take while staying monotonic (its first control point at y = 1). */
-const MAX_START_SLOPE = 3;
+/**
+ * The stiffness of the slide that finishes a release: a critically damped spring's natural
+ * frequency in radians per millisecond. At 0.03 a picture is most of the way in after 100ms and
+ * at rest after about 250ms, whatever the distance.
+ */
+const SPRING_FREQUENCY = 0.03;
+/** The slide ends this close to rest, in px; what is left is too little to see. */
+const SPRING_REST_PX = 0.5;
+/** Time between the samples of the slide's easing, which `linear()` joins with straight lines. */
+const SPRING_STEP_MS = 8;
 
 const releaseVelocity = (samples: readonly LightboxTouchPoint[], end: LightboxTouchPoint, axis: 'x' | 'y'): number => {
   let first = end;
@@ -90,18 +96,24 @@ export function lightboxSheetOpens(progress: number, velocityY: number): boolean
 type LightboxSwipeFinish = { durationMs: number; easing: string };
 
 /**
- * The slide that carries a released swipe the rest of the way. It leaves at the finger's speed
- * and decelerates to rest, like a flung photo rather than a fresh animation.
+ * The slide that carries a released swipe the rest of the way: a critically damped spring, which
+ * leaves at the finger's speed and pulls the picture into place, like a flung photo rather than a
+ * fresh animation. However slow the release, the pull lands it in about the same short time, and
+ * nothing overshoots: a release faster than the pull over that distance starts at the pull.
  *
- * `cubic-bezier(1/3, s/3, 2/3, 1)` keeps time linear in the curve parameter, so its starting
- * slope is exactly `s` and its end slope zero; `s = 2` is a constant deceleration, which is what
- * `2 * distance / speed` for the duration gives. Outside the duration bounds the slope absorbs
- * the difference: a slow release starts gently and a hard flick is capped rather than overshooting.
+ * The spring is written out as a CSS `linear()` easing of evenly spaced samples, so the slide is
+ * still a transition, which the compositor runs whatever the page's script is doing.
  */
 export function lightboxSwipeFinish(distancePx: number, speedPxPerMs: number): LightboxSwipeFinish {
   const distance = Math.max(distancePx, 1);
-  const speed = Math.max(speedPxPerMs, 0);
-  const durationMs = Math.round(speed > 0 ? Math.min(MAX_FINISH_MS, Math.max(MIN_FINISH_MS, (2 * distance) / speed)) : MAX_FINISH_MS);
-  const slope = Math.min(MAX_START_SLOPE, (speed * durationMs) / distance);
-  return { durationMs, easing: `cubic-bezier(0.333, ${(slope / 3).toFixed(3)}, 0.667, 1)` };
+  const pull = SPRING_FREQUENCY * distance;
+  const speed = Math.min(Math.max(speedPxPerMs, 0), pull);
+  // The way still to go after `t` ms: `distance` at the start, closing at `speed`.
+  const left = (t: number) => (distance + (pull - speed) * t) * Math.exp(-SPRING_FREQUENCY * t);
+  let durationMs = 1;
+  while (left(durationMs) > SPRING_REST_PX) durationMs++;
+  const steps = Math.max(1, Math.round(durationMs / SPRING_STEP_MS));
+  const points: number[] = [];
+  for (let i = 0; i < steps; i++) points.push(Number((1 - left((i * durationMs) / steps) / distance).toFixed(3)));
+  return { durationMs, easing: `linear(${[...points, 1].join(', ')})` };
 }
