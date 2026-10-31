@@ -356,6 +356,11 @@ export type AlbumListItem = {
   path: string;
   /** Whether its media lives in a `files/` directory under it. */
   hasFilesDir: boolean;
+  /**
+   * How many members it has, counted from its child names and those of its `files/`: every child
+   * but the cover, the series links, dot names and `files/` itself, so a document it holds counts too.
+   */
+  itemCount: number;
   origin?: string;
   modtime?: number;
   description?: string;

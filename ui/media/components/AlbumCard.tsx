@@ -65,10 +65,10 @@ export function AlbumCard({ album, onClick }: AlbumCardProps) {
         : suggested
         ? <TablerIcon name='calendar-event' size={48} stroke={1} />
         : <TablerIcon name='photo' size={48} stroke={1} />}
-      // The clusterer writes memberCount, but an album it has not revisited
-      // since a member changed can be stale — so the loader's count wins once
-      // it has one.
-      count={itemCount ?? album.memberCount}
+      // The loader counts the media themselves, so its count wins once it has
+      // one; until then the listing's, and the clusterer's memberCount, which
+      // can be stale for an album it has not revisited since a member changed.
+      count={itemCount ?? album.itemCount ?? album.memberCount}
       timeStart={hideDates ? undefined : album.timeStart}
       timeEnd={hideDates ? undefined : album.timeEnd}
       labels={album.labels}

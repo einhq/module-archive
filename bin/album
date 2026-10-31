@@ -13,7 +13,7 @@ import {
   shq,
 } from '@ein/client';
 import { albumMembers } from '@archive/media/album-members';
-import { NEXT_LINK_NAME, PREVIOUS_LINK_NAME } from '@archive/media/types';
+import { NEXT_LINK_NAME, NON_MEMBER_LINK_NAMES, PREVIOUS_LINK_NAME } from '@archive/media/types';
 import { mediaSpan, SPAN_DAY, SPAN_KEYS } from '@archive/media/album-span';
 import type { AlbumAddResult, AlbumInfo, AlbumInfoAnswer, AlbumListItem, AlbumListResult } from '@archive/media/api';
 import type { StagingAlbumRef } from '@archive/staging/api';
@@ -193,6 +193,7 @@ const listItem = (
   path: string,
   node: { props: { modtime?: { timestamp: number } }; attrs: AlbumListAttrs },
   hasFilesDir: boolean,
+  itemCount: number,
   refs: ReadonlyMap<string, StagingAlbumRef>,
 ): AlbumListItem => {
   const attrs = node.attrs;
@@ -203,6 +204,7 @@ const listItem = (
     title: attrs.name || name,
     path,
     hasFilesDir,
+    itemCount,
     origin: attrs.origin,
     modtime: node.props.modtime?.timestamp,
     description: attrs.description,
@@ -220,6 +222,33 @@ const listItem = (
   };
 };
 
+/** The child of an album that keeps its media in a directory of their own. */
+const FILES_DIR_NAME = 'files';
+
+/** A child that is not one of the album's members: its cover and series links, its dot names (`.profile`), its `files/`. */
+const isMemberEdge = (name: string): boolean => name !== FILES_DIR_NAME && !name.startsWith('.') && !NON_MEMBER_LINK_NAMES.includes(name);
+
+/**
+ * Whether each album keeps its media in `files/`, and how many members it has: its children and
+ * those of its `files/` that are neither the cover, a series link, a dot name nor `files/` itself,
+ * counted from their names in two batched child-edge reads, with no node read. So a document or a
+ * folder an album holds counts as well, which the card's own count (`useAlbumCover`) leaves out.
+ */
+const albumLayouts = async (cmd: Command, ids: string[]): Promise<Map<string, { hasFilesDir: boolean; itemCount: number }>> => {
+  const childLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, ids);
+  const filesDirs = new Map<string, string>();
+  for (const [id, children] of childLinks) {
+    const files = children.find((child) => child.name === FILES_DIR_NAME);
+    if (files) filesDirs.set(id, files.id);
+  }
+  const filesLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, [...filesDirs.values()]);
+  const members = (children: { name: string }[] | undefined) => (children ?? []).filter((child) => isMemberEdge(child.name)).length;
+  return new Map([...childLinks].map(([id, children]) => {
+    const filesDir = filesDirs.get(id);
+    return [id, { hasFilesDir: filesDir !== undefined, itemCount: members(children) + (filesDir ? members(filesLinks.get(filesDir)) : 0) }];
+  }));
+};
+
 /** The albums the matches of suggested albums among `attrs` name, as the reader sees them: one batched read. */
 const matchRefs = async (cmd: Command, attrs: AlbumListAttrs[]): Promise<Map<string, StagingAlbumRef>> =>
   await albumRefs(cmd.sys.vfs, cmd.access, [...new Set(attrs.flatMap((each) => each.origin === AUTO_ORIGIN ? matchedAlbumIds(each) : []))]);
@@ -230,8 +259,8 @@ const NODE_TYPES_LISTED = [NODE_TYPE_ALBUM, NODE_TYPE_DIRECTORY];
  * Several albums (or directories) at once, each as its `album list` row plus its id, cover and
  * child count, and for a suggested album its parts and candidates (`suggested`): what a page
  * re-reads for the rows that changed under it, and what deciding a group needs. Read a few at a
- * time, with whether each keeps its media in `files/` from one batched child-edge read and the
- * albums the matches name from one more. A path that names nothing is answered in `missing`
+ * time, with whether each keeps its media in `files/` and how many members it has from batched
+ * child-edge reads (`albumLayouts`) and the albums the matches name from one more. A path that names nothing is answered in `missing`
  * rather than failing the rest.
  */
 const albumInfo = async (cmd: Command, paths: string[]): Promise<number> => {
@@ -275,10 +304,10 @@ const albumInfo = async (cmd: Command, paths: string[]): Promise<number> => {
   }
 
   const found = reads.filter((read): read is Read => read !== null);
-  const childLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, found.map((read) => read.node.id));
+  const layouts = await albumLayouts(cmd, found.map((read) => read.node.id));
   const refs = await matchRefs(cmd, found.map((read) => read.node.attrs));
   const albums = found.map((read): AlbumInfo => ({
-    ...listItem(basename(read.path), read.path, read.node, (childLinks.get(read.node.id) ?? []).some((child) => child.name === 'files'), refs),
+    ...listItem(basename(read.path), read.path, read.node, layouts.get(read.node.id)?.hasFilesDir ?? false, layouts.get(read.node.id)?.itemCount ?? 0, refs),
     id: read.node.id,
     coverPhoto: read.coverPhoto,
     previous: read.previous,
@@ -307,11 +336,12 @@ const albumInfo = async (cmd: Command, paths: string[]): Promise<number> => {
 
 /**
  * A page of the albums and directories under `path`, as the albums grid and the staging stream
- * show them (`listItem`): each one's own metadata and whether its media sits in a `files/` child,
- * rather than every node property and every child's edges. Paged through the store in its name
- * order, after `--cursor`; dot names are left out, so a page is read on past them until it is
- * full. Whether an album has `files/` comes from one batched child-edge read for the whole page,
- * and the albums its suggested albums are matched to from one more.
+ * show them (`listItem`): each one's own metadata, whether its media sits in a `files/` child and
+ * how many members it has, rather than every node property and every child's edges. Paged through
+ * the store in its name order, after `--cursor`; dot names are left out, so a page is read on past
+ * them until it is full. Whether an album has `files/` and its member count come from batched
+ * child-edge reads for the whole page (`albumLayouts`), and the albums its suggested albums are
+ * matched to from one more.
  */
 const albumList = async (cmd: Command, path: string, flags: Record<string, unknown>): Promise<number> => {
   const requested = parseInt(flags.limit as string) || LIST_PAGE_SIZE;
@@ -326,11 +356,11 @@ const albumList = async (cmd: Command, path: string, flags: Record<string, unkno
     after = read[read.length - 1].name;
   }
   const selected = listed.slice(0, limit);
-  const childLinks = await cmd.sys.vfs.getChildLinksByIds(cmd.access, selected.map((entry) => entry.node.id));
+  const layouts = await albumLayouts(cmd, selected.map((entry) => entry.node.id));
   const refs = await matchRefs(cmd, selected.map((entry) => entry.node.attrs));
 
   const items = selected.map((entry) =>
-    listItem(entry.name, join(path, entry.name), entry.node, (childLinks.get(entry.node.id) ?? []).some((child) => child.name === 'files'), refs)
+    listItem(entry.name, join(path, entry.name), entry.node, layouts.get(entry.node.id)?.hasFilesDir ?? false, layouts.get(entry.node.id)?.itemCount ?? 0, refs)
   );
   const nextCursor = listed.length > limit ? selected[selected.length - 1].name : null;
 

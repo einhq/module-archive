@@ -35,7 +35,7 @@ export default function AlbumsPage() {
       case 'name':
         return filtered.toSorted((a, b) => a.title.localeCompare(b.title));
       case 'size':
-        return filtered.toSorted((a, b) => (b.itemCount ?? b.memberCount ?? 0) - (a.itemCount ?? a.memberCount ?? 0));
+        return filtered.toSorted((a, b) => (b.itemCount ?? 0) - (a.itemCount ?? 0));
       case 'oldest':
         return filtered.toSorted(compareByDate);
       default:

@@ -63,6 +63,7 @@ Deno.test({
         title: string;
         path: string;
         hasFilesDir: boolean;
+        itemCount: number;
         description?: string;
         timeStart?: string;
         timeEnd?: string;
@@ -78,6 +79,7 @@ Deno.test({
         title: 'Imported Album',
         path: `${ALBUMS_ROOT}/imported`,
         hasFilesDir: true,
+        itemCount: 0,
         modtime: first.items[0].modtime,
         description: 'Scanned photographs',
         timeStart: '1998-05-02T18:00:00Z',
@@ -202,6 +204,19 @@ Deno.test({
       const second = await client.execJson<AlbumListResult>(`album list /paged --limit 2 --cursor=${first.nextCursor}`);
       assertEquals(second.items.map((item) => item.name), ['d']);
       assertEquals(second.nextCursor, null);
+    });
+
+    await t.step("list counts each album's members: its own and its files/, links too, not its cover or series links", async () => {
+      await cmd.shouldSucceed('mkdir -p /counted/flat /counted/imported/files /counted/empty');
+      await cmd.shouldSucceed('attrs /counted/flat -s name=Flat');
+      await cmd.shouldSucceed('echo one > /counted/flat/a.jpg && echo two > /counted/flat/b.jpg && ln -s /media-src/a.txt /counted/flat/linked');
+      await cmd.shouldSucceed('ln -s /counted/flat/a.jpg /counted/flat/coverPhoto && ln -s /counted/imported /counted/flat/next');
+      await cmd.shouldSucceed('echo three > /counted/imported/files/c.jpg && ln -s /counted/flat/a.jpg /counted/imported/coverPhoto');
+
+      const page = await client.execJson<AlbumListResult>('album list /counted');
+      assertEquals(page.items.map((item) => [item.name, item.itemCount]), [['empty', 0], ['flat', 3], ['imported', 1]]);
+      const { albums } = await client.execJson<AlbumInfoAnswer>('album info /counted/flat /counted/imported');
+      assertEquals(albums.map((album) => album.itemCount), [3, 1]);
     });
 
     await t.step('set updates attrs', async () => {
