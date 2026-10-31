@@ -324,6 +324,9 @@ export function MediaLightbox() {
   const touchStartRef = useRef<LightboxTouchPoint | null>(null);
   // Recent one-finger positions, from which a released swipe takes its speed.
   const swipeSamplesRef = useRef<LightboxTouchPoint[]>([]);
+  // Where the frames stood when the finger came down on them, mid-slide included: a drag moves
+  // them on from there.
+  const swipeBaseRef = useRef(0);
   // Which way a one-finger drag on the picture went once it passed the threshold; it keeps that
   // axis to the end. `sheet` is a vertical drag that moves the phone's details sheet.
   const touchAxisRef = useRef<'x' | 'y' | 'sheet' | null>(null);
@@ -1072,6 +1075,14 @@ export function MediaLightbox() {
    */
   const swipeFrameWidth = () => (gestureSurfaceRef.current?.clientWidth ?? globalThis.innerWidth) + SWIPE_FRAME_GAP_PX;
 
+  /** How far along the swipe the frame stands this moment, a running slide included, in px. */
+  const swipeOffsetNow = () => {
+    const box = zoomBoxRef.current;
+    const transform = box ? getComputedStyle(box).transform : 'none';
+    const offset = transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41;
+    return Math.abs(offset) < 0.5 ? 0 : offset;
+  };
+
   const resetSwipe = useCallback(() => {
     globalThis.clearTimeout(swipeTransitionTimerRef.current);
     const surface = gestureSurfaceRef.current;
@@ -1302,6 +1313,10 @@ export function MediaLightbox() {
     endSheet(releaseVelocityX(swipeSamplesRef.current, end));
   }, [endSheet]);
 
+  const settleSwipe = useCallback(() => {
+    moveSwipe(0, { durationMs: SWIPE_ANIMATION_MS, easing: SWIPE_SETTLE_EASING });
+  }, [moveSwipe]);
+
   const handleTouchStart = useCallback((event: TouchEvent<HTMLElement>) => {
     touchStartRef.current = null;
     touchPanRef.current = null;
@@ -1310,7 +1325,7 @@ export function MediaLightbox() {
     // A second finger while the sheet is held lets it go where it is heading.
     if (sheetDragRef.current && event.touches.length > 1) endSheet(0);
     if (swipePendingRef.current) {
-      // A flick straight after a flick: land the first where it was going and start from there.
+      // A finger on a picture still sliding in switches to it now, and takes it where it is (below).
       globalThis.clearTimeout(swipeTimerRef.current);
       swipePendingRef.current();
     }
@@ -1331,7 +1346,12 @@ export function MediaLightbox() {
       return;
     }
     pinchRef.current = null;
-    if (event.touches.length !== 1) return;
+    if (event.touches.length !== 1) {
+      // A second finger on a picture the first one holds lets it go.
+      if (swipeBaseRef.current !== 0) settleSwipe();
+      swipeBaseRef.current = 0;
+      return;
+    }
 
     const touch = event.touches[0];
     // Leave the screen edges to the browser/OS so its native Back gesture can close
@@ -1346,11 +1366,10 @@ export function MediaLightbox() {
     }
     touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: event.timeStamp };
     swipeSamplesRef.current = [touchStartRef.current];
-  }, [addingFace, endSheet, isMobile, resetSwipe, slideshow, zoomFocal, zoomable]);
-
-  const settleSwipe = useCallback(() => {
-    moveSwipe(0, { durationMs: SWIPE_ANIMATION_MS, easing: SWIPE_SETTLE_EASING });
-  }, [moveSwipe]);
+    // A finger that lands on a moving picture, sliding in or settling back, holds it where it is.
+    swipeBaseRef.current = swipeOffsetNow();
+    if (swipeBaseRef.current !== 0) moveSwipe(swipeBaseRef.current);
+  }, [addingFace, endSheet, isMobile, moveSwipe, resetSwipe, settleSwipe, slideshow, zoomFocal, zoomable]);
 
   const finishPhotoSwipe = useCallback((
     action: Extract<ReturnType<typeof lightboxSwipeAction>, 'next' | 'previous'>,
@@ -1374,27 +1393,36 @@ export function MediaLightbox() {
     }
 
     // The slide carries on at the speed the finger let go with, over what is left of the way,
-    // and ends with the incoming neighbour exactly centred. Nothing renders until it is over: a
-    // render here would hold the slide's first frame back by as long as it takes.
+    // and ends with the incoming neighbour exactly centred. Nothing renders until the handover a
+    // few pixels from the end: a render here would hold the slide's first frame back by as long
+    // as it takes.
     const travel = direction * swipeFrameWidth();
     const finish = lightboxSwipeFinish(Math.abs(travel) - Math.abs(releaseOffset), releaseVelocity * direction);
+    const startedAt = performance.now();
     moveSwipe(travel, finish);
     const complete = () => {
       swipePendingRef.current = null;
-      // The incoming preview is centred and the old frame beyond the edge. Freeze them there, so
-      // nothing slides while the media switches, then let the switch recentre the frame on the
-      // new media above the preview, which stays until the frame has loaded. One render both
-      // marks the preview as that handoff and switches to its media, so its element is kept
-      // rather than remounted.
-      moveSwipe(travel);
+      // Hold the frames where the slide has got to, so nothing slides while the switch renders
+      // them again. One render both marks the incoming preview as the new frame's handoff and
+      // switches to its media, so its element is kept rather than remounted; the switch recentres
+      // the frames on the new media (`resetSwipe`), above the preview, which stays until the
+      // frame has loaded.
+      moveSwipe(travel - direction * finish.leftAt(performance.now() - startedAt));
       flushSync(() => {
         setSwipeTarget(target);
         if (action === 'next') goToNextMedia();
         else goToPrevMedia();
       });
+      // What is left of the slide eases in on the new frame, from where the old one had got to by
+      // now. The start is laid out first, or the transition would run from the centre.
+      const rest = finish.restFrom(performance.now() - startedAt);
+      if (rest.leftPx <= 0) return;
+      moveSwipe(-direction * rest.leftPx);
+      void gestureSurfaceRef.current?.offsetWidth;
+      moveSwipe(0, rest);
     };
     swipePendingRef.current = complete;
-    swipeTimerRef.current = globalThis.setTimeout(complete, finish.durationMs);
+    swipeTimerRef.current = globalThis.setTimeout(complete, finish.handoverMs);
   }, [moveSwipe, settleSwipe]);
 
   // The arrow buttons and keys slide the neighbour in as a released swipe would. A press while
@@ -1469,7 +1497,7 @@ export function MediaLightbox() {
     if (touchAxisRef.current === 'x') {
       const allowed = dx < 0 ? hasNextMedia.value : hasPrevMedia.value;
       // With nothing to go to, give a small elastic response instead of moving into empty space.
-      moveSwipe(allowed ? dx : dx * 0.18);
+      moveSwipe(swipeBaseRef.current + (allowed ? dx : dx * 0.18));
     } else if (touchAxisRef.current === 'sheet' && sheetDragRef.current) {
       moveSheet(sheetDragRef.current.from - dy / sheetDragRef.current.panelPx);
     }
@@ -1499,6 +1527,8 @@ export function MediaLightbox() {
           lastTapRef.current = null;
           touchStartRef.current = null;
           touchPanRef.current = null;
+          swipeBaseRef.current = 0;
+          resetSwipe();
           setZoom(toggleZoom(zoomRef.current, zoomFocal(tap.x, tap.y), zoomFrame()), true);
           return;
         }
@@ -1513,12 +1543,18 @@ export function MediaLightbox() {
 
     const start = touchStartRef.current;
     touchStartRef.current = null;
-    if (!start || event.changedTouches.length !== 1) return;
+    const base = swipeBaseRef.current;
+    swipeBaseRef.current = 0;
+    if (!start || event.changedTouches.length !== 1) {
+      if (base !== 0) settleSwipe();
+      return;
+    }
 
     const touch = event.changedTouches[0];
     const end = { x: touch.clientX, y: touch.clientY, time: event.timeStamp };
     if (touchAxisRef.current === 'sheet') {
       endSheet(releaseVelocityY(swipeSamplesRef.current, end));
+      if (base !== 0) settleSwipe();
       return;
     }
     const velocityX = releaseVelocityX(swipeSamplesRef.current, end);
@@ -1526,7 +1562,7 @@ export function MediaLightbox() {
     switch (action) {
       case 'next':
       case 'previous':
-        finishPhotoSwipe(action, end.x - start.x, velocityX);
+        finishPhotoSwipe(action, base + end.x - start.x, velocityX);
         return;
       case 'open-details':
         toggleSheet(true);
@@ -1546,7 +1582,7 @@ export function MediaLightbox() {
         settleSwipe();
         return;
     }
-  }, [endSheet, finishPhotoSwipe, requestClose, setZoom, settleSwipe, toggleSheet, zoomFocal, zoomFrame, zoomable]);
+  }, [endSheet, finishPhotoSwipe, requestClose, resetSwipe, setZoom, settleSwipe, toggleSheet, zoomFocal, zoomFrame, zoomable]);
 
   useShortcutHelp('Lightbox', withDetails ? LIGHTBOX_SHORTCUTS : LIGHTBOX_SHORTCUTS.filter((entry) => entry.keys !== 'i'));
   useHotkeys([
@@ -1944,6 +1980,7 @@ export function MediaLightbox() {
               pinchRef.current = null;
               touchPanRef.current = null;
               tapStartRef.current = null;
+              swipeBaseRef.current = 0;
               settleSwipe();
             }}
             style={{

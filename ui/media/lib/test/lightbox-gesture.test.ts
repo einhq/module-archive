@@ -41,11 +41,11 @@ const springPoints = (easing: string): number[] => {
   return match[1].split(', ').map(Number);
 };
 
-Deno.test('lightbox swipe finish is a spring that comes to rest within 350ms and never overshoots', () => {
+Deno.test('lightbox swipe finish lands without overshooting', () => {
   for (const [distance, speed] of [[400, 0], [300, 1.5], [100, 10], [1400, 0]]) {
     const { durationMs, easing } = lightboxSwipeFinish(distance, speed);
     const points = springPoints(easing);
-    assert(durationMs <= 350, `${distance}px at ${speed}px/ms takes ${durationMs}ms`);
+    assert(durationMs <= 500, `${distance}px at ${speed}px/ms takes ${durationMs}ms`);
     assertEquals(points[0], 0);
     assertEquals(points.at(-1), 1);
     assert(points.every((p, i) => p >= 0 && p <= 1 && (i === 0 || p >= points[i - 1])), easing);
@@ -55,22 +55,42 @@ Deno.test('lightbox swipe finish is a spring that comes to rest within 350ms and
 Deno.test('lightbox swipe finish carries most of the way at once, whatever the release speed', () => {
   // 100ms in, however the finger let go, most of the way is behind it.
   for (const speed of [0, 0.4, 1.5, 3]) {
-    const { durationMs, easing } = lightboxSwipeFinish(400, speed);
-    const points = springPoints(easing);
-    const third = points[Math.round(((points.length - 1) * 100) / durationMs)];
-    assert(third > 0.75, `at ${speed}px/ms only ${third} after 100ms`);
+    const { leftAt } = lightboxSwipeFinish(400, speed);
+    assert(leftAt(100) < 0.2 * 400, `at ${speed}px/ms ${leftAt(100)}px are left after 100ms`);
   }
 });
 
 Deno.test('lightbox swipe finish leaves at the finger speed', () => {
-  // 2px/ms over 300px: the first sample's average speed is the finger's, plus the spring's pull
-  // over those few milliseconds.
-  const { durationMs, easing } = lightboxSwipeFinish(300, 2);
-  const points = springPoints(easing);
-  const first = (points[1] * 300) / (durationMs / (points.length - 1));
-  assert(first >= 2 && first < 3, `starts at ${first}px/ms`);
-  // A faster release lands sooner.
-  assert(lightboxSwipeFinish(300, 3).durationMs < lightboxSwipeFinish(300, 0).durationMs);
+  const { leftAt } = lightboxSwipeFinish(300, 2);
+  const start = (300 - leftAt(0.5)) / 0.5;
+  assert(start > 1.9 && start < 2.2, `starts at ${start}px/ms`);
+  // A faster release is further on at every moment.
+  assert(lightboxSwipeFinish(300, 3).leftAt(50) < lightboxSwipeFinish(300, 0).leftAt(50));
+});
+
+Deno.test('lightbox swipe finish hands over a few pixels from the end and eases over them', () => {
+  const { durationMs, handoverMs, leftAt } = lightboxSwipeFinish(290, 1);
+  assert(leftAt(handoverMs) <= 8 && leftAt(handoverMs) > 7, `${leftAt(handoverMs)}px left at the handover`);
+  assert(handoverMs < 220, `hands over after ${handoverMs}ms`);
+  // The picture goes on easing in for a while after the handover, at no more than a crawl: under
+  // 2.5px a frame.
+  assert(durationMs - handoverMs >= 120, `${durationMs - handoverMs}ms after the handover`);
+  for (let t = handoverMs; t < durationMs; t += 10) assert(leftAt(t) - leftAt(t + 10) < 1.5, `${leftAt(t) - leftAt(t + 10)}px in 10ms at ${t}ms`);
+});
+
+Deno.test('lightbox swipe finish carries on from any moment along the same curve', () => {
+  const finish = lightboxSwipeFinish(290, 1);
+  const from = finish.handoverMs;
+  const rest = finish.restFrom(from);
+  assertEquals(rest.leftPx, finish.leftAt(from));
+  assertEquals(rest.durationMs, finish.durationMs - from);
+  const points = springPoints(rest.easing);
+  for (const [i, p] of points.entries()) {
+    const at = from + (rest.durationMs * i) / (points.length - 1);
+    const expected = i === points.length - 1 ? 1 : 1 - finish.leftAt(at) / rest.leftPx;
+    assert(Math.abs(p - expected) < 0.002, `sample ${i}: ${p}, the curve ${expected}`);
+  }
+  assertEquals(finish.restFrom(finish.durationMs).leftPx, 0);
 });
 
 const release = (dx: number, dy: number, velocityX: number, duration = 250) => {

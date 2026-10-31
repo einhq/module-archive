@@ -61,15 +61,24 @@ export function lightboxSwipeAction(
 /** How far back the release velocity looks; older samples describe a finger that has since slowed. */
 const VELOCITY_WINDOW_MS = 100;
 /**
- * The stiffness of the slide that finishes a release: a critically damped spring's natural
- * frequency in radians per millisecond. At 0.036 a picture is nearly 90% of the way in after
- * 100ms and at rest after about 220ms, whatever the distance.
+ * A release is finished by two critically damped springs pulling the picture together: a stiff one
+ * over most of the way, which has it nearly there at once, and a soft one over the last
+ * `SOFT_SHARE` of it, which slows it into place. Natural frequencies in radians per millisecond: a
+ * typical flick is nearly 90% of the way in after 100ms, eases over the rest, and is at rest after
+ * about 350ms.
  */
-const SPRING_FREQUENCY = 0.036;
+const STIFF_SPRING = 0.045;
+const SOFT_SPRING = 0.018;
+const SOFT_SHARE = 0.15;
 /** The slide ends this close to rest, in px; its last sample covers what is left, too little to see. */
-const SPRING_REST_PX = 1;
-/** Time between the samples of the slide's easing, which `linear()` joins with straight lines. */
-const SPRING_STEP_MS = 8;
+const REST_PX = 0.5;
+/**
+ * How close to its end a slide hands over to the picture it brings in. The picture is then moving
+ * so slowly that the switch, should it land a frame late, cannot be seen.
+ */
+const HANDOVER_PX = 8;
+/** Time between the samples of a slide's easing, which `linear()` joins with straight lines. */
+const SAMPLE_MS = 8;
 
 const releaseVelocity = (samples: readonly LightboxTouchPoint[], end: LightboxTouchPoint, axis: 'x' | 'y'): number => {
   let first = end;
@@ -93,27 +102,56 @@ export function lightboxSheetOpens(progress: number, velocityY: number): boolean
   return progress >= 0.5;
 }
 
-type LightboxSwipeFinish = { durationMs: number; easing: string };
+type LightboxEase = { durationMs: number; easing: string };
+
+export type LightboxSwipeFinish = LightboxEase & {
+  /** When `HANDOVER_PX` are left: the time to switch to the picture coming in. */
+  handoverMs: number;
+  /** How far the slide has still to go `elapsedMs` in, in px. */
+  leftAt: (elapsedMs: number) => number;
+  /** The slide from `elapsedMs` on: what is left of the way, eased as the rest of the curve. */
+  restFrom: (elapsedMs: number) => LightboxEase & { leftPx: number };
+};
+
+/** `left`'s curve from `from` to `to` ms as a `linear()` easing of evenly spaced samples. */
+const easingOf = (left: (t: number) => number, from: number, to: number): string => {
+  const total = left(from);
+  const steps = Math.max(1, Math.round((to - from) / SAMPLE_MS));
+  const points: number[] = [];
+  for (let i = 0; i < steps; i++) points.push(Number((1 - left(from + ((to - from) * i) / steps) / total).toFixed(3)));
+  return `linear(${[...points, 1].join(', ')})`;
+};
 
 /**
- * The slide that carries a released swipe the rest of the way: a critically damped spring, which
- * leaves at the finger's speed and pulls the picture into place, like a flung photo rather than a
- * fresh animation. However slow the release, the pull lands it in about the same short time, and
- * nothing overshoots: a release faster than the pull over that distance starts at the pull.
+ * The slide that carries a released swipe the rest of the way: it leaves at the finger's speed,
+ * like a flung photo rather than a fresh animation, has the picture nearly there in about 100ms
+ * however slow the release, and slows it into place over the last few pixels. Nothing overshoots:
+ * a release faster than the stiff spring's pull starts at the pull.
  *
- * The spring is written out as a CSS `linear()` easing of evenly spaced samples, so the slide is
- * still a transition, which the compositor runs whatever the page's script is doing.
+ * The curve is written out as CSS `linear()` easings of evenly spaced samples, so the slide is
+ * still a transition, which the compositor runs whatever the page's script is doing; `restFrom`
+ * gives the same for what is left of it, to carry on from a moment of the slide.
  */
 export function lightboxSwipeFinish(distancePx: number, speedPxPerMs: number): LightboxSwipeFinish {
   const distance = Math.max(distancePx, 1);
-  const pull = SPRING_FREQUENCY * distance;
-  const speed = Math.min(Math.max(speedPxPerMs, 0), pull);
-  // The way still to go after `t` ms: `distance` at the start, closing at `speed`.
-  const left = (t: number) => (distance + (pull - speed) * t) * Math.exp(-SPRING_FREQUENCY * t);
+  const stiff = (1 - SOFT_SHARE) * distance;
+  const soft = SOFT_SHARE * distance;
+  // The finger's speed is the stiff spring's to carry on.
+  const speed = Math.min(Math.max(speedPxPerMs, 0), STIFF_SPRING * stiff);
+  const left = (t: number) => stiff * (1 + (STIFF_SPRING - speed / stiff) * t) * Math.exp(-STIFF_SPRING * t) + soft * (1 + SOFT_SPRING * t) * Math.exp(-SOFT_SPRING * t);
   let durationMs = 1;
-  while (left(durationMs) > SPRING_REST_PX) durationMs++;
-  const steps = Math.max(1, Math.round(durationMs / SPRING_STEP_MS));
-  const points: number[] = [];
-  for (let i = 0; i < steps; i++) points.push(Number((1 - left((i * durationMs) / steps) / distance).toFixed(3)));
-  return { durationMs, easing: `linear(${[...points, 1].join(', ')})` };
+  while (left(durationMs) > REST_PX) durationMs++;
+  let handoverMs = 0;
+  while (handoverMs < durationMs && left(handoverMs) > HANDOVER_PX) handoverMs++;
+  const leftAt = (t: number) => t >= durationMs ? 0 : left(Math.max(t, 0));
+  return {
+    durationMs,
+    easing: easingOf(left, 0, durationMs),
+    handoverMs,
+    leftAt,
+    restFrom: (t) => {
+      const from = Math.min(Math.max(t, 0), durationMs);
+      return { leftPx: leftAt(from), durationMs: Math.max(1, durationMs - from), easing: easingOf(left, from, durationMs) };
+    },
+  };
 }
