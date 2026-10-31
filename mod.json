@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "coreApi": "^0.7.0",
   "exports": {
