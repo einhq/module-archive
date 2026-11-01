@@ -17,6 +17,7 @@ type Entry = {
   key: string;
   date: string;
   exactDate?: string;
+  dateQualifier?: string;
   endDate?: string;
   path: string;
   title: string;
@@ -560,6 +561,20 @@ Med hela familjen."`);
 
       const page = await feed('--kind move');
       assertEquals(page.entries.length, 2);
+    });
+
+    await t.step('an uncertain date says so, and makes no birthday or age', async () => {
+      await mkperson('greta', { name: 'Greta Ek', born: '1900-05-01', bornQualifier: 'about', died: '1980', diedQualifier: 'before' });
+      await mkevent(`${PEOPLE_ROOT}/greta`, 'census', { name: 'Census', eventType: 'generic', date: '1930', dateQualifier: 'after' });
+
+      const birthdays = await feed('--kind birthday --birthdays all -l 200');
+      assertEquals(birthdays.entries.filter((e) => e.path === `${PEOPLE_ROOT}/greta`).length, 0);
+      const life = (await feed('--kind birth,death,event -l 200')).entries.filter((e) => e.people?.includes(`${PEOPLE_ROOT}/greta`));
+      assertEquals(life.map((e) => [e.kind, e.date, e.dateQualifier, e.title]), [
+        ['death', '1980', 'before', 'Greta Ek died'],
+        ['event', '1930', 'after', 'Census'],
+        ['birth', '1900-05-01', 'about', 'Greta Ek was born'],
+      ]);
     });
 
     await t.step('rejects a bad kind, mode or cursor', async () => {

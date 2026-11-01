@@ -25,6 +25,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import { resolve } from '@std/path';
 import { makeCtx } from '@archive/people/genealogy';
 import { ageSpan, KIN_WORDS, parseKin, walkKin } from '@archive/people/kin';
+import { qualifiedDate } from '@archive/people/date-qualifier';
 
 /**
  * A person as a path, a slug, or a path relative to the working directory.
@@ -80,7 +81,7 @@ const personRelatives = async (cmd: Command): CmdReturn => {
 
   const found = await walkKin(makeCtx(cmd.sys.vfs, cmd.access), path, terms);
   const relatives = found.map((relative) => {
-    const span = age !== undefined && relative.born ? ageSpan(relative.born, age) : undefined;
+    const span = age !== undefined && relative.born ? ageSpan(relative.born, age, relative.bornQualifier) : undefined;
     return {
       ...relative,
       // Absent rather than wrong when there is no birth date: a span guessed from nothing would
@@ -99,7 +100,9 @@ const personRelatives = async (cmd: Command): CmdReturn => {
     return 0;
   }
   for (const relative of relatives) {
-    const dates = [relative.born, relative.died].filter(Boolean).join(' – ');
+    const dates = [relative.born && qualifiedDate(relative.born, relative.bornQualifier), relative.died && qualifiedDate(relative.died, relative.diedQualifier)].filter(
+      Boolean,
+    ).join(' – ');
     const span = 'taken' in relative && relative.taken ? `  aged ${age}: ${relative.taken.from} to ${relative.taken.to}` : '';
     await cmd.writeLn(`${relative.name}  (${relative.relation.sv} / ${relative.relation.en})${dates ? `  ${dates}` : ''}  ${relative.path}${span}`);
   }

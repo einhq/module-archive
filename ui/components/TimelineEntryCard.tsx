@@ -36,7 +36,8 @@ const dayLabel = (date: string): string => {
 };
 
 /**
- * "12–14 Jun" when a span crosses days, otherwise just the day it happened.
+ * "12–14 Jun" when a span crosses days, otherwise just the day it happened, and
+ * "about", "before" or "after" in front of a date that is not sure.
  *
  * The year is left out when it is on the month header this entry sits under,
  * where repeating it down a whole column of dates is noise — which holds until
@@ -44,6 +45,8 @@ const dayLabel = (date: string): string => {
  */
 export const spanLabel = (entry: TimelineEntry): string => {
   const start = entry.exactDate ?? entry.date;
+  // An uncertain date says so before its day, or alone under its year's header: "about", "before 12 Jun".
+  if (entry.dateQualifier && !entry.exactDate) return [entry.dateQualifier, dayLabel(start)].filter(Boolean).join(' ');
   if (!entry.endDate) return dayLabel(start);
 
   // Across a year boundary the header names only one of the two years, so both

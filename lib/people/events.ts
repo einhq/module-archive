@@ -1,7 +1,7 @@
 /**
  * Events as files. An event is a `file` node on the `db` storage tier under
  * `<owner>/events/<name>` whose content is the event body (markdown). Metadata
- * lives in attrs {name, eventType, date, legacy}; geo lives in a child
+ * lives in attrs {name, eventType, date, dateQualifier, legacy}; geo lives in a child
  * `position` node, not an attr, and the person who wrote the text, when one is
  * named, is a child `writer` softlink to them.
  *
@@ -11,6 +11,7 @@
  */
 import type { Command } from '@ein/client';
 import { slugifyName, uniqueSlug } from '@archive/people/person';
+import { type DateQualifier, EVENT_QUALIFIER_ATTR, QUALIFIER_ATTRS } from '@archive/people/date-qualifier';
 
 // Concrete vfs/access types derived from the Command surface (no core imports).
 type Vfs = Command['sys']['vfs'];
@@ -41,6 +42,8 @@ type EventSpec = {
   eventType?: string;
   /** ISO date YYYY[-MM[-DD]] */
   date?: string;
+  /** how sure `date` is; absent when it is what happened */
+  dateQualifier?: DateQualifier;
   /** markdown body -> file content */
   body?: string;
   /** geo -> child position node */
@@ -134,6 +137,7 @@ export const createEvent = async (
     name: spec.displayName ?? name,
     eventType: spec.eventType ?? 'generic',
     date: spec.date,
+    [EVENT_QUALIFIER_ATTR]: spec.dateQualifier,
     mimetype: EVENT_MIMETYPE,
     size: bytes.length,
     legacy: spec.legacy,
@@ -141,7 +145,7 @@ export const createEvent = async (
 
   if (await vfs.exists(access, path)) {
     // tier is immutable and set at creation, so it is not sent on update.
-    await vfs.update(access, path, { attrs });
+    await vfs.update(access, path, { attrs: { ...attrs, [EVENT_QUALIFIER_ATTR]: spec.dateQualifier ?? null } });
   } else {
     await vfs.create(access, NODE_TYPE_FILE, eventsDir, name, { props: { ...spec.props, tier: DB_TIER }, attrs });
   }
@@ -160,10 +164,10 @@ export const createEvent = async (
 };
 
 /**
- * Set the person's `born` / `died` from a dated birth or death event; the timeline,
- * search and the profile read the attr, not the event. `fillOnly` leaves an attr
- * that is already set alone. Anything other than a dated birth or death on a person
- * is ignored.
+ * Set the person's `born` / `died` from a dated birth or death event, and its
+ * qualifier from `qualifier` (cleared without one); the timeline, search and the
+ * profile read the attrs, not the event. `fillOnly` leaves an attr that is already
+ * set alone. Anything other than a dated birth or death on a person is ignored.
  */
 export const mirrorLifeDate = async (
   vfs: Vfs,
@@ -172,11 +176,12 @@ export const mirrorLifeDate = async (
   eventType: string | undefined,
   date: string | undefined,
   fillOnly = false,
+  qualifier?: DateQualifier,
 ): Promise<void> => {
   const lifeAttr = eventType ? LIFE_ATTRS[eventType] : undefined;
   if (!lifeAttr || !date) return;
   const node = await vfs.get(access, ownerPath);
   if (node.type !== 'person') return;
   if (fillOnly && (node.attrs as Record<string, unknown>)[lifeAttr]) return;
-  await vfs.update(access, ownerPath, { attrs: { [lifeAttr]: date } });
+  await vfs.update(access, ownerPath, { attrs: { [lifeAttr]: date, [QUALIFIER_ATTRS[lifeAttr]]: qualifier ?? null } });
 };

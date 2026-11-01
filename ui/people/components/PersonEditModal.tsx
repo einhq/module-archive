@@ -5,6 +5,8 @@ import type { PersonContact, PersonInfo } from '../hooks/usePeople.ts';
 import { shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { LabelsField, useLabelsDraft } from '../../components/NodeLabels.tsx';
+import type { DateQualifier } from '@archive/people/date-qualifier';
+import { QualifiedDateInput } from './QualifiedDateInput.tsx';
 
 type PersonEditModalProps = {
   opened: boolean;
@@ -20,7 +22,9 @@ type ProfileDraft = {
   birthname: string;
   gender: string | null;
   born: string;
+  bornQualifier: DateQualifier | null;
   died: string;
+  diedQualifier: DateQualifier | null;
   contacts: PersonContact[];
   allergies: string;
   description: string;
@@ -32,7 +36,9 @@ const draftFor = (person: PersonInfo): ProfileDraft => ({
   birthname: person.birthname ?? '',
   gender: person.gender ?? null,
   born: person.born ?? '',
+  bornQualifier: person.bornQualifier ?? null,
   died: person.died ?? '',
+  diedQualifier: person.diedQualifier ?? null,
   contacts: person.contact ?? [],
   allergies: person.allergies ?? '',
   description: person.description ?? '',
@@ -98,7 +104,9 @@ export function PersonEditModal({ opened, onClose, person, onApplied }: PersonEd
         ['fullname', draft.fullname.trim()],
         ['birthname', draft.birthname.trim()],
         ['born', draft.born.trim()],
+        ['born-qualifier', draft.bornQualifier ?? ''],
         ['died', draft.died.trim()],
+        ['died-qualifier', draft.diedQualifier ?? ''],
         ['allergies', draft.allergies.trim()],
         ['description', draft.description.trim()],
         ['gender', draft.gender ?? ''],
@@ -125,8 +133,18 @@ export function PersonEditModal({ opened, onClose, person, onApplied }: PersonEd
           <TextInput label='Full name' value={draft.fullname} onChange={(event) => set('fullname', event.currentTarget.value)} />
           <TextInput label='Birth name' value={draft.birthname} onChange={(event) => set('birthname', event.currentTarget.value)} />
           <Select label='Gender' data={GENDERS} value={draft.gender} onChange={(value) => set('gender', value)} clearable />
-          <TextInput label='Born' value={draft.born} onChange={(event) => set('born', event.currentTarget.value)} placeholder='YYYY, YYYY-MM or YYYY-MM-DD' />
-          <TextInput label='Died' value={draft.died} onChange={(event) => set('died', event.currentTarget.value)} placeholder='YYYY, YYYY-MM or YYYY-MM-DD' />
+          <QualifiedDateInput
+            label='Born'
+            date={draft.born}
+            qualifier={draft.bornQualifier}
+            onChange={(date, qualifier) => setDraft((d) => ({ ...d, born: date, bornQualifier: qualifier }))}
+          />
+          <QualifiedDateInput
+            label='Died'
+            date={draft.died}
+            qualifier={draft.diedQualifier}
+            onChange={(date, qualifier) => setDraft((d) => ({ ...d, died: date, diedQualifier: qualifier }))}
+          />
         </SimpleGrid>
 
         <Stack gap='xs'>

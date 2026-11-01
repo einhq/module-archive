@@ -8,6 +8,7 @@ import { spanLine } from '../../lib/residence-span.ts';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
+import { qualifiedDate } from '@archive/people/date-qualifier';
 
 type PersonInfoTabProps = {
   person: PersonInfo;
@@ -15,8 +16,8 @@ type PersonInfoTabProps = {
   media?: { total: number; range: { min: number; max: number } | null };
 };
 
-/** A date at the precision it was recorded, without any time of day it carries. */
-const day = (date?: string): string | undefined => (date ? formatRange(date.split('T')[0]) : undefined);
+/** A date at the precision it was recorded, without any time of day it carries, and as sure as it is: `~1890`, `before 1900`. */
+const day = (date?: string, qualifier?: string): string | undefined => (date ? qualifiedDate(formatRange(date.split('T')[0]), qualifier) : undefined);
 
 const slugOf = (path: string): string => encodeURIComponent(path.split('/').pop() ?? path);
 
@@ -44,8 +45,8 @@ export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
         {person.fullname && person.fullname !== person.name && <InfoFact label='Full name'>{person.fullname}</InfoFact>}
         {person.birthname && person.birthname !== person.fullname && person.birthname !== person.name && <InfoFact label='Born as'>{person.birthname}</InfoFact>}
         {person.gender && <InfoFact label='Gender'>{person.gender}</InfoFact>}
-        {person.born && <InfoFact label='Born'>{day(person.born)}</InfoFact>}
-        {person.died && <InfoFact label='Died'>{day(person.died)}</InfoFact>}
+        {person.born && <InfoFact label='Born'>{day(person.born, person.bornQualifier)}</InfoFact>}
+        {person.died && <InfoFact label='Died'>{day(person.died, person.diedQualifier)}</InfoFact>}
         {age && <InfoFact label={age.atDeath ? 'Age at death' : 'Age'}>{`${age.approx ? '~' : ''}${age.years}`}</InfoFact>}
         {media && media.total > 0 && (
           <InfoFact label='Photos'>

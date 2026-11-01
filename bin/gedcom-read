@@ -15,6 +15,7 @@ import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client'
 import { resolve } from '@std/path';
 import { choicesFromFlags, heldSource, importerOf, planGedcom, readGedcomAt } from '@archive/people/gedcom-import';
 import type { GedcomPlan } from '@archive/people/api';
+import { qualifiedYear } from '@archive/people/date-qualifier';
 
 const gedcomRead = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -40,7 +41,7 @@ const gedcomRead = async (cmd: Command): CmdReturn => {
       return 0;
     }
     for (const indi of plan.individuals) {
-      const span = indi.born || indi.died ? `${indi.born?.slice(0, 4) ?? ''}–${indi.died?.slice(0, 4) ?? ''}` : '';
+      const span = indi.born || indi.died ? `${qualifiedYear(indi.born, indi.bornQualifier)}–${qualifiedYear(indi.died, indi.diedQualifier)}` : '';
       const who = indi.action === 'match' ? `= ${indi.person} (${indi.how})` : indi.action === 'new' ? 'new' : 'left out';
       await cmd.writeLn(`${indi.xref} ${indi.name}${span ? ` ${span}` : ''} ${who}${indi.chosen ? ', chosen' : ''}`);
       for (const fit of indi.candidates.filter((fit) => fit.person !== indi.person)) await cmd.writeLn(`    could be ${fit.person} (${fit.score})`);

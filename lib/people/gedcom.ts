@@ -3,6 +3,7 @@
  * the character set it declares, its lines to a tree of records, and the records to the
  * individuals and families the import uses. Pure: no VFS, so the tests read files directly.
  */
+import type { DateQualifier } from '@archive/people/date-qualifier';
 
 /** One line of a GEDCOM file with the lines under it: `1 BIRT` holding `2 DATE 1 JAN 1900`. */
 type GedcomLine = { tag: string; xref?: string; value: string; children: GedcomLine[] };
@@ -172,11 +173,19 @@ const MONTHS: Record<string, number> = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5,
 
 /**
  * A GEDCOM date as EiN keeps one, and the years it can be in. `date` (`YYYY`, `YYYY-MM` or
- * `YYYY-MM-DD`) is set only for a date given without a qualifier or as calculated; an
- * approximate, bounded or ranged date gives only the span of years, for matching. A period
- * (`FROM … TO …`) keeps its ends as `since` and `until`.
+ * `YYYY-MM-DD`) is set for a date given without a qualifier or as calculated. An approximate or
+ * bounded one (`ABT`, `EST`, `BEF`, `AFT`) is `approx`: the date it names and how it is meant,
+ * a range (`BET … AND …`) about the year halfway. A period (`FROM … TO …`) keeps its ends as
+ * `since` and `until`. `from` and `to` are the years it can be in, for matching.
  */
-export type GedcomDate = { date?: string; from: number; to: number; since?: string; until?: string };
+export type GedcomDate = {
+  date?: string;
+  approx?: { date: string; qualifier: DateQualifier };
+  from: number;
+  to: number;
+  since?: string;
+  until?: string;
+};
 
 const point = (text: string): { date: string; year: number } | undefined => {
   // A calendar is named as `@#DJULIAN@` (5.5) or `JULIAN` (7); the date is read as written in it.
@@ -200,7 +209,8 @@ export const parseGedcomDate = (value: string): GedcomDate | undefined => {
     const [a, b] = [point(between[2]), point(between[3])];
     if (!a || !b) return undefined;
     const years = { from: Math.min(a.year, b.year), to: Math.max(a.year, b.year) };
-    return between[1] === 'FROM' ? { ...years, since: a.date, until: b.date } : years;
+    if (between[1] === 'FROM') return { ...years, since: a.date, until: b.date };
+    return { ...years, approx: { date: String(Math.floor((years.from + years.to) / 2)).padStart(4, '0'), qualifier: 'about' } };
   }
   const qualified = text.match(/^(ABT|EST|CAL|BEF|AFT|FROM|TO|INT)\s+(.+)$/);
   if (!qualified) {
@@ -214,15 +224,15 @@ export const parseGedcomDate = (value: string): GedcomDate | undefined => {
     case 'INT':
       return { date: p.date, from: p.year, to: p.year };
     case 'BEF':
-      return { from: p.year - 100, to: p.year };
+      return { from: p.year - 100, to: p.year, approx: { date: p.date, qualifier: 'before' } };
     case 'TO':
       return { from: p.year - 100, to: p.year, until: p.date };
     case 'AFT':
-      return { from: p.year, to: p.year + 100 };
+      return { from: p.year, to: p.year + 100, approx: { date: p.date, qualifier: 'after' } };
     case 'FROM':
       return { from: p.year, to: p.year + 100, since: p.date };
     default:
-      return { from: p.year - 2, to: p.year + 2 };
+      return { from: p.year - 2, to: p.year + 2, approx: { date: p.date, qualifier: 'about' } };
   }
 };
 

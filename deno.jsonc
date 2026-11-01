@@ -77,6 +77,7 @@
     "@archive/paths": "./lib/paths.ts",
     "@archive/people/api": "./lib/people/api.ts",
     "@archive/people/cover": "./lib/people/cover.ts",
+    "@archive/people/date-qualifier": "./lib/people/date-qualifier.ts",
     "@archive/people/events": "./lib/people/events.ts",
     "@archive/people/feed": "./lib/people/feed.ts",
     "@archive/people/gedcom": "./lib/people/gedcom.ts",

@@ -7,6 +7,8 @@ import { bucketLabel, shq } from '@ein/ui/lib';
 import type { TrashPutResult } from '@ein/api';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
 import { usePeople } from '../hooks/usePeople.ts';
+import type { DateQualifier } from '@archive/people/date-qualifier';
+import { QualifiedDateInput } from './QualifiedDateInput.tsx';
 
 // Quote a value for the shell (double-quote, escaping the chars the shell expands)
 function q(s: string): string {
@@ -46,11 +48,13 @@ type EventModalProps =
  * it), or change an existing one's date, text and writer, or delete it. Changing one keeps its
  * type: a person's `born` / `died` is set from a birth or death as it is added. The writer is a
  * person, linked as the event's `writer`; an event without one is by whoever added it. A new
- * event starts as written by the reader's own person, when their account is linked to one.
+ * event starts as written by the reader's own person, when their account is linked to one. A
+ * person's new event may be dated about, before or after a day; an album's is always on it.
  */
 export function EventModal({ ownerPath, ownerName, event, genericOnly = false, defaultDate, opened, onClose, onApplied }: EventModalProps) {
   const [eventType, setEventType] = useState('generic');
   const [date, setDate] = useState('');
+  const [qualifier, setQualifier] = useState<DateQualifier | null>(null);
   const [body, setBody] = useState('');
   const [writer, setWriter] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -64,6 +68,7 @@ export function EventModal({ ownerPath, ownerName, event, genericOnly = false, d
     if (!opened) return;
     setEventType('generic');
     setDate(event?.date ?? '');
+    setQualifier(null);
     setBody(event?.text ?? '');
     setWriter(event?.writer?.path ?? null);
     setError(null);
@@ -94,6 +99,7 @@ export function EventModal({ ownerPath, ownerName, event, genericOnly = false, d
     if (!event) {
       let line = `person-add-event ${q(ownerPath)} --type ${genericOnly ? 'generic' : eventType}`;
       if (date.trim()) line += ` --date ${q(date.trim())}`;
+      if (date.trim() && qualifier) line += ` --qualifier ${qualifier}`;
       if (body.trim()) line += ` --body ${q(body.trim())}`;
       if (writer) line += ` --writer ${q(writer)}`;
       return line;
@@ -181,17 +187,34 @@ export function EventModal({ ownerPath, ownerName, event, genericOnly = false, d
               allowDeselect={false}
             />
           )}
-          <TextInput
-            label='Date'
-            placeholder={genericOnly ? '2005-06-15' : 'Optional (2005-06-15)'}
-            value={date}
-            onChange={(change) => {
-              dateTouched.current = true;
-              setDate(change.currentTarget.value);
-            }}
-            required={genericOnly}
-            data-autofocus={event ? undefined : true}
-          />
+          {withType
+            ? (
+              <QualifiedDateInput
+                label='Date'
+                placeholder='Optional (2005-06-15)'
+                date={date}
+                qualifier={qualifier}
+                onChange={(next, nextQualifier) => {
+                  dateTouched.current = true;
+                  setDate(next);
+                  setQualifier(nextQualifier);
+                }}
+                autoFocus
+              />
+            )
+            : (
+              <TextInput
+                label='Date'
+                placeholder={genericOnly ? '2005-06-15' : 'Optional (2005-06-15)'}
+                value={date}
+                onChange={(change) => {
+                  dateTouched.current = true;
+                  setDate(change.currentTarget.value);
+                }}
+                required={genericOnly}
+                data-autofocus={event ? undefined : true}
+              />
+            )}
         </SimpleGrid>
         <MarkdownEditor
           label='Description'

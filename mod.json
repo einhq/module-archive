@@ -2,7 +2,7 @@
   "name": "archive",
   "version": "0.6.13",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
-  "coreApi": "^0.7.3",
+  "coreApi": "^0.7.4",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -94,6 +94,7 @@
     "@archive/news-albums": "./lib/news-albums.ts",
     "@archive/people/gedcom": "./lib/people/gedcom.ts",
     "@archive/people/gedcom-import": "./lib/people/gedcom-import.ts",
+    "@archive/people/date-qualifier": "./lib/people/date-qualifier.ts",
     "@archive/people/name-match": "./lib/people/name-match.ts",
     "@archive/people/cover": "./lib/people/cover.ts",
     "@archive/people/feed": "./lib/people/feed.ts",

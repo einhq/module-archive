@@ -542,7 +542,7 @@ const toPersonTag = async (
   takenAt?: string,
 ): Promise<{ tag: PersonTag; unnamed: boolean } | null> => {
   try {
-    const node = await vfs.get<{ name?: string; born?: string; unnamed?: boolean }>(access, personPath);
+    const node = await vfs.get<{ name?: string; born?: string; bornQualifier?: string; unnamed?: boolean }>(access, personPath);
     const born = node.attrs.born;
     const age = born && takenAt ? ageAt(born, takenAt) : null;
     const ageMonths = born && takenAt && age?.years === 0 ? ageMonthsAt(born, takenAt) : null;
@@ -555,7 +555,8 @@ const toPersonTag = async (
         born,
         age: age?.years,
         ageMonths: ageMonths?.months,
-        ageApprox: age?.approx,
+        // A birth date only about, before or after a day makes every age a guess.
+        ageApprox: age ? age.approx || Boolean(node.attrs.bornQualifier) : undefined,
         source,
       },
     };

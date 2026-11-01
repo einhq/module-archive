@@ -29,6 +29,7 @@ import { compare, type Direction, DIRECTIONS, encodeCursor, entryKey, isDirectio
 import { anniversarySource } from './partnerships.ts';
 import { attrSource, listSource, type TimelineSource } from './sources.ts';
 import { listTracks } from '@archive/location/track';
+import { type DateQualifier, EVENT_QUALIFIER_ATTR, isDateQualifier, qualifiedDate } from '@archive/people/date-qualifier';
 
 const NODE_TYPE_ALBUM = 'album';
 const NODE_TYPE_PERSON = 'person';
@@ -63,6 +64,11 @@ const attrString = (node: Node, key: string): string | undefined => {
   return typeof value === 'string' && value !== '' ? value : undefined;
 };
 const displayName = (node: Node, path: string): string => attrString(node, 'name') ?? basename(path);
+/** How sure the date beside a qualifier attr is; undefined when it is exact. */
+const lifeQualifier = (node: Node, key: string): DateQualifier | undefined => {
+  const value = (node.attrs as Record<string, unknown>)[key];
+  return isDateQualifier(value) ? value : undefined;
+};
 
 /** Year difference, when both dates carry one. */
 const yearsBetween = (from: string, to: string): number | undefined => {
@@ -129,15 +135,21 @@ const personSource = (cmd: Command, kind: 'birth' | 'death', opts: SourceOpts): 
     toEntries: (path, node, date) => {
       const name = displayName(node, path);
       const born = attrString(node, 'born');
-      // "aged 87" only when both ends are known; a bare year on each is enough.
-      const age = kind === 'death' && born ? yearsBetween(born, date) : undefined;
+      const dateQualifier = lifeQualifier(node, kind === 'birth' ? 'bornQualifier' : 'diedQualifier');
+      // "aged 87" only when both ends are known; a bare year on each is enough. "About" when
+      // either is about then, and no age when one is only before or after a date.
+      const qualifiers = [lifeQualifier(node, 'bornQualifier'), lifeQualifier(node, 'diedQualifier')];
+      const bounded = qualifiers.some((q) => q === 'before' || q === 'after');
+      const age = kind === 'death' && born && !bounded ? yearsBetween(born, date) : undefined;
+      const aged = age === undefined ? '' : `, aged ${qualifiers.includes('about') ? 'about ' : ''}${age}`;
 
       return [{
         kind,
         key: entryKey(node.id, kind),
         date,
+        ...(dateQualifier ? { dateQualifier } : {}),
         path,
-        title: kind === 'birth' ? `${name} was born` : age !== undefined ? `${name} died, aged ${age}` : `${name} died`,
+        title: kind === 'birth' ? `${name} was born` : `${name} died${aged}`,
         ownerPath: path,
         people: [path],
         age,
@@ -169,10 +181,12 @@ const eventSource = (cmd: Command, opts: SourceOpts): TimelineSource => {
     toEntries: (path, node, date) => {
       const owner = eventOwner(path);
       const eventType = attrString(node, 'eventType');
+      const dateQualifier = lifeQualifier(node, EVENT_QUALIFIER_ATTR);
       return [{
         kind: 'event',
         key: entryKey(node.id, 'event'),
         date,
+        ...(dateQualifier ? { dateQualifier } : {}),
         path,
         // Marriage and engagement get composed titles during enrichment, where
         // the partner can be looked up. Everything else has only its own name.
@@ -552,7 +566,9 @@ export const timeline = async (cmd: Command): CmdReturn => {
   for (const entry of entries) {
     const date = entry.exactDate ?? entry.date;
     const span = entry.endDate && entry.endDate.slice(0, 10) !== date.slice(0, 10) ? ` .. ${entry.endDate.slice(0, 10)}` : '';
-    await cmd.writeLn(`${date.slice(0, 10).padEnd(10)}${span.padEnd(14)} ${entry.kind.padEnd(10)} ${entry.title}`);
+    await cmd.writeLn(
+      `${qualifiedDate(date.slice(0, 10), entry.exactDate ? undefined : entry.dateQualifier).padEnd(10)}${span.padEnd(14)} ${entry.kind.padEnd(10)} ${entry.title}`,
+    );
     if (entry.description) await cmd.writeLn(`             ${entry.description.split('\n')[0]}`);
   }
   return 0;

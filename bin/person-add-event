@@ -13,18 +13,21 @@
  * A given name that is taken updates that event in place.
  *
  * A dated birth or death also sets the person's `born` / `died` attr: the timeline,
- * search and the profile read those, and fold the event onto them.
+ * search and the profile read those, and fold the event onto them. `--qualifier`
+ * says the date is about, before or after the day it names, on the event and on
+ * the attr alike.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { resolve } from '@std/path';
 import { createEvent, mirrorLifeDate, newEventName, titleFromBody } from '@archive/people/events';
 import type { PersonAddEventAnswer } from '@archive/people/api';
+import { DATE_QUALIFIERS, isDateQualifier } from '@archive/people/date-qualifier';
 
 const personAddEvent = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
-    string: ['type', 'date', 'body', 'lat', 'lng', 'writer'],
+    string: ['type', 'date', 'qualifier', 'body', 'lat', 'lng', 'writer'],
     alias: { t: 'type', d: 'date' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -36,7 +39,7 @@ const personAddEvent = async (cmd: Command): CmdReturn => {
 
   if (!target) {
     await cmd.writeError(
-      'person-add-event: usage: person-add-event <person> [<name>] [--type <type>] [--date <date>] [--body <text>] [--lat <n> --lng <n>] [--writer <person>]\n',
+      'person-add-event: usage: person-add-event <person> [<name>] [--type <type>] [--date <date> [--qualifier about|before|after]] [--body <text>] [--lat <n> --lng <n>] [--writer <person>]\n',
     );
     return 1;
   }
@@ -44,6 +47,16 @@ const personAddEvent = async (cmd: Command): CmdReturn => {
   const person = resolve(cmd.cwd, target);
   if (!(await cmd.sys.vfs.exists(cmd.access, person))) {
     await cmd.writeError(`person-add-event: ${person}: not found\n`);
+    return 1;
+  }
+
+  const qualifier = flags.qualifier || undefined;
+  if (qualifier !== undefined && !isDateQualifier(qualifier)) {
+    await cmd.writeError(`person-add-event: --qualifier must be one of ${DATE_QUALIFIERS.join(', ')}\n`);
+    return 1;
+  }
+  if (qualifier && !flags.date) {
+    await cmd.writeError('person-add-event: --qualifier needs --date\n');
     return 1;
   }
 
@@ -74,11 +87,12 @@ const personAddEvent = async (cmd: Command): CmdReturn => {
       displayName: given ? undefined : titleFromBody(flags.body),
       eventType: flags.type ?? 'generic',
       date: flags.date,
+      dateQualifier: qualifier,
       body: flags.body,
       latlng,
       writer,
     });
-    await mirrorLifeDate(cmd.sys.vfs, cmd.access, person, flags.type, flags.date);
+    await mirrorLifeDate(cmd.sys.vfs, cmd.access, person, flags.type, flags.date, false, qualifier);
   } catch (error) {
     await cmd.writeError(`person-add-event: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -103,6 +117,11 @@ personAddEvent.spec = {
   flags: [
     { name: 'type', type: 'string' as const, description: 'event type: birth, death, marriage, engagement, generic; a dated birth/death also sets born/died' },
     { name: 'date', type: 'string' as const, description: 'event date (YYYY[-MM[-DD]])' },
+    {
+      name: 'qualifier',
+      type: 'string' as const,
+      description: 'the date is about, before or after the day it names: about, before or after; a birth/death sets the same on born/died',
+    },
     { name: 'body', type: 'string' as const, description: 'event body text (markdown)' },
     { name: 'lat', type: 'string' as const, description: 'latitude for the event position node' },
     { name: 'lng', type: 'string' as const, description: 'longitude for the event position node' },

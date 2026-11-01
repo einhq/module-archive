@@ -3,13 +3,14 @@ import type { CmdReturn, Command } from '@ein/client';
 import { basename, resolve } from '@std/path';
 import { CHILDREN_DIR, type Ctx, getChildren, getParents, makeCtx, PARENTS_DIR } from '@archive/people/genealogy';
 import type { PersonAttrs } from '@archive/people/types';
+import { qualifiedYear } from '@archive/people/date-qualifier';
 
 async function label(cmd: Command, path: string): Promise<string> {
   try {
     const node = await cmd.sys.vfs.get<PersonAttrs>(cmd.access, path);
     const name = node.attrs.name ?? basename(path);
-    const y = (d?: string | null) => (d ? d.slice(0, 4) : '');
-    const span = node.attrs.born || node.attrs.died ? ` (${y(node.attrs.born)}–${y(node.attrs.died)})` : '';
+    const { born, died, bornQualifier, diedQualifier } = node.attrs;
+    const span = born || died ? ` (${qualifiedYear(born, bornQualifier)}–${qualifiedYear(died, diedQualifier)})` : '';
     return `${name}${span}`;
   } catch {
     return basename(path);

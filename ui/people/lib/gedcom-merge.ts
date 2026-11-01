@@ -93,6 +93,8 @@ export function buildMerge(plan: GedcomPlan): Merge {
       ...(shown.gender ? { gender: shown.gender } : {}),
       ...(shown.born ? { born: shown.born } : {}),
       ...(shown.died ? { died: shown.died } : {}),
+      ...(shown.bornQualifier ? { bornQualifier: shown.bornQualifier } : {}),
+      ...(shown.diedQualifier ? { diedQualifier: shown.diedQualifier } : {}),
       parents: up,
       children: down,
       partners: [...partners.get(card.key) ?? []].map((path) => ({ path })),

@@ -292,6 +292,21 @@ Deno.test({
       await cmd.shouldSucceed(`rm -r ${added.path} ${PEOPLE_ROOT}/tora`);
     });
 
+    await t.step('add-event --qualifier dates an event about, before or after a day, and its born too', async () => {
+      await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/ivar --name Ivar`);
+      const attrsOf = (path: string) => client.execJson<Record<string, unknown>>(`attrs ${path}`);
+      await cmd.shouldSucceed(`person-add-event ${PEOPLE_ROOT}/ivar birth --type birth --date 1880 --qualifier about`);
+      assertEquals((await attrsOf(`${PEOPLE_ROOT}/ivar/events/birth`)).dateQualifier, 'about');
+      assertEquals([(await attrsOf(`${PEOPLE_ROOT}/ivar`)).born, (await attrsOf(`${PEOPLE_ROOT}/ivar`)).bornQualifier], ['1880', 'about']);
+      // Given again without one, the date is exact on both.
+      await cmd.shouldSucceed(`person-add-event ${PEOPLE_ROOT}/ivar birth --type birth --date 1881-02-03`);
+      assertEquals((await attrsOf(`${PEOPLE_ROOT}/ivar/events/birth`)).dateQualifier, undefined);
+      assertEquals([(await attrsOf(`${PEOPLE_ROOT}/ivar`)).born, (await attrsOf(`${PEOPLE_ROOT}/ivar`)).bornQualifier], ['1881-02-03', undefined]);
+      await cmd.shouldFail(`person-add-event ${PEOPLE_ROOT}/ivar --date 1900 --qualifier roughly`);
+      await cmd.shouldFail(`person-add-event ${PEOPLE_ROOT}/ivar --body "When?" --qualifier about`);
+      await cmd.shouldSucceed(`rm -r ${PEOPLE_ROOT}/ivar`);
+    });
+
     await t.step('check flags a birth or death event not mirrored onto born/died', async () => {
       await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/sven --name Sven --born 1930`);
       // An event that refines the attr agrees with it.

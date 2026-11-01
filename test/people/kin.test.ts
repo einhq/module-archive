@@ -37,6 +37,9 @@ Deno.test('ageSpan is the year someone was that age, as coarse as the birth date
   assertEquals(ageSpan('2018-04-18T10:34', 6), { from: '2024-04-18', to: '2025-04-18' });
   assertEquals(ageSpan('2008', 0), { from: '2008', to: '2009' });
   assertEquals(ageSpan('sometime', 6), undefined);
+  // Born about then: the two years either side; only before or after a date: no span.
+  assertEquals(ageSpan('2008-03', 6, 'about'), { from: '2012', to: '2017' });
+  assertEquals(ageSpan('2008', 6, 'before'), undefined);
   assertEquals(ageSpan('2008', -1), undefined);
   assertEquals(ageSpan('2008', 6.5), undefined);
 });

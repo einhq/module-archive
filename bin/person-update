@@ -5,7 +5,9 @@
  *
  * The profile editor used to write these with raw `attrs`, which put the person schema — which
  * fields exist, what a date looks like, what a gender may be — in a page. The rules live here now,
- * and a field given empty is cleared.
+ * and a field given empty is cleared. A date comes with how sure it is: `--born` alone says the
+ * date is exact, and clears a qualifier there was; `--born-qualifier` says it is about, before or
+ * after that date.
  */
 
 import type { CmdReturn, Command } from '@ein/client';
@@ -13,14 +15,18 @@ import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client'
 import { resolve } from '@std/path';
 import { validDate } from '@archive/people/genealogy';
 import { PERSON_GENDERS, type PersonContact } from '@archive/people/types';
+import { DATE_QUALIFIERS, isDateQualifier, QUALIFIER_ATTRS } from '@archive/people/date-qualifier';
 
 const TEXT_FIELDS = ['name', 'fullname', 'birthname', 'allergies', 'description'] as const;
 const DATE_FIELDS = ['born', 'died'] as const;
 
+/** `bornQualifier` as a flag: `born-qualifier`. */
+const flagOf = (attr: string): string => attr.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+
 const personUpdate = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
-    string: [...TEXT_FIELDS, ...DATE_FIELDS, 'gender', 'contact'],
+    string: [...TEXT_FIELDS, ...DATE_FIELDS, ...DATE_FIELDS.map((field) => QUALIFIER_ATTRS[field]).map(flagOf), 'gender', 'contact'],
     unknown: collectUnknownFlags(unknown),
   });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
@@ -46,10 +52,18 @@ const personUpdate = async (cmd: Command): CmdReturn => {
     attrs[field] = value || null;
   }
   for (const field of DATE_FIELDS) {
+    const qualifierAttr = QUALIFIER_ATTRS[field];
+    const qualifierFlag = flags[flagOf(qualifierAttr)];
+    if (qualifierFlag !== undefined) {
+      const qualifier = String(qualifierFlag).trim();
+      if (qualifier && !isDateQualifier(qualifier)) return await fail(`--${flagOf(qualifierAttr)} must be one of ${DATE_QUALIFIERS.join(', ')}`);
+      attrs[qualifierAttr] = qualifier || null;
+    }
     if (flags[field] === undefined) continue;
     const value = String(flags[field]).trim();
     if (value && !validDate(value)) return await fail(`--${field} '${value}' is not a date (YYYY[-MM[-DD]])`);
     attrs[field] = value || null;
+    if (!value || qualifierFlag === undefined) attrs[qualifierAttr] = null;
   }
   if (flags.gender !== undefined) {
     const value = String(flags.gender).trim();
@@ -75,6 +89,10 @@ const personUpdate = async (cmd: Command): CmdReturn => {
   try {
     const node = await cmd.sys.vfs.get(cmd.access, path);
     if (node.type !== 'person') return await fail(`${path}: not a person (is ${node.type})`);
+    for (const field of DATE_FIELDS) {
+      const date = field in attrs ? attrs[field] : (node.attrs as Record<string, unknown>)[field];
+      if (attrs[QUALIFIER_ATTRS[field]] && !date) return await fail(`--${flagOf(QUALIFIER_ATTRS[field])} needs a date; give --${field} as well`);
+    }
     await cmd.sys.vfs.update(cmd.access, path, { attrs });
   } catch (error) {
     return await fail(error instanceof Error ? error.message : String(error));
@@ -98,6 +116,8 @@ personUpdate.spec = {
     { name: 'birthname', type: 'string' as const, description: 'name at birth' },
     { name: 'born', type: 'string' as const, description: 'birth date, YYYY[-MM[-DD]]' },
     { name: 'died', type: 'string' as const, description: 'death date, YYYY[-MM[-DD]]' },
+    { name: 'born-qualifier', type: 'string' as const, description: 'the birth date is about, before or after the day given: about, before or after; --born alone clears it' },
+    { name: 'died-qualifier', type: 'string' as const, description: 'the death date is about, before or after the day given: about, before or after; --died alone clears it' },
     { name: 'gender', type: 'string' as const, description: 'male, female, other or unknown' },
     { name: 'allergies', type: 'string' as const, description: 'allergy notes' },
     { name: 'description', type: 'string' as const, description: 'a few words about the person' },
@@ -105,6 +125,7 @@ personUpdate.spec = {
   ],
   examples: [
     "person-update /archive/people/Anna_Andersson --born=1970-01-01 --died=''",
+    'person-update /archive/people/Anna_Andersson --born=1890 --born-qualifier=about',
     'person-update /archive/people/Anna_Andersson --contact \'[{"type":"email","data":"anna@example.com"}]\'',
   ],
   returns: 'nothing; the fields given are written, empty ones cleared.',

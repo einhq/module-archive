@@ -16,6 +16,9 @@ export type PersonAttrs = {
   born?: string | null;
   /** ISO date YYYY[-MM[-DD]] */
   died?: string | null;
+  /** How sure `born` and `died` are (`@archive/people/date-qualifier`); absent when exact. */
+  bornQualifier?: 'about' | 'before' | 'after' | null;
+  diedQualifier?: 'about' | 'before' | 'after' | null;
   contact?: PersonContact[] | null;
   /** free-text allergy notes */
   allergies?: string | null;

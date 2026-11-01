@@ -62,7 +62,7 @@ export type DatedPerson = {
   /** The attr's value as stored, possibly partial (`1815`, `1815-03`). */
   date: string;
   year: number;
-  /** `MM-DD`, only set when the date carries both. */
+  /** `MM-DD`, only set when the date carries both and is what happened, not about, before or after it. */
   monthDay?: string;
   born?: string;
   died?: string;
@@ -84,7 +84,7 @@ const toDated = (absPath: string, attrs: Record<string, unknown>, id: string, re
     name: (attrs.name as string | undefined) ?? absPath.split('/').pop() ?? absPath,
     date,
     year,
-    monthDay: monthDayOf(date),
+    monthDay: attrs[ref === 'born' ? 'bornQualifier' : 'diedQualifier'] ? undefined : monthDayOf(date),
     born,
     died,
   };

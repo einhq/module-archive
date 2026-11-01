@@ -41,6 +41,8 @@ export type TimelineEntry = {
    * the indexed value.
    */
   exactDate?: string;
+  /** How sure `date` is (`about`, `before`, `after`); absent when it is what happened. */
+  dateQualifier?: 'about' | 'before' | 'after';
   /** The far end of a span, for albums and tracks. */
   endDate?: string;
   /** The node this entry is about. */

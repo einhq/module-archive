@@ -399,7 +399,9 @@ const readPeople = async (vfs: Vfs, ctx: OwnerContext, ids: string[]): Promise<v
   const nodes = await batched(missing, (page) => vfs.getNodesByIds<PersonNodeAttrs>(ctx.access, page));
   for (const [id, node] of nodes) {
     if (node.type !== NODE_TYPE_PERSON || typeof node.attrs.name !== 'string' || isUnnamed(node.attrs)) continue;
-    ctx.people.set(id, { name: node.attrs.name, ...(typeof node.attrs.born === 'string' ? { born: node.attrs.born } : {}) });
+    // Only a birth date that is what happened names a birthday.
+    const born = typeof node.attrs.born === 'string' && !node.attrs.bornQualifier ? node.attrs.born : undefined;
+    ctx.people.set(id, { name: node.attrs.name, ...(born ? { born } : {}) });
   }
 };
 

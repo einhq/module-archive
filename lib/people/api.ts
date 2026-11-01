@@ -9,6 +9,7 @@
 import type { TimelineEntry } from '@archive/timeline/api';
 import type { NodeOwnership } from '@ein/api';
 import type { SourceFile } from '@archive/sources/api';
+import type { DateQualifier } from '@archive/people/date-qualifier';
 
 export type PersonFace = {
   /** The region. Its crop is `<facePath>/image.avif`; a row does not repeat it, since a page is held under a byte budget. */
@@ -151,7 +152,7 @@ type PersonRelation = { role: string; path: string; name?: string; kind?: string
 /** A location they lived, and when. An open `to` is where they live now. */
 export type PersonHome = { path: string; name?: string; from?: string; to?: string };
 
-type PersonEvent = { name: string; eventType: string; date?: string; position?: string; description?: string };
+type PersonEvent = { name: string; eventType: string; date?: string; dateQualifier?: DateQualifier; position?: string; description?: string };
 
 /** `person-add-event`: the event file it wrote, under a name it chose when given none. */
 export type PersonAddEventAnswer = { ok: true; path: string };
@@ -165,6 +166,9 @@ export type PersonListEntry = {
   fullname?: string;
   born?: string;
   died?: string;
+  /** How sure `born` and `died` are; absent when exact. */
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
   /** Files of the library with a face, box or voice of theirs, each once (`picturesByPerson`). */
   pictures: number;
 };
@@ -179,6 +183,9 @@ export type PersonInfo = {
   gender?: string;
   born?: string;
   died?: string;
+  /** How sure `born` and `died` are; absent when exact. */
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
   age?: PersonAge;
   contact?: PersonContact[];
   allergies?: string;
@@ -199,6 +206,9 @@ export type FamilyNode = {
   gender?: string;
   born?: string;
   died?: string;
+  /** How sure `born` and `died` are; absent when exact. */
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
   /** Drawn parents — always a subset of `parentCount`. */
   parents: string[];
   children: string[];
@@ -252,7 +262,16 @@ export type GedcomMatchHow = 'chosen' | 'source' | 'uid' | 'name-date' | 'relati
 export type GedcomChoice = { kind: 'person'; person: string } | { kind: 'new' } | { kind: 'skip' };
 
 /** A person's names, gender and dates, as a GEDCOM plan shows them. */
-type GedcomPlanAttrs = { name: string; fullname?: string; birthname?: string; gender?: string; born?: string; died?: string };
+type GedcomPlanAttrs = {
+  name: string;
+  fullname?: string;
+  birthname?: string;
+  gender?: string;
+  born?: string;
+  died?: string;
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
+};
 
 /** One individual of the file in a `gedcom-read` plan. Relatives are the file's, by xref. */
 type GedcomPlanIndividual = GedcomPlanAttrs & {

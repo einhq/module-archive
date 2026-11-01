@@ -10,7 +10,7 @@
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import { GENEALOGY_SOURCES, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
-import type { GedcomImportResult, GedcomPlan, GedcomStageResult, PersonInfo } from '@archive/people/api';
+import type { GedcomImportResult, GedcomPlan, GedcomStageResult, PersonInfo, PersonTimeline } from '@archive/people/api';
 import type { StagingStatus } from '@archive/staging/api';
 import type { SourceFile } from '@archive/sources/api';
 
@@ -47,6 +47,34 @@ const STORY = `0 HEAD
 2 DATE 1990
 2 PLAC Saint Ann's
 0 @N1@ NOTE Played the organ.
+0 TRLR
+`;
+
+/** A couple the file knows only roughly when about. */
+const ROUGH = `0 HEAD
+0 @I1@ INDI
+1 NAME Clara /Pole/
+1 SEX F
+1 BIRT
+2 DATE ABT 1890
+1 DEAT
+2 DATE BEF 1960
+1 OCCU Seamstress
+2 DATE ABT 1910
+1 CENS
+2 DATE AFT 1920
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Walter /Pole/
+1 SEX M
+1 BIRT
+2 DATE BET 1885 AND 1889
+1 FAMS @F1@
+0 @F1@ FAM
+1 HUSB @I2@
+1 WIFE @I1@
+1 MARR
+2 DATE ABT 1912
 0 TRLR
 `;
 
@@ -215,6 +243,28 @@ Deno.test({
       const again = await client.execJson<GedcomImportResult>(`gedcom-import ${await stage('story-again.ged', STORY)}`);
       assertEquals([again.events, again.homes, again.partners], [0, 0, 0]);
       assertEquals((await info('harold')).events.length, 4);
+    });
+
+    await t.step('an approximate date is kept with how sure it is', async () => {
+      const result = await client.execJson<GedcomImportResult>(`gedcom-import ${await stage('rough.ged', ROUGH)}`);
+      assertEquals(result.created.map((c) => c.person), [`${PEOPLE_ROOT}/clara-pole`, `${PEOPLE_ROOT}/walter-pole`]);
+      // Occupation and census for Clara; the marriage, which the relation cannot date, on Walter.
+      assertEquals(result.events, 3);
+
+      const clara = await info('clara-pole');
+      assertEquals([clara.born, clara.bornQualifier, clara.died, clara.diedQualifier, clara.age?.approx], ['1890', 'about', '1960', 'before', true]);
+      assertEquals(clara.events.map((e) => [e.name, e.date, e.dateQualifier]).sort(), [['Census', '1920', 'after'], ['Occupation: Seamstress', '1910', 'about']]);
+      const walter = await info('walter-pole');
+      assertEquals([walter.born, walter.bornQualifier], ['1887', 'about']);
+      assertEquals(walter.events.map((e) => [e.eventType, e.date, e.dateQualifier]), [['marriage', '1912', 'about']]);
+      assertEquals(walter.relations.find((r) => r.role === 'partner')?.from, undefined);
+
+      const timeline = await client.execJson<PersonTimeline>(`person-timeline ${PEOPLE_ROOT}/clara-pole`);
+      const life = timeline.entries.filter((e) => e.kind === 'birth' || e.kind === 'death').map((e) => [e.kind, e.date, e.dateQualifier]);
+      assertEquals(life.sort(), [['birth', '1890', 'about'], ['death', '1960', 'before']]);
+
+      const again = await client.execJson<GedcomImportResult>(`gedcom-import ${await stage('rough-again.ged', ROUGH)}`);
+      assertEquals([again.created.length, again.events], [0, 0]);
     });
 
     await t.step('a staged file is imported as its owner, who may change only their own people', async () => {

@@ -29,6 +29,18 @@ Deno.test({ name: 'person-update', sanitizeResources: false, sanitizeOps: false 
       assertEquals([now.born, now.contact], [undefined, undefined]);
     });
 
+    await t.step('a date comes with how sure it is, and a new date alone is exact', async () => {
+      await cmd.shouldSucceed(`person-update ${anna} --born=1890 --born-qualifier=about`);
+      assertEquals([(await attrs()).born, (await attrs()).bornQualifier], ['1890', 'about']);
+      await cmd.shouldSucceed(`person-update ${anna} --born-qualifier=before`);
+      assertEquals((await attrs()).bornQualifier, 'before');
+      await cmd.shouldSucceed(`person-update ${anna} --born=1891`);
+      assertEquals([(await attrs()).born, (await attrs()).bornQualifier], ['1891', undefined]);
+      await cmd.shouldFail(`person-update ${anna} --born-qualifier=roughly`);
+      await cmd.shouldFail(`person-update ${anna} --died-qualifier=about`);
+      await cmd.shouldSucceed(`person-update ${anna} --born=`);
+    });
+
     await t.step('refuses what is not a person profile', async () => {
       await cmd.shouldFail(`person-update ${anna} --born=last-spring`);
       await cmd.shouldFail(`person-update ${anna} --gender=cat`);

@@ -12,6 +12,7 @@ import { COVER_LINK_NAME } from '@ein/paths';
 import type { TimelineCover, TimelineEntry } from '@archive/timeline/api';
 import { toText } from '@std/streams/to-text';
 import { basename } from '@std/path';
+import { EVENT_QUALIFIER_ATTR, isDateQualifier, qualifiedDate } from '@archive/people/date-qualifier';
 
 export type { TimelineCover, TimelineEntry };
 
@@ -153,6 +154,7 @@ export async function ownEventEntries(cmd: Command, owner: string): Promise<Time
       kind: 'event',
       key: `${path}#event`,
       date: attrs.date as string,
+      ...(isDateQualifier(attrs[EVENT_QUALIFIER_ATTR]) ? { dateQualifier: attrs[EVENT_QUALIFIER_ATTR] } : {}),
       path,
       title: (attrs.name as string | undefined) || child.name,
       ownerPath: owner,
@@ -170,6 +172,8 @@ export async function writeFeed(cmd: Command, entries: TimelineEntry[]): Promise
   for (const entry of entries) {
     const date = entry.exactDate ?? entry.date;
     const span = entry.endDate && entry.endDate.slice(0, 10) !== date.slice(0, 10) ? ` .. ${entry.endDate.slice(0, 10)}` : '';
-    await cmd.writeLn(`${date.slice(0, 10).padEnd(10)}${span.padEnd(14)} ${entry.kind.padEnd(8)} ${entry.title}`);
+    await cmd.writeLn(
+      `${qualifiedDate(date.slice(0, 10), entry.exactDate ? undefined : entry.dateQualifier).padEnd(10)}${span.padEnd(14)} ${entry.kind.padEnd(8)} ${entry.title}`,
+    );
   }
 }

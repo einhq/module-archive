@@ -24,6 +24,7 @@ import { basename, resolve } from '@std/path';
 import { CHILDREN_DIR, PARTNERS_DIR, readRelationDir } from '@archive/people/genealogy';
 import type { PersonAttrs } from '@archive/people/types';
 import type { PersonTimeline } from '@archive/people/api';
+import { EVENT_QUALIFIER_ATTR, isDateQualifier, lifeQualifiers } from '@archive/people/date-qualifier';
 import { albumEntries, attrsOf, coverOf, mapLimited, nameOf, newestFirst, readBody, type TimelineCover, type TimelineEntry, writeFeed } from '@archive/people/feed';
 
 const EVENTS_DIR = 'events';
@@ -32,11 +33,30 @@ const HOMES_DIR = 'homes';
 /** Birth and death, from the attrs — the values everyone has, event file or not. */
 function lifeEntries(person: string, attrs: PersonAttrs, cover?: TimelineCover): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  const { bornQualifier, diedQualifier } = lifeQualifiers(attrs);
   if (attrs.born) {
-    entries.push({ kind: 'birth', key: `${person}#birth`, date: attrs.born, path: person, title: `${attrs.name} was born`, people: [person], cover });
+    entries.push({
+      kind: 'birth',
+      key: `${person}#birth`,
+      date: attrs.born,
+      ...(bornQualifier ? { dateQualifier: bornQualifier } : {}),
+      path: person,
+      title: `${attrs.name} was born`,
+      people: [person],
+      cover,
+    });
   }
   if (attrs.died) {
-    entries.push({ kind: 'death', key: `${person}#death`, date: attrs.died, path: person, title: `${attrs.name} died`, people: [person], cover });
+    entries.push({
+      kind: 'death',
+      key: `${person}#death`,
+      date: attrs.died,
+      ...(diedQualifier ? { dateQualifier: diedQualifier } : {}),
+      path: person,
+      title: `${attrs.name} died`,
+      people: [person],
+      cover,
+    });
   }
   return entries;
 }
@@ -76,6 +96,8 @@ async function eventEntries(cmd: Command, person: string, personName: string, li
     const eventType = (attrs.eventType as string | undefined) ?? 'generic';
     const path = `${person}/${EVENTS_DIR}/${child.name}`;
     const date = attrs.date as string | undefined;
+    const qualifier = attrs[EVENT_QUALIFIER_ATTR];
+    const dateQualifier = isDateQualifier(qualifier) ? { dateQualifier: qualifier } : {};
 
     const [description, location] = details[index];
 
@@ -85,8 +107,9 @@ async function eventEntries(cmd: Command, person: string, personName: string, li
         if (description) target.description = description;
         if (location) target.location = location;
         // Only ever a refinement — `1815` becoming `1815-03-04`. A date that
-        // disagrees is data to fix, not a display to switch.
-        if (date && date !== target.date && date.startsWith(target.date)) target.exactDate = date;
+        // disagrees is data to fix, not a display to switch, and an uncertain
+        // one refines nothing.
+        if (date && !target.dateQualifier && !('dateQualifier' in dateQualifier) && date !== target.date && date.startsWith(target.date)) target.exactDate = date;
         continue;
       }
 
@@ -100,6 +123,7 @@ async function eventEntries(cmd: Command, person: string, personName: string, li
         kind: eventType,
         key: `${path}#${eventType}`,
         date,
+        ...dateQualifier,
         path: person,
         title: eventType === 'birth' ? `${personName} was born` : `${personName} died`,
         people: [person],
@@ -116,6 +140,7 @@ async function eventEntries(cmd: Command, person: string, personName: string, li
       kind: 'event',
       key: `${path}#event`,
       date,
+      ...dateQualifier,
       path,
       title: (attrs.name as string | undefined) || child.name,
       ownerPath: person,

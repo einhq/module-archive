@@ -18,6 +18,7 @@ import { createEvent, EVENTS_DIR, newEventName } from '@archive/people/events';
 import { CHILDREN_DIR, createRelationPair, datePart, makeCtx, PARENTS_DIR, PARTNERS_DIR, wouldCreateCycle } from '@archive/people/genealogy';
 import { type Gedcom, type GedcomDate, type GedcomEvent, type GedcomIndividual, readGedcom } from '@archive/people/gedcom';
 import { createResidence, homeLink } from '@archive/people/residence';
+import { type DateQualifier, isDateQualifier, QUALIFIER_ATTRS } from '@archive/people/date-qualifier';
 import { slugifyName } from '@archive/people/person';
 import type { PersonAttrs } from '@archive/people/types';
 import type { GedcomChoice, GedcomImportResult, GedcomMatchHow, GedcomPlan, GedcomPlanPerson } from '@archive/people/api';
@@ -70,12 +71,24 @@ const year = (date: string | null | undefined): number | undefined => {
 /** The years an individual's birth or death can be in, a christening or burial standing in. */
 const span = (event: GedcomDate | undefined, stand: GedcomDate | undefined): GedcomDate | undefined => event ?? (stand ? { from: stand.from - 1, to: stand.to } : undefined);
 
-/** How a date of the archive and one of the file agree: `exact`, `year`, `conflict`, or unknown. */
-const compareDate = (ours: string | null | undefined, theirs: GedcomDate | undefined): 'exact' | 'year' | 'conflict' | undefined => {
+/** The years a date of the archive can be in: its own, or about, before or after it as its qualifier says. */
+const yearsOf = (y: number, qualifier: unknown): [number, number] => {
+  if (qualifier === 'about') return [y - 2, y + 2];
+  if (qualifier === 'before') return [y - 100, y];
+  if (qualifier === 'after') return [y, y + 100];
+  return [y, y];
+};
+
+/**
+ * How a date of the archive, with its qualifier, and one of the file agree: `exact`, `year`,
+ * `conflict` when their years cannot meet, or unknown.
+ */
+const compareDate = (ours: string | null | undefined, qualifier: unknown, theirs: GedcomDate | undefined): 'exact' | 'year' | 'conflict' | undefined => {
   const y = year(ours);
   if (y === undefined || !theirs) return undefined;
-  if (y < theirs.from || y > theirs.to) return 'conflict';
-  if (ours && theirs.date && datePart(ours).length === 10 && datePart(ours) === theirs.date) return 'exact';
+  const [from, to] = yearsOf(y, qualifier);
+  if (to < theirs.from || from > theirs.to) return 'conflict';
+  if (!qualifier && ours && theirs.date && datePart(ours).length === 10 && datePart(ours) === theirs.date) return 'exact';
   return 'year';
 };
 
@@ -97,8 +110,8 @@ export const score = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividu
   if (nameWords.slice(1).some((word) => !given.has(word) && !surnames.has(word))) return 0;
   if (attrs.gender && indi.gender && ['male', 'female'].includes(attrs.gender) && ['male', 'female'].includes(indi.gender) && attrs.gender !== indi.gender) return 0;
 
-  const born = compareDate(attrs.born, span(indi.born, indi.christened));
-  const died = compareDate(attrs.died, span(indi.died, indi.buried));
+  const born = compareDate(attrs.born, attrs.bornQualifier, span(indi.born, indi.christened));
+  const died = compareDate(attrs.died, attrs.diedQualifier, span(indi.died, indi.buried));
   if (born === 'conflict' || died === 'conflict') return 0;
 
   let points = 1;
@@ -292,7 +305,9 @@ const attrsOnly = (attrs: PersonAttrs) => ({
   ...(attrs.birthname ? { birthname: attrs.birthname } : {}),
   ...(attrs.gender ? { gender: attrs.gender } : {}),
   ...(attrs.born ? { born: attrs.born } : {}),
+  ...(attrs.born && attrs.bornQualifier ? { bornQualifier: attrs.bornQualifier } : {}),
   ...(attrs.died ? { died: attrs.died } : {}),
+  ...(attrs.died && attrs.diedQualifier ? { diedQualifier: attrs.diedQualifier } : {}),
 });
 
 const personOf = (p: ArchivePerson): GedcomPlanPerson => ({
@@ -390,6 +405,13 @@ export async function importerOf(vfs: Vfs, access: Access, path: string): Promis
 
 // ---------- the import ----------
 
+/** A life date as person attrs: the exact date, else the approximate one with its qualifier. */
+const lifeAttrs = (date: GedcomDate | undefined, attr: 'born' | 'died'): Partial<PersonAttrs> => {
+  if (date?.date) return { [attr]: date.date };
+  if (date?.approx) return { [attr]: date.approx.date, [QUALIFIER_ATTRS[attr]]: date.approx.qualifier };
+  return {};
+};
+
 /** What the file says of an individual, as person attrs; `fullname` even where it is their name. */
 const attrsFor = (indi: GedcomIndividual): PersonAttrs => {
   const fullname = [...indi.given, currentSurname(indi)].filter(Boolean).join(' ');
@@ -399,20 +421,25 @@ const attrsFor = (indi: GedcomIndividual): PersonAttrs => {
     ...(fullname ? { fullname } : {}),
     ...(birthname ? { birthname } : {}),
     ...(indi.gender && indi.gender !== 'unknown' ? { gender: indi.gender } : {}),
-    ...(indi.born?.date ? { born: indi.born.date } : {}),
-    ...(indi.died?.date ? { died: indi.died.date } : {}),
+    ...lifeAttrs(indi.born, 'born'),
+    ...lifeAttrs(indi.died, 'died'),
     ...(indi.notes.length ? { description: indi.notes.join('\n\n') } : {}),
   };
 };
 
 /**
- * The attrs of `attrs` a person lacks; what they have already is never changed. A full name
- * that is only their name again says nothing.
+ * The attrs of `attrs` a person lacks; what they have already is never changed. A life date
+ * comes with its qualifier, or not at all. A full name that is only their name again says nothing.
  */
 const missing = (have: PersonAttrs, attrs: PersonAttrs): Partial<PersonAttrs> => {
   const out: Record<string, unknown> = {};
-  for (const key of ['fullname', 'birthname', 'description', 'gender', 'born', 'died'] as const) {
+  for (const key of ['fullname', 'birthname', 'description', 'gender'] as const) {
     if (attrs[key] && !have[key]) out[key] = attrs[key];
+  }
+  for (const key of ['born', 'died'] as const) {
+    if (!attrs[key] || have[key]) continue;
+    out[key] = attrs[key];
+    if (attrs[QUALIFIER_ATTRS[key]]) out[QUALIFIER_ATTRS[key]] = attrs[QUALIFIER_ATTRS[key]];
   }
   if (out.fullname === have.name) delete out.fullname;
   return out as Partial<PersonAttrs>;
@@ -470,8 +497,14 @@ const EVENT_TITLES: Record<string, string> = {
  */
 const DATED_ELSEWHERE = new Set(['BIRT', 'DEAT', 'MARR', 'DIV']);
 
+/** Of those, the ones dated on the partner relation, which takes only an exact date. */
+const DATED_ON_RELATION = new Set(['MARR', 'DIV']);
+
 /** An event as it is to be written under a person's `events/`. */
-type PlannedEvent = { eventType: string; title: string; kind: string; date?: string; body?: string };
+type PlannedEvent = { eventType: string; title: string; kind: string; date?: string; qualifier?: DateQualifier; body?: string };
+
+/** A date with how sure it is. */
+type QualifiedDate = { date: string; qualifier?: DateQualifier };
 
 /** An event a person has: enough to tell whether the file's is the same one. */
 type HeldEvent = { eventType: string; title?: string; date?: string };
@@ -551,23 +584,34 @@ const holds = (held: HeldEvent[], event: PlannedEvent): boolean =>
     return have.date === event.date && (event.eventType !== 'generic' || have.title === event.title);
   });
 
+/** When a GEDCOM event was: its exact date, the start of its period, else its approximate date. */
+const eventWhen = (date: GedcomDate | undefined): QualifiedDate | undefined => {
+  const exact = date?.date ?? date?.since;
+  if (exact) return { date: exact };
+  return date?.approx && { date: date.approx.date, qualifier: date.approx.qualifier };
+};
+
 /**
  * A GEDCOM event as it is written on a person, or undefined when it says nothing the archive
  * does not keep elsewhere. `lifeDate` is the person's `born` or `died`, which a birth or death
- * event takes so that the two agree. The place opens the body, then the cause and the notes.
+ * event takes so that the two agree. A marriage or divorce known only approximately is written
+ * for its date, which the partner relation cannot hold. The place opens the body, then the cause
+ * and the notes.
  */
-const planEvent = (event: GedcomEvent, lifeDate?: string): PlannedEvent | undefined => {
+const planEvent = (event: GedcomEvent, lifeDate?: QualifiedDate): PlannedEvent | undefined => {
   const eventType = EVENT_TYPES[event.tag] ?? 'generic';
   const label = (event.tag === 'EVEN' || event.tag === 'FACT') && event.type ? event.type : EVENT_TITLES[event.tag] ?? event.tag;
   const body = [event.place, event.cause && `Cause: ${event.cause}`, ...event.notes].filter(Boolean).join('\n\n');
-  if (DATED_ELSEWHERE.has(event.tag) && !body) return undefined;
-  const date = lifeDate ?? event.date?.date ?? event.date?.since;
-  if (!date && !body && !event.value) return undefined;
+  const onlyApprox = !event.date?.date && Boolean(event.date?.approx);
+  if (DATED_ELSEWHERE.has(event.tag) && !body && !(DATED_ON_RELATION.has(event.tag) && onlyApprox)) return undefined;
+  const when = lifeDate ?? eventWhen(event.date);
+  if (!when && !body && !event.value) return undefined;
   return {
     eventType,
     title: event.value ? `${label}: ${event.value}` : label,
     kind: eventType === 'generic' ? label : eventType,
-    ...(date ? { date } : {}),
+    ...(when ? { date: when.date } : {}),
+    ...(when?.qualifier ? { qualifier: when.qualifier } : {}),
     ...(body ? { body } : {}),
   };
 };
@@ -736,7 +780,7 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, kep
   const homed = new Set<string>();
 
   /** Write `event` on `owner` unless they, or one of `others`, have it. */
-  const addEvent = async (owner: string, others: string[], event: GedcomEvent, lifeDate?: string): Promise<void> => {
+  const addEvent = async (owner: string, others: string[], event: GedcomEvent, lifeDate?: QualifiedDate): Promise<void> => {
     const planned = planEvent(event, lifeDate);
     if (!planned) return;
     for (const path of [owner, ...others]) if (holds(await heldOf(path), planned)) return;
@@ -749,6 +793,7 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, kep
       displayName: planned.title,
       eventType: planned.eventType,
       date: planned.date,
+      dateQualifier: planned.qualifier,
       body: planned.body,
       latlng,
     });
@@ -776,8 +821,15 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, kep
   for (const indi of gedcom.individuals) {
     const path = pathOf.get(indi.xref);
     if (!path || !writable.has(path)) continue;
+    // The dates the person has now, each with its qualifier: their own, else what the import filled in.
     const had = byPath.get(path)?.attrs;
-    const lifeDates: Record<string, string | undefined> = { BIRT: had?.born ?? indi.born?.date, DEAT: had?.died ?? indi.died?.date };
+    const life = (attr: 'born' | 'died'): QualifiedDate | undefined => {
+      const from = had?.[attr] ? had : attrsFor(indi);
+      const date = from[attr];
+      const qualifier = from[QUALIFIER_ATTRS[attr]];
+      return date ? { date, ...(isDateQualifier(qualifier) ? { qualifier } : {}) } : undefined;
+    };
+    const lifeDates: Record<string, QualifiedDate | undefined> = { BIRT: life('born'), DEAT: life('died') };
     for (const event of indi.events) {
       if (event.tag === 'RESI' && await addHome(indi.xref, path, event)) continue;
       await addEvent(path, [], event, lifeDates[event.tag]);

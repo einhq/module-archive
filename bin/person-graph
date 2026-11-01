@@ -34,6 +34,7 @@ import { basename, resolve } from '@std/path';
 import { CHILDREN_DIR, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationEntry, relationshipPath } from '@archive/people/genealogy';
 import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { GraphResponse } from '@archive/people/api';
+import { type DateQualifier, lifeQualifiers, qualifiedYear } from '@archive/people/date-qualifier';
 
 /** Deeper than this and no layout is readable anyway; the client pages in instead. */
 const MAX_DEPTH = 8;
@@ -49,6 +50,8 @@ type GraphNode = {
   gender?: PersonGender;
   born?: string;
   died?: string;
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
   /** Drawn parents — a subset of the real ones, see `parentCount`. */
   parents: string[];
   children: string[];
@@ -180,6 +183,7 @@ const personGraph = async (cmd: Command): CmdReturn => {
         ...(attrs.gender ? { gender: attrs.gender } : {}),
         ...(attrs.born ? { born: attrs.born } : {}),
         ...(attrs.died ? { died: attrs.died } : {}),
+        ...lifeQualifiers(attrs),
         parents: targets(relations.parents),
         children: targets(relations.children),
         partners: relations.partners.filter((e) => e.target).map((e) => ({
@@ -208,7 +212,7 @@ const personGraph = async (cmd: Command): CmdReturn => {
     }
 
     for (const node of Object.values(nodes)) {
-      const span = node.born || node.died ? ` (${node.born?.slice(0, 4) ?? ''}–${node.died?.slice(0, 4) ?? ''})` : '';
+      const span = node.born || node.died ? ` (${qualifiedYear(node.born, node.bornQualifier)}–${qualifiedYear(node.died, node.diedQualifier)})` : '';
       const more = [
         node.parentCount > node.parents.length ? `+${node.parentCount - node.parents.length}↑` : '',
         node.childCount > node.children.length ? `+${node.childCount - node.children.length}↓` : '',

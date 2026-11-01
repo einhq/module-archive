@@ -54,8 +54,8 @@ Deno.test('readGedcom reads names, call names, married names, dates and families
   const [harold, margaret, ruby, tom] = individuals;
   assertEquals([harold.given, harold.surname, harold.gender, harold.uids], [['Harold'], 'Wrenfield', 'male', ['7A1B']]);
   assertEquals(harold.born, { date: '1931-03-03', from: 1931, to: 1931 });
-  // An approximate date gives years to match by, and no date to keep.
-  assertEquals(harold.died, { from: 2002, to: 2006 });
+  // An approximate date gives years to match by, and the date it names to keep as such.
+  assertEquals(harold.died, { from: 2002, to: 2006, approx: { date: '2004', qualifier: 'about' } });
   assertEquals([margaret.given, margaret.callName, margaret.surname, margaret.marriedSurname], [['Margaret', 'Ann'], 'Ann', 'Pole', 'Wrenfield']);
   assertEquals(ruby.childOf, [{ family: '@F1@', kind: 'blood' }]);
   assertEquals(tom.childOf, [{ family: '@F1@', kind: 'adoptive' }]);
@@ -103,13 +103,16 @@ Deno.test('readGedcom reads events with their places, periods, causes and notes,
   assertEquals(families[0].events, [{ tag: 'MARR', place: "Saint Ann's", notes: ['Told by Ruby.'] }]);
 });
 
-Deno.test('parseGedcomDate keeps a plain date and turns the qualified ones into years', () => {
+Deno.test('parseGedcomDate keeps a plain date, an approximate one as such, and the years each can be in', () => {
   assertEquals(parseGedcomDate('MAR 1900'), { date: '1900-03', from: 1900, to: 1900 });
   assertEquals(parseGedcomDate('@#DJULIAN@ 11 FEB 1731/32'), { date: '1731-02-11', from: 1731, to: 1731 });
-  assertEquals(parseGedcomDate('BET 1850 AND 1855'), { from: 1850, to: 1855 });
+  assertEquals(parseGedcomDate('BET 1850 AND 1855'), { from: 1850, to: 1855, approx: { date: '1852', qualifier: 'about' } });
+  assertEquals(parseGedcomDate('ABT MAR 1890'), { from: 1888, to: 1892, approx: { date: '1890-03', qualifier: 'about' } });
+  assertEquals(parseGedcomDate('AFT 1900'), { from: 1900, to: 2000, approx: { date: '1900', qualifier: 'after' } });
   assertEquals(parseGedcomDate('FROM MAR 1950 TO 1955'), { from: 1950, to: 1955, since: '1950-03', until: '1955' });
   assertEquals(parseGedcomDate('FROM 1950'), { from: 1950, to: 2050, since: '1950' });
-  assertEquals(parseGedcomDate('BEF 1900'), { from: 1800, to: 1900 });
+  assertEquals(parseGedcomDate('BEF 1900'), { from: 1800, to: 1900, approx: { date: '1900', qualifier: 'before' } });
+  assertEquals(parseGedcomDate('TO 1900'), { from: 1800, to: 1900, until: '1900' });
   assertEquals(parseGedcomDate('CAL 1890'), { date: '1890', from: 1890, to: 1890 });
   assertEquals(parseGedcomDate('UNKNOWN'), undefined);
 });
@@ -148,6 +151,10 @@ Deno.test('score wants the first name, and refuses a contradicting date, gender 
   assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', born: '1931-03-03' }), harold), 6);
   assertEquals(score(person('/p/h', { name: 'Harold' }), harold), 1);
   assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', born: '1932' }), harold), 0);
+  // A date of the archive that is only about or before one is the years it can be in.
+  assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', born: '1932', bornQualifier: 'about' }), harold), 4);
+  assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', born: '1925', bornQualifier: 'before' }), harold), 0);
+  assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', born: '1931-03-03', bornQualifier: 'about' }), harold), 4);
   assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', gender: 'female' }), harold), 0);
   assertEquals(score(person('/p/h', { name: 'Harold Pole' }), harold), 0);
   assertEquals(score(person('/p/h', { name: 'Grandpa' }), harold), 0);

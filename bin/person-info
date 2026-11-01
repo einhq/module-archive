@@ -5,15 +5,17 @@ import { basename, resolve } from '@std/path';
 import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { PersonInfo } from '@archive/people/api';
 import { sourceFiles } from '@archive/sources';
+import { EVENT_QUALIFIER_ATTR, isDateQualifier, lifeQualifiers, qualifiedDate } from '@archive/people/date-qualifier';
 
 type RelationInfo = { role: string; path: string; name?: string; kind?: string; from?: string; to?: string };
-type EventInfo = { name: string; eventType: string; date?: string; position?: string; description?: string };
+type EventInfo = PersonInfo['events'][number];
 
 /**
  * Completed years, and whether they are the age this person reached.
  *
  * `approx` comes from `ageAt`: a birth date with no day can be off by one, and
- * a header saying "77" about a "1948" is a guess that should read as one.
+ * a header saying "77" about a "1948" is a guess that should read as one. A
+ * birth or death date that is only about, before or after a day is one too.
  */
 type AgeInfo = { years: number; approx: boolean; atDeath: boolean };
 
@@ -32,7 +34,8 @@ const ageOf = (attrs: PersonAttrs): AgeInfo | null => {
   if (!attrs.born) return null;
   const atDeath = Boolean(attrs.died);
   const reached = ageAt(attrs.born, atDeath ? attrs.died! : new Date());
-  return reached ? { ...reached, atDeath } : null;
+  const uncertain = Boolean(attrs.bornQualifier || (atDeath && attrs.diedQualifier));
+  return reached ? { ...reached, approx: reached.approx || uncertain, atDeath } : null;
 };
 
 const personInfo = async (cmd: Command): CmdReturn => {
@@ -89,6 +92,7 @@ const personInfo = async (cmd: Command): CmdReturn => {
         if (ea) {
           const ev: EventInfo = { name: ea.name || name, eventType: ea.eventType || 'generic' };
           if (ea.date) ev.date = ea.date;
+          if (ea.date && isDateQualifier(ea[EVENT_QUALIFIER_ATTR])) ev.dateQualifier = ea[EVENT_QUALIFIER_ATTR];
           // geo lives in a child `position` node (mirrors files), not an attr
           if (await cmd.sys.vfs.exists(cmd.access, `${target}/events/${name}/position`)) ev.position = 'geo';
           // The body is the story. `description` was declared here from the
@@ -118,6 +122,7 @@ const personInfo = async (cmd: Command): CmdReturn => {
     ...(attrs.gender ? { gender: attrs.gender } : {}),
     ...(attrs.born ? { born: attrs.born } : {}),
     ...(attrs.died ? { died: attrs.died } : {}),
+    ...lifeQualifiers(attrs),
     ...(age ? { age } : {}),
     ...(attrs.contact?.length ? { contact: attrs.contact } : {}),
     ...(attrs.allergies ? { allergies: attrs.allergies } : {}),
@@ -135,8 +140,8 @@ const personInfo = async (cmd: Command): CmdReturn => {
     if (info.fullname) await cmd.writeLn(`Full name: ${info.fullname}`);
     if (info.birthname) await cmd.writeLn(`Born as: ${info.birthname}`);
     if (info.gender) await cmd.writeLn(`Gender: ${info.gender}`);
-    if (info.born) await cmd.writeLn(`Born: ${info.born}`);
-    if (info.died) await cmd.writeLn(`Died: ${info.died}`);
+    if (info.born) await cmd.writeLn(`Born: ${qualifiedDate(info.born, info.bornQualifier)}`);
+    if (info.died) await cmd.writeLn(`Died: ${qualifiedDate(info.died, info.diedQualifier)}`);
     if (age) await cmd.writeLn(`Age: ${age.approx ? '~' : ''}${age.years}${age.atDeath ? ' (at death)' : ''}`);
     if (info.allergies) await cmd.writeLn(`Allergies: ${info.allergies}`);
     if (info.description) await cmd.writeLn(`Description: ${info.description}`);
@@ -163,7 +168,7 @@ const personInfo = async (cmd: Command): CmdReturn => {
       await cmd.writeLn('\nEvents:');
       for (const ev of events) {
         let line = `  ${ev.name} [${ev.eventType}]`;
-        if (ev.date) line += ` ${ev.date}`;
+        if (ev.date) line += ` ${qualifiedDate(ev.date, ev.dateQualifier)}`;
         if (ev.position) line += ` @ ${ev.position}`;
         await cmd.writeLn(line);
       }

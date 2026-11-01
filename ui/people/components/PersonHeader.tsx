@@ -4,9 +4,10 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { PersonContact, PersonInfo } from '../hooks/usePeople.ts';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
+import { qualifiedYear } from '@archive/people/date-qualifier';
 
-/** Just the year — a header is about a life, not about a Tuesday. */
-const year = (date?: string): string | undefined => date?.slice(0, 4);
+/** Just the year — a header is about a life, not about a Tuesday — as sure as it is: `~1890`, `before 1900`. */
+const year = (date: string | undefined, qualifier: string | undefined): string | undefined => qualifiedYear(date, qualifier) || undefined;
 
 /**
  * The one line that places a person in time.
@@ -18,8 +19,8 @@ const year = (date?: string): string | undefined => date?.slice(0, 4);
  * asserting something it guessed.
  */
 export function lifeLine(person: PersonInfo): string | undefined {
-  const born = year(person.born);
-  const died = year(person.died);
+  const born = year(person.born, person.bornQualifier);
+  const died = year(person.died, person.diedQualifier);
   const age = person.age;
   const about = age?.approx ? '~' : '';
 

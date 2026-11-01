@@ -15,6 +15,7 @@
 
 import { type Ctx, datePart, getChildren, getGender, getParents, getPartners, kinship, render } from '@archive/people/genealogy';
 import type { PersonAttrs, PersonGender } from '@archive/people/types';
+import { type DateQualifier, lifeQualifiers } from '@archive/people/date-qualifier';
 
 type Gender = 'male' | 'female';
 type Step = { dir: 'up' | 'down' | 'partner' | 'sibling'; gender?: Gender };
@@ -198,6 +199,8 @@ export type Relative = {
   gender?: PersonGender;
   born?: string;
   died?: string;
+  bornQualifier?: DateQualifier;
+  diedQualifier?: DateQualifier;
   /** What this person is to the one asked about, in both languages, from the graph itself. */
   relation: { sv: string; en: string };
 };
@@ -241,6 +244,7 @@ export const walkKin = async (ctx: Ctx, start: string, terms: Term[]): Promise<R
       ...(attrs?.gender ? { gender: attrs.gender } : {}),
       ...(attrs?.born ? { born: attrs.born } : {}),
       ...(attrs?.died ? { died: attrs.died } : {}),
+      ...(attrs ? lifeQualifiers(attrs) : {}),
       relation: { sv: render(kin, 'sv'), en: render(kin, 'en') },
     });
   }
@@ -250,12 +254,16 @@ export const walkKin = async (ctx: Ctx, start: string, terms: Term[]): Promise<R
 /**
  * The span of `takenAt` in which someone born on `born` was `age` years old — `to` exclusive,
  * as `search --to` reads it. A birth date without a day is left as coarse as it is: born
- * "1990", age 6 is 1996 through 1997, which is honest rather than falsely exact.
+ * "1990", age 6 is 1996 through 1997, which is honest rather than falsely exact. Born about
+ * then widens it by the two years either side an "about" means; born only before or after a
+ * date gives no span.
  */
-export const ageSpan = (born: string, age: number): { from: string; to: string } | undefined => {
+export const ageSpan = (born: string, age: number, qualifier?: DateQualifier): { from: string; to: string } | undefined => {
   const match = datePart(born).match(/^(\d{4})(-\d{2}(?:-\d{2})?)?$/);
   if (!match || !Number.isInteger(age) || age < 0 || age > 130) return undefined;
+  if (qualifier === 'before' || qualifier === 'after') return undefined;
   const year = Number(match[1]);
+  if (qualifier === 'about') return { from: `${year + age - 2}`, to: `${year + age + 3}` };
   const rest = match[2] ?? '';
   return { from: `${year + age}${rest}`, to: `${year + age + 1}${rest}` };
 };

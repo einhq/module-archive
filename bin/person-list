@@ -12,6 +12,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { PersonListEntry } from '@archive/people/api';
 import { type PersonAttrs, picturesByPerson } from '@archive/people/person';
+import { lifeQualifiers } from '@archive/people/date-qualifier';
 
 const string = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
 
@@ -54,6 +55,7 @@ const personList = async (cmd: Command): CmdReturn => {
           fullname: string(attrs.fullname),
           born: string(attrs.born),
           died: string(attrs.died),
+          ...lifeQualifiers(attrs),
           pictures: pictures.get(entry.node.id) ?? 0,
         };
       })
