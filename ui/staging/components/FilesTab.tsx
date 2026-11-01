@@ -3,8 +3,8 @@ import type { StagingCategoryStatus } from '@archive/staging/api';
 import type { FindEntry } from '@ein/api';
 import { EmptyState, NodeBrowser, TablerIcon } from '@ein/ui/components';
 import { useCommand } from '@ein/ui/hooks';
-import { baseName, countOf, type SearchFilters, shq } from '@ein/ui/lib';
-import { type MediaItem, openDialog } from '@ein/ui/signals';
+import { baseName, countOf, parentPath, type SearchFilters, shq } from '@ein/ui/lib';
+import { invalidateListing, type MediaItem, openDialog } from '@ein/ui/signals';
 import { ActionIcon, Anchor, Box, Breadcrumbs, Button, Group, Menu, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
@@ -100,6 +100,8 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
     const gone = paths.map((path) => dirOf(category.path, path)).filter((each): each is string => each !== undefined);
     const leaving = gone.find((each) => dir === each || dir.startsWith(`${each}/`));
     if (leaving !== undefined) openDir(parentDir(leaving));
+    // The Folder view's listing is read again now, not when the folder's watch next reports.
+    invalidateListing(...new Set(paths.map(parentPath)));
     setChanges((value) => value + 1);
     onChanged();
   };
