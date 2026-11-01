@@ -9,7 +9,6 @@ import { ActionIcon, Anchor, Box, Breadcrumbs, Button, Group, Menu, SegmentedCon
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
-import { StagedRoutes } from '../../location/components/StagedRoutes.tsx';
 import { DIRECTORY_GRID_COLS, DirectoryCard } from '../../media/components/DirectoryCard.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
 import { cleanDir, crumbs, dirOf, folderPath, parentDir } from '../lib/folders.ts';
@@ -40,11 +39,9 @@ type Props = {
   category: StagingCategoryStatus;
   /** Every category, for Move to category. */
   categories: StagingCategoryStatus[];
-  /** The staging area's `routes/`, where GPX files wait for their device; asked about here when given. */
-  routesPath?: string;
   /** Changed after an upload, so the lists read again. */
   reloadToken: number;
-  /** Files were moved, discarded or given a time, or a route was given to its device. */
+  /** Files were moved, discarded or given a time. */
   onChanged: () => void;
 };
 
@@ -59,7 +56,7 @@ type Props = {
  * looks like it came from one source (`staging detect`) says so on its card and above the folders,
  * with the way to that source's category.
  */
-export function FilesTab({ category, categories, routesPath, reloadToken, onChanged }: Props) {
+export function FilesTab({ category, categories, reloadToken, onChanged }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const dir = cleanDir(searchParams.get('dir'));
@@ -152,7 +149,6 @@ export function FilesTab({ category, categories, routesPath, reloadToken, onChan
 
   return (
     <Stack gap='md' px='md'>
-      {routesPath && <StagedRoutes routes={routesPath} reloadToken={reload} onImported={onChanged} />}
       <Group justify='space-between' gap='sm' wrap='wrap'>
         <Breadcrumbs separator='›'>
           <Anchor component='button' type='button' size='sm' onClick={() => openDir('')}>{category.label}</Anchor>

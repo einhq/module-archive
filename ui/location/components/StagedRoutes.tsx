@@ -1,4 +1,4 @@
-import { TablerIcon } from '@ein/ui/components';
+import { EmptyState } from '@ein/ui/components';
 import { Alert, Box, Button, Card, Checkbox, Group, Select, Stack, Table, Text, UnstyledButton } from '@mantine/core';
 import { formatBytes, formatDuration, type NodeChildEntry, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
@@ -71,8 +71,8 @@ function RouteDetails({ file }: { file: WaitingRoute }) {
  * of itself (`gpx-info`); the files ticked are imported, one after another, into the track of the
  * one device chosen for them.
  */
-export function StagedRoutes({ routes, reloadToken, onImported }: { routes: string; reloadToken: number; onImported: () => void }) {
-  const [files, setFiles] = useState<WaitingRoute[]>([]);
+export function StagedRoutes({ routes, onImported }: { routes: string; onImported: () => void }) {
+  const [files, setFiles] = useState<WaitingRoute[] | null>(null);
   const [current, setCurrent] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [device, setDevice] = useState<string | null>(null);
@@ -99,9 +99,12 @@ export function StagedRoutes({ routes, reloadToken, onImported }: { routes: stri
 
   useEffect(() => {
     void load();
-  }, [load, reloadToken]);
+  }, [load]);
 
-  if (files.length === 0) return null;
+  if (!files) return <Text size='sm' c='dimmed'>Reading…</Text>;
+  if (files.length === 0) {
+    return <EmptyState title='No route waits'>A GPX file dropped in staging that names no device the archive knows waits here for you to say which recorded it.</EmptyState>;
+  }
 
   const toggle = (path: string) =>
     setSelected((was) => {
@@ -134,14 +137,7 @@ export function StagedRoutes({ routes, reloadToken, onImported }: { routes: stri
   return (
     <Card withBorder radius='md'>
       <Stack gap='sm'>
-        <Group gap='xs'>
-          <TablerIcon name='route' size={18} />
-          <Text fw={500}>Routes waiting for a device</Text>
-        </Group>
-        <Text size='sm' c='dimmed'>
-          These GPX files do not name a device the archive knows. Tick the ones one device recorded, choose that device, and their routes join its track. Click a file to see
-          what it says about itself.
-        </Text>
+        <Text size='sm' c='dimmed'>Click a file to see what it says about itself.</Text>
         {errors.length > 0 && (
           <Alert color='red'>
             {errors.map((message) => <Text key={message} size='sm'>{message}</Text>)}

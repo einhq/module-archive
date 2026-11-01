@@ -699,6 +699,7 @@
       "/staging/categories/:slug": "ui/staging/pages/category.tsx",
       "/staging/genealogy": "ui/staging/pages/genealogy.tsx",
       "/staging/import": "ui/staging/pages/import.tsx",
+      "/staging/routes": "ui/staging/pages/routes.tsx",
       "/start/upload": "ui/staging/pages/start-upload.tsx",
       "/stats/life-events": "ui/people/pages/life-events.tsx",
       "/timeline": "ui/pages/timeline.tsx",

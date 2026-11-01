@@ -30,9 +30,8 @@ const Count = ({ value }: { value: number | undefined }) => value ? <Badge size=
 
 const SUBTITLE = 'New media to sort before it joins the shared library. Only you can see it.';
 
-/** The page of `category`, on `tab` when one is named. */
-const categoryRoute = (category: string, tab?: string): string =>
-  `/staging?c=${encodeURIComponent(category)}${tab && tab !== 'sort' ? `&tab=${encodeURIComponent(tab)}` : ''}`;
+/** The page of `category`. */
+const categoryRoute = (category: string): string => `/staging?c=${encodeURIComponent(category)}`;
 
 export const handle = { fullBleed: true, signedIn: true };
 
@@ -78,7 +77,7 @@ function Staging({ user }: { user: string }) {
   }, [data, slug, category, refetch]);
 
   // Leaving the overview for a category, or one category for another, is a step Back undoes.
-  const open = useCallback((name: string | null, tab?: string) => navigate(name ? categoryRoute(name, tab) : '/staging'), [navigate]);
+  const open = useCallback((name: string | null) => navigate(name ? categoryRoute(name) : '/staging'), [navigate]);
 
   if (status.error && !data) return <Alert color='red' m='lg'>{status.error.message}</Alert>;
   if (!data || (!slug && only) || (slug && !category && (status.loading || askedFor.current !== slug))) return <PageLoader label='Reading your staging area…' />;
@@ -106,7 +105,7 @@ function Staging({ user }: { user: string }) {
 type OverviewProps = {
   status: StagingStatus;
   eta: Record<string, number | undefined>;
-  onOpen: (category: string, tab?: string) => void;
+  onOpen: (category: string) => void;
 };
 
 function Overview({ status, eta, onOpen }: OverviewProps) {
@@ -173,7 +172,7 @@ type CategoryPageProps = {
   category: StagingCategoryStatus;
   eta?: number;
   refetchStatus: () => void;
-  onOpen: (name: string | null, tab?: string) => void;
+  onOpen: (name: string | null) => void;
 };
 
 function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: CategoryPageProps) {
@@ -188,7 +187,6 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
   const groupDirs = useCommand<NodeChildEntry[]>(`ls -l ${shq(roots.albumsPath)}`);
   const refetchGroups = groupDirs.refetch;
   const [reloadToken, setReloadToken] = useState(0);
-  const isDefault = category.name === status.defaultCategory;
 
   // A staged file put in an album from a list on this page has left the inbox.
   const moved = mediaMoved.value;
@@ -213,11 +211,6 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
       return next;
     }, { replace: true, state: location.state });
   }, [setSearchParams, location.state]);
-
-  // GPX and GEDCOM files staged in any category wait outside it, so every category's page says so.
-  // The inbox's Files tab lists the routes itself, and is where their devices are chosen.
-  const routesNotice = status.routesWaiting > 0 && !(isDefault && tab === 'files');
-  const chooseDevices = useCallback(() => isDefault ? showTab('files') : onOpen(status.defaultCategory, 'files'), [isDefault, showTab, onOpen, status.defaultCategory]);
 
   const groupCount = groupDirs.data?.find((entry) => entry.name === category.name)?.childCount;
   const counts = category.counts;
@@ -278,9 +271,10 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
 
       <Box py='lg' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
         <ProgressStrip category={category} eta={eta} />
-        {(routesNotice || status.genealogyWaiting > 0) && (
+        {/* GPX and GEDCOM files staged in any category wait outside it, on pages of their own, so every category's page says so. */}
+        {(status.routesWaiting > 0 || status.genealogyWaiting > 0) && (
           <Stack gap='sm' px='md' pb='md'>
-            {routesNotice && <RoutesWaiting count={status.routesWaiting} onChoose={chooseDevices} />}
+            <RoutesWaiting count={status.routesWaiting} />
             <GenealogyWaiting count={status.genealogyWaiting} />
           </Stack>
         )}
@@ -303,7 +297,6 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
           <FilesTab
             category={category}
             categories={status.categories}
-            routesPath={isDefault ? roots.routesPath : undefined}
             reloadToken={reloadToken}
             onChanged={changed}
           />

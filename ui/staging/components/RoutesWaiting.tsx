@@ -1,11 +1,13 @@
 import { TablerIcon } from '@ein/ui/components';
 import { Alert, Button, Group, Text } from '@mantine/core';
+import { useNavigate } from 'react-router-dom';
 
 /**
  * The GPX files waiting in the staging area's `routes/` (`count`, from `staging status`) for the
- * device that recorded each, with the way to where it is chosen (`onChoose`).
+ * device that recorded each, with the way to the page where it is chosen.
  */
-export function RoutesWaiting({ count, onChoose }: { count: number; onChoose: () => void }) {
+export function RoutesWaiting({ count }: { count: number }) {
+  const navigate = useNavigate();
   if (count === 0) return null;
   return (
     <Alert color='yellow' icon={<TablerIcon name='route' size={16} />} title='Needs you'>
@@ -13,7 +15,7 @@ export function RoutesWaiting({ count, onChoose }: { count: number; onChoose: ()
         <Text size='sm'>
           {count === 1 ? '1 GPS track waits for the device that recorded it.' : `${count} GPS tracks wait for the devices that recorded them.`}
         </Text>
-        <Button size='xs' variant='light' onClick={onChoose}>Choose device</Button>
+        <Button size='xs' variant='light' onClick={() => navigate('/staging/routes')}>Choose device</Button>
       </Group>
     </Alert>
   );

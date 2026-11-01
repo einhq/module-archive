@@ -21,8 +21,8 @@ type Props = {
   status: StagingStatus;
   /** How long each category's files still being prepared take, in ms, by name. */
   eta: Record<string, number | undefined>;
-  /** Open a category's page, on a tab when one is named. */
-  onOpen: (category: string, tab?: string) => void;
+  /** Open a category's page. */
+  onOpen: (category: string) => void;
 };
 
 /**
@@ -72,7 +72,7 @@ export function CategoryOverview({ status, eta, onOpen }: Props) {
           </Stack>
         </Card>
       </SimpleGrid>
-      <RoutesWaiting count={status.routesWaiting} onChoose={() => onOpen(status.defaultCategory, 'files')} />
+      <RoutesWaiting count={status.routesWaiting} />
       <GenealogyWaiting count={status.genealogyWaiting} />
       <Stack gap={4}>
         <Text size='sm' c='dimmed'>Tens of thousands of files? Copy them over SFTP into a category's folder:</Text>
