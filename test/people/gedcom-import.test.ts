@@ -252,7 +252,9 @@ Deno.test({
       assertEquals(result.events, 3);
 
       const clara = await info('clara-pole');
-      assertEquals([clara.born, clara.bornQualifier, clara.died, clara.diedQualifier, clara.age?.approx], ['1890', 'about', '1960', 'before', true]);
+      // Died only before a year: no age to give.
+      assertEquals([clara.born, clara.bornQualifier, clara.died, clara.diedQualifier, clara.age], ['1890', 'about', '1960', 'before', undefined]);
+      assertEquals((await info('walter-pole')).age?.approx, true);
       assertEquals(clara.events.map((e) => [e.name, e.date, e.dateQualifier]).sort(), [['Census', '1920', 'after'], ['Occupation: Seamstress', '1910', 'about']]);
       const walter = await info('walter-pole');
       assertEquals([walter.born, walter.bornQualifier], ['1887', 'about']);

@@ -14,8 +14,9 @@ type EventInfo = PersonInfo['events'][number];
  * Completed years, and whether they are the age this person reached.
  *
  * `approx` comes from `ageAt`: a birth date with no day can be off by one, and
- * a header saying "77" about a "1948" is a guess that should read as one. A
- * birth or death date that is only about, before or after a day is one too.
+ * a header saying "77" about a "1948" is a guess that should read as one, and
+ * so is an age from a date that is only about a day. A date that is only before
+ * or after one gives no age.
  */
 type AgeInfo = { years: number; approx: boolean; atDeath: boolean };
 
@@ -29,13 +30,14 @@ async function personAttrs(cmd: Command, path: string): Promise<PersonAttrs | nu
 
 const parentRole = (g?: PersonGender | null): string => (g === 'male' ? 'father' : g === 'female' ? 'mother' : 'parent');
 
-/** Age reached, if they died; age now, if they did not. Null without a usable birth date. */
+/** Age reached, if they died; age now, if they did not. Null without a birth date to count from. */
 const ageOf = (attrs: PersonAttrs): AgeInfo | null => {
   if (!attrs.born) return null;
   const atDeath = Boolean(attrs.died);
+  const qualifiers = [attrs.bornQualifier, atDeath ? attrs.diedQualifier : undefined];
+  if (qualifiers.some((q) => q === 'before' || q === 'after')) return null;
   const reached = ageAt(attrs.born, atDeath ? attrs.died! : new Date());
-  const uncertain = Boolean(attrs.bornQualifier || (atDeath && attrs.diedQualifier));
-  return reached ? { ...reached, approx: reached.approx || uncertain, atDeath } : null;
+  return reached ? { ...reached, approx: reached.approx || qualifiers.includes('about'), atDeath } : null;
 };
 
 const personInfo = async (cmd: Command): CmdReturn => {
