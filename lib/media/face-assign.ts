@@ -53,9 +53,14 @@ export type AssignOptions = {
   dryRun: boolean;
 };
 
+/**
+ * The thresholds are on the recogniser's scale (`FACE_MODEL`): for TransFace they let through the
+ * same share of different-person pairs as 0.5 and 0.55 did for the recogniser before it, measured
+ * on an archive's named faces (ein/core#887).
+ */
 export const DEFAULT_ASSIGN_OPTIONS: AssignOptions = {
-  voteThreshold: 0.5,
-  attachThreshold: 0.55,
+  voteThreshold: 0.51,
+  attachThreshold: 0.56,
   margin: 1.2,
   k: 24,
   create: true,

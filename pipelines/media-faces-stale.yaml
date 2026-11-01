@@ -1,0 +1,36 @@
+# Emitted by the scan (`media.faces.stale`) when a photo's or a video's `facesBy` names other face
+# models than EMS runs now: their vectors are in another space, and recognition searches only the
+# current one. `detect-faces -f` finds the faces again, and each continues the region it is the
+# same face as, so nobody's name is lost (@archive/media/face-redetect).
+#
+# A pipeline of its own, not a trigger on `media-faces`, because a step's priority outranks its
+# trigger's: here the step has none, so these sit behind a new photo's (100) and a new video's
+# (50) in the faces kind, photos ahead of videos. The fact is the guard.
+name: media-faces-stale
+description: Find a file's faces again when other face models found them, keeping every face's person
+
+triggers:
+  - on: media.faces.stale
+    match:
+      mimetype: image/*
+    skipIfAttr: undecodable
+    priority: 20
+
+  - on: media.faces.stale
+    match:
+      mimetype: video/*
+    skipIfAttr: undecodable
+    priority: 10
+
+steps:
+  detect-faces:
+    command: detect-faces -f $NODE_PATH
+    description: Face detection again, each face continuing its region
+    pool: media
+    kind: faces
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 10

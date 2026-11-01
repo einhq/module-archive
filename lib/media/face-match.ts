@@ -6,7 +6,7 @@
  * match; `iou` also tells whether two boxes are the same face.
  *
  * The rule is containment, not overlap. Hand-drawn boxes are drawn loosely around
- * a head, while InsightFace returns a tight box on the face, so the detection
+ * a head, while the detector returns a tight box on the face, so the detection
  * for the tagged person sits wholly inside the manual box — and a detection
  * with a corner sticking out is somebody else's face brushing the edge. Among
  * the detections inside one box the largest is the person the box was drawn
@@ -55,6 +55,9 @@ const intersectionArea = (a: Box, b: Box): number => {
   const bottom = Math.min(a.y + a.height, b.y + b.height);
   return Math.max(0, right - x) * Math.max(0, bottom - y);
 };
+
+/** How much two boxes must overlap (`iou`) to be the same face. */
+export const SAME_FACE_IOU = 0.5;
 
 /** Intersection over union, 0 when either box is degenerate. */
 export const iou = (a: Box, b: Box): number => {

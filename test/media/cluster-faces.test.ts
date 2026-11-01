@@ -73,8 +73,8 @@ Deno.test({
     }
     const fileId = opts.fileId ?? (await vfs.get(ADMIN_ACCESS, image)).id;
     const path = `${image}/regions/${name}`;
-    await vfs.create(ADMIN_ACCESS, 'media-region', `${image}/regions`, name, { attrs: { fileId, confidence: 0.9, detectedBy: 'insightface-buffalo_l' } });
-    await vfs.create(ADMIN_ACCESS, 'embedding', path, 'embedding', { attrs: { embeddingType: 'face', capacity: DIM } });
+    await vfs.create(ADMIN_ACCESS, 'media-region', `${image}/regions`, name, { attrs: { fileId, confidence: 0.9, detectedBy: 'retinaface-r34+transface' } });
+    await vfs.create(ADMIN_ACCESS, 'embedding', path, 'embedding', { attrs: { embeddingType: 'face_transface', capacity: DIM } });
     const h = await vfs.open(ADMIN_ACCESS, `${path}/embedding`, { mode: 'w' });
     try {
       await h.write(new TextEncoder().encode(JSON.stringify(vector)));

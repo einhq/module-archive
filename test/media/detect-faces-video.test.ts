@@ -1,7 +1,8 @@
 /**
  * `detect-faces` on a video against a stub EMS: one region per face it shows, with the second
  * its box is of and when it is on screen, the photo's quality gate on each face's clearest look,
- * a crop cut from that frame, and the marker on the video either way.
+ * a crop cut from that frame, and the marker on the video either way; a re-detection that keeps
+ * each face's region, and vectors from other face models refused.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
@@ -48,9 +49,10 @@ Deno.test({
       embedding: [0, 0, 1, 0],
     },
   ];
+  let producer = 'retinaface-r34+transface';
   const stub = startStubEms({
     ops: {
-      'faces.detect_video': () => ({ result: { frame: { width: 1920, height: 1080 }, duration: 35, interval: 1, samples: 35, faces } }),
+      'faces.detect_video': () => ({ result: { frame: { width: 1920, height: 1080 }, duration: 35, interval: 1, samples: 35, faces }, producer }),
       'video.poster': (body) => ({
         result: { frame: { width: 1920, height: 1080 }, t: body.at, targets: (body.targets as unknown[]).map(() => ({ path: '', width: 200, height: 240, bytes: 1 })) },
       }),
@@ -66,7 +68,7 @@ Deno.test({
     await t.step('a region per face it shows, with when it is on screen', async () => {
       const out = await run(clip);
       assertEquals(out.success, true, out.error);
-      assertEquals(await names(`${clip}/regions`), ['face-0', 'face-2']);
+      assertEquals(await names(`${clip}/regions`), ['face-0', 'face-1']);
       const anna = await attrsOf(`${clip}/regions/face-0`);
       assertEquals(anna.atSeconds, 4);
       assertEquals(anna.appearances, [[0.5, 9.5], [30.5, 34.5]]);
@@ -81,12 +83,13 @@ Deno.test({
       const track = await toText(handle.readable).finally(() => handle.close());
       assertEquals(track.trim().split('\n').map((line) => JSON.parse(line)), [[1, 0.39, 0.2, 0.1, 0.18], [4, 0.4, 0.2, 0.1, 0.18], [31, 0.5, 0.25, 0.08, 0.15]]);
       // A face EMS gave no track has none.
-      assertEquals(await names(`${clip}/regions/face-2`), ['embedding', 'image.avif']);
-      assertEquals((await attrsOf(`${clip}/regions/face-0/embedding`)).embeddingType, 'face');
-      assertEquals((await attrsOf(`${clip}/regions/face-2/image.avif`)).sourceId, (await vfs.get(ADMIN_ACCESS, clip)).id);
+      assertEquals(await names(`${clip}/regions/face-1`), ['embedding', 'image.avif']);
+      assertEquals((await attrsOf(`${clip}/regions/face-0/embedding`)).embeddingType, 'face_transface');
+      assertEquals((await attrsOf(`${clip}/regions/face-1/image.avif`)).sourceId, (await vfs.get(ADMIN_ACCESS, clip)).id);
       const file = await attrsOf(clip);
       assertEquals(file.faceCount, 2);
       assertEquals(typeof file.facesAt, 'string');
+      assertEquals(file.facesBy, 'retinaface-r34+transface');
     });
 
     await t.step('EMS is asked in the display frame, with the gate as far as it can apply it', async () => {
@@ -101,6 +104,35 @@ Deno.test({
       const cuts = stub.requests.filter((r) => r.op === 'video.poster');
       assertEquals(cuts.map((r) => r.body.at), [4, 22]);
       assertEquals((cuts[0].body.file as { angle: number }).angle, 90);
+    });
+
+    await t.step('re-detecting continues each face it finds again, keeping its person, and drops a face nobody named', async () => {
+      await vfs.update(ADMIN_ACCESS, `${clip}/regions/face-0`, { attrs: { personId: 'anna', personSource: 'manual' } });
+      const first = (await vfs.get(ADMIN_ACCESS, `${clip}/regions/face-0`)).id;
+      faces = [
+        // The same face at the same second, a little tighter, and someone not seen before.
+        { ...(faces[0] as object), confidence: 0.97, box: { x: 0.405, y: 0.2, width: 0.095, height: 0.18 }, embedding: [0, 0, 0, 1] },
+        { appearances: [[2.5, 6.5]], detections: 5, t: 5, box: { x: 0.7, y: 0.3, width: 0.1, height: 0.18 }, confidence: 0.9, embedding: [0, 1, 1, 0] },
+      ];
+      const out = await run(`-f ${clip}`);
+      assertEquals(out.success, true, out.error);
+      assertEquals(await names(`${clip}/regions`), ['face-0', 'face-2']);
+      const anna = await vfs.get<Record<string, unknown>>(ADMIN_ACCESS, `${clip}/regions/face-0`);
+      assertEquals([anna.id, anna.attrs.personId, anna.attrs.personSource, anna.attrs.confidence], [first, 'anna', 'manual', 0.97]);
+      const handle = await vfs.open(ADMIN_ACCESS, `${clip}/regions/face-0/embedding`, { mode: 'r' });
+      assertEquals(JSON.parse(await toText(handle.readable).finally(() => handle.close())), [0, 0, 0, 1]);
+      assertEquals((await attrsOf(clip)).faceCount, 2);
+    });
+
+    await t.step('vectors from other face models than recognition is tuned for are not stored, and the step waits', async () => {
+      producer = 'other-detector+other-recogniser';
+      try {
+        const out = await run(`-f ${clip}`);
+        assertEquals(out.success, false);
+        assertEquals(await names(`${clip}/regions`), ['face-0', 'face-2']);
+      } finally {
+        producer = 'retinaface-r34+transface';
+      }
     });
 
     await t.step('a video nobody is seen in is marked as detected all the same', async () => {

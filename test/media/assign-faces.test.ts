@@ -60,9 +60,9 @@ Deno.test({
     const path = `${image}/regions/${name}`;
     const side = opts.size ?? 0.12;
     await vfs.create(ADMIN_ACCESS, 'media-region', `${image}/regions`, name, {
-      attrs: { fileId, confidence: opts.confidence ?? 0.9, detectedBy: 'insightface-buffalo_l', faceBox: { x: 0, y: 0, width: side, height: opts.sizeY ?? side } },
+      attrs: { fileId, confidence: opts.confidence ?? 0.9, detectedBy: 'retinaface-r34+transface', faceBox: { x: 0, y: 0, width: side, height: opts.sizeY ?? side } },
     });
-    await vfs.create(ADMIN_ACCESS, 'embedding', path, 'embedding', { attrs: { embeddingType: 'face', capacity: DIM } });
+    await vfs.create(ADMIN_ACCESS, 'embedding', path, 'embedding', { attrs: { embeddingType: 'face_transface', capacity: DIM } });
     const h = await vfs.open(ADMIN_ACCESS, `${path}/embedding`, { mode: 'w' });
     try {
       await h.write(new TextEncoder().encode(JSON.stringify(vector)));

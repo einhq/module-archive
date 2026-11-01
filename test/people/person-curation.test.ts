@@ -82,12 +82,12 @@ Deno.test({
           personId: person.id,
           personSource: source,
           confidence: 0.9 - i * 0.1,
-          detectedBy: 'insightface-buffalo_l',
+          detectedBy: 'retinaface-r34+transface',
         },
       });
       await vfs.create(ADMIN_ACCESS, 'embedding', facePath, 'embedding', {
         props: { uid: 1000, gid: 1000, mode: 0o644 },
-        attrs: { embeddingType: 'face', capacity: 8 },
+        attrs: { embeddingType: 'face_transface', capacity: 8 },
       });
       facePaths.push(facePath);
     }

@@ -96,8 +96,8 @@ assignFaces.spec = {
     { name: 'file', type: 'path' as const, description: 'VFS path to the image file' },
   ],
   flags: [
-    { name: 'vote-threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
-    { name: 'attach-threshold', type: 'string' as const, description: 'min winning vote weight to attach to a person (default 0.55)' },
+    { name: 'vote-threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.51)' },
+    { name: 'attach-threshold', type: 'string' as const, description: 'min winning vote weight to attach to a person (default 0.56)' },
     { name: 'margin', type: 'string' as const, description: 'winner must beat runner-up by this factor (default 1.2)' },
     { name: 'k', type: 'string' as const, description: 'neighbours to consider per face (default 24)' },
     { name: 'min-create-confidence', type: 'string' as const, description: 'min detection confidence to seed a new person (default 0.7)' },

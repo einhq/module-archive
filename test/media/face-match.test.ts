@@ -45,7 +45,7 @@ Deno.test('contains is every corner inside, edges included', () => {
 });
 
 Deno.test('a tight detection inside a loose manual box is matched', () => {
-  // The legacy case: a hand-drawn box around the whole head, and InsightFace's
+  // The legacy case: a hand-drawn box around the whole head, and the detector's
   // tight box on the face.
   const manual: Box = { x: 0, y: 0, width: 100, height: 100 };
   const auto: Box = { x: 30, y: 30, width: 40, height: 40 };

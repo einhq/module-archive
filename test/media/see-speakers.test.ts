@@ -60,7 +60,7 @@ Deno.test({
       // Anna's face on screen from 5 s to 11 s, nobody's yet.
       await cmd.shouldSucceed(`mkdir -p ${video}/regions && mknode -t media-region ${video}/regions/face-0`);
       await vfs.update(ADMIN_ACCESS, `${video}/regions/face-0`, { attrs: { appearances: [[5, 11]] } });
-      await cmd.shouldSucceed(`mknode -t embedding ${video}/regions/face-0/embedding --as embeddingType=face --an capacity=4`);
+      await cmd.shouldSucceed(`mknode -t embedding ${video}/regions/face-0/embedding --as embeddingType=face_transface --an capacity=4`);
       await writeVector(`${video}/regions/face-0/embedding`, [0, 0, 1, 0]);
       const region = (await vfs.get(ADMIN_ACCESS, `${video}/regions/face-0`)).id;
       faces = [{ id: 's1', score: 0.85, t: 8, box: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, confidence: 0.9, embedding: [0, 0.1, 1, 0] }];

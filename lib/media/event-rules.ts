@@ -16,6 +16,7 @@
 
 import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
+import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
 import type { DomainEvent } from '@ein/client';
 import { isTrashPath, TEMP_PATH } from '@ein/paths';
 import { deferredCopy } from '@archive/staging/deferral';
@@ -91,6 +92,11 @@ export const MEDIA_EVENTS = {
    * trigger skips every file that already has the directory.
    */
   pictureStale: 'media.picture.stale',
+  /**
+   * A photo or video's faces were found by other face models than EMS runs now (`facesBy`). Its
+   * own fact because the face pipelines' ordinary trigger skips every file that has `facesAt`.
+   */
+  facesStale: 'media.faces.stale',
   /**
    * A picture's text was read by another engine than EMS reads with now (`ocrBy`). Its own fact
    * because `media-ocr`'s ordinary triggers skip every picture already read.
@@ -324,6 +330,14 @@ export type RuleContext = {
    * which disables the check.
    */
   ocrGeneration?: string;
+  /**
+   * The face models EMS runs now (`faceGeneration()` in `@ems/client`). A detected file whose
+   * `facesBy` names others, or none, has its faces detected again: their vectors are in another
+   * space. Only when EMS runs the models recognition is tuned for (`FACE_MODEL`), since a
+   * re-detection with any others stores nothing. Derived from EMS like `pictureGeneration`, and
+   * undefined when EMS cannot be asked, which disables the check.
+   */
+  faceGeneration?: string;
   /**
    * The text embedder EMS runs now (`textEmbedGeneration()` in `@ems/client`). A text under a
    * file's `metadata/` whose vector carries another `embeddedBy`, or has none, is embedded again
@@ -777,6 +791,22 @@ export async function deriveGaps(
     }
   }
 
+  // Faces found by other models than EMS runs now, on a photo or a video. A file never detected is
+  // `missingFaces`'s above, so this asks only one that has `facesAt`.
+  if (ctx.faceGeneration === FACE_MODEL && !undecodable && PICTURE_MIMETYPE.test(mimetype) && str(file.attrs.facesAt)) {
+    const facesBy = str(file.attrs.facesBy);
+    if (facesBy !== ctx.faceGeneration) {
+      events.push({
+        type: MEDIA_EVENTS.facesStale,
+        subject: filePath,
+        nodeId: file.id,
+        time: now,
+        source: MEDIA_EVENT_SOURCE,
+        data: { mimetype, facesBy: facesBy ?? '', expected: ctx.faceGeneration },
+      });
+    }
+  }
+
   // Text in a picture read by another engine. A picture never read is `media.text.missing`'s, and
   // one without `ocrBy` keeps Tesseract's reading (`ocrGeneration`).
   const ocrBy = str(file.attrs.ocrBy);
@@ -921,7 +951,7 @@ async function deriveForEmbedding(
   // <file>/regions/face-N/embedding — one event per face, so assignment is independently
   // retryable and never re-runs detection for the whole file. The fact is about the region:
   // that is where the person is written, so `skipIfAttr: personId` has to read it there.
-  if (embeddingType === 'face' && nameOf(path) === 'embedding' && nameOf(parentOf(parent)) === 'regions') {
+  if (embeddingType === FACE_EMBEDDING_TYPE && nameOf(path) === 'embedding' && nameOf(parentOf(parent)) === 'regions') {
     const region = await ctx.getNode(parent);
     if (!region) return [];
     const filePath = parentOf(parentOf(parent));

@@ -42,7 +42,14 @@ import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { stampLanes } from '@archive/staging/facts';
-import { imageEmbedGeneration, ocrGeneration as readTextGeneration, textEmbedGeneration, transcodeBudget, transcribeSignature } from '@ems/client';
+import {
+  faceGeneration as faceGenerationOf,
+  imageEmbedGeneration,
+  ocrGeneration as readTextGeneration,
+  textEmbedGeneration,
+  transcodeBudget,
+  transcribeSignature,
+} from '@ems/client';
 
 const encoder = new TextEncoder();
 
@@ -213,6 +220,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   const pictureGeneration = gaps ? (await imageEmbedGeneration(cmd) ?? undefined) : undefined;
   // The same for text in pictures: a picture read by another engine is read again.
   const ocrGeneration = gaps ? (await readTextGeneration(cmd) ?? undefined) : undefined;
+  // The same for faces: a file whose faces other models found has them detected again.
+  const faceGeneration = gaps ? (await faceGenerationOf(cmd) ?? undefined) : undefined;
   // The same for text vectors: extracted text, a transcript or a hand-written description
   // whose vector names another text embedder, or has none, is embedded again from its text.
   const textGeneration = gaps ? (await textEmbedGeneration(cmd) ?? undefined) : undefined;
@@ -246,6 +255,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     cpuEncodeBudget,
     pictureGeneration,
     ocrGeneration,
+    faceGeneration,
     textGeneration,
   };
 
@@ -290,6 +300,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       cpuEncodeBudget: ctx.cpuEncodeBudget,
       pictureGeneration,
       ocrGeneration,
+      faceGeneration,
       textGeneration,
     };
   };

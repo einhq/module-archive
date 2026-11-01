@@ -114,7 +114,7 @@ Deno.test({
       await cmd.shouldSucceed(`mknode -t file ${photo} --as name=bild.jpg --as mimetype=image/jpeg`);
       await cmd.shouldSucceed(`mkdir -p ${photo}/regions`);
       await cmd.shouldSucceed(`mknode -t media-region ${photo}/regions/face-0 --as personId=p-anna`);
-      await cmd.shouldSucceed(`mknode -t embedding ${photo}/regions/face-0/embedding --as embeddingType=face --an capacity=4`);
+      await cmd.shouldSucceed(`mknode -t embedding ${photo}/regions/face-0/embedding --as embeddingType=face_transface --an capacity=4`);
       const handle = await vfs.open(ADMIN_ACCESS, `${photo}/regions/face-0/embedding`, { mode: 'w' });
       await handle.write(new TextEncoder().encode(JSON.stringify([0, 0, 1, 0])));
       await handle.close();
@@ -139,7 +139,7 @@ Deno.test({
         await cmd.shouldSucceed(`mkdir -p ${video}/regions`);
         await cmd.shouldSucceed(`mknode -t media-region ${path}`);
         await vfs.update(ADMIN_ACCESS, path, { attrs: { appearances } });
-        await cmd.shouldSucceed(`mknode -t embedding ${path}/embedding --as embeddingType=face --an capacity=4`);
+        await cmd.shouldSucceed(`mknode -t embedding ${path}/embedding --as embeddingType=face_transface --an capacity=4`);
         const handle = await vfs.open(ADMIN_ACCESS, `${path}/embedding`, { mode: 'w' });
         await handle.write(new TextEncoder().encode(JSON.stringify(vector)));
         await handle.close();

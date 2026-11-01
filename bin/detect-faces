@@ -1,28 +1,29 @@
 #!ts
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, STEP_EXIT_TEMPORARY } from '@ein/client';
 import { type Box, detectFaces as detectFacesOp, detectVideoFaces, stepExitCode } from '@ems/client';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
 import { type FaceCropRequest, writeFaceCrops } from '@archive/media/face-crop-rebuild';
 import { storedPose } from '@archive/media/face-pose';
 import { qualityLimitsFrom, type QualityReason, recognizable } from '@archive/media/face-quality';
-import { clampBox, displayDims, normalizeAngle, normalizeMirror, roundBox } from '@archive/media/orientation';
+import { planRedetection } from '@archive/media/face-redetect';
+import { clampBox, displayDims, type FracBox, normalizeAngle, normalizeMirror, roundBox } from '@archive/media/orientation';
 import {
-  DETECTED_PREFIX,
-  FACE_DETECTOR,
+  detectedRegions,
   FACE_EMBEDDING_NAME,
   FACE_EMBEDDING_TYPE,
+  FACE_MODEL,
   FACE_TRACK_MIMETYPE,
   FACE_TRACK_NAME,
   faceEmbeddingPathOf,
   REGION_TYPE,
   REGIONS_DIR,
   regionsPathOf,
-  removeDetectedRegions,
 } from '@archive/media/regions';
 import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
 import { reportUnwritable } from '@archive/media/writable';
+import { releasePerson } from '@archive/people/person';
 
 const log = (...args: unknown[]) => console.log('[detect-faces]', ...args);
 
@@ -47,7 +48,8 @@ type Found = {
   track?: [number, number, number, number, number][];
 };
 
-type Detection = { frame: { width: number; height: number }; faces: Found[] };
+/** `interval` is a video's sampling interval; `producer` the models EMS found the faces with. */
+type Detection = { frame: { width: number; height: number }; faces: Found[]; interval?: number; producer: string };
 
 /** Write `text` as the whole content of the file node at `path`. */
 const writeText = async (cmd: Command, path: string, text: string): Promise<void> => {
@@ -122,16 +124,12 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   const angle = normalizeAngle(fileAttrs.angle);
   const mirror = normalizeMirror(fileAttrs.mirror);
 
-  // Re-detecting means starting over: the boxes are what changed, and a stale face region would
-  // keep its old crop and its old identity. Only *our* regions, though — `regions/` also holds
-  // `manual-<n>` boxes a human drew or an import carried, with a real personId that no
-  // detector can reproduce.
-  if (force) {
-    const removed = await removeDetectedRegions(cmd.sys.vfs, cmd.access, inputPath);
-    log('removed previous detections', { removed });
-  }
+  // Re-detecting finds every face again, and each continues the region it is the same face as
+  // (@archive/media/face-redetect). Only *our* regions, `face-<n>`: `regions/` also holds
+  // `manual-<n>` boxes a human drew or an import carried, which no detector reproduces.
+  const previous = force ? await detectedRegions(cmd.sys.vfs, cmd.access, inputPath) : [];
 
-  if (verbose) await cmd.writeLn('Running InsightFace...');
+  if (verbose) await cmd.writeLn('Running face detection...');
 
   // EMS detects in the node's display frame and decodes a RAW or an unusual HEIF out of process
   // itself when its readers cannot open it. Every box comes back as a fraction of that frame,
@@ -157,6 +155,8 @@ const detectFaces = async (cmd: Command): CmdReturn => {
       detection = {
         frame: result.frame,
         faces: result.faces.map((face, index) => ({ ...face, index, at: face.t, appearances: face.appearances, track: face.track })),
+        interval: result.interval,
+        producer: result.producer,
       };
     } else {
       detection = await detectFacesOp(cmd, inputPath, angle, mirror);
@@ -167,6 +167,15 @@ const detectFaces = async (cmd: Command): CmdReturn => {
     return stepExitCode(error);
   }
 
+  // Recognition compares vectors only within one recogniser's space, on that recogniser's scale,
+  // so vectors from any other models than the ones it is tuned for are not stored. An EMS on
+  // other models is one not yet updated to match this archive: the faces kind waits for it,
+  // spending no attempt, rather than fail every file it is asked about.
+  if (detection.producer !== FACE_MODEL) {
+    await cmd.writeError(`detect-faces: EMS finds faces with '${detection.producer || 'unknown models'}', and recognition here is tuned for '${FACE_MODEL}'\n`);
+    return STEP_EXIT_TEMPORARY;
+  }
+
   // Detection ran on the display frame; EMS reports every box and landmark as fractions of
   // it, which is exactly what is stored. Only a usable face is kept (@media/face-quality): a
   // weak detection that went on to vote in recognition pulled strangers toward its person.
@@ -174,22 +183,55 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   // its clearest look, the one that is stored.
   const dims = detection.frame.width > 0 && detection.frame.height > 0 ? detection.frame : undefined;
   const rejected: Partial<Record<QualityReason, number>> = {};
-  const faces = detection.faces.filter((face) => {
+  const faces: (Found & { faceBox: FracBox })[] = [];
+  for (const face of detection.faces) {
     const quality = recognizable({ confidence: face.confidence, faceBox: face.box, landmarks: face.landmarks }, dims, limits);
-    if (!quality.ok) rejected[quality.reason] = (rejected[quality.reason] ?? 0) + 1;
-    return quality.ok;
-  });
+    if (!quality.ok) {
+      rejected[quality.reason] = (rejected[quality.reason] ?? 0) + 1;
+      continue;
+    }
+    const faceBox = clampBox(face.box);
+    if (faceBox) faces.push({ ...face, faceBox: roundBox(faceBox) });
+  }
 
   log('faces detected', { total: detection.faces.length, kept: faces.length, rejected, angle, mirror, limits });
 
   const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+  const regionsPath = regionsPathOf(inputPath);
+  const plan = planRedetection(
+    previous,
+    faces.map((face) => ({ box: face.faceBox, ...(face.at !== undefined ? { at: face.at, track: face.track } : {}) })),
+    (detection.interval ?? 0) / 2,
+  );
+  if (force) log('previous detections', { continued: plan.continues.size, kept: plan.kept.length, removed: plan.removed.length, created: plan.created.size });
+
+  // What a detector said about a region goes with its vector and its track; a re-detection
+  // replaces them, and a region that is kept as a tag loses them.
+  const dropDetection = async (regionPath: string) => {
+    for (const child of [FACE_EMBEDDING_NAME, FACE_TRACK_NAME]) {
+      if (await vfs.exists(access, `${regionPath}/${child}`)) await vfs.unlink(access, `${regionPath}/${child}`, regionPath);
+    }
+  };
+
+  // The regions that go first, and their people tidied once all of a person's have gone.
+  const gone = new Map<string, Set<string>>();
+  for (const { name, personId } of plan.removed) {
+    const region = previous.find((entry) => entry.name === name)!;
+    await vfs.unlink(access, `${regionsPath}/${name}`, regionsPath, { recursive: true });
+    if (personId) gone.set(personId, (gone.get(personId) ?? new Set()).add(region.id));
+  }
+  for (const [personId, ids] of gone) await releasePerson(vfs, access, personId, ids);
+  for (const name of plan.kept) await dropDetection(`${regionsPath}/${name}`);
 
   // Mark the file itself, in both exit paths. Without this "has detection run
   // on this file?" is unanswerable: a picture with nobody in it creates no
   // `regions/` directory and no face nodes, so it is indistinguishable from one
   // the crawl has not reached — and anything that needs to know whether the
   // people signal is complete (the staging organizer) would have to guess.
-  const markDetected = (count: number) => cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { facesAt: detectedAt, faceCount: count } });
+  // `facesBy` says which models found them, so faces from other ones are found again.
+  const markDetected = (count: number) => vfs.update(access, inputPath, { attrs: { facesAt: detectedAt, faceCount: count, facesBy: FACE_MODEL } });
 
   if (faces.length === 0) {
     await markDetected(0);
@@ -201,66 +243,68 @@ const detectFaces = async (cmd: Command): CmdReturn => {
     return 0;
   }
 
-  const regionsPath = regionsPathOf(inputPath);
-  await cmd.sys.vfs.ensure(cmd.access, 'directory', inputPath, REGIONS_DIR);
+  await vfs.ensure(access, 'directory', inputPath, REGIONS_DIR);
 
   const createdFaces: string[] = [];
   const crops: FaceCropRequest[] = [];
 
-  for (const face of faces) {
-    const regionName = `${DETECTED_PREFIX}${face.index}`;
+  for (const [index, face] of faces.entries()) {
+    const continued = plan.continues.get(index);
+    const regionName = continued ?? plan.created.get(index)!;
     const regionPath = `${regionsPath}/${regionName}`;
-    const faceBox = clampBox(face.box);
-    if (!faceBox) {
-      await cmd.writeError(`detect-faces: ${regionPath}: degenerate box, skipping\n`);
-      continue;
-    }
+    const attrs = {
+      faceBox: face.faceBox,
+      // Landmarks are fractions of the same frame; kept alongside the box.
+      landmarks: face.landmarks ?? null,
+      // Which way the head is turned, when this EMS reports it (@media/face-pose).
+      pose: storedPose(face.pose),
+      confidence: face.confidence,
+      ...(face.at !== undefined ? { atSeconds: face.at, appearances: face.appearances ?? [] } : {}),
+      detectedAt,
+      detectedBy: FACE_MODEL,
+    };
 
     // The region first, with everything about the box; then the embedding under it. The
     // embedding's arrival is the `media.face.detected` fact, and assignment reads the region.
-    log('creating face region', { regionPath, embeddingLength: face.embedding.length });
+    // A region continued keeps its name and its person: only the detection is new.
+    log(continued ? 'updating face region' : 'creating face region', { regionPath, embeddingLength: face.embedding.length });
     try {
-      await cmd.sys.vfs.create(cmd.access, REGION_TYPE, regionsPath, regionName, {
-        attrs: {
-          fileId: nodeId,
-          faceBox: roundBox(faceBox),
-          // Landmarks are fractions of the same frame; kept alongside the box.
-          landmarks: face.landmarks ?? null,
-          // Which way the head is turned, when this EMS reports it (@media/face-pose).
-          pose: storedPose(face.pose),
-          confidence: face.confidence,
-          ...(face.at !== undefined ? { atSeconds: face.at, appearances: face.appearances ?? [] } : {}),
-          detectedAt,
-          detectedBy: FACE_DETECTOR,
-        },
-      });
-      await cmd.sys.vfs.create(cmd.access, 'embedding', regionPath, FACE_EMBEDDING_NAME, {
+      if (continued) {
+        await dropDetection(regionPath);
+        await vfs.update(access, regionPath, { attrs });
+      } else {
+        await vfs.create(access, REGION_TYPE, regionsPath, regionName, { attrs: { fileId: nodeId, ...attrs } });
+      }
+      await vfs.create(access, 'embedding', regionPath, FACE_EMBEDDING_NAME, {
         attrs: { embeddingType: FACE_EMBEDDING_TYPE, capacity: 512 },
       });
       // Written through the VFS rather than the shell, which would truncate it.
       await writeText(cmd, faceEmbeddingPathOf(regionPath), JSON.stringify(face.embedding));
       if (face.track && face.track.length > 0) {
         // Where the face was along its path, a line a sighting, for a box that follows it.
-        await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_TRACK_NAME, { attrs: { mimetype: FACE_TRACK_MIMETYPE } });
+        await vfs.create(access, 'file', regionPath, FACE_TRACK_NAME, { attrs: { mimetype: FACE_TRACK_MIMETYPE } });
         await writeText(cmd, `${regionPath}/${FACE_TRACK_NAME}`, face.track.map((line) => JSON.stringify(line)).join('\n') + '\n');
       }
     } catch (error) {
-      await cmd.writeError(`detect-faces: failed to create ${regionPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+      await cmd.writeError(`detect-faces: failed to write ${regionPath}: ${error instanceof Error ? error.message : String(error)}\n`);
       continue;
     }
 
-    log('face region created', { regionPath });
+    log('face region written', { regionPath });
 
     const cropPath = `${regionPath}/${FACE_CROP_NAME}`;
     // Set sourceId (the media node) so the crop is treated as a rendition:
     // media-index's trigger skips it — otherwise the crop (an image file
     // node) re-triggers the pipeline and detect-faces recurses on its own
     // output indefinitely — and it routes to the volatile storage tier.
-    await cmd.sys.vfs.create(cmd.access, 'file', regionPath, FACE_CROP_NAME, {
-      attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: nodeId },
-    });
+    // A continued region's crop is cut again into the node it has.
+    if (!(await vfs.exists(access, cropPath))) {
+      await vfs.create(access, 'file', regionPath, FACE_CROP_NAME, {
+        attrs: { mimetype: FACE_CROP_MIMETYPE, sourceId: nodeId },
+      });
+    }
 
-    crops.push({ output: cropPath, box: faceBox, ...(face.at !== undefined ? { at: face.at } : {}) });
+    crops.push({ output: cropPath, box: face.faceBox, ...(face.at !== undefined ? { at: face.at } : {}) });
     createdFaces.push(regionPath);
   }
 
@@ -310,7 +354,7 @@ detectFaces.spec = {
   ],
   flags: [
     { name: 'c', type: 'string' as const, description: 'Minimum confidence (default: CFG_FACE_MIN_CONFIDENCE, 0.7)' },
-    { name: 'f', type: 'bool' as const, description: 'Re-detect: drop previous face-* regions first (manual-* boxes are kept)' },
+    { name: 'f', type: 'bool' as const, description: 'Re-detect: each face found continues the face-* region it is the same face as; manual-* boxes are kept' },
     { name: 'v', type: 'bool' as const, description: 'Verbose output' },
   ],
   examples: [

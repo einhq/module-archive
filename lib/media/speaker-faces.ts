@@ -20,14 +20,15 @@
 import type { Command } from '@ein/client';
 import { type ActiveSpeaker, activeSpeakers } from '@ems/client';
 import { cosine, parseVector } from '@archive/media/near-duplicates';
+import { DEFAULT_ASSIGN_OPTIONS } from '@archive/media/face-assign';
 import { FACE_EMBEDDING_TYPE, faceEmbeddingsOfRegions, type RegionAttrs, regionsOfEmbeddings, regionsPathOf } from '@archive/media/regions';
 import type { Span } from '@archive/media/speakers';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
 
-/** Cosine similarity for a seen face to count as a known person's, or as a region's of the video. */
-const SPEAKER_FACE_MATCH_THRESHOLD = 0.5;
+/** Cosine similarity for a seen face to count as a known person's, or as a region's of the video: face-assign's vote threshold. */
+const SPEAKER_FACE_MATCH_THRESHOLD = DEFAULT_ASSIGN_OPTIONS.voteThreshold;
 
 const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
 

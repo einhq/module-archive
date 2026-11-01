@@ -64,7 +64,7 @@ Deno.test({
       if (values) {
         await vfs.create(ADMIN_ACCESS, 'embedding', facePath, 'embedding', {
           props: { uid: 1000, gid: 1000, mode: 0o644 },
-          attrs: { embeddingType: 'face', capacity: DIM },
+          attrs: { embeddingType: 'face_transface', capacity: DIM },
         });
         const handle = await vfs.open(ADMIN_ACCESS, `${facePath}/embedding`, { mode: 'w' });
         try {

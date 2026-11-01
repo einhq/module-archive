@@ -47,12 +47,13 @@ const clusterFaces = async (cmd: Command): CmdReturn => {
     boolean: ['dry-run', 'verbose', 'create-people', 'mutual', 'no-mutual'],
     alias: { n: 'dry-run', v: 'verbose' },
   });
-  const threshold = flags.threshold ? Number(flags.threshold) : 0.5;
+  // On the recogniser's scale (`FACE_MODEL`), as face-assign's (ein/core#887).
+  const threshold = flags.threshold ? Number(flags.threshold) : 0.51;
   const margin = flags.margin ? Number(flags.margin) : 1.2;
-  const minVotes = flags['min-votes'] ? Number(flags['min-votes']) : 0.5;
+  const minVotes = flags['min-votes'] ? Number(flags['min-votes']) : 0.51;
   const k = flags.k ? Number(flags.k) : 8;
   const minCluster = flags['min-cluster'] ? Number(flags['min-cluster']) : 3;
-  const clusterThreshold = flags['cluster-threshold'] ? Number(flags['cluster-threshold']) : 0.6;
+  const clusterThreshold = flags['cluster-threshold'] ? Number(flags['cluster-threshold']) : 0.61;
   const maxCluster = flags['max-cluster'] ? Number(flags['max-cluster']) : 60;
   const maxPeople = flags['max-people'] ? Number(flags['max-people']) : 500;
   const createPeople = !!flags['create-people'];
@@ -304,12 +305,12 @@ clusterFaces.spec = {
   description: 'Recognize untagged faces as existing people (label propagation) + optionally create unnamed people for leftover clusters',
   args: [],
   flags: [
-    { name: 'threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.5)' },
+    { name: 'threshold', type: 'string' as const, description: 'min cosine similarity for a neighbour vote (default 0.51)' },
     { name: 'margin', type: 'string' as const, description: 'winning person must beat runner-up by this factor (default 1.2)' },
-    { name: 'min-votes', type: 'string' as const, description: 'min winning vote weight to assign (default 0.5)' },
+    { name: 'min-votes', type: 'string' as const, description: 'min winning vote weight to assign (default 0.51)' },
     { name: 'k', type: 'string' as const, description: 'nearest neighbours per face (default 8)' },
     { name: 'min-cluster', type: 'string' as const, description: 'min faces in a new-person cluster (default 3)' },
-    { name: 'cluster-threshold', type: 'string' as const, description: 'stricter min similarity to group two untagged faces (default 0.6)' },
+    { name: 'cluster-threshold', type: 'string' as const, description: 'stricter min similarity to group two untagged faces (default 0.61)' },
     { name: 'max-cluster', type: 'string' as const, description: 'skip clusters larger than this as likely chained (default 60)' },
     { name: 'max-people', type: 'string' as const, description: 'max unnamed people to create per run (default 500)' },
     { name: 'create-people', type: 'bool' as const, description: 'create an unnamed person per leftover cluster (off by default)' },

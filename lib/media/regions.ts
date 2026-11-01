@@ -33,14 +33,26 @@ export const FACE_EMBEDDING_NAME = 'embedding';
 export const FACE_TRACK_NAME = 'track';
 export const FACE_TRACK_MIMETYPE = 'application/x-ndjson';
 
-/** `embeddingType` of a face vector. */
-export const FACE_EMBEDDING_TYPE = 'face';
+/**
+ * The face models recognition is tuned for, as EMS names them (its faces ops' producer): RetinaFace
+ * finds the faces and TransFace makes the vectors. Every similarity threshold of face recognition
+ * is on this recogniser's scale. It is `detectedBy` on a region `detect-faces` wrote, and `facesBy`
+ * on a file whose faces it found; a file with faces from other models is detected again.
+ */
+export const FACE_MODEL = 'retinaface-r34+transface';
 
-/** `detectedBy` on a region `detect-faces` wrote. */
-export const FACE_DETECTOR = 'insightface-buffalo_l';
+/**
+ * `embeddingType` of a face vector from FACE_MODEL. Named per model, as every vector type is
+ * (@archive/media/embedding-types): another recogniser's vectors are in another space, and
+ * recognition searches only this one.
+ */
+export const FACE_EMBEDDING_TYPE = 'face_transface';
 
 /** `detectedBy` on a box somebody drew in the lightbox. */
 export const LIGHTBOX_MANUAL_DETECTOR = 'manual';
+
+/** `personSource` values a machine wrote; any other means a person decided, or an import carried one's decision. */
+export const MACHINE_SOURCES: ReadonlySet<string> = new Set(['auto', 'cluster']);
 
 /** Node-name prefix for a detection this system produced. */
 export const DETECTED_PREFIX = 'face-';
@@ -157,29 +169,17 @@ export const faceEmbeddingsOfRegions = async (vfs: NodeVFS, access: Access, regi
 };
 
 /**
- * Drop the regions a previous detection run created, leaving human and imported boxes alone, and
- * say how many went.
- *
- * Human-drawn and imported boxes are not reproducible by any detector, so asking for fresh
- * detections must not remove them.
+ * The regions a detection run created on a file, `face-<n>`, with their ids and attrs; none on a
+ * file never detected. Human-drawn and imported boxes are not among them: no detector reproduces
+ * those, so a re-detection never touches them.
  */
-export const removeDetectedRegions = async (
+export const detectedRegions = async (
   vfs: NodeVFS,
   access: Access,
-  imagePath: string,
-): Promise<number> => {
-  const regionsPath = regionsPathOf(imagePath);
-  let entries;
-  try {
-    entries = await vfs.children<RegionAttrs>(access, regionsPath);
-  } catch {
-    return 0; // nothing detected here yet
-  }
-
-  const detected = entries.filter((entry) => entry.name.startsWith(DETECTED_PREFIX));
-  // Recursive: a region owns its embedding and its crop.
-  for (const entry of detected) await vfs.unlink(access, `${regionsPath}/${entry.name}`, regionsPath, { recursive: true });
-  return detected.length;
+  filePath: string,
+): Promise<{ id: string; name: string; attrs: RegionAttrs }[]> => {
+  const entries = await vfs.children<RegionAttrs>(access, regionsPathOf(filePath), { follow: false }).catch(() => []);
+  return entries.filter((entry) => entry.name.startsWith(DETECTED_PREFIX)).map((entry) => ({ id: entry.node.id, name: entry.name, attrs: entry.node.attrs }));
 };
 
 /** The next unused `manual-<n>` among `names`: a removed index is never reused, so a new box never looks like an old one returned. */

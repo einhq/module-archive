@@ -21,7 +21,7 @@ trigger:
 steps:
   detect-faces:
     command: detect-faces $NODE_PATH
-    description: InsightFace detection plus a cropped image per face
+    description: Face detection plus a cropped image per face
     pool: media
     kind: faces
     priority: 100

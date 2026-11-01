@@ -43,9 +43,9 @@ Deno.test({
       // something else, so the face stops voting and stays a tag of the same person.
       const fileId = (await vfs.get(ADMIN_ACCESS, '/img/photo.jpg')).id;
       await vfs.create(ADMIN_ACCESS, 'media-region', '/img/photo.jpg/regions', 'face-7', {
-        attrs: { fileId, detectedBy: 'insightface-buffalo_l', confidence: 0.9, personId: first.personId, faceBox: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } },
+        attrs: { fileId, detectedBy: 'retinaface-r34+transface', confidence: 0.9, personId: first.personId, faceBox: { x: 0.5, y: 0.5, width: 0.1, height: 0.1 } },
       });
-      await vfs.create(ADMIN_ACCESS, 'embedding', '/img/photo.jpg/regions/face-7', 'embedding', { attrs: { embeddingType: 'face', capacity: 512 } });
+      await vfs.create(ADMIN_ACCESS, 'embedding', '/img/photo.jpg/regions/face-7', 'embedding', { attrs: { embeddingType: 'face_transface', capacity: 512 } });
 
       await client.execJson(`face-set-box /img/photo.jpg/regions/face-7 --box 0.5,0.5,0.15,0.15 --no-crop`);
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/img/photo.jpg/regions/face-7/embedding'), false);

@@ -1,16 +1,15 @@
 /**
  * Head pose: which way a detected face is turned, as EMS's `faces.detect` reports it.
  *
- * Degrees, from InsightFace buffalo_l's 3D landmark model, in the **display frame** the face was
+ * Degrees, estimated by EMS from the detector's five points, in the **display frame** the face was
  * detected in: `pitch` is up/down, `yaw` a left/right turn, `roll` a tilt; all three 0 is a face
  * looking straight into the camera. Stored on the face node as `pose` beside `faceBox` and
  * `landmarks`. Faces stored without one, and hand-drawn boxes, have none — readers treat a
  * missing pose as unknown, never as frontal.
  *
  * The convention matters for one thing only, carrying a pose across a change of frame
- * (`file-set-orientation`). InsightFace takes roll as `atan2(R[1][0], R[0][0])` of the rotation
- * that maps its mean face onto the image, in image coordinates with y down — the angle of the
- * head's own x-axis measured clockwise on screen. Turning the frame turns that axis with it;
+ * (`file-set-orientation`). Roll is the angle of the line from the face's first eye point to its
+ * second, in image coordinates with y down — the head's own x-axis measured clockwise on screen. Turning the frame turns that axis with it;
  * mirroring it mirrors the axis and flips the turn. Pitch, being about the head's own x-axis,
  * is the same in every frame.
  */

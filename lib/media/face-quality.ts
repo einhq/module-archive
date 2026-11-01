@@ -8,7 +8,9 @@
  * Below confidence 0.7 a face's nearest neighbour is far less often the same person, and weak
  * faces become hubs that pull strangers toward their person. Above it, small faces vote as well
  * as large ones, and the turn only hurts near profile. Backs of heads come out at low confidence;
- * their landmarks are symmetric guesses, so the turn does not catch them.
+ * their landmarks are symmetric guesses, so the turn does not catch them. With RetinaFace about 2 %
+ * of what passes at 0.7 is no face (underexposed patches, objects), which confidence does not
+ * separate from the profiles and small faces it finds (ein/core#887).
  *
  * Pure: no VFS, no config reads, so the fast test tier covers it. `canSeedPerson` in
  * `@archive/media/face-assign` (may this face start a new identity) and the cover ranking in

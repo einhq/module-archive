@@ -22,9 +22,9 @@ import { leaveSuggestedAlbums, suggestionsOf } from '@archive/staging/membership
 import { inboxOf, markTrashed, refreshReferences } from '@archive/staging/duplicates';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 import { albumsHolding } from '@archive/media/album-members';
-import { iou } from '@archive/media/face-match';
+import { iou, SAME_FACE_IOU } from '@archive/media/face-match';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
-import { FACE_DETECTOR, LIGHTBOX_MANUAL_DETECTOR, nextManualName, REGION_TYPE, type RegionAttrs, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
+import { DETECTED_PREFIX, LIGHTBOX_MANUAL_DETECTOR, MACHINE_SOURCES, nextManualName, REGION_TYPE, type RegionAttrs, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
 
 /** Paths per `trash put`, so a command line stays short however many drops there are. */
 const TRASH_CHUNK = 500;
@@ -43,12 +43,6 @@ export const COMMENTS_DIR = 'comments';
 
 /** An imported album's lone child that holds its members. */
 const FILES_DIR = 'files';
-
-/** Where a region's person came from when a machine guessed it; recognition makes the guess again on the kept file. */
-const MACHINE_SOURCES = new Set(['auto', 'cluster']);
-
-/** How much a drop's box must overlap a box on the kept file to be the same face. */
-const SAME_FACE_IOU = 0.5;
 
 /** The attrs of a file the merge reads: the inputs a person sets by hand, the labels, and whether it is indexed. */
 type MergeAttrs = {
@@ -287,7 +281,8 @@ const planPeople = (cmd: Command, keep: MergeFile, drops: MergeFile[]): Step[] =
           const name = nextManualName(names);
           names.push(name);
           // A detection becomes a box drawn by hand here; any other box keeps who drew it.
-          const drawnBy = from.attrs.detectedBy && from.attrs.detectedBy !== FACE_DETECTOR ? from.attrs.detectedBy : LIGHTBOX_MANUAL_DETECTOR;
+          const detected = basename(from.path).startsWith(DETECTED_PREFIX);
+          const drawnBy = from.attrs.detectedBy && !detected ? from.attrs.detectedBy : LIGHTBOX_MANUAL_DETECTOR;
           await vfs.create(access, REGION_TYPE, dir, name, {
             attrs: {
               fileId: keep.id,

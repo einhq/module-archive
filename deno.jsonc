@@ -43,6 +43,7 @@
     "@archive/media/face-match": "./lib/media/face-match.ts",
     "@archive/media/face-pose": "./lib/media/face-pose.ts",
     "@archive/media/face-quality": "./lib/media/face-quality.ts",
+    "@archive/media/face-redetect": "./lib/media/face-redetect.ts",
     "@archive/media/face-subcluster": "./lib/media/face-subcluster.ts",
     "@archive/media/filename-date": "./lib/media/filename-date.ts",
     "@archive/media/fingerprint-service": "./lib/media/fingerprint-service.ts",

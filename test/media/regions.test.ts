@@ -8,12 +8,12 @@ import { ADMIN_ACCESS, createTestVfs } from '@ein/testing';
 import type { NodeVFS } from '@ein/testing';
 import {
   allRegions,
+  detectedRegions,
   faceEmbeddingsOfRegions,
   imageOfRegion,
   LIGHTBOX_MANUAL_DETECTOR,
   nextManualName,
   regionsOfEmbeddings,
-  removeDetectedRegions,
 } from '../../lib/media/regions.ts';
 
 const OWNER = { uid: 1000, gid: 1000, mode: 0o644 };
@@ -28,48 +28,33 @@ const seedImage = async (vfs: NodeVFS, path = '/img.jpg') => {
 const seedRegion = async (vfs: NodeVFS, image: string, name: string, detectedBy: string, opts: { face?: boolean; attrs?: Record<string, unknown> } = {}) => {
   const region = await vfs.create(ADMIN_ACCESS, 'media-region', `${image}/regions`, name, { props: OWNER, attrs: { detectedBy, ...opts.attrs } });
   const embedding = opts.face
-    ? await vfs.create(ADMIN_ACCESS, 'embedding', `${image}/regions/${name}`, 'embedding', { props: OWNER, attrs: { embeddingType: 'face', capacity: 512 } })
+    ? await vfs.create(ADMIN_ACCESS, 'embedding', `${image}/regions/${name}`, 'embedding', { props: OWNER, attrs: { embeddingType: 'face_transface', capacity: 512 } })
     : undefined;
   return { region, embedding };
 };
 
-Deno.test('removeDetectedRegions drops detections and spares tags', async () => {
+Deno.test('detectedRegions lists detections, a vector or not, and never tags', async () => {
   const { vfs, dispose } = await createTestVfs();
   try {
     const image = await seedImage(vfs);
-    await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
+    await seedRegion(vfs, image, 'face-0', 'retinaface-r34+transface', { face: true });
     // A detection that lost its vector is still a detection.
-    await seedRegion(vfs, image, 'face-1', 'insightface-buffalo_l');
+    await seedRegion(vfs, image, 'face-1', 'retinaface-r34+transface', { attrs: { personId: 'p1' } });
     await seedRegion(vfs, image, 'manual-0', LIGHTBOX_MANUAL_DETECTOR);
 
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), 2);
-
-    const left = (await vfs.children(ADMIN_ACCESS, `${image}/regions`)).map((c) => c.name);
-    assertEquals(left, ['manual-0'], 'the hand-drawn tag survives a re-detect');
+    const found = await detectedRegions(vfs, ADMIN_ACCESS, image);
+    assertEquals(found.map((region) => region.name).sort(), ['face-0', 'face-1']);
+    assertEquals(found.find((region) => region.name === 'face-1')?.attrs.personId, 'p1');
   } finally {
     await dispose();
   }
 });
 
-Deno.test('removeDetectedRegions takes the embedding and the crop with it', async () => {
-  const { vfs, dispose } = await createTestVfs();
-  try {
-    const image = await seedImage(vfs);
-    await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true });
-    await vfs.create(ADMIN_ACCESS, 'file', `${image}/regions/face-0`, 'image.avif', { props: OWNER, attrs: { mimetype: 'image/avif' } });
-
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, image), 1);
-    assertEquals(await vfs.exists(ADMIN_ACCESS, `${image}/regions/face-0`), false);
-  } finally {
-    await dispose();
-  }
-});
-
-Deno.test('removeDetectedRegions is a no-op on an image never detected', async () => {
+Deno.test('detectedRegions is empty on an image never detected', async () => {
   const { vfs, dispose } = await createTestVfs();
   try {
     await vfs.create(ADMIN_ACCESS, 'file', '/', 'bare.jpg', { props: OWNER, attrs: { mimetype: 'image/jpeg' } });
-    assertEquals(await removeDetectedRegions(vfs, ADMIN_ACCESS, '/bare.jpg'), 0);
+    assertEquals(await detectedRegions(vfs, ADMIN_ACCESS, '/bare.jpg'), []);
   } finally {
     await dispose();
   }
@@ -79,7 +64,7 @@ Deno.test('a face maps to its region and back; a tag has no embedding', async ()
   const { vfs, dispose } = await createTestVfs();
   try {
     const image = await seedImage(vfs);
-    const face = await seedRegion(vfs, image, 'face-0', 'insightface-buffalo_l', { face: true, attrs: { personId: 'p1' } });
+    const face = await seedRegion(vfs, image, 'face-0', 'retinaface-r34+transface', { face: true, attrs: { personId: 'p1' } });
     const tag = await seedRegion(vfs, image, 'manual-0', LIGHTBOX_MANUAL_DETECTOR, { attrs: { personId: 'p2' } });
 
     assertEquals(await regionsOfEmbeddings(vfs, ADMIN_ACCESS, [face.embedding!.id]), new Map([[face.embedding!.id, face.region.id]]));

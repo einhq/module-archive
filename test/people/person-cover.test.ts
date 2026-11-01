@@ -58,7 +58,7 @@ Deno.test({
     });
     const facePath = `${image}/regions/face-0`;
     // A face has an embedding; a tag (`tag: true`) is a region without one.
-    if (!opts.tag) await vfs.create(ADMIN_ACCESS, 'embedding', facePath, 'embedding', { props: PROPS, attrs: { embeddingType: 'face', capacity: 8 } });
+    if (!opts.tag) await vfs.create(ADMIN_ACCESS, 'embedding', facePath, 'embedding', { props: PROPS, attrs: { embeddingType: 'face_transface', capacity: 8 } });
     if (opts.crop !== false) await client.exec(`echo crop > ${facePath}/image.avif`);
     return { image, facePath, crop: `${facePath}/image.avif` };
   };

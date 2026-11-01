@@ -37,7 +37,7 @@ Deno.test({
         fileId,
         faceBox: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
         confidence: 0.9,
-        detectedBy: 'insightface-buffalo_l',
+        detectedBy: 'retinaface-r34+transface',
         personId,
         personSource,
         ...(doubt ? { doubt } : {}),

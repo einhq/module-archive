@@ -19,8 +19,7 @@ import { parseArgs } from '@ein/client';
 import { faceEmbeddingsOf, type FaceView, faceView, type PersonNodeAttrs, personPathOf, regionsOf } from '@archive/people/person';
 import { buildDendrogram, cutAtSimilarity, cutIntoK, groupsFrom, normalize, suggestCut } from '@archive/media/face-subcluster';
 import type { Merge, SubclusterResult } from '@archive/media/api';
-
-const FACE_TYPE = 'face';
+import { FACE_EMBEDDING_TYPE } from '@archive/media/regions';
 
 const subclusterFaces = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, {
@@ -66,7 +65,7 @@ const subclusterFaces = async (cmd: Command): CmdReturn => {
     // One lookup for which regions are faces and one query for every vector. The alternative
     // is an open/read round trip per face, which at nine hundred faces is nine hundred.
     const embeddings = await faceEmbeddingsOf(vfs, access, rows.map((row) => row.id));
-    const vectors = await vfs.getVectors(access, FACE_TYPE, [...embeddings.values()]);
+    const vectors = await vfs.getVectors(access, FACE_EMBEDDING_TYPE, [...embeddings.values()]);
 
     // Tags are box-only: a human drew them, or the face was too poor to keep a vector, and there
     // is no embedding to cluster on. Reported, not silently dropped.

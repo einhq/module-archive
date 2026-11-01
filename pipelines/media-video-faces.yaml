@@ -14,7 +14,7 @@ trigger:
 steps:
   detect-faces:
     command: detect-faces $NODE_PATH
-    description: InsightFace on frames sampled through the video, a face region per person seen with its crop
+    description: Face detection on frames sampled through the video, a face region per person seen with its crop
     pool: media
     kind: faces
     priority: 50

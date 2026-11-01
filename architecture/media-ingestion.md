@@ -44,6 +44,7 @@ waits for rather than by a shared DAG:
    | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                         | pool `fingerprint` (1 cpu, priority 30)                                                            |
    | `media-faces`          | `metadata.extracted` (image)                                                    | pool `faces` (1 model slot, priority 100)                                                          |
    | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                           |
+   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                  | pool `faces` (1 model slot; priority 20/10)                                                        |
    | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                |
    | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                      |
    | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                              |
@@ -1259,7 +1260,7 @@ of the same video on screen at the same time — one person the grouping left as
 faces of one person, not two people. The lightbox draws no boxes over a playing video but the one
 face its sidebar is asked to follow: paused first on that face's clearest frame, then boxed wherever
 its track has it, and not at all while it is off screen. A region that shows a usable face has the face's 512-d vector as a
-child named `embedding` (`embeddingType: face`), the way `metadata/description` has one — that
+child named `embedding` (`embeddingType: face_transface`, named per recogniser like every vector type), the way `metadata/description` has one — that
 child is what makes a region a **face**, and a region without one is a **tag**: a box and a
 person, which recognition never searches or votes with. The box, landmarks, pose, detector and
 every person field live on the region; the embedding carries only its type and capacity, and
@@ -1278,10 +1279,16 @@ embedding: the vector described the box the detector drew, so a moved face keeps
 stops voting. `face-remove` recursively deletes one region and deletes its person only when
 that person is still unnamed and has neither another region nor a voice; if other regions remain,
 a removed representative advances to one of them. Only the detected kind is reproducible, so
-the prefixes are load-bearing: `detect-faces -f`
-drops `face-*` and leaves `manual-*` alone, and "has detection run here?" is the
-`facesAt` attr on the **file**, not the existence of `regions/` — a directory the importer also
-writes, and one a photo or video with nobody in it never gets. Which old boxes are named is decided by the
+the prefixes are load-bearing: `detect-faces -f` finds the faces again and leaves `manual-*` alone.
+Each new face continues the `face-*` region it is the same face as (the same box, on a video at
+the same second; `@archive/media/face-redetect`), so the region keeps its name, its person and
+every reference to it, and only the box, points, pose, confidence and vector are new; an old
+region it does not find stays as a tag when a person decided who it is, and goes otherwise. "Has
+detection run here?" is the `facesAt` attr on the **file**, not the existence of `regions/` — a
+directory the importer also writes, and one a photo or video with nobody in it never gets — and
+`facesBy` names the face models that ran: `media-scan` announces `faces.stale` for a file whose
+`facesBy` is not what EMS runs (`faceGeneration()`), which `media-faces-stale` detects again behind
+new media. Vectors of two recognisers are never searched side by side. Which old boxes are named is decided by the
 legacy `tags/<faceId> -> /people/<slug>` links and not by the box's detector
 (`resolveFaceTags` in `@importer/legacy`): a machine-drawn box a human named carries exactly as
 much identity as a hand-drawn one. Also `people/<slug>` softlinks
@@ -1338,7 +1345,7 @@ box out of it — the box reaches it as a fraction, `@archive/media/face-crop`),
 `regenerate-face-crops`, and `assign-faces`' minimum-size gate.
 
 Beside the box and landmarks a face stores its **head pose** (`pose: { pitch, yaw, roll }`,
-degrees, from EMS `faces.detect` — buffalo_l's 3D landmark model; `@archive/media/face-pose`): all three
+degrees, from EMS `faces.detect` — estimated from the five points; `@archive/media/face-pose`): all three
 0 faces the camera. Angles, not fractions, but still of the display frame: roll is the head's
 tilt measured clockwise on screen. Faces detected before EMS reported it, and boxes drawn by
 hand or imported, have none, and readers treat that as unknown, never as frontal. The cover
@@ -1535,7 +1542,7 @@ does — the lower face cropped square from the smoothed track, MFCCs of 16-bit 
 whole-head crop and float samples it scored a woman talking to the camera at 0.1. The face is
 tied to the video's own face region it is (`@archive/media/speaker-faces`): of the regions on
 screen when it was seen (their `appearances` cover its `t`), the one whose vector is nearest, if
-near enough (cosine 0.5) — the voice's `asdRegionId`. Faces on screen together are different
+near enough (cosine 0.51, face-assign's vote threshold) — the voice's `asdRegionId`. Faces on screen together are different
 people, so the nearest of them is the one even where another video shows the same person more
 alike. The face is also searched among all the archive's faces, its person read from the region
 the hit belongs to — the voice's `asdPersonId`. The faces the video shows are found apart from

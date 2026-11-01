@@ -27,7 +27,7 @@
     "./timeline/api": "./lib/timeline/api.ts"
   },
   "dependencies": {
-    "ems": "^0.3.0"
+    "ems": "^0.3.1"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
@@ -63,6 +63,7 @@
     "@archive/media/face-match": "./lib/media/face-match.ts",
     "@archive/media/face-pose": "./lib/media/face-pose.ts",
     "@archive/media/face-quality": "./lib/media/face-quality.ts",
+    "@archive/media/face-redetect": "./lib/media/face-redetect.ts",
     "@archive/media/face-subcluster": "./lib/media/face-subcluster.ts",
     "@archive/media/filename-date": "./lib/media/filename-date.ts",
     "@archive/media/fingerprint-service": "./lib/media/fingerprint-service.ts",
@@ -229,7 +230,7 @@
         "key": "CFG_FACE_ATTACH_THRESHOLD",
         "scope": "system",
         "type": "number",
-        "default": "0.55",
+        "default": "0.56",
         "label": "Face match threshold",
         "description": "How similar two faces must be before one is attached to a known person. Higher is stricter and produces fewer wrong matches but more unknown faces.",
         "group": "Faces"
@@ -312,7 +313,7 @@
         "key": "CFG_FACE_VOTE_THRESHOLD",
         "scope": "system",
         "type": "number",
-        "default": "0.5",
+        "default": "0.51",
         "label": "Face neighbour similarity",
         "description": "How similar a known face must be to count as a vote for its person. Faces less alike than this are ignored when deciding who an unknown face is.",
         "group": "Faces"

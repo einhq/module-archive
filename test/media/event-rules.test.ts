@@ -270,7 +270,7 @@ Deno.test('rule: each face is its own fact', async () => {
     [`${IMG}/regions/face-0/embedding`]: {
       id: 'fa0',
       type: 'embedding',
-      attrs: { embeddingType: 'face', capacity: 512 },
+      attrs: { embeddingType: 'face_transface', capacity: 512 },
     },
   });
 
@@ -484,7 +484,7 @@ Deno.test('rule: a transcript gaining its transcribedAt reports the recording, o
 
 Deno.test('rule: an unrelated embedding produces nothing', async () => {
   const ctx = tree({
-    [`${PEOPLE_ROOT}/alice/embedding`]: { id: 'x1', type: 'embedding', attrs: { embeddingType: 'face' } },
+    [`${PEOPLE_ROOT}/alice/embedding`]: { id: 'x1', type: 'embedding', attrs: { embeddingType: 'face_transface' } },
   });
 
   // embeddingType is 'face' but it is not the embedding of a region of a file
@@ -1056,6 +1056,29 @@ Deno.test('picture: audio, undecodable sources and an unanswering EMS ask nothin
   assertEquals(pictureFacts(await deriveGaps(SND, tree(indexedAudio(), { pictureGeneration: SIGLIP }), 100)), []);
   assertEquals(pictureFacts(await deriveGaps(IMG, tree(indexed({ undecodable: 'no frame table' }), { pictureGeneration: SIGLIP }), 100)), []);
   assertEquals(pictureFacts(await deriveGaps(IMG, tree(indexed()), 100)), []);
+});
+
+const FACES = 'retinaface-r34+transface';
+const facesFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.facesStale);
+const FOUND_AT = '2026-10-20T08:00:00Z';
+
+Deno.test('faces: a photo or a video whose faces other models found is detected again', async () => {
+  const photo = facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT }), { faceGeneration: FACES }), 100));
+  assertEquals(photo.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', facesBy: '', expected: FACES }]]);
+  const nodes = indexedVideo();
+  nodes[VID] = { ...nodes[VID], attrs: { ...nodes[VID].attrs, facesAt: FOUND_AT, facesBy: 'other-detector+other-recogniser' } };
+  const video = facesFacts(await deriveGaps(VID, tree(nodes, { faceGeneration: FACES }), 100));
+  assertEquals(video.map((f) => f.data?.facesBy), ['other-detector+other-recogniser']);
+});
+
+Deno.test('faces: current faces, a file never detected, an undecodable one, another EMS or a silent one ask nothing', async () => {
+  assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT, facesBy: FACES }), { faceGeneration: FACES }), 100)), []);
+  // Never detected is the first detection's gap, not this one.
+  assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: undefined }), { faceGeneration: FACES }), 100)), []);
+  assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT, undecodable: 'no frame table' }), { faceGeneration: FACES }), 100)), []);
+  // An EMS running models recognition is not tuned for would store nothing on a re-detection.
+  assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT }), { faceGeneration: 'other-detector+other-recogniser' }), 100)), []);
+  assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT })), 100)), []);
 });
 
 const PPOCR = 'PP-OCRv6_medium';

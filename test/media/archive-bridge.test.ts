@@ -211,7 +211,7 @@ Deno.test({
         attrs: { fileId: await nodeIdOf(`${ALBUMS_ROOT}/t/a.jpg`), confidence: 0.9 },
       });
       await vfs.create(ADMIN_ACCESS, 'embedding', `${ALBUMS_ROOT}/t/a.jpg/regions/face-0`, 'embedding', {
-        attrs: { embeddingType: 'face', capacity: 512 },
+        attrs: { embeddingType: 'face_transface', capacity: 512 },
       });
 
       const faceId = await nodeIdOf(`${ALBUMS_ROOT}/t/a.jpg/regions/face-0`);
