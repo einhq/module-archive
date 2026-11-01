@@ -14,6 +14,7 @@ import { type Command, NodeNotFoundError } from '@ein/client';
 import type { SourceFile } from '@archive/sources/api';
 import { encodeHex } from '@std/encoding/hex';
 import { basename, dirname } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
@@ -55,10 +56,31 @@ type FileSourceOptions = {
 type Filed = { path: string; reused: boolean };
 
 /**
- * File the file at `from` in `folder`, made if missing: moved there (copied, with `copy`) under
- * its own name or `name`, or the first free `name-2.ext`. A file in the folder with the same bytes is the
- * source instead, and the one at `from` is removed (left, with `copy`): a file brought in twice
- * is kept once.
+ * A new file `name` in `folder` with the bytes of the file at `from`. What was made from the file
+ * there, such as the text read out of it under its `metadata`, stays with it.
+ */
+async function copyBytes(vfs: Vfs, access: Access, from: string, folder: string, name: string): Promise<void> {
+  const source = await vfs.open(access, from, { mode: 'r' });
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await toArrayBuffer(source.readable));
+  } finally {
+    await source.close();
+  }
+  await vfs.create(access, 'file', folder, name);
+  const copy = await vfs.open(access, `${folder}/${name}`, { mode: 'w' });
+  try {
+    await copy.write(bytes);
+  } finally {
+    await copy.close();
+  }
+}
+
+/**
+ * File the file at `from` in `folder`, made if missing: moved there (its bytes copied, with
+ * `copy`) under its own name or `name`, or the first free `name-2.ext`. A file in the folder with
+ * the same bytes is the source instead, and the one at `from` is removed (left, with `copy`): a
+ * file brought in twice is kept once.
  */
 export async function fileSource(vfs: Vfs, access: Access, from: string, folder: string, opts: FileSourceOptions): Promise<Filed> {
   await ensureFolder(vfs, access, folder);
@@ -71,7 +93,7 @@ export async function fileSource(vfs: Vfs, access: Access, from: string, folder:
   }
 
   const name = freeName(opts.name ?? basename(from), new Set(held.map((entry) => entry.name)));
-  if (opts.copy) await vfs.copy(access, from, folder, name);
+  if (opts.copy) await copyBytes(vfs, access, from, folder, name);
   else await vfs.rename(access, dirname(from), basename(from), folder, name, { failIfExists: true });
   const path = `${folder}/${name}`;
   if (opts.attrs) await vfs.update(access, path, { attrs: opts.attrs });

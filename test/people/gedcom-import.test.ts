@@ -236,6 +236,26 @@ Deno.test({
       assertEquals((await info('harold')).sources.map((s) => s.name).sort(), ['story.ged', 'tree.ged']);
     });
 
+    await t.step('a file outside staging is copied without what was read out of it', async () => {
+      const home = '/home/admin/lily-copy.ged';
+      await cmd.shouldSucceed(`mkfile ${home}`);
+      const fh = await ctx.vfs.open(ADMIN_ACCESS, home, { mode: 'w' });
+      try {
+        await fh.write(new TextEncoder().encode('0 HEAD\n0 @I1@ INDI\n1 NAME Lily /Wrenfield/\n'));
+      } finally {
+        await fh.close();
+      }
+      // As the text pipeline leaves it.
+      await cmd.shouldSucceed(`mkdir ${home}/metadata`);
+
+      const result = await client.execJson<GedcomImportResult>(`gedcom-import ${home}`);
+      assertEquals(result.source, `${GENEALOGY_SOURCES}/lily-copy.ged`);
+      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, result.source)).length, 0);
+      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, home)).map((e) => e.name), ['metadata']);
+      const again = await client.execJson<GedcomImportResult>(`gedcom-import ${home}`);
+      assertEquals(again.source, result.source);
+    });
+
     await t.step('a file with no individuals is refused and left where it is', async () => {
       const staged = await stage('notes.ged', 'just some notes\n');
       await cmd.shouldFailWith(`gedcom-import ${staged}`, 'no individuals found');
