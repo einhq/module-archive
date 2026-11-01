@@ -245,7 +245,7 @@ const detectFaces = async (cmd: Command): CmdReturn => {
 
   await vfs.ensure(access, 'directory', inputPath, REGIONS_DIR);
 
-  const createdFaces: string[] = [];
+  const writtenFaces: string[] = [];
   const crops: FaceCropRequest[] = [];
 
   for (const [index, face] of faces.entries()) {
@@ -305,7 +305,7 @@ const detectFaces = async (cmd: Command): CmdReturn => {
     }
 
     crops.push({ output: cropPath, box: face.faceBox, ...(face.at !== undefined ? { at: face.at } : {}) });
-    createdFaces.push(regionPath);
+    writtenFaces.push(regionPath);
   }
 
   // Every crop of a photo from one decode, a video's from one decode per frame, once every face
@@ -320,13 +320,13 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   log('faces cropped', { count: crops.length, cropped: !cropFailure });
   if (verbose && !cropFailure) { for (const crop of crops) await cmd.writeLn(`  Created face crop: ${crop.output}`); }
 
-  log('all faces processed', { created: createdFaces.length });
+  log('all faces processed', { written: writtenFaces.length, continued: plan.continues.size });
 
   // The other exit path. Marking only the no-faces case left every file that
   // *does* have people looking permanently un-detected, which is both what
   // the staging organizer reads and what this pipeline's own `skipIfAttr` guard
   // now rests on — without it the file re-detects on every re-emission.
-  await markDetected(createdFaces.length);
+  await markDetected(writtenFaces.length);
 
   // Assignment is a separate pipeline, triggered per face by the bridge. It is
   // pure database work (a kNN over every known face) and used to run here, on
@@ -334,10 +334,12 @@ const detectFaces = async (cmd: Command): CmdReturn => {
 
   // Output results
   if (cmd.json) {
-    await cmd.writeLn(JSON.stringify({ count: createdFaces.length, faces: createdFaces }));
+    await cmd.writeLn(JSON.stringify({ count: writtenFaces.length, faces: writtenFaces }));
   } else {
-    await cmd.writeLn(`Created ${createdFaces.length} face region${createdFaces.length === 1 ? '' : 's'}`);
-    for (const f of createdFaces) {
+    const continued = writtenFaces.filter((path) => [...plan.continues.values()].some((name) => path.endsWith(`/${name}`))).length;
+    const created = writtenFaces.length - continued;
+    await cmd.writeLn(`${created} face region${created === 1 ? '' : 's'} created${continued ? `, ${continued} found again` : ''}`);
+    for (const f of writtenFaces) {
       await cmd.writeLn(`  ${f}`);
     }
   }
