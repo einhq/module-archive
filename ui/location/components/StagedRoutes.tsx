@@ -23,7 +23,7 @@ const recorded = (start: string, end?: string): string => {
 const summary = (info?: GpxInfo): string => {
   if (!info) return '';
   if ('error' in info) return 'cannot be read';
-  return [info.name ?? info.tracks[0], info.start?.slice(0, 10), `${info.points.toLocaleString()} points`].filter(Boolean).join(' · ');
+  return [info.name ?? info.tracks[0], info.start?.slice(0, 10), `${info.points.toLocaleString()} ${info.points === 1 ? 'point' : 'points'}`].filter(Boolean).join(' · ');
 };
 
 /** What one waiting file says about itself, as rows of a table. */
