@@ -104,7 +104,7 @@ export function lightboxSheetOpens(progress: number, velocityY: number): boolean
 
 type LightboxEase = { durationMs: number; easing: string };
 
-export type LightboxSwipeFinish = LightboxEase & {
+type LightboxSwipeFinish = LightboxEase & {
   /** When `HANDOVER_PX` are left: the time to switch to the picture coming in. */
   handoverMs: number;
   /** How far the slide has still to go `elapsedMs` in, in px. */
