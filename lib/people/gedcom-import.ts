@@ -195,29 +195,48 @@ export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source
 
 // ---------- reading the archive ----------
 
-const targetsOf = (settled: PromiseSettledResult<{ node: { props: { softlink?: string } } }[]>): string[] =>
-  settled.status === 'fulfilled' ? settled.value.flatMap((entry) => entry.node.props.softlink ? [entry.node.props.softlink] : []) : [];
+/** How many links a page of `loadPeople`'s query holds. */
+const LINK_PAGE = 5000;
 
-/** Every named person of the archive (the direct children of `PEOPLE_ROOT`), with relatives and GEDCOM links. */
+/**
+ * Every named person of the archive (the direct children of `PEOPLE_ROOT`), with relatives and
+ * GEDCOM links. The links are read by one paged query of every softlink under `PEOPLE_ROOT`, not
+ * by listing four directories of each person: those are thousands of path lookups, most of them of
+ * a directory a person does not have.
+ */
 async function loadPeople(vfs: Vfs, access: Access): Promise<ArchivePerson[]> {
   const entries = (await vfs.children<PersonAttrs>(access, PEOPLE_ROOT)).filter((entry) => entry.node.type === 'person');
-  const paths = entries.map((entry) => `${PEOPLE_ROOT}/${entry.name}`);
-  const read = (dir: string) => vfs.childrenMany(access, paths.map((path) => `${path}/${dir}`), { follow: false });
-  const [parents, children, partners, sources] = await Promise.all([read(PARENTS_DIR), read(CHILDREN_DIR), read(PARTNERS_DIR), read(SOURCES_DIR)]);
-  return entries.map((entry, i) => ({
-    path: paths[i],
-    attrs: entry.node.attrs,
-    parents: targetsOf(parents[i]),
-    children: targetsOf(children[i]),
-    partners: targetsOf(partners[i]),
-    writable: verifyAccess(access, entry.node.props, 'w'),
-    gedcom: sources[i].status === 'fulfilled'
-      ? sources[i].value.flatMap((link) => {
-        const attrs = (link.node.attrs as Partial<GedcomLinkAttrs>).gedcom;
-        return link.node.props.softlink && attrs?.xref ? [{ target: link.node.props.softlink, xref: attrs.xref, uids: attrs.uids ?? [] }] : [];
-      })
-      : [],
+  const people = new Map(entries.map((entry): [string, ArchivePerson] => {
+    const path = `${PEOPLE_ROOT}/${entry.name}`;
+    return [path, { path, attrs: entry.node.attrs, parents: [], children: [], partners: [], writable: verifyAccess(access, entry.node.props, 'w'), gedcom: [] }];
   }));
+
+  for (let after: string | undefined;;) {
+    const page = await vfs.query(access, {
+      types: ['softlink'],
+      within: PEOPLE_ROOT,
+      limit: LINK_PAGE,
+      ...(after !== undefined ? { after: { value: null, id: after } } : {}),
+    });
+    for (const hit of page) {
+      // `<person>/<dir>/<link>` directly under the root; a link anywhere deeper is no relation.
+      const [slug, dir, name, deeper] = hit.absPath.slice(PEOPLE_ROOT.length + 1).split('/');
+      const person = people.get(`${PEOPLE_ROOT}/${slug}`);
+      const target = hit.node.props.softlink;
+      if (!person || !target || !name || deeper !== undefined) continue;
+      if (dir === PARENTS_DIR) person.parents.push(target);
+      else if (dir === CHILDREN_DIR) person.children.push(target);
+      else if (dir === PARTNERS_DIR) person.partners.push(target);
+      else if (dir === SOURCES_DIR) {
+        const attrs = (hit.node.attrs as Partial<GedcomLinkAttrs>).gedcom;
+        if (attrs?.xref) person.gedcom.push({ target, xref: attrs.xref, uids: attrs.uids ?? [] });
+      }
+    }
+    if (page.length < LINK_PAGE) break;
+    after = page[page.length - 1].id;
+  }
+  for (const person of people.values()) for (const list of [person.parents, person.children, person.partners]) list.sort();
+  return [...people.values()];
 }
 
 // ---------- choices ----------
