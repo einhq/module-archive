@@ -3,7 +3,7 @@
  * gedcom-import — bring a GEDCOM file's people, their relations, events, homes and notes into
  * the archive.
  *
- *   gedcom-import <file.ged> [--dry-run]
+ *   gedcom-import <file.ged> [--match <xref>=<person>]… [--new <xref>]… [--skip <xref>]… [--dry-run]
  *
  * The file is kept in `/archive/sources/genealogy/`: moved there from staging, copied from
  * anywhere else, and not kept twice when the same bytes are there already. Each individual is
@@ -11,72 +11,49 @@
  * describes links it from their `sources/`. What the file says of them is added where they lack
  * it: their events and facts as events, a place that names a location placing the event there, a
  * residence at a location as a home, and their notes as their description. Importing the same
- * file again finds the same people and adds nothing. `--dry-run` says what would happen and
- * writes nothing.
+ * file again finds the same people and adds nothing. `--match` says who an individual is,
+ * overriding what the import would find, `--new` makes them a new person whoever they fit, and
+ * `--skip` leaves them and their relations out. `--dry-run` says what would happen and writes
+ * nothing.
  *
  * A staged file is imported as the person whose staging area it is in, whoever runs this: the
  * pipeline runs it with administrative access, and the import may change only the people its
  * owner may.
  */
 import type { CmdReturn, Command } from '@ein/client';
-import { accessOfUser, collectUnknownFlags, isAdmin, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { dirname, resolve } from '@std/path';
-import { toArrayBuffer } from '@std/streams/to-array-buffer';
 import { GENEALOGY_SOURCES } from '@archive/paths';
-import { readGedcom } from '@archive/people/gedcom';
-import { importGedcom } from '@archive/people/gedcom-import';
+import { choicesFromFlags, GEDCOM_MIMETYPE, heldSource, importerOf, importGedcom, readGedcomAt } from '@archive/people/gedcom-import';
 import type { GedcomImportResult } from '@archive/people/api';
-import { fileSource, sha256Hex } from '@archive/sources';
+import { fileSource } from '@archive/sources';
 import { parseStagedPath } from '@archive/staging/paths';
 
-/** The type a kept GEDCOM file is given, which keeps it out of text extraction. */
-const GEDCOM_MIMETYPE = 'application/x-gedcom';
+const USAGE = 'gedcom-import <file.ged> [--match <xref>=<person>]… [--new <xref>]… [--skip <xref>]… [--dry-run]';
 
 const gedcomImport = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { boolean: ['dry-run'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { boolean: ['dry-run'], collect: ['match', 'new', 'skip'], string: ['match', 'new', 'skip'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
 
   const target = flags._[0] as string | undefined;
   if (!target) {
-    await cmd.writeError('gedcom-import: usage: gedcom-import <file.ged> [--dry-run]\n');
+    await cmd.writeError(`gedcom-import: usage: ${USAGE}\n`);
     return 1;
   }
   const vfs = cmd.sys.vfs;
-  const access = cmd.access;
   const path = resolve(cmd.cwd, target);
   const dryRun = Boolean(flags['dry-run']);
 
   try {
-    const handle = await vfs.open(access, path, { mode: 'r' });
-    let bytes: Uint8Array;
-    try {
-      bytes = new Uint8Array(await toArrayBuffer(handle.readable));
-    } finally {
-      await handle.close();
-    }
+    const choices = choicesFromFlags(flags as { match?: string[]; new?: string[]; skip?: string[] }, cmd.cwd);
+    const as = await importerOf(vfs, cmd.access, path);
+    const { gedcom, sha256 } = await readGedcomAt(vfs, cmd.access, path);
+    // Kept only once the choices hold, so a refused import leaves the file where it was.
+    const keep = async () => (await fileSource(vfs, as, path, GENEALOGY_SOURCES, { sha256, copy: !parseStagedPath(path), attrs: { mimetype: GEDCOM_MIMETYPE } })).path;
+    const keptAt = dryRun || dirname(path) === GENEALOGY_SOURCES ? await heldSource(vfs, as, path, sha256) : keep;
 
-    const gedcom = readGedcom(bytes);
-    if (gedcom.individuals.length === 0) {
-      await cmd.writeError(`gedcom-import: ${path}: no individuals found; is it a GEDCOM file?\n`);
-      return 1;
-    }
-
-    const place = parseStagedPath(path);
-    const as = place && isAdmin(access) ? await accessOfUser(vfs, access, place.user) : access;
-    const sha256 = await sha256Hex(bytes);
-    let source = path;
-    if (dirname(path) !== GENEALOGY_SOURCES) {
-      if (dryRun) {
-        const held = await vfs.children(as, GENEALOGY_SOURCES, { follow: false }).catch(() => []);
-        const same = held.find((entry) => (entry.node.attrs as { sha256?: unknown }).sha256 === sha256);
-        if (same) source = `${GENEALOGY_SOURCES}/${same.name}`;
-      } else {
-        source = (await fileSource(vfs, as, path, GENEALOGY_SOURCES, { sha256, copy: !place, attrs: { mimetype: GEDCOM_MIMETYPE } })).path;
-      }
-    }
-
-    const result = await importGedcom(vfs, as, gedcom, source, { dryRun });
+    const result = await importGedcom(vfs, as, gedcom, keptAt, { dryRun, choices });
 
     if (cmd.json) {
       await cmd.writeJSON(result satisfies GedcomImportResult);
@@ -106,9 +83,21 @@ gedcomImport.spec = {
     { name: 'file', type: 'path' as const, description: 'the GEDCOM (.ged) file' },
   ],
   flags: [
+    {
+      name: 'match',
+      type: 'string' as const,
+      repeatable: true,
+      description: "who an individual is: '<xref>=<person>', the person a path or a name under /archive/people (repeatable)",
+    },
+    { name: 'new', type: 'string' as const, repeatable: true, description: 'make the individual with this xref a new person, whoever they fit (repeatable)' },
+    { name: 'skip', type: 'string' as const, repeatable: true, description: 'leave the individual with this xref, and their relations, out (repeatable)' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'say who would be matched, made and related, and what would be added, and write nothing' },
   ],
-  examples: ['gedcom-import /home/ruby/wrenfield.ged --dry-run', 'gedcom-import /home/ruby/wrenfield.ged'],
+  examples: [
+    'gedcom-import /home/ruby/wrenfield.ged --dry-run',
+    'gedcom-import /home/ruby/wrenfield.ged',
+    'gedcom-import /home/ruby/staging/genealogy/wrenfield.ged --match @I3@=ruby-wrenfield --new @I4@ --skip @I9@',
+  ],
   returns: 'the kept file, who each individual was found to be or was made, what was skipped, and how many relations, events and homes were added.',
 };
 

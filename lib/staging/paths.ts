@@ -9,6 +9,7 @@
  *                             the organizer's checkpoint, and a request for a run of it
  *   journal/                  decisions made in staging
  *   routes/                   GPX files waiting for the device that recorded them
+ *   genealogy/                GEDCOM files waiting to be matched to the archive's people and imported
  * ```
  *
  * Pure and import-free but for `@ein/paths`, so pages, bins and other modules can import it.
@@ -31,7 +32,7 @@ export const ORGANIZER_CHECKPOINT = '.organizer';
 export const ORGANIZER_REQUEST = '.request';
 
 /** The directories directly under `staging/`, each made by `staging init`. */
-export const STAGING_DIRS = ['files', 'albums', 'journal', 'routes'] as const;
+export const STAGING_DIRS = ['files', 'albums', 'journal', 'routes', 'genealogy'] as const;
 
 type StagingRoots = {
   homePath: string;
@@ -40,6 +41,7 @@ type StagingRoots = {
   albumsPath: string;
   journalPath: string;
   routesPath: string;
+  genealogyPath: string;
 };
 
 const USER_NAME = /^[A-Za-z0-9._@+-]+$/;
@@ -56,6 +58,7 @@ export const stagingRoots = (user: string): StagingRoots => {
     albumsPath: `${stagingPath}/albums`,
     journalPath: `${stagingPath}/journal`,
     routesPath: `${stagingPath}/routes`,
+    genealogyPath: `${stagingPath}/genealogy`,
   };
 };
 

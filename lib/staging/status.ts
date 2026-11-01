@@ -132,6 +132,7 @@ export const stagingStatus = async (vfs: Vfs, access: Access, user: string, at =
   const initialized = inbox !== undefined && inbox.attrs[CATEGORY_ATTR] !== undefined &&
     await vfs.exists(access, categoryAlbumsPath(user, DEFAULT_CATEGORY));
   const routesWaiting = await vfs.childCount(access, roots.routesPath).catch(() => 0);
+  const genealogyWaiting = await vfs.childCount(access, roots.genealogyPath).catch(() => 0);
   return {
     user,
     initialized,
@@ -139,5 +140,6 @@ export const stagingStatus = async (vfs: Vfs, access: Access, user: string, at =
     defaultCategory: DEFAULT_CATEGORY,
     categories: await categoryStatuses(vfs, access, user, categories, at),
     routesWaiting,
+    genealogyWaiting,
   };
 };

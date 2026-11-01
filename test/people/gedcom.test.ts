@@ -1,11 +1,11 @@
 /**
- * Reading GEDCOM: character sets, names, dates, families, events and notes; and which individuals the matcher
- * takes to be people the archive has.
+ * Reading GEDCOM: character sets, names, dates, families, events and notes; which individuals the
+ * matcher takes to be people the archive has, and what choosing for an individual changes.
  */
 
-import { assertEquals } from '@std/assert';
+import { assertEquals, assertThrows } from '@std/assert';
 import { decodeAnsel, decodeGedcom, parseGedcomDate, readGedcom } from '@archive/people/gedcom';
-import { type ArchivePerson, matchIndividuals, score } from '@archive/people/gedcom-import';
+import { type ArchivePerson, choicesFromFlags, matchIndividuals, score } from '@archive/people/gedcom-import';
 
 const enc = (text: string) => new TextEncoder().encode(text);
 
@@ -180,4 +180,36 @@ Deno.test('matchIndividuals finds an earlier import by its link, or by the _UID'
   const matches = matchIndividuals(gedcom, people, source);
   assertEquals(matches.get('@I3@')?.path, '/p/someone');
   assertEquals([matches.get('@I1@')?.path, matches.get('@I1@')?.how], ['/p/other', 'uid']);
+});
+
+Deno.test('matchIndividuals puts choices first, and a chosen person confirms their relatives', () => {
+  const gedcom = readGedcom(enc(TREE));
+  const people = [
+    person('/p/harold', { name: 'Harold Wrenfield', born: '1931-03-03' }, { children: ['/p/ruby'] }),
+    person('/p/hal', { name: 'Hal' }, { children: ['/p/ruby-2'] }),
+    person('/p/ruby', { name: 'Ruby' }, { parents: ['/p/harold'] }),
+    person('/p/ruby-2', { name: 'Ruby' }, { parents: ['/p/hal'] }),
+  ];
+  const source = '/archive/sources/genealogy/tree.ged';
+  const how = (choices: ReturnType<typeof choicesFromFlags>) =>
+    Object.fromEntries([...matchIndividuals(gedcom, people, source, choices)].map(([xref, m]) => [xref, [m.path, m.how]]));
+
+  // Harold is said to be Hal: his daughter is then Hal's Ruby, and the other Harold is nobody's.
+  assertEquals(how(choicesFromFlags({ match: ['@I1@=/p/hal'] }, '/')), { '@I1@': ['/p/hal', 'chosen'], '@I3@': ['/p/ruby-2', 'relatives'] });
+  // Said to be new, Harold matches nobody, and so confirms nobody.
+  assertEquals(how(choicesFromFlags({ new: ['I1'] }, '/')), {});
+  // Left out, the same.
+  assertEquals(how(choicesFromFlags({ skip: ['@i1@'] }, '/')), {});
+});
+
+Deno.test('choicesFromFlags reads xrefs loosely and people as paths or names', () => {
+  const choices = choicesFromFlags({ match: ['I1=harold', '@I2@=/archive/people/ann'], new: ['@I3@'], skip: ['i4'] }, '/');
+  assertEquals(Object.fromEntries(choices), {
+    '@I1@': { kind: 'person', person: '/archive/people/harold' },
+    '@I2@': { kind: 'person', person: '/archive/people/ann' },
+    '@I3@': { kind: 'new' },
+    '@I4@': { kind: 'skip' },
+  });
+  assertThrows(() => choicesFromFlags({ match: ['@I1@'] }, '/'), Error, '<xref>=<person>');
+  assertThrows(() => choicesFromFlags({ match: ['@I1@=harold'], skip: ['@I1@'] }, '/'), Error, 'chosen twice');
 });

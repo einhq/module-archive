@@ -9,20 +9,22 @@
  * An individual is the person who links the same file with the same xref, or a link of any GEDCOM
  * file with one of its `_UID`s: an import made again, or a newer export of the same tree, finds
  * the people the last one made. Otherwise the names and the dates decide (`score`), and a match
- * the names alone suggest is taken only when a relative already matched says the same.
+ * the names alone suggest is taken only when a relative already matched says the same. Whoever
+ * imports can settle an individual first (`GedcomChoices`): this person, a new one, or nobody.
  */
-import { type Command, verifyAccess } from '@ein/client';
-import { LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import { accessOfUser, type Command, isAdmin, verifyAccess } from '@ein/client';
+import { GENEALOGY_SOURCES, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { createEvent, EVENTS_DIR, newEventName } from '@archive/people/events';
 import { CHILDREN_DIR, createRelationPair, datePart, makeCtx, PARENTS_DIR, PARTNERS_DIR, wouldCreateCycle } from '@archive/people/genealogy';
-import type { Gedcom, GedcomDate, GedcomEvent, GedcomIndividual } from '@archive/people/gedcom';
+import { type Gedcom, type GedcomDate, type GedcomEvent, type GedcomIndividual, readGedcom } from '@archive/people/gedcom';
 import { createResidence, homeLink } from '@archive/people/residence';
 import { slugifyName } from '@archive/people/person';
 import type { PersonAttrs } from '@archive/people/types';
-import type { GedcomImportResult } from '@archive/people/api';
-import { freeName, linkSource, SOURCES_DIR } from '@archive/sources';
+import type { GedcomChoice, GedcomImportResult, GedcomMatchHow, GedcomPlan, GedcomPlanPerson } from '@archive/people/api';
+import { freeName, linkSource, sha256Hex, SOURCES_DIR } from '@archive/sources';
 import { POSITION_CHILD } from '@archive/location/location-link';
-import { basename } from '@std/path';
+import { parseStagedPath } from '@archive/staging/paths';
+import { basename, dirname, resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
 
 type Vfs = Command['sys']['vfs'];
@@ -44,10 +46,10 @@ export type ArchivePerson = {
   gedcom: { target: string; xref: string; uids: string[] }[];
 };
 
-/** How an individual was found among the archive's people. */
-type MatchHow = GedcomImportResult['matched'][number]['how'];
+type Match = { path: string; how: GedcomMatchHow; score: number };
 
-type Match = { path: string; how: MatchHow; score: number };
+/** What was said of individuals before the import, by xref; the rest are matched as usual. */
+type GedcomChoices = ReadonlyMap<string, GedcomChoice>;
 
 // ---------- names and dates ----------
 
@@ -109,24 +111,33 @@ export const score = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividu
 /** What `score` takes without a relative to confirm it. */
 const SURE = 4;
 
+/** The people who could be `indi`, best first: every one `score` does not rule out. */
+const rankFits = (indi: GedcomIndividual, people: ArchivePerson[]): { path: string; score: number }[] =>
+  people.map((p) => ({ path: p.path, score: score(p, indi) })).filter((fit) => fit.score > 0).sort((a, b) => b.score - a.score);
+
 // ---------- matching ----------
 
 /**
- * The archive's person for each individual that has one. An earlier import's link settles an
- * individual first; then the surest fits are taken, best first, each person going to one
+ * The archive's person for each individual that has one. The `choices` come first: a chosen person
+ * is theirs, and one chosen to be new or left out is matched to nobody. Then an earlier import's
+ * link settles an individual; then the surest fits are taken, best first, each person going to one
  * individual only and a tie taking neither; then a fit no better than a name is taken where a
  * parent, partner or child of the individual has matched the same relative of the person, until
  * nothing more is found.
  */
-export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source: string): Map<string, Match> => {
+export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source: string, choices: GedcomChoices = new Map()): Map<string, Match> => {
   const matches = new Map<string, Match>();
   const taken = new Set<string>();
   const take = (xref: string, match: Match) => {
     matches.set(xref, match);
     taken.add(match.path);
   };
+  const settled = (xref: string) => matches.has(xref) || choices.has(xref);
+
+  for (const [xref, choice] of choices) if (choice.kind === 'person') take(xref, { path: choice.person, how: 'chosen', score: Infinity });
 
   for (const indi of gedcom.individuals) {
+    if (settled(indi.xref)) continue;
     const bySource = people.find((p) => !taken.has(p.path) && p.gedcom.some((link) => link.target === source && link.xref === indi.xref));
     const byUid = bySource ?? people.find((p) => !taken.has(p.path) && p.gedcom.some((link) => link.uids.some((uid) => indi.uids.includes(uid))));
     if (bySource) take(indi.xref, { path: bySource.path, how: 'source', score: Infinity });
@@ -135,8 +146,8 @@ export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source
 
   const fits = new Map<string, { path: string; score: number }[]>();
   for (const indi of gedcom.individuals) {
-    if (matches.has(indi.xref)) continue;
-    const ranked = people.map((p) => ({ path: p.path, score: score(p, indi) })).filter((fit) => fit.score > 0).sort((a, b) => b.score - a.score);
+    if (settled(indi.xref)) continue;
+    const ranked = rankFits(indi, people);
     if (ranked.length > 0) fits.set(indi.xref, ranked);
   }
 
@@ -162,7 +173,7 @@ export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source
   for (let found = true; found;) {
     found = false;
     for (const indi of gedcom.individuals) {
-      if (matches.has(indi.xref)) continue;
+      if (settled(indi.xref)) continue;
       const relatives = relativesOf(indi);
       const confirmed = (fits.get(indi.xref) ?? []).filter((fit) => {
         if (taken.has(fit.path)) return false;
@@ -207,6 +218,155 @@ async function loadPeople(vfs: Vfs, access: Access): Promise<ArchivePerson[]> {
       })
       : [],
   }));
+}
+
+// ---------- choices ----------
+
+/** `@I1@`, `I1` and `i1` name the same record: xrefs are compared upper-case and between `@`s. */
+const xrefOf = (text: string): string => `@${text.trim().replace(/^@|@$/g, '').toUpperCase()}@`;
+
+/**
+ * The choices `--match <xref>=<person>`, `--new <xref>` and `--skip <xref>` say. A person is a
+ * path, or the name of one directly under `PEOPLE_ROOT`.
+ */
+export const choicesFromFlags = (flags: { match?: string[]; new?: string[]; skip?: string[] }, cwd: string): Map<string, GedcomChoice> => {
+  const choices = new Map<string, GedcomChoice>();
+  const say = (xref: string, choice: GedcomChoice) => {
+    if (choices.has(xref)) throw new Error(`${xref} is chosen twice`);
+    choices.set(xref, choice);
+  };
+  for (const pair of flags.match ?? []) {
+    const eq = pair.indexOf('=');
+    if (eq <= 0 || eq === pair.length - 1) throw new Error(`--match wants <xref>=<person>, not '${pair}'`);
+    const person = pair.slice(eq + 1).trim();
+    say(xrefOf(pair.slice(0, eq)), { kind: 'person', person: person.includes('/') ? resolve(cwd, person) : `${PEOPLE_ROOT}/${person}` });
+  }
+  for (const xref of flags.new ?? []) say(xrefOf(xref), { kind: 'new' });
+  for (const xref of flags.skip ?? []) say(xrefOf(xref), { kind: 'skip' });
+  return choices;
+};
+
+/** Throws unless every choice names an individual of the file, and every chosen person is a named person chosen once. */
+const checkChoices = (gedcom: Gedcom, people: ArchivePerson[], choices: GedcomChoices): void => {
+  const xrefs = new Set(gedcom.individuals.map((indi) => indi.xref));
+  const paths = new Set(people.map((p) => p.path));
+  const chosen = new Map<string, string>();
+  for (const [xref, choice] of choices) {
+    if (!xrefs.has(xref)) throw new Error(`the file has no individual ${xref}`);
+    if (choice.kind !== 'person') continue;
+    if (!paths.has(choice.person)) throw new Error(`${choice.person} is not a person directly under ${PEOPLE_ROOT}`);
+    const other = chosen.get(choice.person);
+    if (other) throw new Error(`${choice.person} is chosen for both ${other} and ${xref}`);
+    chosen.set(choice.person, xref);
+  }
+};
+
+// ---------- the plan ----------
+
+/** How many of an individual's fits a plan lists. */
+const CANDIDATES = 5;
+
+/** The attrs a plan shows of a person or an individual. */
+const attrsOnly = (attrs: PersonAttrs) => ({
+  name: attrs.name,
+  ...(attrs.fullname ? { fullname: attrs.fullname } : {}),
+  ...(attrs.birthname ? { birthname: attrs.birthname } : {}),
+  ...(attrs.gender ? { gender: attrs.gender } : {}),
+  ...(attrs.born ? { born: attrs.born } : {}),
+  ...(attrs.died ? { died: attrs.died } : {}),
+});
+
+const personOf = (p: ArchivePerson): GedcomPlanPerson => ({
+  ...attrsOnly(p.attrs),
+  parents: p.parents,
+  children: p.children,
+  partners: p.partners,
+  writable: p.writable,
+});
+
+/**
+ * Who each individual of `gedcom` would be if it were imported now with `choices` (see the file's
+ * comment): matched to a person, made one, or left out, with the people that could be them. The
+ * archive's side is in `people`: everyone matched or a candidate, and the parents, children and
+ * partners of everyone matched.
+ */
+export async function planGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, file: string, source: string, choices: GedcomChoices = new Map()): Promise<GedcomPlan> {
+  const people = await loadPeople(vfs, access);
+  checkChoices(gedcom, people, choices);
+  const matches = matchIndividuals(gedcom, people, source, choices);
+  const byPath = new Map(people.map((p) => [p.path, p]));
+  const families = new Map(gedcom.families.map((family) => [family.xref, family]));
+
+  const shown = new Set<string>();
+  const individuals = gedcom.individuals.map((indi): GedcomPlan['individuals'][number] => {
+    const attrs = attrsFor(indi);
+    const match = matches.get(indi.xref);
+    const choice = choices.get(indi.xref);
+    const candidates = rankFits(indi, people).slice(0, CANDIDATES).map((fit) => ({ person: fit.path, score: fit.score }));
+    for (const fit of candidates) shown.add(fit.person);
+    if (match) {
+      const person = byPath.get(match.path)!;
+      for (const path of [match.path, ...person.parents, ...person.children, ...person.partners]) shown.add(path);
+    }
+    const unique = (xrefs: string[]) => [...new Set(xrefs)].filter((xref) => xref !== indi.xref);
+    return {
+      xref: indi.xref,
+      ...attrsOnly(attrs),
+      parents: unique(indi.childOf.flatMap(({ family }) => families.get(family)?.partners ?? [])),
+      children: unique(indi.partnerIn.flatMap((family) => families.get(family)?.children ?? [])),
+      partners: unique(indi.partnerIn.flatMap((family) => families.get(family)?.partners ?? [])),
+      action: match ? 'match' : choice?.kind === 'skip' || !attrs.name ? 'skip' : 'new',
+      chosen: choice !== undefined,
+      ...(match ? { person: match.path, how: match.how } : {}),
+      candidates,
+    };
+  });
+
+  return {
+    file,
+    source,
+    individuals,
+    people: Object.fromEntries([...shown].flatMap((path) => byPath.has(path) ? [[path, personOf(byPath.get(path)!)]] : [])),
+  };
+}
+
+// ---------- the file ----------
+
+/** The type a GEDCOM file is given, waiting or kept, which keeps it out of text extraction. */
+export const GEDCOM_MIMETYPE = 'application/x-gedcom';
+
+/** A GEDCOM file read from the archive: what it says, and the hash its kept copy is known by. */
+export async function readGedcomAt(vfs: Vfs, access: Access, path: string): Promise<{ gedcom: Gedcom; sha256: string }> {
+  const handle = await vfs.open(access, path, { mode: 'r' });
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await toArrayBuffer(handle.readable));
+  } finally {
+    await handle.close();
+  }
+  const gedcom = readGedcom(bytes);
+  if (gedcom.individuals.length === 0) throw new Error(`${path}: no individuals found; is it a GEDCOM file?`);
+  return { gedcom, sha256: await sha256Hex(bytes) };
+}
+
+/**
+ * Where the people of the file at `path` link it before it is kept: the copy of the same bytes in
+ * `GENEALOGY_SOURCES` when there is one, else `path` itself.
+ */
+export async function heldSource(vfs: Vfs, access: Access, path: string, sha256: string): Promise<string> {
+  if (dirname(path) === GENEALOGY_SOURCES) return path;
+  const held = await vfs.children(access, GENEALOGY_SOURCES, { follow: false }).catch(() => []);
+  const same = held.find((entry) => (entry.node.attrs as { sha256?: unknown }).sha256 === sha256);
+  return same ? `${GENEALOGY_SOURCES}/${same.name}` : path;
+}
+
+/**
+ * Whose access a GEDCOM file is read and imported with: a staged file's owner's, when `access`
+ * is an administrator's (the pipeline's), so the import changes only the people its owner may.
+ */
+export async function importerOf(vfs: Vfs, access: Access, path: string): Promise<Access> {
+  const place = parseStagedPath(path);
+  return place && isAdmin(access) ? await accessOfUser(vfs, access, place.user) : access;
 }
 
 // ---------- the import ----------
@@ -393,17 +553,23 @@ const planEvent = (event: GedcomEvent, lifeDate?: string): PlannedEvent | undefi
   };
 };
 
-type ImportOptions = { dryRun?: boolean };
+type ImportOptions = { dryRun?: boolean; choices?: GedcomChoices };
+
+/** Where the file is kept, or how to keep it, called once the choices are known to hold; it answers where. */
+type KeptAt = string | (() => Promise<string>);
 
 /**
- * Bring `gedcom`, kept at `source`, into the archive as `access` (see the file's comment). A
- * person `access` may not change is matched all the same, and what the import would write on them
+ * Bring `gedcom`, kept at `keptAt`, into the archive as `access` (see the file's comment), with
+ * the `choices` made of its individuals. A person `access` may not change is matched all the same, and what the import would write on them
  * is left out and said in `skipped`. With `dryRun`, nothing is written and the answer says what
  * would be: the paths of people to be made, and the relations that would be added.
  */
-export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, source: string, opts: ImportOptions = {}): Promise<GedcomImportResult> {
+export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, keptAt: KeptAt, opts: ImportOptions = {}): Promise<GedcomImportResult> {
   const people = await loadPeople(vfs, access);
-  const matches = matchIndividuals(gedcom, people, source);
+  const choices = opts.choices ?? new Map();
+  checkChoices(gedcom, people, choices);
+  const source = typeof keptAt === 'string' ? keptAt : await keptAt();
+  const matches = matchIndividuals(gedcom, people, source, choices);
   const byPath = new Map(people.map((p) => [p.path, p]));
   const result: GedcomImportResult = {
     source,
@@ -435,6 +601,10 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, sou
       }
       const fill = missing(byPath.get(match.path)!.attrs, attrs);
       if (!opts.dryRun && Object.keys(fill).length > 0) await vfs.update(access, match.path, { attrs: fill });
+      continue;
+    }
+    if (choices.get(indi.xref)?.kind === 'skip') {
+      result.skipped.push({ xref: indi.xref, reason: 'left out' });
       continue;
     }
     if (!attrs.name) {

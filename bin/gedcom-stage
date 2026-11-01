@@ -1,0 +1,73 @@
+#!ts
+/**
+ * gedcom-stage — a GEDCOM file dropped in staging waits to be looked over before it is imported.
+ *
+ *   gedcom-stage <file.ged>
+ *
+ * Moves a GEDCOM file staged under `files/` to its staging area's `genealogy/`, under its own name
+ * or the first free `name-2.ged`, … there, making `genealogy/` if it is missing. There the staging
+ * page draws the file's tree with the archive's people it matches (`gedcom-read`), lets its owner
+ * say who each individual is, and imports it (`gedcom-import`). A file that is not GEDCOM is left
+ * where it is.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, dirname, resolve } from '@std/path';
+import type { GedcomStageResult } from '@archive/people/api';
+import { GEDCOM_MIMETYPE, readGedcomAt } from '@archive/people/gedcom-import';
+import { freeName } from '@archive/sources';
+import { initStaging } from '@archive/staging/init';
+import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
+
+const gedcomStage = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const target = flags._[0] as string | undefined;
+  if (!target) {
+    await cmd.writeError('gedcom-stage: usage: gedcom-stage <file.ged>\n');
+    return 1;
+  }
+  const vfs = cmd.sys.vfs;
+  const path = resolve(cmd.cwd, target);
+  const place = parseStagedPath(path);
+  if (place?.area !== 'files') {
+    await cmd.writeError(`gedcom-stage: ${path} is not staged under a staging area's files/\n`);
+    return 1;
+  }
+
+  try {
+    const { gedcom } = await readGedcomAt(vfs, cmd.access, path);
+    await initStaging(vfs, cmd.access, place.user, { layoutOnly: true });
+    const { genealogyPath } = stagingRoots(place.user);
+    const used = new Set((await vfs.children(cmd.access, genealogyPath)).map((entry) => entry.name));
+    const name = freeName(basename(path), used);
+    await vfs.rename(cmd.access, dirname(path), basename(path), genealogyPath, name, { failIfExists: true });
+    const waiting = `${genealogyPath}/${name}`;
+    await vfs.update(cmd.access, waiting, { attrs: { mimetype: GEDCOM_MIMETYPE } });
+
+    if (cmd.json) {
+      await cmd.writeJSON({ path: waiting, individuals: gedcom.individuals.length, families: gedcom.families.length } satisfies GedcomStageResult);
+      return 0;
+    }
+    await cmd.writeLn(`${waiting}: ${gedcom.individuals.length} individuals and ${gedcom.families.length} families wait to be imported`);
+  } catch (error) {
+    await cmd.writeError(`gedcom-stage: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  return 0;
+};
+
+gedcomStage.spec = {
+  name: 'gedcom-stage',
+  effect: 'write' as const,
+  description: "Move a GEDCOM file staged under files/ to its staging area's genealogy/, where it waits to be looked over and imported",
+  args: [
+    { name: 'file', type: 'path' as const, description: 'the staged GEDCOM (.ged) file' },
+  ],
+  examples: ['gedcom-stage /home/ruby/staging/files/inbox/upload-2026-11-01/wrenfield.ged'],
+  returns: 'where the file waits, and how many individuals and families it holds.',
+};
+
+export default gedcomStage;

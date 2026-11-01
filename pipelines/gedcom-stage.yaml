@@ -1,18 +1,18 @@
 name: gedcom-stage
-description: A GEDCOM file dropped in staging brings its people and their relations into the archive
+description: A GEDCOM file dropped in staging waits in its staging area's genealogy/ to be looked over and imported
 
 # Subject is the GEDCOM file. `updated` is the upload's size report, after the bytes have landed.
-# The import moves the file to /archive/sources/genealogy, so it runs once per file.
+# The file moves out of files/, so it runs once per file; the staging page imports it from there.
 trigger:
   event: updated
   nodeType: file
   match:
-    nodePath: ['/home/*/staging/**.ged', '/home/*/staging/**.GED']
+    nodePath: ['/home/*/staging/files/**.ged', '/home/*/staging/files/**.GED']
 
 steps:
-  import:
-    command: gedcom-import $NODE_PATH
-    description: Match its individuals to the archive's people or make them, add its relations, and keep the file
+  stage:
+    command: gedcom-stage $NODE_PATH
+    description: Move it to genealogy/, where the staging page asks who its individuals are before importing it
 
 options:
   maxAttempts: 2

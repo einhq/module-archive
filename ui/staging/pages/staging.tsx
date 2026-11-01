@@ -12,6 +12,7 @@ import { CategoryOverview } from '../components/CategoryOverview.tsx';
 import { DoneTab } from '../components/DoneTab.tsx';
 import { importRoute, settingsRoute } from '../components/CategoryCard.tsx';
 import { FilesTab } from '../components/FilesTab.tsx';
+import { GenealogyWaiting } from '../components/GenealogyWaiting.tsx';
 import { GroupStream } from '../components/GroupStream.tsx';
 import { DuplicatesTab } from '../components/DuplicatesTab.tsx';
 import { ProgressStrip } from '../components/ProgressStrip.tsx';
@@ -271,6 +272,11 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
 
       <Box py='lg' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
         <ProgressStrip category={category} eta={eta} />
+        {isDefault && status.genealogyWaiting > 0 && (
+          <Box px='md' pb='md'>
+            <GenealogyWaiting count={status.genealogyWaiting} />
+          </Box>
+        )}
 
         <Tabs.Panel value='sort'>
           <GroupStream

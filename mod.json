@@ -2,7 +2,7 @@
   "name": "archive",
   "version": "0.6.9",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
-  "coreApi": "^0.7.0",
+  "coreApi": "^0.7.3",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -695,6 +695,7 @@
       "/staging": "ui/staging/pages/staging.tsx",
       "/staging/categories/new": "ui/staging/pages/category-new.tsx",
       "/staging/categories/:slug": "ui/staging/pages/category.tsx",
+      "/staging/genealogy": "ui/staging/pages/genealogy.tsx",
       "/staging/import": "ui/staging/pages/import.tsx",
       "/start/upload": "ui/staging/pages/start-upload.tsx",
       "/stats/life-events": "ui/people/pages/life-events.tsx",

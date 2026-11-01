@@ -23,7 +23,7 @@ Deno.test({ name: 'staging status', sanitizeResources: false, sanitizeOps: false
 
     await t.step('a staging area not set up reads as not initialized, and is not made', async () => {
       const status = await client.execJson<StagingStatus>('staging status --user anna');
-      assertEquals(status, { user: 'anna', initialized: false, stagingPath: STAGING, defaultCategory: 'inbox', categories: [], routesWaiting: 0 });
+      assertEquals(status, { user: 'anna', initialized: false, stagingPath: STAGING, defaultCategory: 'inbox', categories: [], routesWaiting: 0, genealogyWaiting: 0 });
       assertEquals(await vfs.exists(ADMIN_ACCESS, STAGING), false);
     });
 

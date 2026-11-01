@@ -3,12 +3,15 @@
  * its individuals are found among the people or made, the relations it gives are added, and every
  * person it describes links it, and their events, homes and notes are added where they lack them.
  * A dry run writes nothing; the same file again adds nothing; a merged person's links follow them.
+ * A file staged by the pipeline waits in genealogy/ until it is imported, and who its individuals
+ * are can be chosen before.
  */
 
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import { GENEALOGY_SOURCES, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
-import type { GedcomImportResult, PersonInfo } from '@archive/people/api';
+import type { GedcomImportResult, GedcomPlan, GedcomStageResult, PersonInfo } from '@archive/people/api';
+import type { StagingStatus } from '@archive/staging/api';
 import type { SourceFile } from '@archive/sources/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -82,6 +85,25 @@ const TREE = `0 HEAD
 1 MARR
 2 DATE 20 AUG 1958
 0 TRLR
+`;
+
+/** Harold again, with two daughters: one the archive has under another name, one it should not get. */
+const FAMILY = `0 HEAD
+0 @I1@ INDI
+1 NAME Harold /Wrenfield/
+1 BIRT
+2 DATE 3 MAR 1931
+1 FAMS @F1@
+0 @I2@ INDI
+1 NAME Rosie /Wrenfield/
+1 FAMC @F1@
+0 @I3@ INDI
+1 NAME Clara /Wrenfield/
+1 FAMC @F1@
+0 @F1@ FAM
+1 HUSB @I1@
+1 CHIL @I2@
+1 CHIL @I3@
 `;
 
 Deno.test({
@@ -254,6 +276,42 @@ Deno.test({
       assertEquals((await ctx.vfs.children(ADMIN_ACCESS, home)).map((e) => e.name), ['metadata']);
       const again = await client.execJson<GedcomImportResult>(`gedcom-import ${home}`);
       assertEquals(again.source, result.source);
+    });
+
+    await t.step('a staged file waits in genealogy/, read with choices, and is imported as chosen', async () => {
+      const staged = await stage('family.ged', FAMILY);
+      const waiting = await client.execJson<GedcomStageResult>(`gedcom-stage ${staged}`);
+      assertEquals(waiting, { path: '/home/admin/staging/genealogy/family.ged', individuals: 3, families: 1 });
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, staged), false);
+      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, waiting.path)).attrs.mimetype, 'application/x-gedcom');
+      assertEquals((await client.execJson<StagingStatus>('staging status')).genealogyWaiting, 1);
+
+      const plan = await client.execJson<GedcomPlan>(`gedcom-read ${waiting.path}`);
+      assertEquals(plan.individuals.map((i) => [i.xref, i.action, i.person, i.how, i.chosen]), [
+        ['@I1@', 'match', `${PEOPLE_ROOT}/harold`, 'name-date', false],
+        ['@I2@', 'new', undefined, undefined, false],
+        ['@I3@', 'new', undefined, undefined, false],
+      ]);
+      assertEquals([plan.individuals[1].parents, plan.individuals[0].children], [['@I1@'], ['@I2@', '@I3@']]);
+      // Harold's own family in the archive comes along, to be drawn beside the file's.
+      assertEquals(plan.people[`${PEOPLE_ROOT}/harold`].children.includes(`${PEOPLE_ROOT}/ruby`), true);
+      assertEquals(plan.people[`${PEOPLE_ROOT}/ruby`].name, 'Ruby');
+
+      const chosen = await client.execJson<GedcomPlan>(`gedcom-read ${waiting.path} --match I2=ruby`);
+      assertEquals([chosen.individuals[1].action, chosen.individuals[1].person, chosen.individuals[1].how], ['match', `${PEOPLE_ROOT}/ruby`, 'chosen']);
+
+      await cmd.shouldFailWith(`gedcom-read ${waiting.path} --match @I9@=ruby`, 'the file has no individual @I9@');
+      await cmd.shouldFailWith(`gedcom-read ${waiting.path} --match @I2@=nobody`, `${PEOPLE_ROOT}/nobody is not a person`);
+      await cmd.shouldFailWith(`gedcom-import ${waiting.path} --match @I2@=ruby --match @I3@=ruby`, 'is chosen for both @I2@ and @I3@');
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, waiting.path), true);
+
+      const result = await client.execJson<GedcomImportResult>(`gedcom-import ${waiting.path} --match @I2@=ruby --new @I1@ --skip @I3@`);
+      assertEquals(result.matched.map((m) => [m.xref, m.person, m.how]), [['@I2@', `${PEOPLE_ROOT}/ruby`, 'chosen']]);
+      assertEquals(result.created.map((c) => [c.xref, c.person]), [['@I1@', `${PEOPLE_ROOT}/harold-wrenfield`]]);
+      assertEquals(result.skipped.find((s) => s.xref === '@I3@')?.reason, 'left out');
+      assertEquals(result.source, `${GENEALOGY_SOURCES}/family.ged`);
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, `${PEOPLE_ROOT}/clara-wrenfield`), false);
+      assertEquals((await client.execJson<StagingStatus>('staging status')).genealogyWaiting, 0);
     });
 
     await t.step('a file with no individuals is refused and left where it is', async () => {

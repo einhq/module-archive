@@ -439,7 +439,8 @@ export type StagingCategoryStatus = {
 /**
  * `staging status [--user u]`: one user's staging area, read without changing anything.
  * `initialized` is false until `staging init` has made the layout and the default category.
- * `routesWaiting` counts the GPX files in `routes/`.
+ * `routesWaiting` counts the GPX files in `routes/`, `genealogyWaiting` the GEDCOM files in
+ * `genealogy/`.
  */
 export type StagingStatus = {
   user: string;
@@ -448,6 +449,7 @@ export type StagingStatus = {
   defaultCategory: string;
   categories: StagingCategoryStatus[];
   routesWaiting: number;
+  genealogyWaiting: number;
 };
 
 /**

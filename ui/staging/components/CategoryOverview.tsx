@@ -12,6 +12,7 @@ import type { DetectHint } from '../lib/detect-hint.ts';
 import { KIND_LABELS, NEW_KINDS } from '../lib/overview.ts';
 import { CategoryCard } from './CategoryCard.tsx';
 import { DetectHints } from './DetectHints.tsx';
+import { GenealogyWaiting } from './GenealogyWaiting.tsx';
 import { MoveDialog } from './MoveDialog.tsx';
 import { SftpPath } from './SftpPath.tsx';
 
@@ -27,7 +28,7 @@ type Props = {
  * `/staging` without a category: a card per category, with the uploads into it from this browser,
  * a card that starts a new one of a kind, the folders newly arrived in the default category that
  * look like they came from one source (`staging detect`), with the way to its category, what waits
- * for a person outside every category (GPS tracks), and where to copy files over SFTP.
+ * for a person outside every category (GPS tracks, family trees), and where to copy files over SFTP.
  */
 export function CategoryOverview({ status, eta, onOpen }: Props) {
   useSignals();
@@ -82,6 +83,7 @@ export function CategoryOverview({ status, eta, onOpen }: Props) {
           </Group>
         </Alert>
       )}
+      <GenealogyWaiting count={status.genealogyWaiting} />
       <Stack gap={4}>
         <Text size='sm' c='dimmed'>Tens of thousands of files? Copy them over SFTP into a category's folder:</Text>
         <SftpPath path={`${stagingRoots(status.user).filesPath}/<category>/`} />

@@ -241,6 +241,58 @@ export type LifeEventStats = {
   withoutMonth: Record<LifeEventKind, number>;
 };
 
+/**
+ * How an individual was found among the archive's people: chosen by whoever imports, linked by an
+ * earlier import of the same file (`source`) or by a `_UID`, fitted by names and dates, or by
+ * names and a relative who matched already.
+ */
+export type GedcomMatchHow = 'chosen' | 'source' | 'uid' | 'name-date' | 'relatives';
+
+/** What is said of one individual before an import: they are `person`, a new person, or left out. */
+export type GedcomChoice = { kind: 'person'; person: string } | { kind: 'new' } | { kind: 'skip' };
+
+/** A person's names, gender and dates, as a GEDCOM plan shows them. */
+type GedcomPlanAttrs = { name: string; fullname?: string; birthname?: string; gender?: string; born?: string; died?: string };
+
+/** One individual of the file in a `gedcom-read` plan. Relatives are the file's, by xref. */
+type GedcomPlanIndividual = GedcomPlanAttrs & {
+  xref: string;
+  parents: string[];
+  children: string[];
+  partners: string[];
+  /** Matched to `person`, made a new person, or left out (chosen so, or with no name). */
+  action: 'match' | 'new' | 'skip';
+  /** Whether the action is one asked for (`--match`, `--new`, `--skip`) rather than found. */
+  chosen: boolean;
+  person?: string;
+  how?: GedcomMatchHow;
+  /** The archive's people who could be them, best first, whoever they are matched to. */
+  candidates: { person: string; score: number }[];
+};
+
+/** One person of the archive in a `gedcom-read` plan. Relatives are paths, also of people the plan leaves out. */
+export type GedcomPlanPerson = GedcomPlanAttrs & {
+  parents: string[];
+  children: string[];
+  partners: string[];
+  /** Whether the import, as whoever runs it, may change them. */
+  writable: boolean;
+};
+
+/** `gedcom-stage`: where a staged GEDCOM file waits to be imported, and what it holds. */
+export type GedcomStageResult = { path: string; individuals: number; families: number };
+
+/** `gedcom-read`: who each individual of a GEDCOM file would be if it were imported now. */
+export type GedcomPlan = {
+  /** The file read. */
+  file: string;
+  /** Where its people's links point: where it is kept, once imported. */
+  source: string;
+  individuals: GedcomPlanIndividual[];
+  /** By path: everyone matched or a candidate, and the parents, children and partners of everyone matched. */
+  people: Record<string, GedcomPlanPerson>;
+};
+
 /** `gedcom-import`: who each individual of the file is in the archive, and what was added. */
 export type GedcomImportResult = {
   /** Where the file is kept. */
@@ -248,7 +300,7 @@ export type GedcomImportResult = {
   individuals: number;
   families: number;
   /** Individuals found among the archive's people, and how. */
-  matched: { xref: string; name: string; person: string; how: 'source' | 'uid' | 'name-date' | 'relatives' }[];
+  matched: { xref: string; name: string; person: string; how: GedcomMatchHow }[];
   /** Individuals nobody in the archive was, each a person made for them. */
   created: { xref: string; name: string; person: string }[];
   /** Individuals, or relations of theirs, left out, and why. */
