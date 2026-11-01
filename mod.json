@@ -94,6 +94,7 @@
     "@archive/news-albums": "./lib/news-albums.ts",
     "@archive/people/gedcom": "./lib/people/gedcom.ts",
     "@archive/people/gedcom-import": "./lib/people/gedcom-import.ts",
+    "@archive/people/name-spellings": "./lib/people/name-spellings.ts",
     "@archive/people/date-qualifier": "./lib/people/date-qualifier.ts",
     "@archive/people/name-match": "./lib/people/name-match.ts",
     "@archive/people/cover": "./lib/people/cover.ts",

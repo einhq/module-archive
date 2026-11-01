@@ -1,0 +1,31 @@
+# How the archive reads names when it matches people (gedcom-import, gedcom-read): two spellings
+# the rules make the same are one name spelled two ways. A person who fits only by spelling is
+# suggested, not chosen, unless their day of birth is the same too.
+#
+# Each line is `<from> -> <to>`: <from> a regular expression over one word in lower case without
+# accents (Öberg is oberg), <to> what each match becomes; empty drops it, $1 is the first group.
+# The rules apply in order, to both names alike, so a rule only matters where two names meet.
+# Add your own in a file beside this directory, such as /etc/name-spellings.d/local: such files
+# are read first, so your rules see a name as it is written, and these then read the result.
+
+^mac -> mc                # MacDonald, McDonald
+ck -> k                   # Eriksson, Ericksson
+ch -> k                   # Christina, Kristina; Richard, Rikard
+ph -> f                   # Philip, Filip
+th -> t                   # Thomson, Tomson; Mathilda, Matilda
+dt -> t                   # Smidt, Smit
+qu -> kv                  # Qvist, Kvist
+q -> k
+x -> ks                   # Alexander, Aleksander
+z -> s                    # Elizabeth, Elisabeth
+w -> v                    # Wilhelm, Vilhelm
+c(?=[eiy]) -> s           # Cecilia, Sesilia
+c -> k                    # Carl, Karl; Ericsson, Eriksson
+y -> i                    # Smyth, Smith
+(?<=.)h ->                # Ohlson, Olsson; Pehr, Per; Johnson, Jonson
+mps -> ms                 # Thompson, Thomson
+fv -> v                   # Gustafva, Gustava
+f(?=s|$) -> v             # Gustaf, Gustav; Gustafsson, Gustavsson
+(?<=..)e$ ->              # Clarke, Clark; Browne, Brown
+sen$ -> son               # Olsen, Olsson
+(.)\1+ -> $1              # Olsson, Olson; Phillips, Philips

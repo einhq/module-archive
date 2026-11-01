@@ -8,7 +8,8 @@
  *
  * An individual is the person who links the same file with the same xref, or a link of any GEDCOM
  * file with one of its `_UID`s: an import made again, or a newer export of the same tree, finds
- * the people the last one made. Otherwise the names and the dates decide (`score`), and a match
+ * the people the last one made. Otherwise the names and the dates decide (`score`), names read
+ * through the spelling rules of `/etc/name-spellings.d` (`loadSpeller`), and a match
  * the names alone suggest is taken only when a relative already matched says the same. Whoever
  * imports can settle an individual first (`GedcomChoices`): this person, a new one, or nobody.
  */
@@ -23,6 +24,7 @@ import { slugifyName } from '@archive/people/person';
 import type { PersonAttrs } from '@archive/people/types';
 import type { GedcomChoice, GedcomImportResult, GedcomMatchHow, GedcomPlan, GedcomPlanPerson } from '@archive/people/api';
 import { freeName, linkSource, sha256Hex, SOURCES_DIR } from '@archive/sources';
+import { asWritten, loadSpeller, type Speller } from '@archive/people/name-spellings';
 import { POSITION_CHILD } from '@archive/location/location-link';
 import { parseStagedPath } from '@archive/staging/paths';
 import { basename, dirname, resolve } from '@std/path';
@@ -109,47 +111,61 @@ const nameFit = (name: string[], given: Set<string>, surnames: Set<string>): num
 /** How far given names go in `score`: one for the first, one for each more spelled out, up to this. */
 const GIVEN_POINTS = 3;
 
+/** What the names of a person and an individual have in common, with every word spelled by one speller. */
+const compareNames = (person: PersonAttrs, indi: GedcomIndividual, spell: Speller) => {
+  const read = (text: string | null | undefined) => words(text).map(spell);
+  const names = [person.name, person.fullname, person.birthname].map(read).filter((name) => name.length > 0);
+  const ours = new Set(names.flat());
+  const given = new Set([...indi.given.flatMap(read), ...read(indi.callName)]);
+  const surnames = new Set([...read(indi.surname), ...read(indi.marriedSurname)]);
+  const fits = names.map((name) => nameFit(name, given, surnames)).filter((spelled): spelled is number => spelled !== undefined);
+  return {
+    fits: fits.length > 0,
+    spelled: fits.length > 0 ? Math.max(...fits) : [...given].filter((word) => ours.has(word)).length,
+    sharedSurname: [...surnames].some((word) => ours.has(word)),
+  };
+};
+
 /**
  * How well a person of the archive fits an individual (`points`), and whether by the rules that
  * let a match be taken (`strict`), or undefined when they cannot be the same: a date or gender
  * contradicts, or no name of theirs shares a given name with the individual.
  *
  * A person fits strictly by any of their names — name, full name, birth name — that `nameFit`
- * takes; otherwise loosely, when a name of theirs has one of the individual's given names and one
- * of their surnames among other words (a nickname, another spelling), which only suggests them.
+ * takes as written. One that fits only once `spell` has read both (`Ericsson` and `Eriksson`) fits
+ * strictly when their day of birth is the same, else loosely; so does one whose names hold one of
+ * the individual's given names and one of their surnames among other words (a nickname). A loose
+ * fit only suggests them.
  * Points: one for each given name spelled out, up to `GIVEN_POINTS`; two for a shared surname;
  * three for the same day of birth (one for the year); two for the same day of death (one for the
  * year). A name and a year of birth, a first name and a day of birth, or a full name of two given
  * names or more and the surname reach `SURE`: enough to take the match without a relative
  * confirming it.
  */
-const assess = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividual): { points: number; strict: boolean } | undefined => {
+const assess = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividual, spell: Speller): { points: number; strict: boolean } | undefined => {
   const { attrs } = person;
-  const names = [attrs.name, attrs.fullname, attrs.birthname].map(words).filter((name) => name.length > 0);
-  const ours = new Set(names.flat());
-  const given = new Set([...indi.given.flatMap(words), ...words(indi.callName)]);
-  const surnames = new Set([...words(indi.surname), ...words(indi.marriedSurname)]);
-  const sharedSurname = [...surnames].some((word) => ours.has(word));
-  const fits = names.map((name) => nameFit(name, given, surnames)).filter((spelled): spelled is number => spelled !== undefined);
-  const strict = fits.length > 0;
-  const spelled = strict ? Math.max(...fits) : [...given].filter((word) => ours.has(word)).length;
-  if (!strict && (spelled === 0 || !sharedSurname)) return undefined;
+  const written = compareNames(attrs, indi, asWritten);
+  const names = written.fits || spell === asWritten ? written : compareNames(attrs, indi, spell);
+  if (!names.fits && (names.spelled === 0 || !names.sharedSurname)) return undefined;
   if (attrs.gender && indi.gender && ['male', 'female'].includes(attrs.gender) && ['male', 'female'].includes(indi.gender) && attrs.gender !== indi.gender) return undefined;
 
   const born = compareDate(attrs.born, attrs.bornQualifier, span(indi.born, indi.christened));
   const died = compareDate(attrs.died, attrs.diedQualifier, span(indi.died, indi.buried));
   if (born === 'conflict' || died === 'conflict') return undefined;
 
-  let points = Math.min(spelled, GIVEN_POINTS);
-  if (sharedSurname) points += 2;
+  let points = Math.min(names.spelled, GIVEN_POINTS);
+  if (names.sharedSurname) points += 2;
   if (born) points += born === 'exact' ? 3 : 1;
   if (died) points += died === 'exact' ? 2 : 1;
-  return { points, strict };
+  return { points, strict: written.fits || (names.fits && born === 'exact') };
 };
 
-/** How well a person fits an individual by the rules a match is taken by (`assess`), or 0 when they cannot be the same. */
-export const score = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividual): number => {
-  const fit = assess(person, indi);
+/**
+ * How well a person fits an individual by the rules a match is taken by (`assess`, with names read
+ * by `spell`), or 0 when they cannot be the same.
+ */
+export const score = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividual, spell: Speller = asWritten): number => {
+  const fit = assess(person, indi, spell);
   return fit?.strict ? fit.points : 0;
 };
 
@@ -157,13 +173,13 @@ export const score = (person: Pick<ArchivePerson, 'attrs'>, indi: GedcomIndividu
 const SURE = 4;
 
 /** The people who could be `indi`, best first: every one `score` does not rule out. */
-const rankFits = (indi: GedcomIndividual, people: ArchivePerson[]): { path: string; score: number }[] =>
-  people.map((p) => ({ path: p.path, score: score(p, indi) })).filter((fit) => fit.score > 0).sort((a, b) => b.score - a.score);
+const rankFits = (indi: GedcomIndividual, people: ArchivePerson[], spell: Speller): { path: string; score: number }[] =>
+  people.map((p) => ({ path: p.path, score: score(p, indi, spell) })).filter((fit) => fit.score > 0).sort((a, b) => b.score - a.score);
 
-/** The people to suggest for `indi`: the fits first, best first, then those of a like name (`assess`), best first. */
-const suggestions = (indi: GedcomIndividual, people: ArchivePerson[]): { person: string; score: number; loose?: true }[] =>
+/** The people to suggest for `indi`: the fits first, best first, then the loose ones (`assess`), best first. */
+const suggestions = (indi: GedcomIndividual, people: ArchivePerson[], spell: Speller): { person: string; score: number; loose?: true }[] =>
   people.flatMap((p) => {
-    const fit = assess(p, indi);
+    const fit = assess(p, indi, spell);
     return fit ? [{ person: p.path, score: fit.points, ...(fit.strict ? {} : { loose: true as const }) }] : [];
   }).sort((a, b) => Number(Boolean(a.loose)) - Number(Boolean(b.loose)) || b.score - a.score);
 
@@ -177,7 +193,13 @@ const suggestions = (indi: GedcomIndividual, people: ArchivePerson[]): { person:
  * parent, partner or child of the individual has matched the same relative of the person, until
  * nothing more is found.
  */
-export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source: string, choices: GedcomChoices = new Map()): Map<string, Match> => {
+export const matchIndividuals = (
+  gedcom: Gedcom,
+  people: ArchivePerson[],
+  source: string,
+  choices: GedcomChoices = new Map(),
+  spell: Speller = asWritten,
+): Map<string, Match> => {
   const matches = new Map<string, Match>();
   const taken = new Set<string>();
   const take = (xref: string, match: Match) => {
@@ -199,7 +221,7 @@ export const matchIndividuals = (gedcom: Gedcom, people: ArchivePerson[], source
   const fits = new Map<string, { path: string; score: number }[]>();
   for (const indi of gedcom.individuals) {
     if (settled(indi.xref)) continue;
-    const ranked = rankFits(indi, people);
+    const ranked = rankFits(indi, people, spell);
     if (ranked.length > 0) fits.set(indi.xref, ranked);
   }
 
@@ -368,9 +390,9 @@ const personOf = (p: ArchivePerson): GedcomPlanPerson => ({
  * partners of everyone matched.
  */
 export async function planGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, file: string, source: string, choices: GedcomChoices = new Map()): Promise<GedcomPlan> {
-  const people = await loadPeople(vfs, access);
+  const [people, spell] = await Promise.all([loadPeople(vfs, access), loadSpeller(vfs, access)]);
   checkChoices(gedcom, people, choices);
-  const matches = matchIndividuals(gedcom, people, source, choices);
+  const matches = matchIndividuals(gedcom, people, source, choices, spell);
   const byPath = new Map(people.map((p) => [p.path, p]));
   const families = new Map(gedcom.families.map((family) => [family.xref, family]));
 
@@ -379,7 +401,7 @@ export async function planGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, file:
     const attrs = attrsFor(indi);
     const match = matches.get(indi.xref);
     const choice = choices.get(indi.xref);
-    const candidates = suggestions(indi, people).slice(0, CANDIDATES);
+    const candidates = suggestions(indi, people, spell).slice(0, CANDIDATES);
     for (const fit of candidates) shown.add(fit.person);
     if (match) {
       const person = byPath.get(match.path)!;
@@ -671,11 +693,11 @@ type KeptAt = string | (() => Promise<string>);
  * would be: the paths of people to be made, and the relations that would be added.
  */
 export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, keptAt: KeptAt, opts: ImportOptions = {}): Promise<GedcomImportResult> {
-  const people = await loadPeople(vfs, access);
+  const [people, spell] = await Promise.all([loadPeople(vfs, access), loadSpeller(vfs, access)]);
   const choices = opts.choices ?? new Map();
   checkChoices(gedcom, people, choices);
   const source = typeof keptAt === 'string' ? keptAt : await keptAt();
-  const matches = matchIndividuals(gedcom, people, source, choices);
+  const matches = matchIndividuals(gedcom, people, source, choices, spell);
   const byPath = new Map(people.map((p) => [p.path, p]));
   const result: GedcomImportResult = {
     source,

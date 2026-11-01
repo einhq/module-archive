@@ -8,6 +8,7 @@
  */
 
 import { assertEquals } from '@std/assert';
+import { fromFileUrl } from '@std/path';
 import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import { GENEALOGY_SOURCES, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import type { GedcomImportResult, GedcomPlan, GedcomStageResult, PersonInfo, PersonTimeline } from '@archive/people/api';
@@ -340,8 +341,23 @@ Deno.test({
 
       // Of a like name, with a word the file does not have: suggested for Clara, never taken.
       await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/clara-c --name 'Clara Cee Wrenfield'`);
+      // Spelled another way, by the archive's rules (Klara) and by the administrator's own (Rose).
+      await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/klara --name 'Klara Wrenfield' && person-create ${PEOPLE_ROOT}/rose --name 'Rose Wrenfield'`);
+      // The module's rules as `mod setup` links them, which the harness does not.
+      await cmd.shouldSucceed('mkdir -p /etc/name-spellings.d/archive && mkfile /etc/name-spellings.d/archive/spellings');
+      const rules = await ctx.vfs.open(ADMIN_ACCESS, '/etc/name-spellings.d/archive/spellings', { mode: 'w' });
+      try {
+        await rules.write(await Deno.readFile(fromFileUrl(new URL('../../etc/name-spellings.d/spellings', import.meta.url))));
+      } finally {
+        await rules.close();
+      }
+      await cmd.shouldSucceed("echo 'ie$ -> e' > /etc/name-spellings.d/local");
       const plan = await client.execJson<GedcomPlan>(`gedcom-read ${waiting.path}`);
-      assertEquals(plan.individuals[2].candidates, [{ person: `${PEOPLE_ROOT}/clara-c`, score: 3, loose: true }]);
+      assertEquals(plan.individuals[2].candidates, [
+        { person: `${PEOPLE_ROOT}/clara-c`, score: 3, loose: true },
+        { person: `${PEOPLE_ROOT}/klara`, score: 3, loose: true },
+      ]);
+      assertEquals(plan.individuals[1].candidates, [{ person: `${PEOPLE_ROOT}/rose`, score: 3, loose: true }]);
       assertEquals(plan.individuals.map((i) => [i.xref, i.action, i.person, i.how, i.chosen]), [
         ['@I1@', 'match', `${PEOPLE_ROOT}/harold`, 'name-date', false],
         ['@I2@', 'new', undefined, undefined, false],
