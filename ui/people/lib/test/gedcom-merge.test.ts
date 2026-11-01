@@ -7,7 +7,7 @@
 
 import { assertEquals } from '@std/assert';
 import type { GedcomPlan } from '@archive/people/api';
-import { attrFate, buildMerge, choiceWords } from '../gedcom-merge.ts';
+import { attrFate, buildMerge, choiceWords, withChoice } from '../gedcom-merge.ts';
 
 type Individual = GedcomPlan['individuals'][number];
 
@@ -93,4 +93,16 @@ Deno.test('gedcom merge: choices are the import flags', () => {
 
 Deno.test('gedcom merge: what the file says fills in, and never replaces', () => {
   assertEquals([attrFate('1931-03-03', undefined), attrFate('1931', '1931'), attrFate('Harold', 'Hal'), attrFate(undefined, 'Hal')], ['added', 'same', 'differs', null]);
+});
+
+Deno.test('gedcom merge: a choice shows at once, before the plan is read again', () => {
+  const kinds = (plan: GedcomPlan) => Object.fromEntries(Object.values(buildMerge(plan).cards).filter((card) => card.individual).map((card) => [card.key, card.kind]));
+  // Harold's person chosen for Clara: she is chosen, and Harold, who had him, is new.
+  const taken = withChoice(PLAN, '@I5@', { kind: 'person', person: '/p/harold' });
+  assertEquals([kinds(taken)['@I5@'], kinds(taken)['@I1@']], ['chosen', 'new']);
+  assertEquals([taken.individuals[0].person, taken.individuals[4].how], [undefined, 'chosen']);
+  assertEquals(kinds(withChoice(PLAN, '@I2@', { kind: 'new' }))['@I2@'], 'new');
+  assertEquals(kinds(withChoice(PLAN, '@I1@', { kind: 'skip' }))['@I1@'], 'skip');
+  // Taking a choice back leaves what it did until the reading says otherwise.
+  assertEquals(withChoice(PLAN, '@I3@', undefined).individuals[2], { ...PLAN.individuals[2], chosen: false });
 });

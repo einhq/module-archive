@@ -18,7 +18,7 @@ type Props = {
   /** Say who an individual is; undefined lets the import decide again. */
   onChoose: (xref: string, choice: GedcomChoice | undefined) => void;
   onSelect: (key: string) => void;
-  /** Waiting on a choice just made. */
+  /** The file is being imported: nothing can be chosen meanwhile. */
   busy: boolean;
   /** Given, a close button in the corner calls it. */
   onClose?: () => void;
@@ -115,6 +115,8 @@ function IndividualChoice({ plan, merge, individual, onChoose, onSelect, busy }:
         </Alert>
       )}
 
+      <Relatives merge={merge} individual={individual} onSelect={onSelect} />
+
       <Stack gap='xs'>
         <Text fw={600} size='sm'>Who is this?</Text>
         {individual.candidates.length === 0 && !person && <Text size='sm' c='dimmed'>Nobody in the archive fits the name and dates.</Text>}
@@ -172,8 +174,6 @@ function IndividualChoice({ plan, merge, individual, onChoose, onSelect, busy }:
           )}
         </Group>
       </Stack>
-
-      <Relatives merge={merge} individual={individual} onSelect={onSelect} />
     </>
   );
 }

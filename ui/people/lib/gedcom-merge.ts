@@ -142,3 +142,27 @@ export const attrFate = (file: string | undefined, archive: string | undefined):
   if (!archive) return 'added';
   return file.toLowerCase() === archive.toLowerCase() ? 'same' : 'differs';
 };
+
+/** An individual without the person they were matched to. */
+const unmatched = (indi: PlanIndividual): PlanIndividual => {
+  const { person: _person, how: _how, ...rest } = indi;
+  return rest;
+};
+
+/**
+ * `plan` as `choice` makes it for `xref`, before it is read again: matched to the chosen person
+ * (whom anyone else matched to them loses), new, left out, or, with no choice, no longer chosen.
+ * What only a reading can say — who else a choice settles through their relatives, the archive's
+ * side of a person the plan did not hold — waits for the reading.
+ */
+export const withChoice = (plan: GedcomPlan, xref: string, choice: GedcomChoice | undefined): GedcomPlan => ({
+  ...plan,
+  individuals: plan.individuals.map((indi) => {
+    if (indi.xref === xref) {
+      if (!choice) return { ...indi, chosen: false };
+      if (choice.kind === 'person') return { ...indi, action: 'match', chosen: true, person: choice.person, how: 'chosen' };
+      return { ...unmatched(indi), action: choice.kind, chosen: true };
+    }
+    return choice?.kind === 'person' && indi.person === choice.person ? { ...unmatched(indi), action: 'new', chosen: false } : indi;
+  }),
+});

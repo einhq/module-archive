@@ -4,14 +4,14 @@ import { EmptyState, EntityDetailHeader, FamilyTree, PageLoader, TablerIcon } fr
 import { useCommand } from '@ein/ui/hooks';
 import { countOf, type FamilyNode, type NodeChildEntry, shq } from '@ein/ui/lib';
 import { currentUser, execCommand } from '@ein/ui/signals';
-import { Alert, Box, Button, Card, Group, LoadingOverlay, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Alert, Box, Button, Card, Group, Loader, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useElementSize, useMediaQuery } from '@mantine/hooks';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { GedcomChoicePanel } from '../../people/components/GedcomChoicePanel.tsx';
 import { GedcomMergeCard, MERGE_KINDS } from '../../people/components/GedcomMergeCard.tsx';
-import { buildMerge, choiceWords, type MergeKind } from '../../people/lib/gedcom-merge.ts';
+import { buildMerge, choiceWords, type MergeKind, withChoice } from '../../people/lib/gedcom-merge.ts';
 import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
 
 export const handle = { fullBleed: true, signedIn: true };
@@ -53,8 +53,8 @@ const keepChoices = (path: string, choices: Choices) => {
  * drawn with the archive's people it matches (`gedcom-read`): each card is an individual, found in
  * the archive, to decide between people who fit, or new; a matched one brings their relatives in
  * the archive along. Selecting a card says who they are — one of the people who fit, anyone else,
- * a new person, or nobody — and the tree is read again with that choice, so a choice can settle
- * relatives too. Import runs `gedcom-import` with every choice.
+ * a new person, or nobody — which shows at once, and the tree is read again with it behind, so a
+ * choice can settle relatives too. Import runs `gedcom-import` with every choice.
  */
 export default function GenealogyPage() {
   useSignals();
@@ -141,9 +141,11 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
     plan?.individuals[0]?.xref;
   const card = shown ? merge?.cards[shown] : undefined;
 
-  // The individual chosen for stays selected, so the panel shows what the choice did.
+  // The individual chosen for stays selected, and the choice shows at once (`withChoice`): the
+  // reading it starts goes on behind, and only the newest one's answer is taken.
   const choose = useCallback((xref: string, choice: GedcomChoice | undefined) => {
     setSelected(xref);
+    setPlan((current) => current && withChoice(current, xref, choice));
     setChoices((current) => {
       const next = { ...current };
       // A person is one individual's: choosing them here unsays them for anyone else.
@@ -246,7 +248,7 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
             label: importing ? 'Importing…' : 'Import',
             icon: 'file-import',
             button: true,
-            disabled: !plan || reading || importing || Boolean(error),
+            disabled: !plan || importing || Boolean(error),
             onClick: () => void importNow(),
           },
           ...(Object.keys(choices).length > 0 ? [{ label: 'Forget my choices', icon: 'eraser', onClick: forget }] : []),
@@ -319,7 +321,6 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
               </SimpleGrid>
             </ScrollArea>
           )}
-        <LoadingOverlay visible={reading && Boolean(plan)} overlayProps={{ blur: 1, backgroundOpacity: 0.2 }} loaderProps={{ size: 'sm' }} />
 
         <Stack gap='xs' style={{ position: 'absolute', top: PANEL_GAP, left: PANEL_GAP, right: (inset?.right ?? 0) + PANEL_GAP + 56, zIndex: 3, pointerEvents: 'none' }}>
           {parts.length > 1 && part && (
@@ -333,6 +334,12 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
               }}
               style={{ alignSelf: 'flex-start', maxWidth: '100%', overflowX: 'auto', pointerEvents: 'auto' }}
             />
+          )}
+          {reading && plan && (
+            <Group gap={6} style={{ alignSelf: 'flex-start' }} role='status'>
+              <Loader size='xs' />
+              <Text size='xs' c='dimmed'>Reading the tree again…</Text>
+            </Group>
           )}
           {error && (
             <Alert color='red' title='The family tree could not be read' style={{ pointerEvents: 'auto' }}>
@@ -358,7 +365,7 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
                 : { top: PANEL_GAP, right: PANEL_GAP, width: PANEL_WIDTH, maxHeight: `calc(100% - ${2 * PANEL_GAP}px)` }),
             }}
           >
-            <GedcomChoicePanel plan={plan} merge={merge} card={card} onChoose={choose} onSelect={select} onClose={() => setPanelOpen(false)} busy={reading || importing} />
+            <GedcomChoicePanel plan={plan} merge={merge} card={card} onChoose={choose} onSelect={select} onClose={() => setPanelOpen(false)} busy={importing} />
           </Box>
         )}
       </Box>
