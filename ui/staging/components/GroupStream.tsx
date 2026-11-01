@@ -39,7 +39,7 @@ import {
   tileIndex,
 } from '@ein/ui/lib';
 import { dismissToast, execCommand, type MediaItem, notify, openMediaAt } from '@ein/ui/signals';
-import { Alert, Box, Button, Group, Menu, SegmentedControl, Select, Text } from '@mantine/core';
+import { Alert, Box, Button, Group, Menu, SegmentedControl, Select, Text, VisuallyHidden } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -85,7 +85,6 @@ import { GroupPickerDialog } from './GroupPickerDialog.tsx';
 import type { GroupActions, GroupDrop, GroupFailure, GroupSelected } from './GroupHeader.tsx';
 import { closedSectionHeight, GroupSection, type PartMatch, SECTION_METRICS } from './GroupSection.tsx';
 import { NameDialog } from './NameDialog.tsx';
-import { StagingDock } from './StagingDock.tsx';
 
 type Props = {
   /** The category whose suggested groups are sorted, and whose destination is the default target. */
@@ -242,7 +241,12 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const readingLine = useHeaderHeight();
   const streamRef = useRef<SectionStreamHandle>(null);
   const [widthRef, width] = useElementWidth<HTMLDivElement>();
-  useShortcutHelp('Staging', TRIAGE_HELP);
+  // One call per section, always the same number of them.
+  useShortcutHelp(TRIAGE_HELP[0].group, TRIAGE_HELP[0].entries);
+  useShortcutHelp(TRIAGE_HELP[1].group, TRIAGE_HELP[1].entries);
+  useShortcutHelp(TRIAGE_HELP[2].group, TRIAGE_HELP[2].entries);
+  useShortcutHelp(TRIAGE_HELP[3].group, TRIAGE_HELP[3].entries);
+  useShortcutHelp(TRIAGE_HELP[4].group, TRIAGE_HELP[4].entries);
   const queue = useCommandQueue();
   const selection = useSectionSelection();
   const clearSelection = selection.clear;
@@ -1531,39 +1535,8 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const cursorEnter = cursorRow ? enterFor(cursorRow, filing) : undefined;
   const canEnter = cursorEnter !== undefined;
   const cursorCandidates = useMemo(() => cursorRow ? candidatesOf(cursorRow) : [], [cursorRow, candidatesOf]);
-  const legendContext = useMemo(() => ({
-    candidates: cursorCandidates.map((candidate) => candidate.album.title),
-    candidate: cursorCandidates[highlight]?.album.title,
-    comparing,
-    title: cursorRow?.title,
-    previous: previousRow?.title,
-    next: nextRow?.title,
-    proposal: cursorEnter?.label,
-    target: target?.title,
-    selected: regrouping.length,
-    later: across ? allLater : cursorRow?.staging.later !== undefined,
-    lane: cursorRow !== undefined && isLaneGroup(cursorRow),
-    groups: chosenCount.groups,
-  }), [cursorRow, previousRow, nextRow, cursorEnter?.label, target, regrouping.length, across, allLater, chosenCount.groups, cursorCandidates, highlight, comparing]);
   /** S can cut here: in a lane anything, elsewhere not before the group's first picture. */
   const canCut = cursorRow !== undefined && regrouping.length > 0 && (isLaneGroup(cursorRow) || regrouping[0] !== openItems[0]?.path);
-  const available = useCallback((action: TriageAction) => {
-    if (scope === 'groups') {
-      if (action === 'apply') return chosen.groups.length > 0;
-      if (action === 'new' || action === 'private' || action === 'later') return selectedGroups.length > 0;
-    }
-    if (action === 'candidate-1' || action === 'candidate-2' || action === 'candidate-3') return cursorCandidates[Number(action.slice(-1)) - 1]?.album.writable === true;
-    if (action === 'reject' || action === 'compare' || action === 'candidate-next' || action === 'candidate-previous') return cursorCandidates.length > 0;
-    if (action === 'merge-up') return previousRow !== undefined && cursorRow !== undefined && mergeable(previousRow, cursorRow);
-    if (action === 'merge-down') return nextRow !== undefined && cursorRow !== undefined && mergeable(cursorRow, nextRow);
-    if (action === 'apply') return canEnter;
-    if (action === 'part-next' || action === 'part-previous') return parts.sections.length > 1;
-    if (action === 'split') return canCut;
-    if (action === 'move-up') return previousRow !== undefined && regrouping.length > 0;
-    if (action === 'move-down') return nextRow !== undefined && regrouping.length > 0;
-    if (action === 'move-to') return regrouping.length > 0;
-    return cursorRow !== undefined;
-  }, [scope, chosen, selectedGroups, cursorRow, previousRow, nextRow, canEnter, parts.sections.length, canCut, regrouping.length, cursorCandidates]);
   const backlog = queue.items.filter((item) => item.state !== 'failed');
   const column = !phone && width >= COLUMN_MIN_WIDTH && cursorRow !== undefined && cursorProposal !== undefined;
 
@@ -1704,7 +1677,20 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
             )}
         </Box>
         {column && (
-          <Box w={comparing ? Math.round(width * COMPARE_SHARE) : COLUMN_WIDTH} style={{ position: 'sticky', top: readingLine + 8, flexShrink: 0 }} pr='md'>
+          // A side panel of its own: as tall as the window below the page's sticky header, scrolled by
+          // itself, so what it offers stays in reach however long the stream or the list of candidates.
+          <Box
+            w={comparing ? Math.round(width * COMPARE_SHARE) : COLUMN_WIDTH}
+            style={{
+              position: 'sticky',
+              top: readingLine + 8,
+              height: `calc(100dvh - ${readingLine + 16}px)`,
+              overflowY: 'auto',
+              overscrollBehavior: 'contain',
+              flexShrink: 0,
+            }}
+            pr='md'
+          >
             <DestinationColumn
               subject={across ? `${selectionWords(chosenCount)} selected` : cursorRow.title}
               groups={across ? { count: chosenCount.groups, files: chosenCount.files } : undefined}
@@ -1758,11 +1744,8 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         />
       )}
 
-      {!phone && view.length > 0 && (
-        <Box style={{ position: 'sticky', bottom: 0, zIndex: 4 }}>
-          <StagingDock scope={scope} context={legendContext} available={available} act={act} announce={announce} />
-        </Box>
-      )}
+      {/* What was just done, and what is next, for a screen reader. */}
+      <VisuallyHidden aria-live='polite'>{announce}</VisuallyHidden>
 
       <NameDialog
         group={naming && { title: naming.row.title, count: naming.files.length || naming.row.memberCount }}

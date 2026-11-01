@@ -400,8 +400,10 @@ time (`?dir=`): its subfolders as `DirectoryCard`s
 (`find -mindepth 1 -maxdepth 1 -type d`), then `MediaTimeline within` the folder with Set time for a
 selection — its tiles badged as the Sort stream's, a file kept over copies the list leaves out too (`useFileDuplicates`: the tiles a grid draws, read
 together a moment later with `staging duplicates <file>…`, at most 200 a call; the badge opens
-`CompareDialog`) — or, as Folder (`?view=folder`), every entry of the folder (`ls -l --limit 200 --after`).
-A folder, or a selection of entries, moves to a folder of this or another category (`MoveDialog`,
+`CompareDialog`) — or, as Folder (`?view=folder`), the kit's `NodeBrowser` over the folder, every entry
+whatever its type, held to the category (`root`) with its place in `?dir=` (`onNavigate`), the page
+filling the window below its header; its side panel's actions, and its Delete (`onDelete`), are the
+page's own. A folder, or a selection of entries, moves to a folder of this or another category (`MoveDialog`,
 `mv -n`, which relinks) or goes to the trash as one batch (`DiscardDialog`, `trash put --batch
 --label`). A staged file of the reader's own opened in the lightbox, from any of these, has the
 sets it belongs to in its sidebar (`StagedDuplicates`, `staging duplicates <file>`): whether it is
@@ -471,10 +473,11 @@ group's header and the part at that line placing the handle.
 
 One table, `lib/triage-keys.ts`, gives the page's keydown listener its keys (J/K, Enter, 1–3, `,`/`.`,
 R, C, E, M, ⇧M, T, `[`/`]` for the part cursor, the arrows for a cursor over the open group's pictures
-with `gridNeighbour`, O to open one, S, `<`, `>`, G, Esc) in four scopes — group, part, tile, selection —
-a sign such as `<` or `[` matched as typed whatever Shift, AltGr or Option it took, the `?`
-overlay its list and the docked `ShortcutLegend` its line, each entry named for the group on screen
-("New album “Lake weekend”"). The listener stands aside while the lightbox, the shell's dialog or one
+with `gridNeighbour`, O to open one, S, `<`, `>`, G, Esc) in five scopes — group, part, tile, selection, groups —
+a sign such as `<` or `[` matched as typed whatever Shift, AltGr or Option it took, and the `?`
+overlay its list, a section per scope (`TRIAGE_HELP`), which the foot of the Put in column opens
+(`openShortcutHelp`). The column is a side panel: sticky under the page's header, as tall as the
+window below it and scrolled by itself. The listener stands aside while the lightbox, the shell's dialog or one
 of the page's own dialogs is open, for a field, a menu or a list box, and for Enter on a focused
 button or link and an arrow on a focused tab, which are the control's own; it listens on the window in
 the capture phase, before Mantine's own Escape there, so it still sees a dialog open that the same key

@@ -1,5 +1,5 @@
 import { assert, assertEquals } from '@std/assert';
-import { keysAllowed, legendEntries, matchTriageKey, parseKeys, TRIAGE_HELP, TRIAGE_KEYS, type TriageScope } from '../triage-keys.ts';
+import { keysAllowed, matchTriageKey, parseKeys, TRIAGE_HELP, TRIAGE_KEYS, type TriageScope } from '../triage-keys.ts';
 
 const press = (key: string, mods: Partial<{ shiftKey: boolean; altKey: boolean; ctrlKey: boolean; metaKey: boolean }> = {}) => ({
   key,
@@ -25,23 +25,14 @@ Deno.test('no key is bound twice in a scope', () => {
   }
 });
 
-Deno.test('every legend entry is bound, in the scope it is shown in', () => {
-  for (const scope of ['group', 'part', 'tile', 'selection', 'groups'] as TriageScope[]) {
-    const entries = legendEntries(scope, { title: 'Lake weekend', previous: 'Midsummer eve', next: 'Monday', selected: 3 });
-    assert(entries.length > 0);
-    for (const entry of entries) assertEquals(matchTriageKey(eventFor(entry.keys), scope)?.action, entry.action, `${entry.keys} in ${scope}`);
-  }
-  // Labels name what is on screen.
-  const context = { title: 'Lake weekend', proposal: 'Add to “Lake trip 2019”', target: 'Summer 2019', selected: 3 };
-  const labels = legendEntries('group', context).map((entry) => entry.label);
-  assert(labels.includes('New album “Lake weekend”'));
-  assert(labels.includes('Add to “Lake trip 2019”'));
-  assert(labels.includes('Into “Summer 2019”'));
-  const selected = legendEntries('selection', context).map((entry) => entry.label);
-  assert(selected.includes('Discard 3 pictures'));
-  assert(selected.includes('3 pictures into “Summer 2019”'));
-  // A group without a proposal says what is left.
-  assertEquals(legendEntries('group', {}).find((entry) => entry.action === 'apply')?.label, 'No proposal: N, A, B or X');
+Deno.test('every key the overlay lists is bound, in the scope it is listed under', () => {
+  const scopes: TriageScope[] = ['group', 'tile', 'part', 'selection', 'groups'];
+  TRIAGE_HELP.forEach((section, at) => {
+    assert(section.entries.length > 0);
+    for (const entry of section.entries) {
+      for (const keys of entry.keys.split(' ')) assertEquals(matchTriageKey(eventFor(keys), scopes[at])?.scope, scopes[at], `${keys} under ${section.group}`);
+    }
+  });
 });
 
 Deno.test("nothing clashes with the shell's keys: mod+K, ?, and Alt with anything", () => {
@@ -100,15 +91,6 @@ Deno.test('a sign is matched as typed, whatever Shift, AltGr or Option it took',
   assertEquals(matchTriageKey(press('[', { metaKey: true }), 'group'), undefined);
 });
 
-Deno.test('in a lane, S makes a new group rather than splits; the moves name the neighbours', () => {
-  const labels = (scope: TriageScope, context: Parameters<typeof legendEntries>[1]) =>
-    Object.fromEntries(legendEntries(scope, context).map((entry) => [entry.keys, entry.label]));
-  assertEquals(labels('selection', { selected: 4 }).S, 'Split the group before the first selected');
-  assertEquals(labels('selection', { selected: 4, lane: true }).S, 'New group of 4 pictures');
-  assertEquals(labels('part', { selected: 12, previous: 'Midsummer eve' })['<'], 'Move 12 pictures to “Midsummer eve”');
-  assertEquals(labels('tile', { selected: 1 })['>'], 'Move 1 picture to the group below');
-});
-
 Deno.test('the guard is off with the lightbox, a dialog or a page modal open, and in fields and menus', () => {
   assert(keysAllowed(null, OPEN, 'j'));
   assert(keysAllowed({ tagName: 'DIV', closest: () => null }, OPEN, 'Enter'));
@@ -141,17 +123,20 @@ Deno.test("Enter on a focused button or link, and an arrow on a focused tab, are
   assert(keysAllowed(element('BUTTON', 'tab'), OPEN, 'j'));
 });
 
-Deno.test('the overlay lists every bound key, each once', () => {
-  const listed = TRIAGE_HELP.flatMap((entry) => entry.keys.split(' '));
-  assertEquals(listed.length, new Set(listed).size);
-  for (const entry of TRIAGE_KEYS) assert(listed.includes(entry.keys), `${entry.keys} is not listed`);
+Deno.test('the overlay lists every bound key once, under its scope', () => {
+  const scopes: TriageScope[] = ['group', 'tile', 'part', 'selection', 'groups'];
+  TRIAGE_HELP.forEach((section, at) => {
+    const listed = section.entries.flatMap((entry) => entry.keys.split(' '));
+    assertEquals(listed.length, new Set(listed).size, `a key listed twice under ${section.group}`);
+    for (const entry of TRIAGE_KEYS.filter((each) => each.scope === scopes[at])) assert(listed.includes(entry.keys), `${entry.keys} is not listed under ${section.group}`);
+  });
   // The arrows share one row.
-  assertEquals(TRIAGE_HELP.find((entry) => entry.label === 'Step through the pictures')?.keys, '← → ↑ ↓');
+  assertEquals(TRIAGE_HELP[0].entries.find((entry) => entry.label === 'Step through the pictures')?.keys, '← → ↑ ↓');
 });
 
 Deno.test('across groups, the filing keys act on the selection, and Shift with J, K or an arrow selects on to the next group', () => {
-  assertEquals(matchTriageKey(press('Enter'), 'groups')?.label({ groups: 12 }), 'Accept the proposals of 12 groups…');
-  assertEquals(matchTriageKey(press('l'), 'groups')?.label({ groups: 3, later: true }), '3 groups back to their lanes');
+  assertEquals(matchTriageKey(press('Enter'), 'groups')?.action, 'apply');
+  assertEquals(matchTriageKey(press('l'), 'groups')?.action, 'later');
   assertEquals(matchTriageKey(press('j'), 'groups')?.action, 'next');
   assertEquals(matchTriageKey(press('J', { shiftKey: true }), 'group')?.action, 'extend-next');
   assertEquals(matchTriageKey(press('ArrowUp', { shiftKey: true }), 'group')?.action, 'extend-previous');
@@ -168,7 +153,4 @@ Deno.test('1, 2 and 3 file into the candidates, R rejects the highlighted one, c
   assertEquals(matchTriageKey(press('c'), 'group')?.action, 'compare');
   // From a picture or a selection they reach the group's candidates too.
   assertEquals(matchTriageKey(press('2'), 'selection')?.action, 'candidate-2');
-  const labels = legendEntries('group', { candidates: ['Lake trip 2019', 'Summer 2019'], candidate: 'Summer 2019' });
-  assert(labels.some((entry) => entry.keys === '1' && entry.label === 'Into “Lake trip 2019”'));
-  assert(labels.some((entry) => entry.keys === 'R' && entry.label === 'Not “Summer 2019”'));
 });

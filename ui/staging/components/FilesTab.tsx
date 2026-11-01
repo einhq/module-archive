@@ -1,9 +1,9 @@
 import type { DuplicateSet } from '@archive/media/api';
 import type { StagingCategoryStatus } from '@archive/staging/api';
 import type { FindEntry } from '@ein/api';
-import { EmptyState, TablerIcon } from '@ein/ui/components';
+import { EmptyState, NodeBrowser, TablerIcon } from '@ein/ui/components';
 import { useCommand } from '@ein/ui/hooks';
-import { countOf, type SearchFilters, shq } from '@ein/ui/lib';
+import { baseName, countOf, type SearchFilters, shq } from '@ein/ui/lib';
 import { type MediaItem, openDialog } from '@ein/ui/signals';
 import { ActionIcon, Anchor, Box, Breadcrumbs, Button, Group, Menu, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,7 +22,6 @@ import { CompareDialog } from './CompareDialog.tsx';
 import { DetectHints } from './DetectHints.tsx';
 import { DiscardDialog } from './DiscardDialog.tsx';
 import { duplicateBadge } from './DuplicateBadge.tsx';
-import { FolderList } from './FolderList.tsx';
 import { MoveDialog } from './MoveDialog.tsx';
 import { SftpPath } from './SftpPath.tsx';
 
@@ -48,9 +47,10 @@ type Props = {
 /**
  * One category's files, a folder at a time (`?dir=` below the category): its subfolders as cards,
  * then either its pictures, videos and recordings however deep, by day (`search --within`, the
- * exact copies that are not indexed left out), or with **Folder** every entry of the folder
- * itself, whatever its type (`?view=folder`). A folder, or a selection in the folder list, can be
- * moved to another folder or category, or discarded. A picture that copies or looks like another,
+ * exact copies that are not indexed left out), or with **Folder** the Nodes page's pane over the
+ * folder (`?view=folder`), every entry whatever its type, held to the category and filling the page
+ * below its header, with a side panel that moves the selection to another folder or category or
+ * discards it (as Delete does there). A folder can be moved or discarded from its card too. A picture that copies or looks like another,
  * in the library or here, or is kept over copies left out of the list, carries the Sort stream's
  * badge, which compares it with its set. In the default category, a newly arrived folder that
  * looks like it came from one source (`staging detect`) says so on its card and above the folders,
@@ -146,9 +146,11 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
   );
 
   const empty = heldFiles(category.counts) === 0 && dir === '';
+  /** The selected entries in words: one by its name, more by how many. */
+  const named = (paths: string[]) => paths.length === 1 ? `“${baseName(paths[0])}”` : countOf(paths.length, 'item', 'items');
 
   return (
-    <Stack gap='md' px='md'>
+    <Stack gap='md' px='md' style={folderView ? { flex: 1, minHeight: 0 } : undefined}>
       <Group justify='space-between' gap='sm' wrap='wrap'>
         <Breadcrumbs separator='›'>
           <Anchor component='button' type='button' size='sm' onClick={() => openDir('')}>{category.label}</Anchor>
@@ -201,13 +203,57 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
             )}
             {folderView
               ? (
-                <Box>
-                  <FolderList
-                    key={current}
-                    dir={current}
-                    reloadToken={reload}
-                    onOpen={(name) => openDir(dir ? `${dir}/${name}` : name)}
-                    actions={(paths) => actionsMenu(paths, countOf(paths.length, 'item', 'items'), 'button')}
+                <Box
+                  style={{
+                    flex: 1,
+                    minHeight: 0,
+                    display: 'flex',
+                    border: '1px solid var(--mantine-color-default-border)',
+                    borderRadius: 'var(--mantine-radius-sm)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <NodeBrowser
+                    path={current}
+                    root={category.path}
+                    onNavigate={(to) => openDir(dirOf(category.path, to) ?? '')}
+                    onDelete={(paths) => setPending({ action: 'discard', paths, what: named(paths) })}
+                    actions={({ selection }) => (
+                      <Stack gap='xs'>
+                        <Text size='sm'>
+                          {selection.length > 0 ? `${named(selection)} selected.` : 'Select what to move or discard: click, Ctrl or Shift and click for more, Ctrl+A for all.'}
+                        </Text>
+                        <Group gap='xs'>
+                          <Button
+                            size='xs'
+                            variant='default'
+                            disabled={selection.length === 0}
+                            onClick={() => setPending({ action: 'folder', paths: selection, what: named(selection) })}
+                          >
+                            Move to folder…
+                          </Button>
+                          {canChangeCategory && (
+                            <Button
+                              size='xs'
+                              variant='default'
+                              disabled={selection.length === 0}
+                              onClick={() => setPending({ action: 'category', paths: selection, what: named(selection) })}
+                            >
+                              Move to category…
+                            </Button>
+                          )}
+                          <Button
+                            size='xs'
+                            variant='light'
+                            color='red'
+                            disabled={selection.length === 0}
+                            onClick={() => setPending({ action: 'discard', paths: selection, what: named(selection) })}
+                          >
+                            Discard…
+                          </Button>
+                        </Group>
+                      </Stack>
+                    )}
                   />
                 </Box>
               )

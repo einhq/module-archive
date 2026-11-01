@@ -181,6 +181,10 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
   const location = useLocation();
   const requested = searchParams.get('tab');
   const tab: StagingTab = isTab(requested) ? requested : 'sort';
+  // The Files tab's Folder view is a file manager's pane: the page is the window's height, and it
+  // takes what the header leaves rather than the page scrolling.
+  const fill = tab === 'files' && searchParams.get('view') === 'folder';
+  const filling: CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
   const roots = stagingRoots(user);
   // How many groups the category holds, for the Sort tab's badge: the child count of its directory
   // of groups, from one listing of the directories of groups.
@@ -234,7 +238,12 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
   };
 
   return (
-    <Tabs value={tab} keepMounted={false} onChange={showTab}>
+    <Tabs
+      value={tab}
+      keepMounted={false}
+      onChange={showTab}
+      style={fill ? { height: 'calc(100dvh - var(--app-shell-header-height))', display: 'flex', flexDirection: 'column' } : undefined}
+    >
       <EntityDetailHeader
         tabs={
           <Tabs.List>
@@ -269,10 +278,10 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
         actions={actions}
       />
 
-      <Box py='lg' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
+      <Box pt='lg' pb={fill ? 'md' : 'lg'} style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)', ...(fill ? filling : {}) } as CSSProperties}>
         <ProgressStrip category={category} eta={eta} />
-        {/* GPX and GEDCOM files staged in any category wait outside it, on pages of their own, so every category's page says so. */}
-        {(status.routesWaiting > 0 || status.genealogyWaiting > 0) && (
+        {/* GPX and GEDCOM files wait outside every category, which the overview says; a category's page says it only when it is the only one, and stands in for the overview. */}
+        {status.categories.length === 1 && (status.routesWaiting > 0 || status.genealogyWaiting > 0) && (
           <Stack gap='sm' px='md' pb='md'>
             <RoutesWaiting count={status.routesWaiting} />
             <GenealogyWaiting count={status.genealogyWaiting} />
@@ -293,7 +302,7 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
         <Tabs.Panel value='done'>
           <DoneTab category={category.name} onChanged={changed} />
         </Tabs.Panel>
-        <Tabs.Panel value='files'>
+        <Tabs.Panel value='files' style={fill ? filling : undefined}>
           <FilesTab
             category={category}
             categories={status.categories}

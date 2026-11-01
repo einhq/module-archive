@@ -2,6 +2,7 @@ import type { StagingCandidate } from '@archive/staging/api';
 import type { Proposal } from '@archive/staging/proposal';
 import { formatRange, TablerIcon } from '@ein/ui/components';
 import { useDropTarget } from '@ein/ui/hooks';
+import { openShortcutHelp } from '@ein/ui/signals';
 import { ActionIcon, Badge, Box, Button, Divider, Group, Kbd, Paper, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { type AlbumTarget, CONFIDENCE_WORDS, proposalLabel } from '../lib/destinations.ts';
@@ -325,6 +326,8 @@ export function DestinationColumn(props: Props) {
           />
         )}
         <Row keys='X' icon='trash' label='Discard' detail='To the trash, with Undo' onClick={props.onDiscard} drop={drop?.({ kind: 'discard' })} />
+        <Divider my={4} />
+        <Row keys='?' icon='keyboard' label='Keyboard shortcuts' detail='Every key, for a group, a picture or a selection' onClick={openShortcutHelp} />
       </Stack>
     </Paper>
   );

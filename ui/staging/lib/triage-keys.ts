@@ -1,7 +1,7 @@
 /**
- * The Sort tab's keys, in one table: what the page's one `keydown` listener acts on, what the `?`
- * overlay lists and what the docked legend shows are all read from it, so the three cannot drift
- * apart. Pure, so the table is tested without a page.
+ * The Sort tab's keys, in one table: what the page's one `keydown` listener acts on and what the
+ * `?` overlay lists are both read from it, so the two cannot drift apart. Pure, so the table is
+ * tested without a page.
  *
  * A key acts in a scope: `group` while the cursor is on a group, `part` once `[` or `]` have put a
  * cursor on one of the open group's parts (a day, or a month in a long group), `tile` once the
@@ -53,169 +53,99 @@ export type TriageAction =
   | 'clear-selection'
   | 'leave';
 
-/**
- * What a label may name: the group under the cursor and its neighbours in the stream, what Enter
- * does to it, the target B files into, how many pictures the keys act on (those selected, or the
- * part's), whether it is put aside, and whether it is a lane, where S makes a new group rather
- * than splits; across groups, how many groups the selection holds; the candidate albums 1, 2 and
- * 3 file into, the one highlighted (which R rejects), and whether the column is widened to compare.
- */
-export type LegendContext = {
-  title?: string;
-  previous?: string;
-  next?: string;
-  proposal?: string;
-  target?: string;
-  selected?: number;
-  later?: boolean;
-  lane?: boolean;
-  groups?: number;
-  candidates?: readonly string[];
-  candidate?: string;
-  comparing?: boolean;
-};
-
 type TriageKey = {
   scope: TriageScope;
   /** As `useShortcutHelp` writes keys: a key's name or letter (`Enter`, `J`, `←`, `Esc`), `shift+` before it when held. */
   keys: string;
   action: TriageAction;
-  label: (context: LegendContext) => string;
-  /** Shown in the docked legend, not only in the `?` overlay. */
-  legend?: boolean;
+  /** What it does, as the shortcut help says it. */
+  label: string;
 };
 
-const quoted = (name: string | undefined, fallback: string) => (name ? `“${name}”` : fallback);
-const pictures = (count: number | undefined) => count === undefined ? 'the pictures' : `${count} ${count === 1 ? 'picture' : 'pictures'}`;
-
-/** Enter, N, P, A, B and X for some pictures of the group (those selected, or a part's) rather than all of it. */
-const filing = (scope: 'selection' | 'part'): TriageKey[] => [
-  {
-    scope,
-    keys: 'Enter',
-    action: 'apply',
-    label: ({ proposal, selected }) => proposal ? `${pictures(selected)}: ${proposal}` : 'No proposal: N, A, B or X',
-    legend: true,
-  },
-  { scope, keys: 'N', action: 'new', label: ({ selected }) => `New album of ${pictures(selected)}`, legend: true },
-  { scope, keys: 'P', action: 'private', label: ({ selected }) => `New private album of ${pictures(selected)}`, legend: true },
-  { scope, keys: 'A', action: 'add-to', label: ({ selected }) => `Add ${pictures(selected)} to album…`, legend: true },
-  {
-    scope,
-    keys: 'B',
-    action: 'target',
-    label: ({ target, selected }) => target ? `${pictures(selected)} into ${quoted(target, '')}` : 'Choose a target…',
-    legend: true,
-  },
-  { scope, keys: 'X', action: 'discard', label: ({ selected }) => `Discard ${pictures(selected)}`, legend: true },
+/** Enter, N, P, A, B and X for some pictures of the group (`what`: those selected, or a part's) rather than all of it. */
+const filing = (scope: 'selection' | 'part', what: string): TriageKey[] => [
+  { scope, keys: 'Enter', action: 'apply', label: `Accept the proposal for ${what}` },
+  { scope, keys: 'N', action: 'new', label: `New album of ${what}` },
+  { scope, keys: 'P', action: 'private', label: `New private album of ${what}` },
+  { scope, keys: 'A', action: 'add-to', label: `Add ${what} to album…` },
+  { scope, keys: 'B', action: 'target', label: `Put ${what} into the target` },
+  { scope, keys: 'X', action: 'discard', label: `Discard ${what}` },
 ];
 
-/** `<`, `>` and G: some pictures of the group into the group above, the one below, or any. */
-const moves = (scope: 'selection' | 'part' | 'tile'): TriageKey[] => [
-  { scope, keys: '<', action: 'move-up', label: ({ previous, selected }) => `Move ${pictures(selected)} to ${quoted(previous, 'the group above')}`, legend: true },
-  { scope, keys: '>', action: 'move-down', label: ({ next, selected }) => `Move ${pictures(selected)} to ${quoted(next, 'the group below')}`, legend: true },
-  { scope, keys: 'G', action: 'move-to', label: ({ selected }) => `Move ${pictures(selected)} to a group…`, legend: true },
+/** `<`, `>` and G: some pictures of the group (`what`) into the group above, the one below, or any. */
+const moves = (scope: 'selection' | 'part' | 'tile', what: string): TriageKey[] => [
+  { scope, keys: '<', action: 'move-up', label: `Move ${what} to the group above` },
+  { scope, keys: '>', action: 'move-down', label: `Move ${what} to the group below` },
+  { scope, keys: 'G', action: 'move-to', label: `Move ${what} to a group…` },
 ];
-
-const groupCount = (count: number | undefined) => count === undefined ? 'the groups' : `${count} ${count === 1 ? 'group' : 'groups'}`;
 
 /** 1, 2 and 3: into the candidate album of that rank. */
-const candidate = (n: 1 | 2 | 3): TriageKey => ({
-  scope: 'group',
-  keys: String(n),
-  action: `candidate-${n}`,
-  label: ({ candidates }) => candidates?.[n - 1] ? `Into “${candidates[n - 1]}”` : `Into candidate ${n}`,
-  legend: n === 1,
-});
+const candidate = (n: 1 | 2 | 3): TriageKey => ({ scope: 'group', keys: String(n), action: `candidate-${n}`, label: `Into candidate album ${n}` });
 
 /** What acts on a selection that reaches past the open group: the decisions over many groups at once. */
 const acrossGroups: TriageKey[] = [
-  { scope: 'groups', keys: 'Enter', action: 'apply', label: ({ groups }) => `Accept the proposals of ${groupCount(groups)}…`, legend: true },
-  { scope: 'groups', keys: 'N', action: 'new', label: () => 'New album of the selection', legend: true },
-  { scope: 'groups', keys: 'P', action: 'private', label: () => 'New private album of the selection', legend: true },
-  { scope: 'groups', keys: 'A', action: 'add-to', label: () => 'Add the selection to album…', legend: true },
-  { scope: 'groups', keys: 'B', action: 'target', label: ({ target }) => target ? `The selection into ${quoted(target, '')}` : 'Choose a target…', legend: true },
-  { scope: 'groups', keys: 'X', action: 'discard', label: () => 'Discard the selection…', legend: true },
-  {
-    scope: 'groups',
-    keys: 'L',
-    action: 'later',
-    label: ({ later, groups }) => later ? `${groupCount(groups)} back to their lanes` : `Later, ${groupCount(groups)}`,
-    legend: true,
-  },
-  { scope: 'groups', keys: 'Esc', action: 'clear-selection', label: () => 'Clear the selection', legend: true },
+  { scope: 'groups', keys: 'Enter', action: 'apply', label: 'Accept the proposals of the selected groups…' },
+  { scope: 'groups', keys: 'N', action: 'new', label: 'New album of the selection' },
+  { scope: 'groups', keys: 'P', action: 'private', label: 'New private album of the selection' },
+  { scope: 'groups', keys: 'A', action: 'add-to', label: 'Add the selection to album…' },
+  { scope: 'groups', keys: 'B', action: 'target', label: 'Put the selection into the target' },
+  { scope: 'groups', keys: 'X', action: 'discard', label: 'Discard the selection…' },
+  { scope: 'groups', keys: 'L', action: 'later', label: 'Later, or back to their lanes' },
+  { scope: 'groups', keys: 'Esc', action: 'clear-selection', label: 'Clear the selection' },
 ];
 
 export const TRIAGE_KEYS: readonly TriageKey[] = [
-  { scope: 'group', keys: 'Enter', action: 'apply', label: ({ proposal }) => proposal ?? 'No proposal: N, A, B or X', legend: true },
-  { scope: 'group', keys: 'N', action: 'new', label: ({ title }) => `New album ${quoted(title, 'from this group')}`, legend: true },
-  { scope: 'group', keys: 'P', action: 'private', label: () => 'New private album', legend: true },
-  { scope: 'group', keys: 'A', action: 'add-to', label: () => 'Add to album…', legend: true },
-  { scope: 'group', keys: 'B', action: 'target', label: ({ target }) => target ? `Into ${quoted(target, '')}` : 'Choose a target…', legend: true },
-  { scope: 'group', keys: 'shift+B', action: 'set-target', label: () => 'Choose the target' },
-  { scope: 'group', keys: 'X', action: 'discard', label: () => 'Discard', legend: true },
-  { scope: 'group', keys: 'L', action: 'later', label: ({ later }) => later ? 'Back to its lane' : 'Later', legend: true },
-  { scope: 'group', keys: 'Z', action: 'undo', label: () => 'Undo', legend: true },
-  { scope: 'group', keys: 'J', action: 'next', label: () => 'Next group', legend: true },
-  { scope: 'group', keys: 'K', action: 'previous', label: () => 'Previous group', legend: true },
-  { scope: 'group', keys: 'shift+J', action: 'extend-next', label: () => 'Select on to the next group' },
-  { scope: 'group', keys: 'shift+K', action: 'extend-previous', label: () => 'Select on to the previous group' },
-  { scope: 'group', keys: 'shift+↓', action: 'extend-next', label: () => 'Select on to the next group' },
-  { scope: 'group', keys: 'shift+↑', action: 'extend-previous', label: () => 'Select on to the previous group' },
-  { scope: 'group', keys: 'E', action: 'rename', label: () => 'Rename' },
-  { scope: 'group', keys: 'T', action: 'date', label: ({ selected }) => selected ? `Set the time of ${pictures(selected)}` : 'Set the time of every picture' },
-  { scope: 'group', keys: '[', action: 'part-previous', label: () => 'Previous day or month of the group' },
-  { scope: 'group', keys: ']', action: 'part-next', label: () => 'Next day or month of the group' },
+  { scope: 'group', keys: 'Enter', action: 'apply', label: 'Accept the proposal' },
+  { scope: 'group', keys: 'N', action: 'new', label: 'New album from the group' },
+  { scope: 'group', keys: 'P', action: 'private', label: 'New private album' },
+  { scope: 'group', keys: 'A', action: 'add-to', label: 'Add to album…' },
+  { scope: 'group', keys: 'B', action: 'target', label: 'Put into the target' },
+  { scope: 'group', keys: 'shift+B', action: 'set-target', label: 'Choose the target' },
+  { scope: 'group', keys: 'X', action: 'discard', label: 'Discard' },
+  { scope: 'group', keys: 'L', action: 'later', label: 'Later, or back to its lane' },
+  { scope: 'group', keys: 'Z', action: 'undo', label: 'Undo' },
+  { scope: 'group', keys: 'J', action: 'next', label: 'Next group' },
+  { scope: 'group', keys: 'K', action: 'previous', label: 'Previous group' },
+  { scope: 'group', keys: 'shift+J', action: 'extend-next', label: 'Select on to the next group' },
+  { scope: 'group', keys: 'shift+K', action: 'extend-previous', label: 'Select on to the previous group' },
+  { scope: 'group', keys: 'shift+↓', action: 'extend-next', label: 'Select on to the next group' },
+  { scope: 'group', keys: 'shift+↑', action: 'extend-previous', label: 'Select on to the previous group' },
+  { scope: 'group', keys: 'E', action: 'rename', label: 'Rename' },
+  { scope: 'group', keys: 'T', action: 'date', label: 'Set the time of the pictures' },
+  { scope: 'group', keys: '[', action: 'part-previous', label: 'Previous day or month of the group' },
+  { scope: 'group', keys: ']', action: 'part-next', label: 'Next day or month of the group' },
   candidate(1),
   candidate(2),
   candidate(3),
-  { scope: 'group', keys: 'R', action: 'reject', label: ({ candidate }) => `Not ${quoted(candidate, 'this album')}`, legend: true },
-  { scope: 'group', keys: ',', action: 'candidate-previous', label: () => 'Highlight the candidate above' },
-  { scope: 'group', keys: '.', action: 'candidate-next', label: () => 'Highlight the candidate below' },
-  { scope: 'group', keys: 'C', action: 'compare', label: ({ comparing }) => comparing ? 'Narrow the column' : 'Compare with the highlighted album' },
-  { scope: 'group', keys: 'M', action: 'merge-up', label: ({ previous }) => `Merge into ${quoted(previous, 'the group above')}` },
-  { scope: 'group', keys: 'shift+M', action: 'merge-down', label: ({ next }) => `Merge ${quoted(next, 'the group below')} in` },
-  { scope: 'group', keys: 'O', action: 'open', label: () => 'Open the first picture' },
-  { scope: 'group', keys: '←', action: 'tile-left', label: () => 'Step through the pictures' },
-  { scope: 'group', keys: '→', action: 'tile-right', label: () => 'Step through the pictures' },
-  { scope: 'group', keys: '↑', action: 'tile-up', label: () => 'Step through the pictures' },
-  { scope: 'group', keys: '↓', action: 'tile-down', label: () => 'Step through the pictures' },
-  { scope: 'tile', keys: '←', action: 'tile-left', label: () => 'Previous picture' },
-  { scope: 'tile', keys: '→', action: 'tile-right', label: () => 'Next picture' },
-  { scope: 'tile', keys: '↑', action: 'tile-up', label: () => 'Picture above' },
-  { scope: 'tile', keys: '↓', action: 'tile-down', label: () => 'Picture below' },
-  { scope: 'tile', keys: 'Space', action: 'select', label: () => 'Select the picture', legend: true },
-  { scope: 'tile', keys: 'O', action: 'open', label: () => 'Open the picture', legend: true },
-  {
-    scope: 'tile',
-    keys: 'S',
-    action: 'split',
-    label: ({ lane }) => lane ? 'New group of this picture' : 'Split the group before this picture',
-    legend: true,
-  },
-  ...moves('tile'),
-  { scope: 'tile', keys: 'Esc', action: 'leave', label: () => 'Back to the group', legend: true },
-  ...filing('part'),
-  { scope: 'part', keys: 'Space', action: 'select', label: () => 'Select its pictures', legend: true },
-  {
-    scope: 'part',
-    keys: 'S',
-    action: 'split',
-    label: ({ lane, selected }) => lane ? `New group of ${pictures(selected)}` : 'Split the group before it',
-    legend: true,
-  },
-  ...moves('part'),
-  { scope: 'part', keys: 'Esc', action: 'leave', label: () => 'Back to the group', legend: true },
-  ...filing('selection'),
-  {
-    scope: 'selection',
-    keys: 'S',
-    action: 'split',
-    label: ({ lane, selected }) => lane ? `New group of ${pictures(selected)}` : 'Split the group before the first selected',
-    legend: true,
-  },
-  ...moves('selection'),
-  { scope: 'selection', keys: 'Esc', action: 'clear-selection', label: () => 'Clear the selection', legend: true },
+  { scope: 'group', keys: 'R', action: 'reject', label: 'Not the highlighted album' },
+  { scope: 'group', keys: ',', action: 'candidate-previous', label: 'Highlight the candidate above' },
+  { scope: 'group', keys: '.', action: 'candidate-next', label: 'Highlight the candidate below' },
+  { scope: 'group', keys: 'C', action: 'compare', label: 'Compare with the highlighted album, or narrow the column again' },
+  { scope: 'group', keys: 'M', action: 'merge-up', label: 'Merge into the group above' },
+  { scope: 'group', keys: 'shift+M', action: 'merge-down', label: 'Merge the group below in' },
+  { scope: 'group', keys: 'O', action: 'open', label: 'Open the first picture' },
+  { scope: 'group', keys: '←', action: 'tile-left', label: 'Step through the pictures' },
+  { scope: 'group', keys: '→', action: 'tile-right', label: 'Step through the pictures' },
+  { scope: 'group', keys: '↑', action: 'tile-up', label: 'Step through the pictures' },
+  { scope: 'group', keys: '↓', action: 'tile-down', label: 'Step through the pictures' },
+  { scope: 'tile', keys: '←', action: 'tile-left', label: 'Previous picture' },
+  { scope: 'tile', keys: '→', action: 'tile-right', label: 'Next picture' },
+  { scope: 'tile', keys: '↑', action: 'tile-up', label: 'Picture above' },
+  { scope: 'tile', keys: '↓', action: 'tile-down', label: 'Picture below' },
+  { scope: 'tile', keys: 'Space', action: 'select', label: 'Select the picture' },
+  { scope: 'tile', keys: 'O', action: 'open', label: 'Open the picture' },
+  { scope: 'tile', keys: 'S', action: 'split', label: 'Split the group before this picture; in a lane, a new group of it' },
+  ...moves('tile', 'the picture'),
+  { scope: 'tile', keys: 'Esc', action: 'leave', label: 'Back to the group' },
+  ...filing('part', 'its pictures'),
+  { scope: 'part', keys: 'Space', action: 'select', label: 'Select its pictures' },
+  { scope: 'part', keys: 'S', action: 'split', label: 'Split the group before it; in a lane, a new group of its pictures' },
+  ...moves('part', 'its pictures'),
+  { scope: 'part', keys: 'Esc', action: 'leave', label: 'Back to the group' },
+  ...filing('selection', 'the selected pictures'),
+  { scope: 'selection', keys: 'S', action: 'split', label: 'Split the group before the first selected; in a lane, a new group of them' },
+  ...moves('selection', 'the selected pictures'),
+  { scope: 'selection', keys: 'Esc', action: 'clear-selection', label: 'Clear the selection' },
   ...acrossGroups,
 ];
 
@@ -306,32 +236,27 @@ export function keysAllowed(target: KeyTarget | null, context: GuardContext, key
   return true;
 }
 
-/** The legend's entries for `scope`: those marked for it, then those of the scopes it falls through to, each key once. */
-export function legendEntries(scope: TriageScope, context: LegendContext): { keys: string; label: string; action: TriageAction }[] {
-  const entries: TriageKey[] = [];
-  for (const each of FALL_THROUGH[scope]) {
-    for (const entry of TRIAGE_KEYS) {
-      if (entry.scope === each && entry.legend && !entries.some((mine) => mine.keys === entry.keys)) entries.push(entry);
-    }
-  }
-  return entries.map((entry) => ({ keys: entry.keys, label: entry.label(context), action: entry.action }));
-}
+/** The heading each scope's keys stand under in the `?` overlay, in the order they are listed. */
+const HELP_GROUPS: readonly [TriageScope, string][] = [
+  ['group', 'Staging'],
+  ['tile', 'Staging, on a picture'],
+  ['part', 'Staging, on a day or month'],
+  ['selection', 'Staging, with pictures selected'],
+  ['groups', 'Staging, with groups selected'],
+];
 
 /**
- * The keys as the `?` overlay lists them: each key once, under its group-scope label (a key the
- * group scope does not bind under the first the table gives it), and the keys that share a label
- * in one row (`← → ↑ ↓`).
+ * The keys as the `?` overlay lists them, under a heading per scope: each scope's own keys, the
+ * keys that share a label in one row (`← → ↑ ↓`). What a scope does not bind falls through to the
+ * group's, listed first.
  */
-export const TRIAGE_HELP: readonly { keys: string; label: string }[] = (() => {
+export const TRIAGE_HELP: readonly { group: string; entries: readonly { keys: string; label: string }[] }[] = HELP_GROUPS.map(([scope, group]) => {
   const rows: { keys: string[]; label: string }[] = [];
-  const listed = new Set<string>();
   for (const entry of TRIAGE_KEYS) {
-    if (listed.has(entry.keys)) continue;
-    listed.add(entry.keys);
-    const label = entry.label({});
-    const row = rows.find((each) => each.label === label);
+    if (entry.scope !== scope) continue;
+    const row = rows.find((each) => each.label === entry.label);
     if (row) row.keys.push(entry.keys);
-    else rows.push({ keys: [entry.keys], label });
+    else rows.push({ keys: [entry.keys], label: entry.label });
   }
-  return rows.map((row) => ({ keys: row.keys.join(' '), label: row.label }));
-})();
+  return { group, entries: rows.map((row) => ({ keys: row.keys.join(' '), label: row.label })) };
+});
