@@ -1,20 +1,24 @@
 import { stagingRoots } from '@archive/staging/paths';
-import { EntityDetailHeader } from '@ein/ui/components';
+import { EntityDetailHeader, NodeBrowser } from '@ein/ui/components';
 import { currentUser } from '@ein/ui/signals';
 import { Alert, Box, Text } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useNavigate } from 'react-router-dom';
-import { StagedRoutes } from '../../location/components/StagedRoutes.tsx';
+import { GpxDetails } from '../../location/components/GpxDetails.tsx';
+import { isGpx, RouteImport } from '../../location/components/RouteImport.tsx';
 import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
 
 export const handle = { fullBleed: true, signedIn: true };
 
-const SUBTITLE = 'These GPX files do not name a device the archive knows. Tick the ones one device recorded, choose that device, and their routes join its track.';
+const SUBTITLE =
+  'These GPX files do not name a device the archive knows. Select the ones one device recorded, choose that device, and their routes join its track. The panel says what the file you are on holds.';
 
 /**
  * `/staging/routes`: the GPX files waiting in the reader's staging area (`routes/`, where
  * `track-stage` keeps a staged one that names no single device it knows), whichever category they
- * were dropped on, to give each the device that recorded it.
+ * were dropped on, in the Nodes page's listing below the header and filling the rest of the page.
+ * Its side panel imports the selected files into the device chosen for them, over what the
+ * current file says of itself (`gpx-info`).
  */
 export default function RoutesPage() {
   useSignals();
@@ -22,7 +26,7 @@ export default function RoutesPage() {
   const user = currentUser.value?.username;
   if (!user) return <Alert color='yellow' m='lg'>Sign in to give routes their device.</Alert>;
   return (
-    <>
+    <Box style={{ height: 'calc(100dvh - var(--app-shell-header-height))', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <EntityDetailHeader
         eyebrow='Staging'
         title='Routes waiting for a device'
@@ -31,9 +35,13 @@ export default function RoutesPage() {
         flowContent
         actions={{ items: [{ label: 'Back to staging', icon: 'arrow-left', onClick: () => navigate('/staging') }] }}
       />
-      <Box p='lg'>
-        <StagedRoutes routes={stagingRoots(user).routesPath} onImported={refreshStagingStatus} />
+      <Box style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        <NodeBrowser
+          path={stagingRoots(user).routesPath}
+          actions={({ selection, directory }) => <RouteImport selection={selection} directory={directory} onImported={refreshStagingStatus} />}
+          details={({ path, entry }) => entry?.node.type === 'file' && isGpx(path) ? <GpxDetails path={path} /> : undefined}
+        />
       </Box>
-    </>
+    </Box>
   );
 }
