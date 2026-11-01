@@ -1,14 +1,18 @@
 #!ts
 /**
- * gedcom-import — bring a GEDCOM file's people and their relations into the archive.
+ * gedcom-import — bring a GEDCOM file's people, their relations, events, homes and notes into
+ * the archive.
  *
  *   gedcom-import <file.ged> [--dry-run]
  *
  * The file is kept in `/archive/sources/genealogy/`: moved there from staging, copied from
  * anywhere else, and not kept twice when the same bytes are there already. Each individual is
  * matched to a person of the archive or made one (`importGedcom`), and every person the file
- * describes links it from their `sources/`. Importing the same file again finds the same people
- * and adds nothing. `--dry-run` says what would happen and writes nothing.
+ * describes links it from their `sources/`. What the file says of them is added where they lack
+ * it: their events and facts as events, a place that names a location placing the event there, a
+ * residence at a location as a home, and their notes as their description. Importing the same
+ * file again finds the same people and adds nothing. `--dry-run` says what would happen and
+ * writes nothing.
  *
  * A staged file is imported as the person whose staging area it is in, whoever runs this: the
  * pipeline runs it with administrative access, and the import may change only the people its
@@ -84,7 +88,7 @@ const gedcomImport = async (cmd: Command): CmdReturn => {
     for (const made of result.created) await cmd.writeLn(`  ${made.xref} ${made.name} → ${made.person} ${would}made`);
     for (const skip of result.skipped) await cmd.writeLn(`  ${skip.xref} skipped: ${skip.reason}`);
     await cmd.writeLn(
-      `${result.matched.length} found in the archive, ${result.created.length} ${would}made, ${result.parents} parent and ${result.partners} partner relations ${would}added`,
+      `${result.matched.length} found in the archive, ${result.created.length} ${would}made, ${result.parents} parent and ${result.partners} partner relations, ${result.events} events and ${result.homes} homes ${would}added`,
     );
   } catch (error) {
     await cmd.writeError(`gedcom-import: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -97,15 +101,15 @@ gedcomImport.spec = {
   name: 'gedcom-import',
   effect: 'write' as const,
   description:
-    "Import a GEDCOM file's people and relations: match each individual to a person of the archive or make one, add missing parents and partners, and keep the file in /archive/sources/genealogy, linked from every person it describes",
+    "Import a GEDCOM file's people and relations: match each individual to a person of the archive or make one, add missing parents, partners, events, homes and descriptions, and keep the file in /archive/sources/genealogy, linked from every person it describes",
   args: [
     { name: 'file', type: 'path' as const, description: 'the GEDCOM (.ged) file' },
   ],
   flags: [
-    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'say who would be matched, made and related, and write nothing' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'say who would be matched, made and related, and what would be added, and write nothing' },
   ],
   examples: ['gedcom-import /home/ruby/wrenfield.ged --dry-run', 'gedcom-import /home/ruby/wrenfield.ged'],
-  returns: 'the kept file, who each individual was found to be or was made, what was skipped, and how many relations were added.',
+  returns: 'the kept file, who each individual was found to be or was made, what was skipped, and how many relations, events and homes were added.',
 };
 
 export default gedcomImport;

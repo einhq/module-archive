@@ -1,8 +1,10 @@
 /**
  * Bringing a GEDCOM file's people into the archive: which of its individuals are people the
  * archive has already (`matchIndividuals`), and the import itself (`importGedcom`) — people made
- * for the rest, attrs the archive lacks filled in, the file's parents and partners added where
- * they are missing, and every person it describes linked to the file from their `sources/`.
+ * for the rest, attrs the archive lacks filled in (a person's notes as their description), the
+ * file's parents and partners added where they are missing, its events and facts written as the
+ * person's events, its residences as homes, and every person it describes linked to the file from
+ * their `sources/`.
  *
  * An individual is the person who links the same file with the same xref, or a link of any GEDCOM
  * file with one of its `_UID`s: an import made again, or a newer export of the same tree, finds
@@ -10,14 +12,18 @@
  * the names alone suggest is taken only when a relative already matched says the same.
  */
 import { type Command, verifyAccess } from '@ein/client';
-import { PEOPLE_ROOT } from '@archive/paths';
+import { LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import { createEvent, EVENTS_DIR, newEventName } from '@archive/people/events';
 import { CHILDREN_DIR, createRelationPair, datePart, makeCtx, PARENTS_DIR, PARTNERS_DIR, wouldCreateCycle } from '@archive/people/genealogy';
-import type { Gedcom, GedcomDate, GedcomIndividual } from '@archive/people/gedcom';
+import type { Gedcom, GedcomDate, GedcomEvent, GedcomIndividual } from '@archive/people/gedcom';
+import { createResidence, homeLink } from '@archive/people/residence';
 import { slugifyName } from '@archive/people/person';
 import type { PersonAttrs } from '@archive/people/types';
 import type { GedcomImportResult } from '@archive/people/api';
 import { freeName, linkSource, SOURCES_DIR } from '@archive/sources';
+import { POSITION_CHILD } from '@archive/location/location-link';
 import { basename } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
@@ -216,6 +222,7 @@ const attrsFor = (indi: GedcomIndividual): PersonAttrs => {
     ...(indi.gender && indi.gender !== 'unknown' ? { gender: indi.gender } : {}),
     ...(indi.born?.date ? { born: indi.born.date } : {}),
     ...(indi.died?.date ? { died: indi.died.date } : {}),
+    ...(indi.notes.length ? { description: indi.notes.join('\n\n') } : {}),
   };
 };
 
@@ -225,11 +232,165 @@ const attrsFor = (indi: GedcomIndividual): PersonAttrs => {
  */
 const missing = (have: PersonAttrs, attrs: PersonAttrs): Partial<PersonAttrs> => {
   const out: Record<string, unknown> = {};
-  for (const key of ['fullname', 'birthname', 'gender', 'born', 'died'] as const) {
+  for (const key of ['fullname', 'birthname', 'description', 'gender', 'born', 'died'] as const) {
     if (attrs[key] && !have[key]) out[key] = attrs[key];
   }
   if (out.fullname === have.name) delete out.fullname;
   return out as Partial<PersonAttrs>;
+};
+
+// ---------- events, homes and places ----------
+
+/** The event types of the tags that have one; every other tag is a `generic` event. */
+const EVENT_TYPES: Record<string, string> = { BIRT: 'birth', DEAT: 'death', MARR: 'marriage', ENGA: 'engagement' };
+
+/** What each tag is called as an event's title. */
+const EVENT_TITLES: Record<string, string> = {
+  BIRT: 'Birth',
+  CHR: 'Christening',
+  BAPM: 'Baptism',
+  CONF: 'Confirmation',
+  FCOM: 'First communion',
+  BARM: 'Bar mitzvah',
+  BASM: 'Bat mitzvah',
+  ADOP: 'Adoption',
+  ORDN: 'Ordination',
+  GRAD: 'Graduation',
+  EDUC: 'Education',
+  OCCU: 'Occupation',
+  RETI: 'Retirement',
+  RELI: 'Religion',
+  TITL: 'Title',
+  NATI: 'Nationality',
+  NATU: 'Naturalisation',
+  EMIG: 'Emigration',
+  IMMI: 'Immigration',
+  CENS: 'Census',
+  RESI: 'Residence',
+  WILL: 'Will',
+  PROB: 'Probate',
+  DEAT: 'Death',
+  BURI: 'Burial',
+  CREM: 'Cremation',
+  ENGA: 'Engagement',
+  MARB: 'Marriage banns',
+  MARC: 'Marriage contract',
+  MARL: 'Marriage licence',
+  MARS: 'Marriage settlement',
+  MARR: 'Marriage',
+  DIV: 'Divorce',
+  DIVF: 'Divorce filed',
+  ANUL: 'Annulment',
+  EVEN: 'Event',
+  FACT: 'Fact',
+};
+
+/**
+ * The tags whose date the archive keeps already, as `born`, `died` or the partner relation's
+ * span: their event is written only for what else it says, a place, a cause or a note.
+ */
+const DATED_ELSEWHERE = new Set(['BIRT', 'DEAT', 'MARR', 'DIV']);
+
+/** An event as it is to be written under a person's `events/`. */
+type PlannedEvent = { eventType: string; title: string; kind: string; date?: string; body?: string };
+
+/** An event a person has: enough to tell whether the file's is the same one. */
+type HeldEvent = { eventType: string; title?: string; date?: string };
+
+type LatLng = { lat: number; lng: number };
+
+/** A location of the archive a GEDCOM place names. */
+type Place = { path: string; writable: boolean };
+
+const placeKey = (text: string): string => words(text).join(' ');
+
+/** The point of a `position` node, when it holds one. */
+async function readPoint(vfs: Vfs, access: Access, path: string): Promise<LatLng | undefined> {
+  try {
+    const handle = await vfs.open(access, path, { mode: 'r' });
+    try {
+      const point = JSON.parse(new TextDecoder().decode(await toArrayBuffer(handle.readable))) as { lat?: unknown; lng?: unknown };
+      return typeof point.lat === 'number' && typeof point.lng === 'number' ? { lat: point.lat, lng: point.lng } : undefined;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The archive's locations, found by a GEDCOM place: the whole place (`Exempelby, Exempel
+ * socken`) named as a location, else its first part (`Exempelby`). Names compare as `words`
+ * does, a location going by its `name` attr and its own name; a name two locations share finds
+ * neither. `point` is where a location is, read once.
+ */
+async function loadPlaces(vfs: Vfs, access: Access): Promise<{ find: (place: string) => Place | undefined; point: (path: string) => Promise<LatLng | undefined> }> {
+  const entries = (await vfs.children<{ name?: unknown }>(access, LOCATIONS_ROOT).catch(() => [])).filter((entry) => entry.node.type === 'location');
+  const byName = new Map<string, Set<number>>();
+  entries.forEach((entry, i) => {
+    for (const name of [entry.node.attrs.name, entry.name]) {
+      const key = typeof name === 'string' ? placeKey(name) : '';
+      if (key) byName.set(key, (byName.get(key) ?? new Set()).add(i));
+    }
+  });
+  const only = (key: string): number | undefined => {
+    const hits = byName.get(key);
+    return hits?.size === 1 ? [...hits][0] : undefined;
+  };
+  const points = new Map<string, Promise<LatLng | undefined>>();
+  return {
+    find: (place) => {
+      const i = only(placeKey(place)) ?? only(placeKey(place.split(',')[0]));
+      return i === undefined ? undefined : { path: `${LOCATIONS_ROOT}/${entries[i].name}`, writable: verifyAccess(access, entries[i].node.props, 'w') };
+    },
+    point: (path) => {
+      if (!points.has(path)) points.set(path, readPoint(vfs, access, `${path}/${POSITION_CHILD}`));
+      return points.get(path)!;
+    },
+  };
+}
+
+/** A person's events, as `HeldEvent`s. */
+async function loadEvents(vfs: Vfs, access: Access, person: string): Promise<HeldEvent[]> {
+  const entries = await vfs.children(access, `${person}/${EVENTS_DIR}`, { follow: false }).catch(() => []);
+  return entries.map((entry) => {
+    const attrs = entry.node.attrs as { eventType?: unknown; name?: unknown; date?: unknown };
+    return {
+      eventType: typeof attrs.eventType === 'string' ? attrs.eventType : 'generic',
+      ...(typeof attrs.name === 'string' ? { title: attrs.name } : {}),
+      ...(typeof attrs.date === 'string' ? { date: attrs.date } : {}),
+    };
+  });
+}
+
+/** Whether a person has the event already: one birth or death each, else the same type (or title) on the same day. */
+const holds = (held: HeldEvent[], event: PlannedEvent): boolean =>
+  held.some((have) => {
+    if (have.eventType !== event.eventType) return false;
+    if (event.eventType === 'birth' || event.eventType === 'death') return true;
+    return have.date === event.date && (event.eventType !== 'generic' || have.title === event.title);
+  });
+
+/**
+ * A GEDCOM event as it is written on a person, or undefined when it says nothing the archive
+ * does not keep elsewhere. `lifeDate` is the person's `born` or `died`, which a birth or death
+ * event takes so that the two agree. The place opens the body, then the cause and the notes.
+ */
+const planEvent = (event: GedcomEvent, lifeDate?: string): PlannedEvent | undefined => {
+  const eventType = EVENT_TYPES[event.tag] ?? 'generic';
+  const label = (event.tag === 'EVEN' || event.tag === 'FACT') && event.type ? event.type : EVENT_TITLES[event.tag] ?? event.tag;
+  const body = [event.place, event.cause && `Cause: ${event.cause}`, ...event.notes].filter(Boolean).join('\n\n');
+  if (DATED_ELSEWHERE.has(event.tag) && !body) return undefined;
+  const date = lifeDate ?? event.date?.date ?? event.date?.since;
+  if (!date && !body && !event.value) return undefined;
+  return {
+    eventType,
+    title: event.value ? `${label}: ${event.value}` : label,
+    kind: eventType === 'generic' ? label : eventType,
+    ...(date ? { date } : {}),
+    ...(body ? { body } : {}),
+  };
 };
 
 type ImportOptions = { dryRun?: boolean };
@@ -253,6 +414,8 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, sou
     skipped: [],
     parents: 0,
     partners: 0,
+    events: 0,
+    homes: 0,
     dryRun: Boolean(opts.dryRun),
   };
 
@@ -371,6 +534,79 @@ export async function importGedcom(vfs: Vfs, access: Access, gedcom: Gedcom, sou
           });
         }
       }
+    }
+  }
+
+  // The events and residences the file gives that the archive lacks.
+  const places = await loadPlaces(vfs, access);
+  const heldBy = new Map<string, Promise<HeldEvent[]>>();
+  const heldOf = (path: string): Promise<HeldEvent[]> => {
+    if (!heldBy.has(path)) heldBy.set(path, loadEvents(vfs, access, path));
+    return heldBy.get(path)!;
+  };
+  const homed = new Set<string>();
+
+  /** Write `event` on `owner` unless they, or one of `others`, have it. */
+  const addEvent = async (owner: string, others: string[], event: GedcomEvent, lifeDate?: string): Promise<void> => {
+    const planned = planEvent(event, lifeDate);
+    if (!planned) return;
+    for (const path of [owner, ...others]) if (holds(await heldOf(path), planned)) return;
+    (await heldOf(owner)).push(planned);
+    result.events++;
+    if (opts.dryRun) return;
+    const place = event.place ? places.find(event.place) : undefined;
+    const latlng = place ? await places.point(place.path) : undefined;
+    await createEvent(vfs, access, owner, await newEventName(vfs, access, owner, planned.kind, planned.date), {
+      displayName: planned.title,
+      eventType: planned.eventType,
+      date: planned.date,
+      body: planned.body,
+      latlng,
+    });
+  };
+
+  /**
+   * A residence at a location of the archive as the person's home, from and to the ends of its
+   * period; false when its place names no location `access` may change, and it is an event instead.
+   */
+  const addHome = async (xref: string, person: string, event: GedcomEvent): Promise<boolean> => {
+    const place = event.place ? places.find(event.place) : undefined;
+    if (!place?.writable) return false;
+    const link = homeLink(person, place.path);
+    if (homed.has(link) || await vfs.exists(access, link, { follow: false })) return true;
+    homed.add(link);
+    try {
+      if (!opts.dryRun) await createResidence(vfs, access, person, place.path, { from: event.date?.since, to: event.date?.until });
+      result.homes++;
+    } catch (error) {
+      result.skipped.push({ xref, reason: `not making ${place.path} a home: ${error instanceof Error ? error.message : String(error)}` });
+    }
+    return true;
+  };
+
+  for (const indi of gedcom.individuals) {
+    const path = pathOf.get(indi.xref);
+    if (!path || !writable.has(path)) continue;
+    const had = byPath.get(path)?.attrs;
+    const lifeDates: Record<string, string | undefined> = { BIRT: had?.born ?? indi.born?.date, DEAT: had?.died ?? indi.died?.date };
+    for (const event of indi.events) {
+      if (event.tag === 'RESI' && await addHome(indi.xref, path, event)) continue;
+      await addEvent(path, [], event, lifeDates[event.tag]);
+    }
+  }
+
+  // A family's event is written on its first partner who may be changed, unless a partner has it.
+  for (const family of gedcom.families) {
+    const partners = [...new Set(family.partners.map((xref) => pathOf.get(xref)).filter((p): p is string => Boolean(p)))];
+    const owners = partners.filter((path) => writable.has(path));
+    if (owners.length === 0) continue;
+    for (const event of family.events) {
+      if (event.tag === 'RESI') {
+        let home = false;
+        for (const path of owners) home = await addHome(family.xref, path, event) || home;
+        if (home) continue;
+      }
+      await addEvent(owners[0], partners.filter((path) => path !== owners[0]), event);
     }
   }
 

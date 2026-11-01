@@ -173,9 +173,10 @@ const MONTHS: Record<string, number> = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5,
 /**
  * A GEDCOM date as EiN keeps one, and the years it can be in. `date` (`YYYY`, `YYYY-MM` or
  * `YYYY-MM-DD`) is set only for a date given without a qualifier or as calculated; an
- * approximate, bounded or ranged date gives only the span of years, for matching.
+ * approximate, bounded or ranged date gives only the span of years, for matching. A period
+ * (`FROM … TO …`) keeps its ends as `since` and `until`.
  */
-export type GedcomDate = { date?: string; from: number; to: number };
+export type GedcomDate = { date?: string; from: number; to: number; since?: string; until?: string };
 
 const point = (text: string): { date: string; year: number } | undefined => {
   // A calendar is named as `@#DJULIAN@` (5.5) or `JULIAN` (7); the date is read as written in it.
@@ -194,10 +195,12 @@ const point = (text: string): { date: string; year: number } | undefined => {
 /** Read a GEDCOM `DATE` value; undefined when it names no year (`UNKNOWN`, a phrase). */
 export const parseGedcomDate = (value: string): GedcomDate | undefined => {
   const text = value.replace(/\(.*\)/g, '').trim().toUpperCase();
-  const between = text.match(/^(?:BET|FROM)\s+(.+?)\s+(?:AND|TO)\s+(.+)$/);
+  const between = text.match(/^(BET|FROM)\s+(.+?)\s+(?:AND|TO)\s+(.+)$/);
   if (between) {
-    const [a, b] = [point(between[1]), point(between[2])];
-    return a && b ? { from: Math.min(a.year, b.year), to: Math.max(a.year, b.year) } : undefined;
+    const [a, b] = [point(between[2]), point(between[3])];
+    if (!a || !b) return undefined;
+    const years = { from: Math.min(a.year, b.year), to: Math.max(a.year, b.year) };
+    return between[1] === 'FROM' ? { ...years, since: a.date, until: b.date } : years;
   }
   const qualified = text.match(/^(ABT|EST|CAL|BEF|AFT|FROM|TO|INT)\s+(.+)$/);
   if (!qualified) {
@@ -211,17 +214,26 @@ export const parseGedcomDate = (value: string): GedcomDate | undefined => {
     case 'INT':
       return { date: p.date, from: p.year, to: p.year };
     case 'BEF':
-    case 'TO':
       return { from: p.year - 100, to: p.year };
+    case 'TO':
+      return { from: p.year - 100, to: p.year, until: p.date };
     case 'AFT':
-    case 'FROM':
       return { from: p.year, to: p.year + 100 };
+    case 'FROM':
+      return { from: p.year, to: p.year + 100, since: p.date };
     default:
       return { from: p.year - 2, to: p.year + 2 };
   }
 };
 
 // ---------- individuals and families ----------
+
+/**
+ * An event or a fact of an individual or a family (`BIRT`, `OCCU`, `MARR`, `EVEN`, …): its tag,
+ * what it says (`OCCU Farmer`; a bare `Y` says nothing), its `TYPE`, when, where (`PLAC`, else
+ * `ADDR`), the cause given (`CAUS`) and its notes.
+ */
+export type GedcomEvent = { tag: string; value?: string; type?: string; date?: GedcomDate; place?: string; cause?: string; notes: string[] };
 
 /** A parent tie in a GEDCOM file as EiN names it: `blood`, `adoptive` or `foster`. */
 type GedcomParentKind = 'blood' | 'adoptive' | 'foster';
@@ -248,9 +260,13 @@ export type GedcomIndividual = {
   /** The families they are a child (`FAMC`) and a partner (`FAMS`) in. */
   childOf: { family: string; kind: GedcomParentKind }[];
   partnerIn: string[];
+  /** Their events and facts, in the file's order. */
+  events: GedcomEvent[];
+  /** Their own notes, a shared note's text in place of the pointer to it. */
+  notes: string[];
 };
 
-/** A family (`FAM`): its partners, its children and when it began and ended. */
+/** A family (`FAM`): its partners, its children, when it began and ended, and its events. */
 type GedcomFamily = {
   xref: string;
   partners: string[];
@@ -258,6 +274,7 @@ type GedcomFamily = {
   married: boolean;
   marriedOn?: string;
   divorcedOn?: string;
+  events: GedcomEvent[];
 };
 
 export type Gedcom = { individuals: GedcomIndividual[]; families: GedcomFamily[] };
@@ -296,9 +313,74 @@ const eventDate = (line: GedcomLine, tag: string): GedcomDate | undefined => {
   return undefined;
 };
 
+/** The tags of an individual's events and facts the import reads; numbers and identifiers (`SSN`, `NCHI`, …) are left out. */
+const INDIVIDUAL_EVENTS = new Set([
+  'BIRT',
+  'CHR',
+  'BAPM',
+  'CONF',
+  'FCOM',
+  'BARM',
+  'BASM',
+  'ADOP',
+  'ORDN',
+  'GRAD',
+  'EDUC',
+  'OCCU',
+  'RETI',
+  'RELI',
+  'TITL',
+  'NATI',
+  'NATU',
+  'EMIG',
+  'IMMI',
+  'CENS',
+  'RESI',
+  'WILL',
+  'PROB',
+  'DEAT',
+  'BURI',
+  'CREM',
+  'EVEN',
+  'FACT',
+]);
+
+/** The tags of a family's events the import reads. */
+const FAMILY_EVENTS = new Set(['ENGA', 'MARB', 'MARC', 'MARL', 'MARS', 'MARR', 'DIV', 'DIVF', 'ANUL', 'CENS', 'RESI', 'EVEN', 'FACT']);
+
+/** The text of a record's notes (`NOTE`, and 7's `SNOTE`), a pointer read from the note record it names. */
+type NoteReader = (line: GedcomLine) => string[];
+
+const noteReader = (records: GedcomLine[]): NoteReader => {
+  const shared = new Map(records.filter((r) => (r.tag === 'NOTE' || r.tag === 'SNOTE') && r.xref).map((r) => [r.xref!, r.value]));
+  return (line) =>
+    line.children.filter((c) => c.tag === 'NOTE' || c.tag === 'SNOTE')
+      .map((note) => (/^@[^@]+@$/.test(note.value.trim()) ? shared.get(note.value.trim()) ?? '' : note.value).trim())
+      .filter(Boolean);
+};
+
+const readEvents = (record: GedcomLine, tags: Set<string>, notes: NoteReader): GedcomEvent[] =>
+  record.children.filter((line) => tags.has(line.tag)).map((line) => {
+    const value = line.value.trim();
+    const date = child(line, 'DATE') && parseGedcomDate(child(line, 'DATE')!.value);
+    const addr = child(line, 'ADDR')?.value.split('\n').map((part) => part.trim()).filter(Boolean).join(', ');
+    const place = child(line, 'PLAC')?.value.trim() || addr;
+    const type = child(line, 'TYPE')?.value.trim();
+    const cause = child(line, 'CAUS')?.value.trim();
+    return {
+      tag: line.tag,
+      ...(value && value.toUpperCase() !== 'Y' ? { value } : {}),
+      ...(type ? { type } : {}),
+      ...(date ? { date } : {}),
+      ...(place ? { place } : {}),
+      ...(cause ? { cause } : {}),
+      notes: notes(line),
+    };
+  });
+
 const SEX: Record<string, GedcomIndividual['gender']> = { M: 'male', F: 'female', X: 'other', U: 'unknown' };
 
-const readIndividual = (record: GedcomLine): GedcomIndividual => {
+const readIndividual = (record: GedcomLine, notes: NoteReader): GedcomIndividual => {
   const names = childrenOf(record, 'NAME').map(readName);
   const birthName = names.find((name) => name.type === 'birth') ?? names.find((name) => name.type !== 'married') ?? names[0];
   const married = names.find((name) => name !== birthName && name.type === 'married' && name.surname);
@@ -319,10 +401,12 @@ const readIndividual = (record: GedcomLine): GedcomIndividual => {
     uids: [...childrenOf(record, '_UID'), ...childrenOf(record, 'UID')].map((line) => line.value.trim()).filter(Boolean),
     childOf: childrenOf(record, 'FAMC').map((line) => ({ family: line.value.trim(), kind: PEDIGREE[child(line, 'PEDI')?.value.trim().toUpperCase() ?? 'BIRTH'] ?? 'blood' })),
     partnerIn: childrenOf(record, 'FAMS').map((line) => line.value.trim()),
+    events: readEvents(record, INDIVIDUAL_EVENTS, notes),
+    notes: notes(record),
   };
 };
 
-const readFamily = (record: GedcomLine): GedcomFamily => {
+const readFamily = (record: GedcomLine, notes: NoteReader): GedcomFamily => {
   const marriage = childrenOf(record, 'MARR')[0];
   const marriedOn = marriage && child(marriage, 'DATE') ? parseGedcomDate(child(marriage, 'DATE')!.value)?.date : undefined;
   const divorcedOn = eventDate(record, 'DIV')?.date;
@@ -333,14 +417,16 @@ const readFamily = (record: GedcomLine): GedcomFamily => {
     married: Boolean(marriage),
     ...(marriedOn ? { marriedOn } : {}),
     ...(divorcedOn ? { divorcedOn } : {}),
+    events: readEvents(record, FAMILY_EVENTS, notes),
   };
 };
 
 /** The individuals and families of a GEDCOM file, from its bytes. */
 export const readGedcom = (bytes: Uint8Array): Gedcom => {
   const records = parseGedcomLines(decodeGedcom(bytes));
+  const notes = noteReader(records);
   return {
-    individuals: records.filter((r) => r.tag === 'INDI' && r.xref).map(readIndividual),
-    families: records.filter((r) => r.tag === 'FAM' && r.xref).map(readFamily),
+    individuals: records.filter((r) => r.tag === 'INDI' && r.xref).map((r) => readIndividual(r, notes)),
+    families: records.filter((r) => r.tag === 'FAM' && r.xref).map((r) => readFamily(r, notes)),
   };
 };

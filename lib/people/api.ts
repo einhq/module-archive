@@ -256,5 +256,8 @@ export type GedcomImportResult = {
   /** Parent and partner relations added. */
   parents: number;
   partners: number;
+  /** Events written on people, and residences made homes. */
+  events: number;
+  homes: number;
   dryRun: boolean;
 };

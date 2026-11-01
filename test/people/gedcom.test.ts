@@ -1,5 +1,5 @@
 /**
- * Reading GEDCOM: character sets, names, dates, families; and which individuals the matcher
+ * Reading GEDCOM: character sets, names, dates, families, events and notes; and which individuals the matcher
  * takes to be people the archive has.
  */
 
@@ -59,13 +59,56 @@ Deno.test('readGedcom reads names, call names, married names, dates and families
   assertEquals([margaret.given, margaret.callName, margaret.surname, margaret.marriedSurname], [['Margaret', 'Ann'], 'Ann', 'Pole', 'Wrenfield']);
   assertEquals(ruby.childOf, [{ family: '@F1@', kind: 'blood' }]);
   assertEquals(tom.childOf, [{ family: '@F1@', kind: 'adoptive' }]);
-  assertEquals(families, [{ xref: '@F1@', partners: ['@I1@', '@I2@'], children: ['@I3@', '@I4@'], married: true, marriedOn: '1958-08-20' }]);
+  assertEquals(families.map(({ events: _, ...family }) => family), [{
+    xref: '@F1@',
+    partners: ['@I1@', '@I2@'],
+    children: ['@I3@', '@I4@'],
+    married: true,
+    marriedOn: '1958-08-20',
+  }]);
+});
+
+Deno.test('readGedcom reads events with their places, periods, causes and notes, a shared note by its pointer', () => {
+  const { individuals, families } = readGedcom(enc(`0 HEAD
+0 @I1@ INDI
+1 NAME Harold /Wrenfield/
+1 BIRT Y
+2 PLAC Lower Wrenfield, Kent
+1 OCCU Boatbuilder
+2 DATE FROM 1950 TO 1975
+1 RESI
+2 ADDR 4 Mill Lane
+3 CONT Lower Wrenfield
+1 DEAT
+2 CAUS Old age
+1 NOTE Kept a boatyard
+2 CONT by the river.
+1 NOTE @N1@
+1 SSN 123
+0 @F1@ FAM
+1 HUSB @I1@
+1 MARR
+2 PLAC Saint Ann's
+2 SNOTE @N1@
+0 @N1@ NOTE Told by Ruby.
+`));
+  const [harold] = individuals;
+  assertEquals(harold.events, [
+    { tag: 'BIRT', place: 'Lower Wrenfield, Kent', notes: [] },
+    { tag: 'OCCU', value: 'Boatbuilder', date: { from: 1950, to: 1975, since: '1950', until: '1975' }, notes: [] },
+    { tag: 'RESI', place: '4 Mill Lane, Lower Wrenfield', notes: [] },
+    { tag: 'DEAT', cause: 'Old age', notes: [] },
+  ]);
+  assertEquals(harold.notes, ['Kept a boatyard\nby the river.', 'Told by Ruby.']);
+  assertEquals(families[0].events, [{ tag: 'MARR', place: "Saint Ann's", notes: ['Told by Ruby.'] }]);
 });
 
 Deno.test('parseGedcomDate keeps a plain date and turns the qualified ones into years', () => {
   assertEquals(parseGedcomDate('MAR 1900'), { date: '1900-03', from: 1900, to: 1900 });
   assertEquals(parseGedcomDate('@#DJULIAN@ 11 FEB 1731/32'), { date: '1731-02-11', from: 1731, to: 1731 });
   assertEquals(parseGedcomDate('BET 1850 AND 1855'), { from: 1850, to: 1855 });
+  assertEquals(parseGedcomDate('FROM MAR 1950 TO 1955'), { from: 1950, to: 1955, since: '1950-03', until: '1955' });
+  assertEquals(parseGedcomDate('FROM 1950'), { from: 1950, to: 2050, since: '1950' });
   assertEquals(parseGedcomDate('BEF 1900'), { from: 1800, to: 1900 });
   assertEquals(parseGedcomDate('CAL 1890'), { date: '1890', from: 1890, to: 1890 });
   assertEquals(parseGedcomDate('UNKNOWN'), undefined);
