@@ -119,6 +119,7 @@ function IndividualChoice({ plan, merge, individual, onChoose, onSelect, busy }:
             path={fit.person}
             person={plan.people[fit.person]}
             score={fit.score}
+            loose={fit.loose}
             matched={individual.person === fit.person}
             other={matchedBy.get(fit.person)}
             busy={busy}
@@ -176,6 +177,8 @@ type CandidateProps = {
   path: string;
   person?: GedcomPlanPerson;
   score?: number;
+  /** Only their names are alike: a given name and the surname among other words. */
+  loose?: boolean;
   /** They are who the individual is now. */
   matched: boolean;
   /** Another individual they are matched to now, whom choosing them here takes them from. */
@@ -184,7 +187,7 @@ type CandidateProps = {
   onChoose: () => void;
 };
 
-function Candidate({ path, person, score, matched, other, busy, onChoose }: CandidateProps) {
+function Candidate({ path, person, score, loose, matched, other, busy, onChoose }: CandidateProps) {
   const span = person ? lifeSpan(person) : undefined;
   return (
     <Group gap='xs' wrap='nowrap' justify='space-between'>
@@ -194,7 +197,11 @@ function Candidate({ path, person, score, matched, other, busy, onChoose }: Cand
           {span && <Text size='xs' c='dimmed' style={{ flex: 'none' }}>{span}</Text>}
         </Group>
         <Text size='xs' c='dimmed'>
-          {[path.slice(path.lastIndexOf('/') + 1), score !== undefined ? `fits ${score}` : undefined, other ? `now ${other.name} (${other.xref})` : undefined].filter(Boolean)
+          {[
+            path.slice(path.lastIndexOf('/') + 1),
+            score !== undefined ? `${loose ? 'a like name' : 'fits'} ${score}` : undefined,
+            other ? `now ${other.name} (${other.xref})` : undefined,
+          ].filter(Boolean)
             .join(' · ')}
         </Text>
       </Stack>

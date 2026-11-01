@@ -220,3 +220,27 @@ Deno.test('choicesFromFlags reads xrefs loosely and people as paths or names', (
   assertThrows(() => choicesFromFlags({ match: ['@I1@'] }, '/'), Error, '<xref>=<person>');
   assertThrows(() => choicesFromFlags({ match: ['@I1@=harold'], skip: ['@I1@'] }, '/'), Error, 'chosen twice');
 });
+
+Deno.test('score reads every name of a person, initials too, and counts the given names spelled out', () => {
+  const [harold] = readGedcom(enc('0 HEAD\n0 @I1@ INDI\n1 NAME Harold James Robert /Wrenfield/\n1 SEX M\n')).individuals;
+  // Initials stand for given names: the name fits, and the full name spells out all three.
+  assertEquals(score(person('/p/h', { name: 'Harold J R Wrenfield', fullname: 'Harold James Robert Wrenfield' }), harold), 5);
+  assertEquals(score(person('/p/h', { name: 'Harold J R Wrenfield' }), harold), 3);
+  assertEquals(score(person('/p/h', { name: 'H. J. Wrenfield' }), harold), 2);
+  // A name the file does not know is not the end: the full name can still be theirs.
+  assertEquals(score(person('/p/h', { name: 'Grandpa', fullname: 'Harold James Wrenfield' }), harold), 4);
+  // An initial no given name starts with is a word the file does not know.
+  assertEquals(score(person('/p/h', { name: 'Harold K Wrenfield' }), harold), 0);
+  assertEquals(score(person('/p/h', { name: 'Harold Wrenfield', gender: 'female', fullname: 'Harold James Robert Wrenfield' }), harold), 0);
+});
+
+Deno.test("matchIndividuals takes a full name the same as the file's without dates, and never a like name", () => {
+  const gedcom = readGedcom(enc('0 HEAD\n0 @I1@ INDI\n1 NAME Harold James Robert /Wrenfield/\n0 @I2@ INDI\n1 NAME Ruby /Pole/\n'));
+  const people = [
+    person('/p/harold', { name: 'Harold J R Wrenfield', fullname: 'Harold James Robert Wrenfield' }),
+    // A nickname among the names: only suggested, so not taken.
+    person('/p/ruby', { name: 'Ruby "Bee" Pole' }),
+  ];
+  const matches = matchIndividuals(gedcom, people, '/archive/sources/genealogy/tree.ged');
+  assertEquals(Object.fromEntries([...matches].map(([xref, m]) => [xref, [m.path, m.how]])), { '@I1@': ['/p/harold', 'name-date'] });
+});

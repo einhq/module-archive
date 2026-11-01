@@ -338,7 +338,10 @@ Deno.test({
       assertEquals((await ctx.vfs.get(ADMIN_ACCESS, waiting.path)).attrs.mimetype, 'application/x-gedcom');
       assertEquals((await client.execJson<StagingStatus>('staging status')).genealogyWaiting, 1);
 
+      // Of a like name, with a word the file does not have: suggested for Clara, never taken.
+      await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/clara-c --name 'Clara Cee Wrenfield'`);
       const plan = await client.execJson<GedcomPlan>(`gedcom-read ${waiting.path}`);
+      assertEquals(plan.individuals[2].candidates, [{ person: `${PEOPLE_ROOT}/clara-c`, score: 3, loose: true }]);
       assertEquals(plan.individuals.map((i) => [i.xref, i.action, i.person, i.how, i.chosen]), [
         ['@I1@', 'match', `${PEOPLE_ROOT}/harold`, 'name-date', false],
         ['@I2@', 'new', undefined, undefined, false],

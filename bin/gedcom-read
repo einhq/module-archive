@@ -44,7 +44,9 @@ const gedcomRead = async (cmd: Command): CmdReturn => {
       const span = indi.born || indi.died ? `${qualifiedYear(indi.born, indi.bornQualifier)}–${qualifiedYear(indi.died, indi.diedQualifier)}` : '';
       const who = indi.action === 'match' ? `= ${indi.person} (${indi.how})` : indi.action === 'new' ? 'new' : 'left out';
       await cmd.writeLn(`${indi.xref} ${indi.name}${span ? ` ${span}` : ''} ${who}${indi.chosen ? ', chosen' : ''}`);
-      for (const fit of indi.candidates.filter((fit) => fit.person !== indi.person)) await cmd.writeLn(`    could be ${fit.person} (${fit.score})`);
+      for (const fit of indi.candidates.filter((fit) => fit.person !== indi.person)) {
+        await cmd.writeLn(`    could be ${fit.person} (${fit.score}${fit.loose ? ', a like name' : ''})`);
+      }
     }
   } catch (error) {
     await cmd.writeError(`gedcom-read: ${error instanceof Error ? error.message : String(error)}\n`);

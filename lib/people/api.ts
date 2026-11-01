@@ -285,8 +285,12 @@ type GedcomPlanIndividual = GedcomPlanAttrs & {
   chosen: boolean;
   person?: string;
   how?: GedcomMatchHow;
-  /** The archive's people who could be them, best first, whoever they are matched to. */
-  candidates: { person: string; score: number }[];
+  /**
+   * The archive's people who could be them, best first, whoever they are matched to; then, marked
+   * `loose`, people of a like name (a given name and a surname shared among other words), which the
+   * import never takes unless chosen.
+   */
+  candidates: { person: string; score: number; loose?: boolean }[];
 };
 
 /** One person of the archive in a `gedcom-read` plan. Relatives are paths, also of people the plan leaves out. */
