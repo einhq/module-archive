@@ -62,6 +62,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
     events: sum((r) => r.events),
     relations: sum((r) => r.relations),
     links: sum((r) => r.links),
+    sources: sum((r) => r.sources),
     conflicts: sum((r) => r.conflicts),
   };
 
@@ -82,7 +83,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
       `${report.src} -> ${report.dst}: ${report.faces} face${report.faces === 1 ? '' : 's'}, ` +
         `${report.voices} voice${report.voices === 1 ? '' : 's'}, ` +
         `${report.events} event${report.events === 1 ? '' : 's'}, ${report.relations} relation${report.relations === 1 ? '' : 's'}, ` +
-        `${report.links} link${report.links === 1 ? '' : 's'}` +
+        `${report.links} link${report.links === 1 ? '' : 's'}, ${report.sources} source${report.sources === 1 ? '' : 's'}` +
         (report.dryRun ? ' (dry run)' : ', source removed'),
     );
     if (report.conflicts > 0) {
@@ -94,7 +95,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
   }
   if (merged.length > 1) {
     await cmd.writeLn(
-      `${merged.length} merged into ${dst}: ${totals.faces} faces, ${totals.events} events, ${totals.relations} relations, ${totals.links} links`,
+      `${merged.length} merged into ${dst}: ${totals.faces} faces, ${totals.events} events, ${totals.relations} relations, ${totals.links} links, ${totals.sources} sources`,
     );
   }
   for (const failure of failed) {

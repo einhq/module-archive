@@ -4,6 +4,8 @@ import { useTrack } from '../hooks/useTracks.ts';
 import { TrackUpload } from './TrackUpload.tsx';
 import { trackDistance } from '../lib/track-segments.ts';
 import { useMemo } from 'react';
+import { useSourceFiles } from '../../hooks/useSourceFiles.ts';
+import { SourceFiles } from '../../components/SourceFiles.tsx';
 
 /** `3 h 12 min`, or minutes alone when it is under an hour. */
 function duration(firstTs?: string, lastTs?: string): string | undefined {
@@ -26,12 +28,17 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * A device's track: its route on a map, and what the route adds up to. `device` is the device's
- * slug; `editable` offers GPX files to add to it.
+ * A device's track: its route on a map, what the route adds up to, and the GPX files it was read
+ * from. `device` is the device's slug; `editable` offers GPX files to add to it.
  */
 export function TrackView({ device, editable }: { device: string; editable: boolean }) {
   const { track, segments, truncated, loading, refetch } = useTrack(device);
-  const upload = editable && <TrackUpload device={device} onImported={refetch} />;
+  const { files, refetch: refetchFiles } = useSourceFiles(track?.path);
+  const imported = () => {
+    refetch();
+    refetchFiles();
+  };
+  const upload = editable && <TrackUpload device={device} onImported={imported} />;
 
   // Summed per segment, so a day boundary or a gap adds no phantom distance.
   const distance = useMemo(() => trackDistance(segments.map((segment) => ({ day: segment.id, points: segment.points }))), [segments]);
@@ -78,6 +85,13 @@ export function TrackView({ device, editable }: { device: string; editable: bool
         {track.description ? ` · ${track.description}` : ''}
         {truncated ? ' · drawn from a thinned copy of the track' : ''}
       </Text>
+
+      {files.length > 0 && (
+        <Stack gap='xs' maw={560}>
+          <Text size='xs' c='dimmed' tt='uppercase' fw={500}>Read from</Text>
+          <SourceFiles files={files} />
+        </Stack>
+      )}
     </Stack>
   );
 }

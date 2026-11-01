@@ -8,7 +8,8 @@ import type { TrackStageResult } from '@archive/location/api';
 
 /**
  * Put a GPX file in /tmp and answer the path it got. Nothing there is indexed, and `track-stage`
- * removes it once its fixes are in the track; one it refuses is swept a day later.
+ * moves it to the device's `routes/` once its fixes are in the track; one it refuses is swept a
+ * day later.
  */
 const putInTemp = async (file: File): Promise<string> => {
   const name = `track-${uuidv4()}.gpx`;
@@ -38,7 +39,7 @@ export function TrackUpload({ device, onImported }: { device: string; onImported
     try {
       for (const file of files) {
         const path = await putInTemp(file);
-        const result = await execCommand<TrackStageResult>(`track-stage ${shq(path)} --device ${shq(device)}`);
+        const result = await execCommand<TrackStageResult>(`track-stage ${shq(path)} --device ${shq(device)} --name ${shq(file.name)}`);
         if (result.status === 'imported') points += result.imported;
       }
       notify({

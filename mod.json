@@ -92,11 +92,15 @@
     "@archive/media/writable": "./lib/media/writable.ts",
     "@archive/media/xmp": "./lib/media/xmp.ts",
     "@archive/news-albums": "./lib/news-albums.ts",
+    "@archive/people/gedcom": "./lib/people/gedcom.ts",
+    "@archive/people/gedcom-import": "./lib/people/gedcom-import.ts",
     "@archive/people/name-match": "./lib/people/name-match.ts",
     "@archive/people/cover": "./lib/people/cover.ts",
     "@archive/people/feed": "./lib/people/feed.ts",
     "@archive/people/kin": "./lib/people/kin.ts",
     "@archive/people/types": "./types/people/mod.ts",
+    "@archive/sources": "./lib/sources/sources.ts",
+    "@archive/sources/api": "./lib/sources/api.ts",
     "@archive/search/listed": "./lib/search/listed.ts",
     "@archive/search/parse": "./lib/search/parse.ts",
     "@archive/search/proposal": "./lib/search/proposal.ts",
@@ -522,7 +526,8 @@
     "/archive/people",
     "/archive/locations",
     "/archive/devices",
-    "/archive/albums"
+    "/archive/albums",
+    "/archive/sources"
   ],
   "indexes": [
     {

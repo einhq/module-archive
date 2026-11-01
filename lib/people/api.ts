@@ -8,6 +8,7 @@
 
 import type { TimelineEntry } from '@archive/timeline/api';
 import type { NodeOwnership } from '@ein/api';
+import type { SourceFile } from '@archive/sources/api';
 
 export type PersonFace = {
   /** The region. Its crop is `<facePath>/image.avif`; a row does not repeat it, since a page is held under a byte budget. */
@@ -185,6 +186,8 @@ export type PersonInfo = {
   relations: PersonRelation[];
   homes: PersonHome[];
   events: PersonEvent[];
+  /** The files that describe them, such as a GEDCOM file they were imported from. */
+  sources: SourceFile[];
   /** Mode and owner of the person node, for deciding what to offer editing on. */
   ownership: NodeOwnership;
 };
@@ -236,4 +239,22 @@ export type LifeEventStats = {
   totals: Record<LifeEventKind, number>;
   /** Events dated only to the year: counted in the totals, in no month. */
   withoutMonth: Record<LifeEventKind, number>;
+};
+
+/** `gedcom-import`: who each individual of the file is in the archive, and what was added. */
+export type GedcomImportResult = {
+  /** Where the file is kept. */
+  source: string;
+  individuals: number;
+  families: number;
+  /** Individuals found among the archive's people, and how. */
+  matched: { xref: string; name: string; person: string; how: 'source' | 'uid' | 'name-date' | 'relatives' }[];
+  /** Individuals nobody in the archive was, each a person made for them. */
+  created: { xref: string; name: string; person: string }[];
+  /** Individuals, or relations of theirs, left out, and why. */
+  skipped: { xref: string; reason: string }[];
+  /** Parent and partner relations added. */
+  parents: number;
+  partners: number;
+  dryRun: boolean;
 };

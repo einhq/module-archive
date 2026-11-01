@@ -1,7 +1,8 @@
 /**
  * Track commands: track-create / track-append / track-read / track-import (GPX) /
  * track-list / track-stage. A track is a device's child `track`, and every command takes the
- * device (its slug or path) or the track's path. Runs against the in-memory track registry.
+ * device (its slug or path) or the track's path; a GPX file read into it is kept in the device's
+ * `routes/` and linked from the track's `sources/`. Runs against the in-memory track registry.
  */
 
 import { DEVICES_ROOT } from '@archive/paths';
@@ -11,6 +12,7 @@ import { createTestContext, type ShellClient, testCommands } from '@ein/testing'
 import { devicesForGpx, parseGpx } from '@archive/location/track';
 import type { TrackStageResult } from '@archive/location/api';
 import type { StagingStatus } from '@archive/staging/api';
+import type { SourceFile } from '@archive/sources/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
@@ -235,7 +237,7 @@ Deno.test({
         await fh.close();
       }
 
-      const result = await client.execJson<{ imported: number; track: string }>(`track-import hike /trip.gpx`);
+      const result = await client.execJson<{ imported: number; track: string; source: string }>(`track-import hike /trip.gpx`);
       assertEquals(result.imported, 3);
       assertEquals(result.track, `${DEVICES_ROOT}/hike/track`);
 
@@ -251,10 +253,16 @@ Deno.test({
       assertEquals(hike?.points, 3);
       assertEquals(hike?.bbox, { north: 57.72, south: 57.7, east: 11.99, west: 11.97 });
 
-      // Importing the same file twice does not double the track.
+      // The file stays where it was, and a copy is kept with the device and linked from the track.
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, '/trip.gpx'), true);
+      assertEquals(result.source, `${DEVICES_ROOT}/hike/routes/trip.gpx`);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${DEVICES_ROOT}/hike/track`)).map((s) => s.path), [`${DEVICES_ROOT}/hike/routes/trip.gpx`]);
+
+      // Importing the same file twice does not double the track, nor keep the file twice.
       const again = await client.execJson<{ imported: number; skipped: number }>(`track-import ${DEVICES_ROOT}/hike/track /trip.gpx`);
       assertEquals(again.imported, 0);
       assertEquals(again.skipped, 3);
+      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${DEVICES_ROOT}/hike/routes`)).map((e) => e.name), ['trip.gpx']);
     });
 
     await t.step('rejects invalid input', async () => {
@@ -270,7 +278,7 @@ Deno.test({
       assertStringIncludes(res.error ?? '', 'track-read');
     });
 
-    await t.step('track-stage imports a GPX into the device it names, and removes the file', async () => {
+    await t.step("track-stage imports a GPX into the device it names, and moves the file to the device's routes/", async () => {
       await cmd.shouldSucceed(`mknode -t device ${DEVICES_ROOT}/logger --as name=Logger --as make=Exempel --as model=Trail`);
       await cmd.shouldSucceed('staging init --user admin && mkdir -p /home/admin/staging/files/inbox/upload-2026-10-16');
       const write = async (path: string, xml: string) => {
@@ -284,13 +292,17 @@ Deno.test({
       };
 
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
-      const staged = await client.execJson<{ status: string; track: string; imported: number }>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
-      assertEquals([staged.status, staged.track, staged.imported], ['imported', `${DEVICES_ROOT}/logger/track`, 3]);
+      const staged = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
+      const kept = `${DEVICES_ROOT}/logger/routes/walk.gpx`;
+      assertEquals(staged, { status: 'imported', track: `${DEVICES_ROOT}/logger/track`, imported: 3, skipped: 0, source: kept });
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${DEVICES_ROOT}/logger/track`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
 
-      // Staged again, nothing is added: a fix is keyed by its time.
+      // Staged again, nothing is added: a fix is keyed by its time, and the same bytes are kept once.
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/again.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
-      assertEquals((await client.execJson<{ imported: number }>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/again.gpx')).imported, 0);
+      const again = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/again.gpx');
+      assertEquals(again.status === 'imported' && [again.imported, again.source], [0, kept]);
+      await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/again.gpx');
     });
 
     await t.step('track-stage leaves a GPX naming no known device waiting in routes/, until told which', async () => {
@@ -311,9 +323,13 @@ Deno.test({
       assertEquals([attrs.trackDevicePending, attrs.gpxCreator], [true, 'Unknown Thing']);
       assertEquals((await client.execJson<StagingStatus>('staging status')).routesWaiting, 1);
 
-      const told = await client.execJson<{ status: string; imported: number }>(`track-stage ${waiting} --device logger`);
-      assertEquals([told.status, told.imported], ['imported', 3]);
+      // Told which device, and under which name to keep it (as the device page's upload says).
+      const told = await client.execJson<TrackStageResult>(`track-stage ${waiting} --device logger --name 'July walk.gpx'`);
+      assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${DEVICES_ROOT}/logger/routes/July walk.gpx`]);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, waiting), false);
+      const keptAttrs = (await ctx.vfs.get(ADMIN_ACCESS, `${DEVICES_ROOT}/logger/routes/July walk.gpx`)).attrs;
+      assertEquals([keptAttrs.trackDevicePending, keptAttrs.gpxCreator], [undefined, undefined]);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${DEVICES_ROOT}/logger/track`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
     });
 
     await t.step('track-list names the devices that have a track', async () => {

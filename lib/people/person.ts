@@ -22,6 +22,7 @@
 
 import { fileOfSpeaker, longestTurn, type Span } from '@archive/media/speakers';
 import { PEOPLE_ROOT } from '@archive/paths';
+import { moveSources, readSources, SOURCES_DIR } from '@archive/sources';
 import type { AttrCondition, Command } from '@ein/client';
 import { unlistedIds, unlistedRoots } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
@@ -551,7 +552,7 @@ export const namePerson = async (
   return { id: node.id, path: `${PEOPLE_ROOT}/${slug}`, slug };
 };
 
-const EXPECTED_CHILDREN = new Set([EVENTS_DIR, PARENTS_DIR, CHILDREN_DIR, PARTNERS_DIR, 'homes', 'measurements', 'comments', 'coverPhoto']);
+const EXPECTED_CHILDREN = new Set([EVENTS_DIR, PARENTS_DIR, CHILDREN_DIR, PARTNERS_DIR, SOURCES_DIR, 'homes', 'measurements', 'comments', 'coverPhoto']);
 
 type MergeOptions = {
   dryRun?: boolean;
@@ -569,6 +570,8 @@ export type MergeReport = {
   relations: number;
   /** Other softlinks to the source — a photographer, an event's writer, an account's person — now at the destination. */
   links: number;
+  /** Links to the files the source person was read from, moved to the destination's `sources/`. */
+  sources: number;
   /** Images that end up showing the surviving person twice — reported, not fixed. */
   conflicts: number;
   skippedChildren: string[];
@@ -622,6 +625,7 @@ export const mergePersons = async (
     events: 0,
     relations: 0,
     links: 0,
+    sources: 0,
     conflicts: 0,
     skippedChildren,
     deleted: false,
@@ -669,6 +673,10 @@ export const mergePersons = async (
     for (let n = 2; await vfs.exists(access, `${dstPath}/${EVENTS_DIR}/${name}`, { follow: false }); n++) name = `${event.name}-${n}`;
     await vfs.rename(access, `${srcPath}/${EVENTS_DIR}`, event.name, `${dstPath}/${EVENTS_DIR}`, name);
   }
+
+  // --- sources: the files that describe the source person describe the destination ---
+  if (dryRun) report.sources = (await readSources(vfs, access, srcPath)).length;
+  else report.sources = await moveSources(vfs, access, srcPath, dstPath);
 
   // --- relations ---
   const RELATION_DIRS = [

@@ -4,15 +4,20 @@
  *
  * A track is the route a device recorded, kept as the device's child `track`.
  * What a track is without reading it — point count, span, extent — is the
- * track registry's alone; nothing copies it onto the node.
+ * track registry's alone; nothing copies it onto the node. The GPX files it
+ * was read from are kept in the device's `routes/` and linked from the
+ * track's `sources/`.
  */
 import { DEVICES_ROOT } from '@archive/paths';
 import type { TrackEntry } from '@archive/location/api';
+import { fileSource, linkSource } from '@archive/sources';
 import type { Command } from '@ein/client';
-import { resolve } from '@std/path';
+import { dirname, resolve } from '@std/path';
 
 /** The name of a device's track. */
 const TRACK_CHILD = 'track';
+/** The child of a device that holds the GPX files its track was read from. */
+const ROUTES_DIR = 'routes';
 
 /** A coordinate point. `ts` is the track's primary key, so it is never optional at rest. */
 export type TrackPoint = {
@@ -131,6 +136,18 @@ export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 
   }
   const handle = await cmd.sys.vfs.open(cmd.access, path, { mode });
   return { path, handle: handle as unknown as TrackLikeHandle };
+}
+
+/**
+ * Keep a GPX file a track was read from: filed in its device's `routes/`, moved there or with
+ * `copy` copied, and linked from the track's `sources/`. A file the device holds already, byte for
+ * byte, is not kept twice (`fileSource`). `name` is the name to keep it under, instead of its own.
+ * Returns where it is kept.
+ */
+export async function keepRoute(cmd: Command, trackPath: string, gpxPath: string, sha256: string, opts: { copy?: boolean; name?: string } = {}): Promise<string> {
+  const { path } = await fileSource(cmd.sys.vfs, cmd.access, gpxPath, `${dirname(trackPath)}/${ROUTES_DIR}`, { sha256, ...opts });
+  await linkSource(cmd.sys.vfs, cmd.access, trackPath, path);
+  return path;
 }
 
 /** Validate and normalize a point; throws on invalid lat/lng/ts. */

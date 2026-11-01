@@ -4,6 +4,7 @@ import { ageAt, CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir } from 
 import { basename, resolve } from '@std/path';
 import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { PersonInfo } from '@archive/people/api';
+import { sourceFiles } from '@archive/sources';
 
 type RelationInfo = { role: string; path: string; name?: string; kind?: string; from?: string; to?: string };
 type EventInfo = { name: string; eventType: string; date?: string; position?: string; description?: string };
@@ -106,6 +107,7 @@ const personInfo = async (cmd: Command): CmdReturn => {
   }
 
   const age = ageOf(attrs);
+  const sources = await sourceFiles(cmd.sys.vfs, cmd.access, target);
 
   const info = {
     path: target,
@@ -123,6 +125,7 @@ const personInfo = async (cmd: Command): CmdReturn => {
     relations,
     homes,
     events,
+    sources,
   };
 
   if (cmd.json) {
@@ -151,6 +154,10 @@ const personInfo = async (cmd: Command): CmdReturn => {
         const span = home.from ? ` [${home.from}–${home.to ?? ''}]` : '';
         await cmd.writeLn(`  ${home.name ?? basename(home.path)}${span} (${home.path})`);
       }
+    }
+    if (sources.length > 0) {
+      await cmd.writeLn('\nSources:');
+      for (const source of sources) await cmd.writeLn(`  ${source.path}${source.xref ? ` ${source.xref}` : ''}${source.missing ? ' (missing)' : ''}`);
     }
     if (events.length > 0) {
       await cmd.writeLn('\nEvents:');

@@ -12,6 +12,12 @@ export const PEOPLE_ROOT = `${ARCHIVE_PATH}/people`;
 export const LOCATIONS_ROOT = `${ARCHIVE_PATH}/locations`;
 /** Devices live under this prefix; a device's recorded route is its child `track`. */
 export const DEVICES_ROOT = `${ARCHIVE_PATH}/devices`;
+/**
+ * Source files no single node owns, one folder per kind: a GEDCOM file, which describes many
+ * people, is kept in `GENEALOGY_SOURCES`. A source with an owner is kept under it instead.
+ */
+export const SOURCES_ROOT = `${ARCHIVE_PATH}/sources`;
+export const GENEALOGY_SOURCES = `${SOURCES_ROOT}/genealogy`;
 
 /**
  * Whether `path` lies in the library: under `ALBUMS_ROOT`. A copy of a staged file is "already in

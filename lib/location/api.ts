@@ -48,7 +48,7 @@ export type TrackEntry = {
  * `routes/` when it was staged) for someone to say which device recorded it.
  */
 export type TrackStageResult =
-  | { status: 'imported'; track: string; imported: number; skipped: number }
+  | { status: 'imported'; track: string; imported: number; skipped: number; source: string }
   | { status: 'pending'; path: string; reason: string; candidates: string[] };
 
 type TrackSegment = { day: string; points: TrackPoint[] };

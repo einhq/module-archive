@@ -7,6 +7,7 @@ import { contactLink } from './PersonHeader.tsx';
 import { spanLine } from '../../lib/residence-span.ts';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { SourceFiles } from '../../components/SourceFiles.tsx';
 
 type PersonInfoTabProps = {
   person: PersonInfo;
@@ -26,7 +27,7 @@ const slugOf = (path: string): string => encodeURIComponent(path.split('/').pop(
  * and on a phone not even their contact details, which would push the name off
  * the cover. This tab is where the rest lives, on every screen size: every
  * contact with its type, the full dates, homes with their spans, the family
- * the node links to, and the whole description.
+ * the node links to, the whole description, and the files that describe them.
  */
 export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
   const contacts = person.contact ?? [];
@@ -111,6 +112,12 @@ export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
       {person.description && (
         <InfoSection title='About'>
           <UserText text={person.description} size='sm' />
+        </InfoSection>
+      )}
+
+      {person.sources.length > 0 && (
+        <InfoSection title='Sources'>
+          <SourceFiles files={person.sources} />
         </InfoSection>
       )}
     </SimpleGrid>
