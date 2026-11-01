@@ -353,6 +353,7 @@ const staging = async (cmd: Command): CmdReturn => {
           await cmd.writeLn(`${category.name}: ${files} media, ${other} other, ${indexing} indexing, ${undated} undated`);
         }
         if (status.routesWaiting > 0) await cmd.writeLn(`${status.routesWaiting} route(s) waiting for a device`);
+        if (status.genealogyWaiting > 0) await cmd.writeLn(`${status.genealogyWaiting} family tree(s) waiting to be imported`);
       }
       return 0;
     }
