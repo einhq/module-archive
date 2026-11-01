@@ -48,7 +48,7 @@ Deno.test({
       // Deliberately the same shell that wrote the settings. A shell's
       // environment is a snapshot taken at open, so this only works because the
       // creation path reads the settings files rather than its own environment —
-      // which is what lets the web UI, whose shell lives as long as the tab,
+      // which is what lets the Web UI, whose shell lives as long as the tab,
       // apply a change without a reload.
       await cmd.shouldSucceed(`album create ${ALBUMS_ROOT}/trip`);
 

@@ -143,7 +143,7 @@ const createAlbum = async (cmd: Command, path: string, name: string | undefined,
   if (description) attrs.description = description;
 
   // Ownership comes from the system default, narrowed or widened by `share`, or by this person's
-  // own preference. Through the settings files rather than cmd.env: the web UI holds one
+  // own preference. Through the settings files rather than cmd.env: the Web UI holds one
   // long-lived shell, so a preference changed in this session would otherwise not apply until the
   // page was reloaded.
   const ownership = await resolveDefaultOwnership(cmd, cmd.access);
