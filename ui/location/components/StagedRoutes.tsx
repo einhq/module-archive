@@ -1,28 +1,36 @@
 import { TablerIcon } from '@ein/ui/components';
-import { Alert, Button, Card, Group, Select, Stack, Text } from '@mantine/core';
+import { Alert, Button, Card, Checkbox, Group, Select, Stack, Text } from '@mantine/core';
 import { type NodeChildEntry, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { useCallback, useEffect, useState } from 'react';
 import { useDevices } from '../../device/hooks/useDevices.ts';
 
-/** A GPX file waiting in `routes/`, by its path and name. */
-type WaitingRoute = { path: string; name: string };
+/** A GPX file waiting in `routes/`: its path, name and the `creator` it says wrote it. */
+type WaitingRoute = { path: string; name: string; creator?: string };
 
 /**
  * The GPX files waiting in a staging area's `routes/` (`routes`): `track-stage` keeps a file there
- * only when it named no single device it knows. Asks which device recorded each, and imports it
- * into that device's track.
+ * only when it named no single device it knows. The files ticked are imported, one after another,
+ * into the track of the one device chosen for them.
  */
 export function StagedRoutes({ routes, reloadToken, onImported }: { routes: string; reloadToken: number; onImported: () => void }) {
   const [files, setFiles] = useState<WaitingRoute[]>([]);
-  const [chosen, setChosen] = useState<Record<string, string | null>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [device, setDevice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [errors, setErrors] = useState<string[]>([]);
   const { devices } = useDevices();
 
   const load = useCallback(async () => {
     const entries = await execCommand<NodeChildEntry[]>(`ls -l ${shq(routes)}`).catch(() => []);
-    setFiles(entries.filter((entry) => entry.node.type === 'file').map((entry) => ({ path: `${routes}/${entry.name}`, name: entry.name })));
+    const waiting = entries.filter((entry) => entry.node.type === 'file').map((entry) => ({
+      path: `${routes}/${entry.name}`,
+      name: entry.name,
+      creator: (entry.node.attrs as { gpxCreator?: string }).gpxCreator,
+    }));
+    setFiles(waiting);
+    // A file that is no longer waiting is no longer selected.
+    setSelected((current) => new Set(waiting.map((file) => file.path).filter((path) => current.has(path))));
   }, [routes]);
 
   useEffect(() => {
@@ -31,20 +39,31 @@ export function StagedRoutes({ routes, reloadToken, onImported }: { routes: stri
 
   if (files.length === 0) return null;
 
-  const importInto = async (file: WaitingRoute) => {
-    const device = chosen[file.path];
-    if (!device) return;
-    setBusy(file.path);
-    setError(null);
-    try {
-      await execCommand(`track-stage ${shq(file.path)} --device ${shq(device)}`);
-      await load();
-      onImported();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(null);
+  const toggle = (path: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  const all = selected.size === files.length;
+
+  const importSelected = async () => {
+    if (!device || selected.size === 0) return;
+    setBusy(true);
+    setErrors([]);
+    const failed: string[] = [];
+    for (const file of files.filter((file) => selected.has(file.path))) {
+      try {
+        await execCommand(`track-stage ${shq(file.path)} --device ${shq(device)}`);
+      } catch (err) {
+        failed.push(`${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
+    setErrors(failed);
+    setBusy(false);
+    await load();
+    onImported();
   };
 
   return (
@@ -55,25 +74,48 @@ export function StagedRoutes({ routes, reloadToken, onImported }: { routes: stri
           <Text fw={500}>Routes waiting for a device</Text>
         </Group>
         <Text size='sm' c='dimmed'>
-          These GPX files do not name a device the archive knows. Say which device recorded each, and its route joins that device's track.
+          These GPX files do not name a device the archive knows. Tick the ones one device recorded, choose that device, and their routes join its track.
         </Text>
-        {error && <Alert color='red'>{error}</Alert>}
+        {errors.length > 0 && (
+          <Alert color='red'>
+            {errors.map((message) => <Text key={message} size='sm'>{message}</Text>)}
+          </Alert>
+        )}
+        <Checkbox
+          label={all ? 'All selected' : selected.size > 0 ? `${selected.size} of ${files.length} selected` : 'Select all'}
+          checked={all}
+          indeterminate={!all && selected.size > 0}
+          onChange={() => setSelected(all ? new Set() : new Set(files.map((file) => file.path)))}
+          disabled={busy}
+        />
         {files.map((file) => (
-          <Group key={file.path} gap='sm' wrap='wrap'>
-            <Text size='sm' style={{ flex: '1 1 12rem', overflowWrap: 'anywhere' }}>{file.name}</Text>
-            <Select
-              placeholder='Device'
-              searchable
-              data={devices.map((device) => ({ value: device.path, label: device.name }))}
-              value={chosen[file.path] ?? null}
-              onChange={(value) => setChosen((current) => ({ ...current, [file.path]: value }))}
-              w={240}
-            />
-            <Button size='sm' disabled={!chosen[file.path]} loading={busy === file.path} onClick={() => void importInto(file)}>
-              Import
-            </Button>
-          </Group>
+          <Checkbox
+            key={file.path}
+            checked={selected.has(file.path)}
+            onChange={() => toggle(file.path)}
+            disabled={busy}
+            label={
+              <Text size='sm' style={{ overflowWrap: 'anywhere' }}>
+                {file.name}
+                {file.creator && <Text span size='xs' c='dimmed'>{` — creator "${file.creator}"`}</Text>}
+              </Text>
+            }
+          />
         ))}
+        <Group gap='sm' wrap='wrap'>
+          <Select
+            placeholder='Device'
+            aria-label='Device'
+            searchable
+            data={devices.map((entry) => ({ value: entry.path, label: entry.name }))}
+            value={device}
+            onChange={setDevice}
+            w={240}
+          />
+          <Button size='sm' disabled={!device || selected.size === 0} loading={busy} onClick={() => void importSelected()}>
+            {selected.size > 1 ? `Import ${selected.size} files` : 'Import'}
+          </Button>
+        </Group>
       </Stack>
     </Card>
   );
