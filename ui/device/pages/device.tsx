@@ -222,8 +222,8 @@ export default function DeviceDetailPage() {
                         Link existing media
                       </Title>
                       <Text size='xs' c='dimmed' mb='sm'>
-                        Files are linked to their device when they are indexed. A camera registered afterwards leaves its older photos unclaimed; this finds them by
-                        fingerprint and attaches them.
+                        Files are linked to their device when it is registered and when they are indexed. A make, model or serial number changed afterwards leaves the files it
+                        now matches unclaimed; this finds them by fingerprint and attaches them.
                       </Text>
                       <Button size='xs' variant='light' fullWidth leftSection={<TablerIcon name='link' size={14} />} loading={busy} onClick={runRelink}>
                         Link existing media
@@ -261,7 +261,7 @@ export default function DeviceDetailPage() {
             <MediaTimeline
               device={device.path}
               emptyMessage={matchable
-                ? 'Nothing is linked to this device yet. If it was registered after the media was indexed, use “Link existing media”.'
+                ? 'Nothing is linked to this device yet: no file carries its make and model or serial number. If they changed since it was registered, use “Link existing media”.'
                 : 'Nothing is linked to this device yet, and nothing can be: give it a serial number, or both a make and a model.'}
               selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
             />

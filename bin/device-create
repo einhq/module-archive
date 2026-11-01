@@ -6,11 +6,15 @@
  * given (`Canon EOS 5D Mark III` → `/devices/Canon_EOS_5D_Mark_III`), which is
  * both what the legacy import produced and what a caller with a fingerprint in
  * hand — the devices page registering a proposal — actually has.
+ *
+ * A device created with a fingerprint (a serial, or make and model) is linked to the media
+ * already in the archive that carry it, through `device-relink`.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { dirname, resolve } from '@std/path';
 import { DEVICES_ROOT, NODE_TYPE_DEVICE, OWNERS_DIR, slugifyDeviceName } from '@archive/device/device';
+import type { RelinkResult } from '@archive/device/api';
 
 const deviceCreate = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, {
@@ -70,10 +74,23 @@ const deviceCreate = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
+  // The files this camera took before it was registered were passed over when they were
+  // indexed; registering it is when they should find it (ein/core#863).
+  let relink: RelinkResult | undefined;
+  if (flags.serial || (flags.make && flags.model)) {
+    const linked = await cmd.execute(`JSON_OUTPUT=1 device-relink ${shq(path)}`);
+    if (linked.code !== 0) {
+      await cmd.writeError(`device-create: ${path}: registered, but existing media were not linked: ${linked.stderr.trim() || 'relink failed'}\n`);
+      return 1;
+    }
+    relink = JSON.parse(linked.stdout) as RelinkResult;
+  }
+
   if (cmd.json) {
-    await cmd.writeJSON({ ok: true, path });
+    await cmd.writeJSON({ ok: true, path, ...(relink ? { relink } : {}) });
   } else {
     await cmd.writeLn(path);
+    if (relink) await cmd.writeLn(`Linked ${relink.linked} file(s) and retimed ${relink.retimed}`);
   }
 
   return 0;
@@ -82,7 +99,7 @@ const deviceCreate = async (cmd: Command): CmdReturn => {
 deviceCreate.spec = {
   name: 'device-create',
   effect: 'write' as const,
-  description: 'Create a device node',
+  description: 'Create a device node and link the media already carrying its fingerprint',
   args: [
     { name: 'target', type: 'path' as const, description: `VFS path for the device node (default: ${DEVICES_ROOT}/<name>)` },
   ],

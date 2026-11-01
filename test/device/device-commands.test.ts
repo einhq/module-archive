@@ -188,11 +188,11 @@ Deno.test({
       // The hand-typed source, not a derived attr: `whenManual` is what outranks the device
       // date, and the point of this step is that suppressing the scanner's clock never touches it.
       await vfs.update(ADMIN_ACCESS, '/shots/scan.jpg', { attrs: { whenManual: '1983-12-24T10:00:00' } });
-      await cmd.shouldSucceed('device-create --name "HP ScanJet 3500" --make HP --model "ScanJet 3500" --digitizer');
-
-      const linked = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/HP_ScanJet_3500`);
-      assertEquals(linked.linked, 1);
-      assertEquals(linked.retimed, 1);
+      const created = await client.execJson<{ relink: Relink }>(
+        'device-create --name "HP ScanJet 3500" --make HP --model "ScanJet 3500" --digitizer',
+      );
+      assertEquals(created.relink.linked, 1);
+      assertEquals(created.relink.retimed, 1);
       // The manual time wins over the scanner's clock either way, so `takenAt` stays on it and
       // only the *source* moves — which is the whole reason `takenAtSource` is carried.
       let attrs = await client.execJson<Times>('attrs /shots/scan.jpg');
@@ -234,6 +234,17 @@ Deno.test({
     await t.step('a relinked device is then findable by search --device', async () => {
       const found = await client.execJson<{ results: { path: string }[] }>(`search --subject device:${DEVICES_ROOT}/iPhone_12`);
       assertEquals(found.results.map((hit) => hit.path).sort(), ['/shots/b.jpg', '/shots/c.jpg']);
+    });
+
+    await t.step('registering a scanned camera links the media it took', async () => {
+      // What the devices page does with a proposal: device-create with the fingerprint the scan
+      // found. The file was indexed before the camera was registered.
+      const created = await client.execJson<{ path: string; relink: Relink }>('device-create --name "Nikon D70" --make Nikon --model D70 --serial SER-2');
+      assertEquals(created.relink.linked, 1);
+
+      const attrs = await client.execJson<{ devicePath: string }>('attrs /shots/d.jpg');
+      assertEquals(attrs.devicePath, created.path);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/shots/d.jpg/device'), true);
     });
 
     await t.step('device-relink refuses a device with nothing to match on', async () => {
