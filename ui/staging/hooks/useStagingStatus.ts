@@ -16,6 +16,13 @@ const POLL_MS = 30_000;
  */
 const POLL_COST_FACTOR = 10;
 
+/**
+ * After an upload into the area, status is read again this long after it is done, in ms: a GPX or
+ * GEDCOM file uploaded into a category is moved out of it by a pipeline (`track-stage`,
+ * `gedcom-stage`) as soon as the queue gets to it, and the page then says it waits.
+ */
+const AFTER_UPLOAD_MS = [5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+
 /** Bumped by whatever changed a staging area from outside the page showing it: a dialog's command. */
 const statusStale = signal(0);
 
@@ -41,9 +48,9 @@ const ensureStagingLayout = (user: string): Promise<void> => {
 /**
  * `staging status` for `user`: their staging area's categories, and what each holds; set up first
  * when it is not (`initialized: false`). Read again when a dialog changed it
- * (`refreshStagingStatus`), when an upload into it is done, and every 30 s while files are
- * uploading into it or being prepared and the page is in view, less often when a read takes more
- * than a tenth of that. `eta` is how long, in ms, each category's files still being
+ * (`refreshStagingStatus`), when an upload into it is done and a few times in the five minutes
+ * after (`AFTER_UPLOAD_MS`), and every 30 s while files are uploading into it or being prepared and
+ * the page is in view, less often when a read takes more than a tenth of that. `eta` is how long, in ms, each category's files still being
  * prepared take at the rate they went since this page started watching them, by category name.
  */
 export function useStagingStatus(user: string) {
@@ -73,10 +80,19 @@ export function useStagingStatus(user: string) {
 
   useEffect(() => {
     let first = true;
-    return uploadBatchDone.subscribe((batch) => {
-      if (!first && batch?.dirs.some((dir) => dir.startsWith(`${stagingPath}/`))) refetch();
+    let timers: number[] = [];
+    const unsubscribe = uploadBatchDone.subscribe((batch) => {
+      if (!first && batch?.dirs.some((dir) => dir.startsWith(`${stagingPath}/`))) {
+        refetch();
+        timers.forEach((timer) => globalThis.clearTimeout(timer));
+        timers = AFTER_UPLOAD_MS.map((wait) => globalThis.setTimeout(refetch, wait));
+      }
       first = false;
     });
+    return () => {
+      unsubscribe();
+      timers.forEach((timer) => globalThis.clearTimeout(timer));
+    };
   }, [refetch, stagingPath]);
 
   // Whether files are on their way into the area from this browser; a boolean, so the page
