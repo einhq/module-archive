@@ -10,7 +10,7 @@ import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import { devicesForGpx, parseGpx } from '@archive/location/track';
-import type { TrackStageResult } from '@archive/location/api';
+import type { GpxInfo, TrackStageResult } from '@archive/location/api';
 import type { StagingStatus } from '@archive/staging/api';
 import type { SourceFile } from '@archive/sources/api';
 
@@ -47,6 +47,20 @@ Deno.test('parseGpx reads the creator and the names outside the points', () => {
   assertEquals(gpx.creator, 'Exempel Logger 2');
   assertEquals(gpx.names, ['Morning walk', 'Day 1']);
   assertEquals(gpx.points.length, 1);
+});
+
+Deno.test("parseGpx reads the file's own name, description and time, and its tracks' names", () => {
+  const gpx = parseGpx(`<gpx creator="Exempel &amp; Co"><metadata><name>Morning walk</name><desc>Round the lake</desc><time>2001-01-01T09:00:00Z</time></metadata>
+    <wpt lat="1" lon="2"><name>Bench</name><time>2001-01-01T09:30:00Z</time></wpt>
+    <trk><name>Day 1</name><trkseg><trkpt lat="1" lon="2"><time>2001-01-01T10:00:00Z</time></trkpt></trkseg></trk>
+    <trk><trkseg><trkpt lat="1" lon="2"/></trkseg></trk><trk><name>Day 2</name></trk></gpx>`);
+  assertEquals(
+    [gpx.creator, gpx.name, gpx.description, gpx.time, gpx.tracks],
+    ['Exempel & Co', 'Morning walk', 'Round the lake', '2001-01-01T09:00:00Z', ['Day 1', 'Day 2']],
+  );
+  // GPX 1.0 has no <metadata>: the root's own children are the file's.
+  const old = parseGpx('<gpx version="1.0"><name>Evening walk</name><trk><name>Leg</name></trk></gpx>');
+  assertEquals([old.name, old.tracks], ['Evening walk', ['Leg']]);
 });
 
 Deno.test('devicesForGpx matches a device by name, make and model, or serial', () => {
@@ -319,17 +333,50 @@ Deno.test({
       const waiting = '/home/admin/staging/routes/odd.gpx';
       assertEquals(pending.status === 'pending' && pending.path, waiting);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, staged), false);
-      const attrs = await client.execJson<{ trackDevicePending: boolean; gpxCreator: string }>(`attrs ${waiting}`);
-      assertEquals([attrs.trackDevicePending, attrs.gpxCreator], [true, 'Unknown Thing']);
+      assertEquals((await client.execJson<{ trackDevicePending: boolean }>(`attrs ${waiting}`)).trackDevicePending, true);
       assertEquals((await client.execJson<StagingStatus>('staging status')).routesWaiting, 1);
 
       // Told which device, and under which name to keep it (as the device page's upload says).
       const told = await client.execJson<TrackStageResult>(`track-stage ${waiting} --device logger --name 'July walk.gpx'`);
       assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${DEVICES_ROOT}/logger/routes/July walk.gpx`]);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, waiting), false);
-      const keptAttrs = (await ctx.vfs.get(ADMIN_ACCESS, `${DEVICES_ROOT}/logger/routes/July walk.gpx`)).attrs;
-      assertEquals([keptAttrs.trackDevicePending, keptAttrs.gpxCreator], [undefined, undefined]);
+      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, `${DEVICES_ROOT}/logger/routes/July walk.gpx`)).attrs.trackDevicePending, undefined);
       assertEquals((await client.execJson<SourceFile[]>(`source-list ${DEVICES_ROOT}/logger/track`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
+    });
+
+    await t.step('gpx-info says what GPX files hold and which devices they name, without importing them', async () => {
+      await cmd.shouldSucceed('mkfile /named.gpx');
+      const fh = await ctx.vfs.open(ADMIN_ACCESS, '/named.gpx', { mode: 'w' });
+      try {
+        await fh.write(
+          new TextEncoder().encode(GPX.replace('creator="test"', 'creator="Exempel Trail"').replace('<trk>', '<metadata><name>Morning walk</name></metadata><trk>')),
+        );
+      } finally {
+        await fh.close();
+      }
+      const size = (await ctx.vfs.get(ADMIN_ACCESS, '/named.gpx')).attrs.size;
+
+      const [named, plain] = await client.execJson<GpxInfo[]>('gpx-info /named.gpx /trip.gpx');
+      assertEquals(named, {
+        path: '/named.gpx',
+        size: size as number,
+        name: 'Morning walk',
+        creator: 'Exempel Trail',
+        tracks: ['Test'],
+        points: 3,
+        timed: 3,
+        start: '2020-06-01T10:00:00.000Z',
+        end: '2020-06-01T10:02:00.000Z',
+        devices: [{ path: `${DEVICES_ROOT}/logger`, name: 'Logger' }],
+      });
+      assertEquals(plain.path === '/trip.gpx' && !('error' in plain) && [plain.creator, plain.devices], ['test', []]);
+      // Nothing was imported: the file stays, the device's track as it was.
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, '/named.gpx'), true);
+
+      // A file that cannot be read is answered with why, beside the others, and the command fails.
+      const res = await client.exec('gpx-info /trip.gpx /missing.gpx');
+      assertEquals(res.success, false);
+      await cmd.shouldSucceed('gpx-info /trip.gpx');
     });
 
     await t.step('track-list names the devices that have a track', async () => {

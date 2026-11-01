@@ -1,0 +1,104 @@
+#!ts
+/**
+ * gpx-info — what GPX files say about themselves, without importing them.
+ *
+ *   gpx-info <gpx-file>...
+ *
+ * For each file: its size, its own name, description and time, its creator, its tracks' names,
+ * how many track points it has and how many carry a time, the earliest and latest of those times,
+ * and the registered devices it names (`devicesForGpx`, as `track-stage` matches them). A file
+ * that cannot be read is answered with why, and the command then exits 1.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { resolve } from '@std/path';
+import { toArrayBuffer } from '@std/streams/to-array-buffer';
+import { listDevices } from '@archive/device/device';
+import type { GpxInfo } from '@archive/location/api';
+import { devicesForGpx, parseGpx } from '@archive/location/track';
+
+/** One line per fact the file gives, under its path. */
+const describe = (info: GpxInfo): string[] => {
+  if ('error' in info) return [`${info.path}: ${info.error}`];
+  const span = info.start ? `, ${info.start}${info.end && info.end !== info.start ? ` – ${info.end}` : ''}` : '';
+  return [
+    info.path,
+    ...(info.name ? [`  name: ${info.name}`] : []),
+    ...(info.description ? [`  description: ${info.description}`] : []),
+    ...(info.time ? [`  time: ${info.time}`] : []),
+    ...(info.creator ? [`  creator: ${info.creator}`] : []),
+    ...(info.tracks.length > 0 ? [`  tracks: ${info.tracks.join(', ')}`] : []),
+    `  points: ${info.points}${info.timed < info.points ? ` (${info.timed} with a time)` : ''}${span}`,
+    `  size: ${info.size} bytes`,
+    `  devices: ${info.devices.length > 0 ? info.devices.map((device) => device.path).join(', ') : 'none it names'}`,
+  ];
+};
+
+const gpxInfo = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const targets = flags._.map(String);
+  if (targets.length === 0) {
+    await cmd.writeError('gpx-info: usage: gpx-info <gpx-file>...\n');
+    return 1;
+  }
+
+  const devices = await listDevices(cmd);
+  const answers: GpxInfo[] = [];
+  for (const target of targets) {
+    const path = resolve(cmd.cwd, target);
+    try {
+      const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+      let bytes: Uint8Array;
+      try {
+        bytes = new Uint8Array(await toArrayBuffer(handle.readable));
+      } finally {
+        await handle.close();
+      }
+      const gpx = parseGpx(new TextDecoder().decode(bytes));
+      // Every time is an ISO string in UTC, so they sort as text.
+      const times = gpx.points.flatMap((point) => point.ts ? [point.ts] : []).sort();
+      answers.push({
+        path,
+        size: bytes.length,
+        ...(gpx.name ? { name: gpx.name } : {}),
+        ...(gpx.description ? { description: gpx.description } : {}),
+        ...(gpx.time ? { time: gpx.time } : {}),
+        ...(gpx.creator ? { creator: gpx.creator } : {}),
+        tracks: gpx.tracks,
+        points: gpx.points.length,
+        timed: times.length,
+        ...(times.length > 0 ? { start: times[0], end: times.at(-1) } : {}),
+        devices: devicesForGpx(devices, gpx).map((device) => ({ path: device.path, name: device.name })),
+      });
+    } catch (error) {
+      answers.push({ path, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON(answers satisfies GpxInfo[]);
+  } else {
+    for (const answer of answers) {
+      for (const line of describe(answer)) await cmd.writeLn(line);
+    }
+  }
+  return answers.some((answer) => 'error' in answer) ? 1 : 0;
+};
+
+gpxInfo.spec = {
+  name: 'gpx-info',
+  effect: 'read' as const,
+  description:
+    'Say what GPX files hold without importing them: size, name, description, time, creator, tracks, points and their time span, and the registered devices each names',
+  args: [
+    { name: 'gpx', type: 'path' as const, description: 'VFS paths to GPX files', variadic: true },
+  ],
+  examples: ['gpx-info /home/anna/staging/routes/hike.gpx', 'gpx-info /home/anna/staging/routes/*.gpx'],
+  returns: 'one entry per file, in the order given; a file that could not be read gives its error instead.',
+};
+
+export default gpxInfo;

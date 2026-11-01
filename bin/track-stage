@@ -82,7 +82,7 @@ const trackStage = async (cmd: Command): CmdReturn => {
     if (device === undefined) {
       const candidates = devicesForGpx(await listDevices(cmd), gpx);
       if (candidates.length !== 1) {
-        await vfs.update(access, gpxPath, { attrs: { trackDevicePending: true, ...(gpx.creator ? { gpxCreator: gpx.creator } : {}) } });
+        await vfs.update(access, gpxPath, { attrs: { trackDevicePending: true } });
         const waiting = await waitInRoutes(cmd, gpxPath);
         const reason = candidates.length === 0 ? 'no registered device matches it' : `${candidates.length} devices match it`;
         if (cmd.json) {
@@ -105,8 +105,8 @@ const trackStage = async (cmd: Command): CmdReturn => {
     }
 
     const source = await keepRoute(cmd, trackPath, gpxPath, await sha256Hex(bytes), { name: flags.name ? basename(flags.name) : undefined });
-    // A file that waited for its device is kept without the marks of waiting.
-    if (waited) await vfs.update(access, source, { attrs: { trackDevicePending: null, gpxCreator: null } });
+    // A file that waited for its device is kept without the mark of waiting.
+    if (waited) await vfs.update(access, source, { attrs: { trackDevicePending: null } });
 
     if (cmd.json) {
       await cmd.writeJSON({ status: 'imported', track: trackPath, imported, skipped: gpx.points.length - imported, source } satisfies TrackStageResult);

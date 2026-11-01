@@ -51,6 +51,34 @@ export type TrackStageResult =
   | { status: 'imported'; track: string; imported: number; skipped: number; source: string }
   | { status: 'pending'; path: string; reason: string; candidates: string[] };
 
+/**
+ * `gpx-info`: what one GPX file says about itself, read without importing it — or why it could
+ * not be read.
+ */
+export type GpxInfo =
+  | {
+    path: string;
+    /** Bytes. */
+    size: number;
+    /** The file's own name, description and time (`<metadata>`, or the root in GPX 1.0). */
+    name?: string;
+    description?: string;
+    time?: string;
+    /** The `creator` attribute. */
+    creator?: string;
+    /** Each track's name. */
+    tracks: string[];
+    /** Track points, and how many of them carry a time. */
+    points: number;
+    timed: number;
+    /** The earliest and latest point time. */
+    start?: string;
+    end?: string;
+    /** The registered devices the file names, which `track-stage` would choose from. */
+    devices: { path: string; name: string }[];
+  }
+  | { path: string; error: string };
+
 type TrackSegment = { day: string; points: TrackPoint[] };
 
 export type TrackRead = { segments: TrackSegment[]; points: number; truncated: boolean };

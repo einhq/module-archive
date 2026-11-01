@@ -194,12 +194,25 @@ const TRKPT_RE = /<trkpt\b([^>]*)(?:\/>|>([\s\S]*?)<\/trkpt>)/g;
 type Gpx = {
   /** The `creator` attribute: the program or device that wrote the file. */
   creator?: string;
+  /** The file's own `<name>`, `<desc>` and `<time>`: in `<metadata>` (GPX 1.1) or the root (GPX 1.0). */
+  name?: string;
+  description?: string;
+  time?: string;
+  /** Each `<trk>`'s `<name>`, in document order. */
+  tracks: string[];
   /** Every `<name>` in it — the file's, its tracks' — in document order. */
   names: string[];
   points: TrackPoint[];
 };
 
-/** Read a GPX document: its `<trkpt>` fixes (lat/lon in either order, optional `<ele>` and `<time>`), creator and names. */
+/** `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&apos;` as the characters they stand for. */
+const unescapeXml = (text: string): string => text.replace(/&(amp|lt|gt|quot|apos);/g, (_, entity: string) => ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[entity]!);
+
+/** The text of each `<tag>` in `xml`, CDATA or not, trimmed; empty ones left out. */
+const texts = (xml: string, tag: string): string[] =>
+  [...xml.matchAll(new RegExp(`<${tag}>\\s*(?:<!\\[CDATA\\[)?([^<\\]]*?)(?:\\]\\]>)?\\s*</${tag}>`, 'g'))].map((m) => unescapeXml(m[1].trim())).filter(Boolean);
+
+/** Read a GPX document: its `<trkpt>` fixes (lat/lon in either order, optional `<ele>` and `<time>`), creator, own name, description and time, and names. */
 export function parseGpx(xml: string): Gpx {
   const points: TrackPoint[] = [];
 
@@ -227,10 +240,13 @@ export function parseGpx(xml: string): Gpx {
 
   // Names inside a point (`<trkpt><name>`) are waypoint labels, not what wrote the file.
   const outside = xml.replace(TRKPT_RE, '');
-  const creator = xml.match(/<gpx\b[^>]*\bcreator="([^"]*)"/)?.[1]?.trim() || undefined;
-  const names = [...outside.matchAll(/<name>\s*(?:<!\[CDATA\[)?([^<\]]*?)(?:\]\]>)?\s*<\/name>/g)].map((m) => m[1].trim()).filter(Boolean);
+  const creator = unescapeXml(xml.match(/<gpx\b[^>]*\bcreator="([^"]*)"/)?.[1]?.trim() ?? '') || undefined;
+  const names = texts(outside, 'name');
+  // What is left without tracks, routes and waypoints is the file's own: its metadata, or the root's children.
+  const own = outside.replace(/<(trk|rte|wpt)\b[\s\S]*?<\/\1>/g, '');
+  const tracks = [...outside.matchAll(/<trk\b[^>]*>([\s\S]*?)<\/trk>/g)].flatMap((m) => texts(m[1].replace(/<trkseg\b[\s\S]*?<\/trkseg>/g, ''), 'name').slice(0, 1));
 
-  return { creator, names, points };
+  return { creator, name: texts(own, 'name')[0], description: texts(own, 'desc')[0], time: texts(own, 'time')[0], tracks, names, points };
 }
 
 /** Lower-case words, space-separated and padded: `Garmin eTrex 30x` and `garmin-etrex-30x` read the same. */
