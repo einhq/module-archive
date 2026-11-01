@@ -3,14 +3,14 @@ import { countOf } from '@ein/ui/lib';
 import { Box, Stack, Text, UnstyledButton } from '@mantine/core';
 import type { MergeCard, MergeKind } from '../lib/gedcom-merge.ts';
 
-/** Each kind of card's colour, its name in the legend, and its line on the card. */
-export const MERGE_KINDS: Record<MergeKind, { color: string; label: string }> = {
-  found: { color: 'teal', label: 'Found in the archive' },
-  chosen: { color: 'marine', label: 'Chosen by you' },
-  unsure: { color: 'orange', label: 'To decide' },
-  new: { color: 'grape', label: 'New person' },
-  skip: { color: 'red', label: 'Left out' },
-  archive: { color: 'gray', label: 'Only in the archive' },
+/** Each kind of card's colour, its name on a badge and its line on the card, and what the legend calls several. */
+export const MERGE_KINDS: Record<MergeKind, { color: string; label: string; many: string }> = {
+  found: { color: 'teal', label: 'Found in the archive', many: 'found in the archive' },
+  chosen: { color: 'marine', label: 'Chosen by you', many: 'chosen by you' },
+  unsure: { color: 'orange', label: 'To decide', many: 'to decide' },
+  new: { color: 'grape', label: 'New person', many: 'new people' },
+  skip: { color: 'red', label: 'Left out', many: 'left out' },
+  archive: { color: 'gray', label: 'Only in the archive', many: 'only in the archive' },
 };
 
 /** What a card says of who they are: the person they are matched to, or what becomes of them. */

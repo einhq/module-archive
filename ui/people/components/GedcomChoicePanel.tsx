@@ -83,7 +83,8 @@ function IndividualChoice({ plan, merge, individual, onChoose, onSelect, busy }:
             const theirs = individual[key];
             const ours = person?.[key];
             if (!theirs && !ours) return null;
-            const fate = person ? attrFate(theirs, ours) : null;
+            // A full name that is only their name again is not added, as the import leaves it out.
+            const fate = person ? attrFate(key === 'fullname' && theirs === person.name ? undefined : theirs, ours) : null;
             return (
               <Table.Tr key={key}>
                 <Table.Td c='dimmed'>{label}</Table.Td>
@@ -140,7 +141,7 @@ function IndividualChoice({ plan, merge, individual, onChoose, onSelect, busy }:
         <Group gap='xs'>
           <Button
             size='xs'
-            variant={isNew ? 'filled' : 'default'}
+            variant={isNew && individual.chosen ? 'filled' : 'default'}
             color='grape'
             leftSection={<TablerIcon name='user-plus' size={14} />}
             disabled={busy || (isNew && individual.chosen)}
@@ -193,7 +194,8 @@ function Candidate({ path, person, score, matched, other, busy, onChoose }: Cand
           {span && <Text size='xs' c='dimmed' style={{ flex: 'none' }}>{span}</Text>}
         </Group>
         <Text size='xs' c='dimmed'>
-          {[score !== undefined ? `fits ${score}` : undefined, other ? `now ${other.name} (${other.xref})` : undefined].filter(Boolean).join(' · ')}
+          {[path.slice(path.lastIndexOf('/') + 1), score !== undefined ? `fits ${score}` : undefined, other ? `now ${other.name} (${other.xref})` : undefined].filter(Boolean)
+            .join(' · ')}
         </Text>
       </Stack>
       {matched

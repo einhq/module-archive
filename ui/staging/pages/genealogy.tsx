@@ -137,7 +137,9 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
     plan?.individuals[0]?.xref;
   const card = shown ? merge?.cards[shown] : undefined;
 
+  // The individual chosen for stays selected, so the panel shows what the choice did.
   const choose = useCallback((xref: string, choice: GedcomChoice | undefined) => {
+    setSelected(xref);
     setChoices((current) => {
       const next = { ...current };
       // A person is one individual's: choosing them here unsays them for anyone else.
@@ -258,7 +260,7 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
                 {(Object.keys(MERGE_KINDS) as MergeKind[]).filter((kind) => counts[kind]).map((kind) => (
                   <Group key={kind} gap={6} wrap='nowrap'>
                     <Box w={10} h={10} style={{ borderRadius: 2, background: `var(--mantine-color-${MERGE_KINDS[kind].color}-6)` }} />
-                    <Text size='sm' c='dimmed'>{counts[kind]} {MERGE_KINDS[kind].label.toLowerCase()}</Text>
+                    <Text size='sm' c='dimmed'>{counts[kind]} {counts[kind] === 1 ? MERGE_KINDS[kind].label.toLowerCase() : MERGE_KINDS[kind].many}</Text>
                   </Group>
                 ))}
               </Group>
