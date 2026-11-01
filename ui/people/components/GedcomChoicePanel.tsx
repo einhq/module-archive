@@ -1,7 +1,7 @@
 import type { GedcomChoice, GedcomPlan, GedcomPlanPerson } from '@archive/people/api';
 import { lifeSpan, TablerIcon } from '@ein/ui/components';
 import { openRoute } from '@ein/ui/signals';
-import { Alert, Anchor, Badge, Button, Card, Group, Select, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Badge, Button, Card, CloseButton, Group, Select, Stack, Table, Text, Title } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
@@ -20,6 +20,8 @@ type Props = {
   onSelect: (key: string) => void;
   /** Waiting on a choice just made. */
   busy: boolean;
+  /** Given, a close button in the corner calls it. */
+  onClose?: () => void;
 };
 
 const ATTRS = [
@@ -40,7 +42,7 @@ const personLink = (path: string, children: ReactNode) => <Anchor component={Lin
  * anyone else, a new person, or leaving them out. For a person only the archive has: which of the
  * file's individuals they are.
  */
-export function GedcomChoicePanel({ plan, merge, card, onChoose, onSelect, busy }: Props) {
+export function GedcomChoicePanel({ plan, merge, card, onChoose, onSelect, busy, onClose }: Props) {
   const kind = MERGE_KINDS[card.kind];
   return (
     <Card withBorder radius='md' padding='md'>
@@ -50,7 +52,10 @@ export function GedcomChoicePanel({ plan, merge, card, onChoose, onSelect, busy 
             <Title order={4} style={{ overflowWrap: 'anywhere' }}>{(card.individual ?? card.archive)?.name || card.key}</Title>
             <Text size='xs' c='dimmed'>{card.individual ? `${card.individual.xref} in the file` : 'In the archive, not in the file'}</Text>
           </Stack>
-          <Badge color={kind.color} variant='light' style={{ flex: 'none' }}>{kind.label}</Badge>
+          <Group gap={4} wrap='nowrap' style={{ flex: 'none' }}>
+            <Badge color={kind.color} variant='light'>{kind.label}</Badge>
+            {onClose && <CloseButton size='sm' aria-label='Close' onClick={onClose} />}
+          </Group>
         </Group>
         {card.individual
           ? <IndividualChoice plan={plan} merge={merge} individual={card.individual} onChoose={onChoose} onSelect={onSelect} busy={busy} />

@@ -4,7 +4,8 @@ import { EmptyState, EntityDetailHeader, FamilyTree, PageLoader, TablerIcon } fr
 import { useCommand } from '@ein/ui/hooks';
 import { countOf, type FamilyNode, type NodeChildEntry, shq } from '@ein/ui/lib';
 import { currentUser, execCommand } from '@ein/ui/signals';
-import { Alert, Box, Button, Card, Grid, Group, LoadingOverlay, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Alert, Box, Button, Card, Group, LoadingOverlay, ScrollArea, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
+import { useElementSize, useMediaQuery } from '@mantine/hooks';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -22,6 +23,9 @@ const NONE = { up: new Set<string>(), down: new Set<string>() };
 const ignore = () => {};
 /** A lone individual's card: as tall as the tree's. */
 const LOOSE_CARD_HEIGHT = 64;
+/** How wide the selected person's panel floats over the tree, and how far from its edges. */
+const PANEL_WIDTH = 380;
+const PANEL_GAP = 12;
 
 type Choices = Record<string, GedcomChoice>;
 
@@ -179,9 +183,46 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
     return by;
   }, [merge]);
 
+  // A card pressed is selected, and brings back the panel if it was closed.
+  const [panelOpen, setPanelOpen] = useState(true);
+  const { ref: panelRef, height: panelHeight } = useElementSize();
+  const select = useCallback((key: string) => {
+    setSelected(key);
+    setPanelOpen(true);
+  }, []);
+
   const renderCard = useCallback(
-    (node: FamilyNode) => merge?.cards[node.path] && <GedcomMergeCard card={merge.cards[node.path]} selected={node.path === shown} onSelect={setSelected} />,
-    [merge, shown],
+    (node: FamilyNode) => merge?.cards[node.path] && <GedcomMergeCard card={merge.cards[node.path]} selected={node.path === shown} onSelect={select} />,
+    [merge, shown, select],
+  );
+
+  // The tree drawn is the part of the merged tree the selected card is in; with several parts, a
+  // switch over the tree picks another, selecting its first card.
+  const parts = useMemo(() => {
+    if (!merge) return [];
+    const named = (key: string) => (merge.cards[key].individual ?? merge.cards[key].archive)?.name || key;
+    return [
+      ...merge.trees.map((tree) => ({ value: `tree:${tree.graph.root}`, label: `${named(tree.graph.root)}'s family (${tree.size})`, keys: Object.keys(tree.graph.nodes) })),
+      ...(merge.loose.length > 0 ? [{ value: 'loose', label: `Related to nobody (${merge.loose.length})`, keys: merge.loose }] : []),
+    ];
+  }, [merge]);
+  const part = parts.find((each) => shown && each.keys.includes(shown)) ?? parts[0];
+  const tree = merge?.trees.find((each) => part?.value === `tree:${each.graph.root}`);
+
+  const phone = useMediaQuery('(max-width: 48em)') ?? false;
+  const panelShown = Boolean(card && panelOpen);
+  const inset = !panelShown ? undefined : phone ? { bottom: panelHeight + 2 * PANEL_GAP } : { right: PANEL_WIDTH + 2 * PANEL_GAP };
+
+  const legend = plan && (
+    <Group gap='md' wrap='wrap' mt={6}>
+      <Text size='sm' c='gray.2'>{countOf(plan.individuals.length, 'person', 'people')} in the file:</Text>
+      {(Object.keys(MERGE_KINDS) as MergeKind[]).filter((kind) => counts[kind]).map((kind) => (
+        <Group key={kind} gap={6} wrap='nowrap'>
+          <Box w={10} h={10} style={{ borderRadius: 2, background: `var(--mantine-color-${MERGE_KINDS[kind].color}-6)` }} />
+          <Text size='sm' c='gray.2'>{counts[kind]} {counts[kind] === 1 ? MERGE_KINDS[kind].label.toLowerCase() : MERGE_KINDS[kind].many}</Text>
+        </Group>
+      ))}
+    </Group>
   );
 
   const header = (
@@ -189,7 +230,15 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
       eyebrow='Staging · Family tree'
       title={name}
       pattern='mixed'
-      subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
+      subtitle={
+        <Stack gap={0}>
+          <Text size='sm' c='gray.2'>{SUBTITLE}</Text>
+          {!result && legend}
+          {!result && waiting.length > 1 && (
+            <SegmentedControl size='xs' mt='xs' data={waiting} value={name} onChange={onFile} style={{ alignSelf: 'flex-start', maxWidth: '100%', overflowX: 'auto' }} />
+          )}
+        </Stack>
+      }
       flowContent
       actions={result ? undefined : {
         items: [
@@ -238,73 +287,81 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
   }
 
   return (
-    <>
+    <Box style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - var(--app-shell-header-height))' }}>
       {header}
-      <Box px='md' py='lg'>
-        <Stack gap='md'>
-          {waiting.length > 1 && (
-            <SegmentedControl size='xs' data={waiting} value={name} onChange={onFile} style={{ alignSelf: 'flex-start', maxWidth: '100%', overflowX: 'auto' }} />
+      <Box style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {!plan || !merge ? (!error && <PageLoader label='Reading the family tree…' />) : tree
+          ? (
+            <FamilyTree
+              key={tree.graph.root}
+              graph={tree.graph}
+              loading={false}
+              expanded={NONE}
+              expanding={null}
+              onExpand={ignore}
+              editable={false}
+              onAddRelation={ignore}
+              onRemoveRelation={ignore}
+              renderCard={renderCard}
+              fit
+              fill
+              inset={inset}
+            />
+          )
+          : (
+            <ScrollArea style={{ flex: 1 }} pr={inset?.right} pb={inset?.bottom}>
+              <SimpleGrid cols={{ base: 1, xs: 2, md: 3, xl: 4 }} spacing='xs' p='md' pt={parts.length > 1 ? 56 : 'md'}>
+                {merge.loose.map((key) => (
+                  <Card key={key} withBorder radius='md' p={0} h={LOOSE_CARD_HEIGHT}>
+                    <GedcomMergeCard card={merge.cards[key]} selected={key === shown} onSelect={select} />
+                  </Card>
+                ))}
+              </SimpleGrid>
+            </ScrollArea>
+          )}
+        <LoadingOverlay visible={reading && Boolean(plan)} overlayProps={{ blur: 1, backgroundOpacity: 0.2 }} loaderProps={{ size: 'sm' }} />
+
+        <Stack gap='xs' style={{ position: 'absolute', top: PANEL_GAP, left: PANEL_GAP, right: (inset?.right ?? 0) + PANEL_GAP + 56, zIndex: 3, pointerEvents: 'none' }}>
+          {parts.length > 1 && part && (
+            <SegmentedControl
+              size='xs'
+              data={parts.map((each) => ({ value: each.value, label: each.label }))}
+              value={part.value}
+              onChange={(value) => {
+                const next = parts.find((each) => each.value === value);
+                if (next) select(next.keys.find((key) => merge?.cards[key]?.individual) ?? next.keys[0]);
+              }}
+              style={{ alignSelf: 'flex-start', maxWidth: '100%', overflowX: 'auto', pointerEvents: 'auto' }}
+            />
           )}
           {error && (
-            <Alert color='red' variant='light' title='The family tree could not be read'>
+            <Alert color='red' title='The family tree could not be read' style={{ pointerEvents: 'auto' }}>
               <Stack gap='xs' align='flex-start'>
                 <Text size='sm'>{error}</Text>
                 {Object.keys(choices).length > 0 && <Button size='xs' variant='light' color='red' onClick={forget}>Forget my choices</Button>}
               </Stack>
             </Alert>
           )}
-          {!plan || !merge ? (!error && <PageLoader label='Reading the family tree…' />) : (
-            <>
-              <Group gap='md' wrap='wrap'>
-                <Text size='sm'>{countOf(plan.individuals.length, 'person', 'people')} in the file:</Text>
-                {(Object.keys(MERGE_KINDS) as MergeKind[]).filter((kind) => counts[kind]).map((kind) => (
-                  <Group key={kind} gap={6} wrap='nowrap'>
-                    <Box w={10} h={10} style={{ borderRadius: 2, background: `var(--mantine-color-${MERGE_KINDS[kind].color}-6)` }} />
-                    <Text size='sm' c='dimmed'>{counts[kind]} {counts[kind] === 1 ? MERGE_KINDS[kind].label.toLowerCase() : MERGE_KINDS[kind].many}</Text>
-                  </Group>
-                ))}
-              </Group>
-              <Grid gap='md'>
-                <Grid.Col span={{ base: 12, md: 8 }} pos='relative'>
-                  <LoadingOverlay visible={reading} overlayProps={{ blur: 1, backgroundOpacity: 0.2 }} loaderProps={{ size: 'sm' }} />
-                  <Stack gap='md'>
-                    {merge.trees.map((tree) => (
-                      <FamilyTree
-                        key={tree.graph.root}
-                        graph={tree.graph}
-                        loading={false}
-                        expanded={NONE}
-                        expanding={null}
-                        onExpand={ignore}
-                        editable={false}
-                        onAddRelation={ignore}
-                        onRemoveRelation={ignore}
-                        renderCard={renderCard}
-                        fit
-                      />
-                    ))}
-                    {merge.loose.length > 0 && (
-                      <Stack gap='xs'>
-                        <Text size='sm' c='dimmed'>Related to nobody in the file</Text>
-                        <SimpleGrid cols={{ base: 1, xs: 2, sm: 3 }} spacing='xs'>
-                          {merge.loose.map((key) => (
-                            <Card key={key} withBorder radius='md' p={0} h={LOOSE_CARD_HEIGHT}>
-                              <GedcomMergeCard card={merge.cards[key]} selected={key === shown} onSelect={setSelected} />
-                            </Card>
-                          ))}
-                        </SimpleGrid>
-                      </Stack>
-                    )}
-                  </Stack>
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 4 }}>
-                  {card && <GedcomChoicePanel plan={plan} merge={merge} card={card} onChoose={choose} onSelect={setSelected} busy={reading || importing} />}
-                </Grid.Col>
-              </Grid>
-            </>
-          )}
         </Stack>
+
+        {plan && merge && card && panelOpen && (
+          <Box
+            ref={panelRef}
+            style={{
+              position: 'absolute',
+              zIndex: 3,
+              overflowY: 'auto',
+              borderRadius: 'var(--mantine-radius-md)',
+              boxShadow: 'var(--mantine-shadow-lg)',
+              ...(phone
+                ? { left: PANEL_GAP, right: PANEL_GAP, bottom: PANEL_GAP, maxHeight: '55%' }
+                : { top: PANEL_GAP, right: PANEL_GAP, width: PANEL_WIDTH, maxHeight: `calc(100% - ${2 * PANEL_GAP}px)` }),
+            }}
+          >
+            <GedcomChoicePanel plan={plan} merge={merge} card={card} onChoose={choose} onSelect={select} onClose={() => setPanelOpen(false)} busy={reading || importing} />
+          </Box>
+        )}
       </Box>
-    </>
+    </Box>
   );
 }
