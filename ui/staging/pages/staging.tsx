@@ -4,7 +4,7 @@ import { EntityDetailHeader, type PageActions, PageLoader, TablerIcon, UploadDro
 import { useCommand } from '@ein/ui/hooks';
 import { formatCount, type NodeChildEntry, shq } from '@ein/ui/lib';
 import { currentUser, openDialog } from '@ein/ui/signals';
-import { Alert, Badge, Box, Button, Group, Menu, Tabs, Text, UnstyledButton } from '@mantine/core';
+import { Alert, Badge, Box, Button, Group, Menu, Stack, Tabs, Text, UnstyledButton } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -16,6 +16,7 @@ import { GenealogyWaiting } from '../components/GenealogyWaiting.tsx';
 import { GroupStream } from '../components/GroupStream.tsx';
 import { DuplicatesTab } from '../components/DuplicatesTab.tsx';
 import { ProgressStrip } from '../components/ProgressStrip.tsx';
+import { RoutesWaiting } from '../components/RoutesWaiting.tsx';
 import { useStagingStatus } from '../hooks/useStagingStatus.ts';
 import { heldFiles } from '../lib/overview.ts';
 import { mediaMoved } from '../../media/signals/album.ts';
@@ -213,6 +214,11 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
     }, { replace: true, state: location.state });
   }, [setSearchParams, location.state]);
 
+  // GPX and GEDCOM files staged in any category wait outside it, so every category's page says so.
+  // The inbox's Files tab lists the routes itself, and is where their devices are chosen.
+  const routesNotice = status.routesWaiting > 0 && !(isDefault && tab === 'files');
+  const chooseDevices = useCallback(() => isDefault ? showTab('files') : onOpen(status.defaultCategory, 'files'), [isDefault, showTab, onOpen, status.defaultCategory]);
+
   const groupCount = groupDirs.data?.find((entry) => entry.name === category.name)?.childCount;
   const counts = category.counts;
   const actions: PageActions = {
@@ -272,10 +278,11 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
 
       <Box py='lg' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
         <ProgressStrip category={category} eta={eta} />
-        {isDefault && status.genealogyWaiting > 0 && (
-          <Box px='md' pb='md'>
+        {(routesNotice || status.genealogyWaiting > 0) && (
+          <Stack gap='sm' px='md' pb='md'>
+            {routesNotice && <RoutesWaiting count={status.routesWaiting} onChoose={chooseDevices} />}
             <GenealogyWaiting count={status.genealogyWaiting} />
-          </Box>
+          </Stack>
         )}
 
         <Tabs.Panel value='sort'>

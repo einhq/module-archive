@@ -3,7 +3,7 @@ import { stagingRoots } from '@archive/staging/paths';
 import { TablerIcon } from '@ein/ui/components';
 import { uploadsUnder } from '@ein/ui/lib';
 import { openDialog, uploadSummaryByTarget } from '@ein/ui/signals';
-import { Alert, Button, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Button, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useState } from 'react';
 import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
@@ -14,6 +14,7 @@ import { CategoryCard } from './CategoryCard.tsx';
 import { DetectHints } from './DetectHints.tsx';
 import { GenealogyWaiting } from './GenealogyWaiting.tsx';
 import { MoveDialog } from './MoveDialog.tsx';
+import { RoutesWaiting } from './RoutesWaiting.tsx';
 import { SftpPath } from './SftpPath.tsx';
 
 type Props = {
@@ -71,18 +72,7 @@ export function CategoryOverview({ status, eta, onOpen }: Props) {
           </Stack>
         </Card>
       </SimpleGrid>
-      {status.routesWaiting > 0 && (
-        <Alert color='yellow' icon={<TablerIcon name='route' size={16} />} title='Needs you'>
-          <Group justify='space-between' gap='sm'>
-            <Text size='sm'>
-              {status.routesWaiting === 1
-                ? '1 GPS track waits for the device that recorded it.'
-                : `${status.routesWaiting} GPS tracks wait for the devices that recorded them.`}
-            </Text>
-            <Button size='xs' variant='light' onClick={() => onOpen(status.defaultCategory, 'files')}>Choose device</Button>
-          </Group>
-        </Alert>
-      )}
+      <RoutesWaiting count={status.routesWaiting} onChoose={() => onOpen(status.defaultCategory, 'files')} />
       <GenealogyWaiting count={status.genealogyWaiting} />
       <Stack gap={4}>
         <Text size='sm' c='dimmed'>Tens of thousands of files? Copy them over SFTP into a category's folder:</Text>
