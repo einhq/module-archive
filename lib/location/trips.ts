@@ -62,16 +62,16 @@ export type TripSegmentation = {
 };
 
 /** A stay across a local midnight at least this long is an overnight stay. */
-export const OVERNIGHT_MIN_MS = 2 * 60 * 60 * 1000;
+const OVERNIGHT_MIN_MS = 2 * 60 * 60 * 1000;
 /** A home ends a trip once the device has been there this long, or when its track ends there. */
-export const HOME_MIN_MS = 30 * 60 * 1000;
+const HOME_MIN_MS = 30 * 60 * 1000;
 /** A trip that never gets this many metres from its start is not one. */
-export const MIN_TRIP_M = 500;
+const MIN_TRIP_M = 500;
 /** A trip that has not ended is ongoing while its last fix is younger than this. */
-export const ONGOING_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+const ONGOING_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 /** Great-circle distance in metres. */
-export function haversine(aLat: number, aLng: number, bLat: number, bLng: number): number {
+function haversine(aLat: number, aLng: number, bLat: number, bLng: number): number {
   const R = 6371000;
   const toRad = Math.PI / 180;
   const s1 = Math.sin(((bLat - aLat) * toRad) / 2);
@@ -118,7 +118,7 @@ function centroid(c: Cluster): { lat: number; lng: number } {
 }
 
 /** Consecutive fixes within `radius` metres of where their run began, as clusters. */
-export function clusterFixes(fixes: TripFix[], radius: number): Cluster[] {
+function clusterFixes(fixes: TripFix[], radius: number): Cluster[] {
   const clusters: Cluster[] = [];
   let cur: Cluster | null = null;
   for (const p of fixes) {
