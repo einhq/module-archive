@@ -18,23 +18,23 @@ export const labelsChanged = () => {
 /** A label is one word: `label` refuses whitespace and slashes, so typed text splits into words. */
 export const labelWords = (raw: string): string[] => raw.split(/[\s,]+/).map((word) => word.replace(/\//g, '-')).filter(Boolean);
 
-/** A node's labels, read again whenever `labelsChanged` is said. */
+/** A node's labels, read again whenever `labelsChanged` is said; none while another node's are all there is. */
 function useNodeLabels(path: string): string[] {
   useSignals();
   const version = labelsVersion.value;
-  const [labels, setLabels] = useState<string[]>([]);
+  const [read, setRead] = useState<{ path: string; labels: string[] }>({ path, labels: [] });
 
   useEffect(() => {
     let cancelled = false;
     execCommand<string[]>(`label list ${shq(path)}`)
-      .then((list) => !cancelled && setLabels(list ?? []))
-      .catch(() => !cancelled && setLabels([]));
+      .then((list) => !cancelled && setRead({ path, labels: list ?? [] }))
+      .catch(() => !cancelled && setRead({ path, labels: [] }));
     return () => {
       cancelled = true;
     };
   }, [path, version]);
 
-  return labels;
+  return read.path === path ? read.labels : [];
 }
 
 type Props = {

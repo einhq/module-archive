@@ -1749,7 +1749,6 @@ export function MediaLightbox() {
 
   const detailsSidebar = (mobile: boolean) => (
     <MediaSidebar
-      key={media.id}
       media={media}
       mobile={mobile}
       result={detailsResult}

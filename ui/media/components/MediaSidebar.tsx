@@ -12,6 +12,11 @@
  *
  * The `media-details` answer arrives as `result`: the face overlay draws from the
  * same response, and a read of its own would mean two round trips per photo.
+ *
+ * The panel stays mounted from one picture to the next, so a step updates only the rows that
+ * change (ein/core#915). What belongs to the picture shown starts over when `media` changes: the
+ * comment draft, the open menu and dialogs, the doubt question and the scroll; children that keep
+ * state of their own for a picture are keyed by its path.
  */
 
 import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
@@ -441,12 +446,27 @@ export function MediaSidebar(
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
   // The comment box grows with its draft and is measured only when the draft changes, not on every
-  // render as Mantine's `autosize` is: the panel mounts again for every picture (ein/core#849).
+  // render as Mantine's `autosize` is.
   const commentRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => fitComment(commentRef.current, draft), [draft]);
   const [editing, setEditing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
+  const [shownPath, setShownPath] = useState(media.path);
+  if (shownPath !== media.path) {
+    setShownPath(media.path);
+    setDraft('');
+    setPosting(false);
+    setEditing(false);
+    setMenuOpen(false);
+    setAsking(null);
+  }
+  /** The picture shown, for a comment posted on one to know whether it is still the one shown. */
+  const pathRef = useRef(media.path);
+  pathRef.current = media.path;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => scrollRef.current?.scrollTo({ top: 0 }), [media.path]);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
@@ -488,12 +508,13 @@ export function MediaSidebar(
 
   const post = async () => {
     if (!draft.trim()) return;
+    const path = media.path;
     setPosting(true);
     try {
       await addComment(draft);
-      setDraft('');
+      if (pathRef.current === path) setDraft('');
     } finally {
-      setPosting(false);
+      if (pathRef.current === path) setPosting(false);
     }
   };
 
@@ -504,6 +525,7 @@ export function MediaSidebar(
   return (
     <ScrollBox
       data-media-sidebar
+      viewportRef={scrollRef}
       frameStyle={{
         width: mobile ? '100%' : SIDEBAR_WIDTH,
         minWidth: mobile ? 0 : SIDEBAR_WIDTH,
@@ -555,7 +577,16 @@ export function MediaSidebar(
           {(canEdit || addToAlbumPath) && (
             // Kept mounted, so the album picker outlives the menu closing on the click that opened it.
             // On a phone its rows are a thumb's, like the lightbox bar's menu.
-            <Menu position='bottom-end' withinPortal shadow='md' keepMounted keepMountedMode='display-none' styles={mobile ? THUMB_MENU_STYLES : undefined}>
+            <Menu
+              opened={menuOpen}
+              onChange={setMenuOpen}
+              position='bottom-end'
+              withinPortal
+              shadow='md'
+              keepMounted
+              keepMountedMode='display-none'
+              styles={mobile ? THUMB_MENU_STYLES : undefined}
+            >
               <Menu.Target>
                 <ActionIcon variant='subtle' color='gray' size={mobile ? 'xl' : 'lg'} loading={orienting} aria-label='Edit media'>
                   <TablerIcon name='settings' size={mobile ? 24 : 20} />
@@ -572,7 +603,7 @@ export function MediaSidebar(
                     Share
                   </Menu.Item>
                 )}
-                {addToAlbumPath && <LightboxActionItems path={addToAlbumPath} iconSize={menuIcon} />}
+                {addToAlbumPath && <LightboxActionItems key={addToAlbumPath} path={addToAlbumPath} iconSize={menuIcon} />}
                 {canEdit && !mobile && (media.type === 'photo' || media.type === 'video') && onAddFace && (
                   <Menu.Item
                     leftSection={<TablerIcon name='user-square-rounded' size={menuIcon} />}
@@ -616,6 +647,7 @@ export function MediaSidebar(
 
         {/* A staged file's copies and look-alikes: what the reader decides on while sorting an import. */}
         <StagedDuplicates
+          key={media.path}
           path={media.path}
           row={(children) => <IconRow icon={<TablerIcon name='copy' size={SECTION_ICON_SIZE} />}>{children}</IconRow>}
           onLayer={onLayer}
@@ -632,6 +664,7 @@ export function MediaSidebar(
         {details?.hasTranscript && (
           <IconRow icon={<TablerIcon name='blockquote' size={SECTION_ICON_SIZE} />}>
             <TranscriptPanel
+              key={details.path}
               path={details.path}
               speakers={details.speakers}
               canEdit={canEdit}
@@ -858,7 +891,7 @@ export function MediaSidebar(
                   </Box>
                 )}
                 {details && details.mimetype?.startsWith('image/') && (details.content || details.contentLanguageManual) && (
-                  <TextLanguage details={details} canEdit={canEdit} onSet={setTextLanguage} />
+                  <TextLanguage key={details.path} details={details} canEdit={canEdit} onSet={setTextLanguage} />
                 )}
 
                 <InfoRow label='Type' value={details?.mimetype ?? media.mimetype ?? ''} />
