@@ -45,11 +45,6 @@ export function speedOf(points: TrackPoint[]): number | undefined {
   return trackDistance([{ day: last.ts.slice(0, 10), points: [previous, last] }]) / (ms / 1000);
 }
 
-/** A speed in metres per second as `12 km/h`. */
-export function formatSpeed(metresPerSecond: number): string {
-  return `${Math.round(metresPerSecond * 3.6)} km/h`;
-}
-
 /** How long ago a fix was taken: `just now`, `40 s ago`, `12 min ago`, `2 h 5 min ago`. */
 export function formatAge(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));

@@ -2,18 +2,19 @@ import { MapMarkers, type MapMarkerSpec, MapTracks, type MapTrackSpec, TablerIco
 import { ActionIcon, Box, Group, Stack, Text, Tooltip } from '@mantine/core';
 import { useEffect, useMemo, useRef } from 'react';
 import type { LiveTrack } from '../hooks/useLiveTracks.ts';
-import { formatAge, formatSpeed, speedOf } from '../lib/live.ts';
+import { formatAge, speedOf } from '../lib/live.ts';
+import { formatSpeed, trackProfile } from '@archive/location/track-profile';
 import { dayColor } from '../lib/track-colors.ts';
 import './live-tracks.css';
 
 /** The color a live device is drawn in: its track's color for the day of its last fix. */
 const liveColor = (entry: LiveTrack): string => dayColor(entry.track.path, entry.last.ts?.slice(0, 10) ?? '');
 
-/** `12 km/h · 40 s ago`, or the age alone when the speed is not known. */
+/** `12 km/h · 40 s ago`, in knots for a boat, or the age alone when the speed is not known. */
 export function liveSummary(entry: LiveTrack, now: number): string {
   const speed = speedOf(entry.points);
   const age = entry.last.ts ? formatAge(now - Date.parse(entry.last.ts)) : undefined;
-  return [speed !== undefined ? formatSpeed(speed) : undefined, age].filter(Boolean).join(' · ');
+  return [speed !== undefined ? formatSpeed(speed, trackProfile(entry.track.kind).units) : undefined, age].filter(Boolean).join(' · ');
 }
 
 /** Calls `onDrag` when the map is dragged by hand, which is what ends following. */

@@ -96,6 +96,7 @@ export async function listTracks(cmd: Command, root: string = DEVICES_ROOT): Pro
       path: `${device}/${TRACK_CHILD}`,
       nodeId: id,
       name: str((entry.node.attrs as Record<string, unknown>).name) ?? entry.name,
+      kind: str((entry.node.attrs as Record<string, unknown>).kind),
       description: str((node.attrs as Record<string, unknown>).description),
       ...summary,
     }];

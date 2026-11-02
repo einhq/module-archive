@@ -36,6 +36,8 @@ export type TrackEntry = {
   nodeId: string;
   /** The device's name. */
   name: string;
+  /** How the device travels (`DeviceKind`), which sets the units its speed is shown in. */
+  kind?: string;
   description?: string;
   points: number;
   firstTs?: string;

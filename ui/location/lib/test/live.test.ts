@@ -1,5 +1,5 @@
 import { assertEquals, assertStrictEquals } from '@std/assert';
-import { appendFixes, formatAge, formatSpeed, isLive, LIVE_FOR_MS, speedOf } from '../live.ts';
+import { appendFixes, formatAge, isLive, LIVE_FOR_MS, speedOf } from '../live.ts';
 
 const at = (ts: string, lat = 57.7, lng = 11.9, speed?: number) => ({ lat, lng, ts, ...(speed === undefined ? {} : { speed }) });
 
@@ -35,8 +35,7 @@ Deno.test('live: without a reported speed it is the distance over the time betwe
   assertEquals(speedOf([at('2026-07-01T10:00:00Z')]), undefined);
 });
 
-Deno.test('live: speed and age read as a person says them', () => {
-  assertEquals(formatSpeed(2.5), '9 km/h');
+Deno.test('live: age reads as a person says it', () => {
   assertEquals(formatAge(4000), 'just now');
   assertEquals(formatAge(40_000), '40 s ago');
   assertEquals(formatAge(12 * 60_000 + 5000), '12 min ago');
