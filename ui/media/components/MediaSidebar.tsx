@@ -16,7 +16,7 @@
 
 import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
 import { Accordion, ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
@@ -357,6 +357,24 @@ function DeviceSection({ details, exif, onOpen }: {
   );
 }
 
+const COMMENT_MIN_ROWS = 2;
+const COMMENT_MAX_ROWS = 6;
+
+/**
+ * Sizes the comment box to `draft`: its own `rows` while empty, otherwise tall enough for the text
+ * between COMMENT_MIN_ROWS and COMMENT_MAX_ROWS lines, scrolling past that.
+ */
+function fitComment(box: HTMLTextAreaElement | null, draft: string) {
+  if (!box) return;
+  box.style.height = '';
+  if (!draft || box.scrollHeight <= box.clientHeight) return;
+  const style = getComputedStyle(box);
+  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+  const borders = box.offsetHeight - box.clientHeight;
+  const most = COMMENT_MAX_ROWS * parseFloat(style.lineHeight) + padding;
+  box.style.height = `${Math.min(box.scrollHeight, most) + borders}px`;
+}
+
 export function MediaSidebar(
   {
     media,
@@ -422,6 +440,10 @@ export function MediaSidebar(
   const { details, addComment, removeComment, setDescription, setTextLanguage, rawExif, loadRawExif, rawExifLoading } = result;
   const [draft, setDraft] = useState('');
   const [posting, setPosting] = useState(false);
+  // The comment box grows with its draft and is measured only when the draft changes, not on every
+  // render as Mantine's `autosize` is: the panel mounts again for every picture (ein/core#849).
+  const commentRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => fitComment(commentRef.current, draft), [draft]);
   const [editing, setEditing] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
@@ -777,12 +799,11 @@ export function MediaSidebar(
             {canEdit && (
               <>
                 <Textarea
+                  ref={commentRef}
                   value={draft}
                   onChange={(e) => setDraft(e.currentTarget.value)}
                   placeholder='Add a comment…'
-                  autosize
-                  minRows={2}
-                  maxRows={6}
+                  rows={COMMENT_MIN_ROWS}
                 />
                 {draft.trim() && (
                   <Group>
