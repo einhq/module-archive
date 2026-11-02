@@ -50,7 +50,7 @@ import {
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
 import { useAccessIds, useShortcutHelp, useSurface } from '@ein/ui/hooks';
-import { type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
+import { prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import { useWakeLock } from '../hooks/useWakeLock.ts';
 import {
   albumMediaList,
@@ -456,30 +456,30 @@ export function MediaLightbox() {
   // Only this file's details: straight after a swipe `details` still describes the previous one,
   // whose faces would be drawn over the new picture, and whose state would be taken for this one's,
   // until its own details arrive.
-  const faceDetails = details && detailsPath === media?.path ? details : null;
+  const currentDetails = details && detailsPath === media?.path ? details : null;
   // Rotating an undecodable source would queue a re-encode of bytes ffmpeg cannot open, so the
   // buttons are not offered for one.
-  const canOrient = media?.type !== 'audio' && faceDetails !== null && !faceDetails.undecodable && canEdit;
+  const canOrient = media?.type !== 'audio' && currentDetails !== null && !currentDetails.undecodable && canEdit;
   const { person: reviewPerson, refetch: refetchReviewPerson } = useUnknownPerson(reviewPersonId ?? undefined);
   const { people: namedPeople } = usePeople(PEOPLE_ROOT, reviewPersonId !== null || personFacePath !== null);
 
   // A photo's boxes stand where its faces are. A video's move with them (`VideoFaces`), each on
   // its track, and the face the sidebar picks is followed (`followFace`).
-  const faces = useMemo(() => media?.type === 'photo' ? toFaceMarks(faceDetails?.faces ?? []) : [], [faceDetails, media?.type]);
+  const faces = useMemo(() => media?.type === 'photo' ? toFaceMarks(currentDetails?.faces ?? []) : [], [currentDetails, media?.type]);
   const videoFaces = useMemo(
-    () => media?.type === 'video' ? (faceDetails?.faces ?? []).filter((face) => face.atSeconds !== undefined) : [],
-    [faceDetails, media?.type],
+    () => media?.type === 'video' ? (currentDetails?.faces ?? []).filter((face) => face.atSeconds !== undefined) : [],
+    [currentDetails, media?.type],
   );
   const faceCount = media?.type === 'video' ? videoFaces.length : faces.length;
   const [followedFacePath, setFollowedFacePath] = useState<string | null>(null);
   useEffect(() => setFollowedFacePath(null), [media?.id]);
-  const followedFace = media?.type === 'video' ? faceDetails?.faces.find((face) => face.facePath === followedFacePath && face.atSeconds !== undefined) : undefined;
-  const personFace = faceDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
+  const followedFace = media?.type === 'video' ? currentDetails?.faces.find((face) => face.facePath === followedFacePath && face.atSeconds !== undefined) : undefined;
+  const personFace = currentDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
   // The text in a photo, which the "more" menu lays over it, and opens for writing, in a dialog
   // beside the picture, to whoever may write the photo. Shown, it stays on from picture to
   // picture, for paging through scanned pages, until the lightbox closes.
-  const pictureText = withDetails && media?.type === 'photo' ? faceDetails?.content : undefined;
-  const mayWriteText = withDetails && media?.type === 'photo' && faceDetails !== null && canEdit;
+  const pictureText = withDetails && media?.type === 'photo' ? currentDetails?.content : undefined;
+  const mayWriteText = withDetails && media?.type === 'photo' && currentDetails !== null && canEdit;
   const [showText, setShowText] = useState(false);
   const [editingText, setEditingText] = useState(false);
   const toggleText = useCallback(() => setShowText((shown) => !shown), []);
@@ -490,7 +490,7 @@ export function MediaLightbox() {
   }, [setText]);
   // What is said in a video or a recording, opened for correcting, beside a player of its own, to
   // whoever may write the file. One with no transcript yet gets its first lines there.
-  const mayWriteSubtitles = withDetails && (media?.type === 'video' || media?.type === 'audio') && faceDetails !== null && !faceDetails.undecodable && canEdit;
+  const mayWriteSubtitles = withDetails && (media?.type === 'video' || media?.type === 'audio') && currentDetails !== null && !currentDetails.undecodable && canEdit;
   const [editingSubtitles, setEditingSubtitles] = useState(false);
   const saveSubtitles = useCallback(async (vtt: string) => {
     await setTranscript(vtt);
@@ -507,7 +507,7 @@ export function MediaLightbox() {
 
   // Opened by its URL alone, a file is known by its path only and shown as a picture; its
   // details say what it is, so a video or a recording gets its player.
-  const detailsMimetype = faceDetails?.mimetype;
+  const detailsMimetype = currentDetails?.mimetype;
   useEffect(() => {
     if (!media || !detailsMimetype || detailsMimetype === media.mimetype || media.mimetype !== mediaItemFrom({ path: media.path }).mimetype) return;
     const known = mediaItemFrom({ path: media.path, mimetype: detailsMimetype });
@@ -517,7 +517,7 @@ export function MediaLightbox() {
   // The details are read fresh after a turn, so they know which way the picture stands now; the
   // item came from a list read before it. The shrink back into the tile and the renditions asked
   // for both follow the item's shape.
-  const detailsAngle = faceDetails?.angle;
+  const detailsAngle = currentDetails?.angle;
   useEffect(() => {
     if (!media || detailsAngle === undefined || detailsAngle === (media.angle ?? 0)) return;
     const turned = itemAtAngle(media, detailsAngle);
@@ -764,6 +764,19 @@ export function MediaLightbox() {
     };
   }, [loadedPhotoId, media?.id, media?.type]);
 
+  // The files a step reaches next have their details read once this one's are in, so the place,
+  // the faces and the panel arrive with the picture rather than a beat after it.
+  const currentDetailsIn = currentDetails !== null;
+  useEffect(() => {
+    const list = albumMediaList.value;
+    if (!media || !currentDetailsIn || list.length < 2) return;
+    const index = currentMediaIndex.value;
+    for (const at of [index + 1, index - 1]) {
+      const item = list[((at % list.length) + list.length) % list.length];
+      if (item.id !== media.id) prefetchMediaDetails(item.path, item.stackAlbumPath);
+    }
+  }, [currentDetailsIn, media?.id]);
+
   // Hotkeys remain available while presenting. A direct navigation interrupts the automatic
   // transition rather than reviving its outgoing frame on a later slide.
   useEffect(() => {
@@ -933,7 +946,7 @@ export function MediaLightbox() {
 
   // A photo and a video's picture zoom; the slideshow is already moving the picture itself, and
   // a video that cannot be played has only its message to show.
-  const zoomable = (media?.type === 'photo' || (media?.type === 'video' && !faceDetails?.undecodable)) && !slideshow;
+  const zoomable = (media?.type === 'photo' || (media?.type === 'video' && !currentDetails?.undecodable)) && !slideshow;
 
   const setZoom = useCallback((next: ZoomState, animate: boolean) => {
     zoomRef.current = next;
@@ -1615,19 +1628,19 @@ export function MediaLightbox() {
    */
   const followFace = useCallback((facePath: string) => {
     if (facePath === followedFacePath) return setFollowedFacePath(null);
-    const face = faceDetails?.faces.find((candidate) => candidate.facePath === facePath);
+    const face = currentDetails?.faces.find((candidate) => candidate.facePath === facePath);
     const video = mediaRef.current;
     if (face?.atSeconds === undefined || !(video instanceof HTMLVideoElement)) return;
     video.pause();
     video.currentTime = face.atSeconds;
     setFollowedFacePath(facePath);
-  }, [faceDetails, followedFacePath]);
+  }, [currentDetails, followedFacePath]);
 
   // A recording the browser will not start by itself (an autoplay policy), one that fails, or one
   // known to be undecodable never ends; a slideshow moves past it after one slide's time rather
   // than stopping there. A stall lasts until the recording plays after all.
   const [stalledId, setStalledId] = useState<string | null>(null);
-  const undecodableAv = (media?.type === 'video' || media?.type === 'audio') && Boolean(faceDetails?.undecodable);
+  const undecodableAv = (media?.type === 'video' || media?.type === 'audio') && Boolean(currentDetails?.undecodable);
   useEffect(() => {
     if (!slideshow || !media || (stalledId !== media.id && !undecodableAv)) return;
     const timer = globalThis.setTimeout(advanceSlideshow, slideDurationMs);
@@ -1651,8 +1664,9 @@ export function MediaLightbox() {
   // A source ffprobe could not read at all — no rendition exists and none can be made, so the
   // player below would be controls over nothing. Say what is wrong instead. Only for a/v: it is
   // the only family `exif-extract` probes, and `details` is the read the sidebar already makes.
-  const undecodable = (isVideo || isAudio) ? faceDetails?.undecodable : undefined;
-  const takenAt = details?.takenAt ?? media.takenAt;
+  const undecodable = (isVideo || isAudio) ? currentDetails?.undecodable : undefined;
+  // The list item's date is there the moment a swipe lands; `details` may still be the last file's.
+  const takenAt = currentDetails?.takenAt ?? media.takenAt;
   // An upright phone's slideshow bar carries the date beside the counter and location; the short
   // names keep it on one line.
   const taken = formatLightboxTaken(takenAt, slideshow && mobilePortrait);
@@ -1660,16 +1674,16 @@ export function MediaLightbox() {
   // A photograph is shown on the clock the photographer was reading. The viewer's own time is
   // offered beside it only when the two differ, which on this archive means the pictures taken
   // abroad and nothing else.
-  const takenHere = viewerLocalTime(takenAt, details?.takenAtUtc);
-  const takenSource = timeSourceLabel(details?.takenAtSource, details?.digitized);
-  const takenNote = details?.takenAtNote;
+  const takenHere = viewerLocalTime(takenAt, currentDetails?.takenAtUtc ?? media.takenAtUtc);
+  const takenSource = timeSourceLabel(currentDetails?.takenAtSource, currentDetails?.digitized);
+  const takenNote = currentDetails?.takenAtNote;
   const takenTooltip = [takenHere && `${takenHere} your time`, takenSource, takenNote].filter(Boolean).join(' · ');
-  const where = locationLabel(details);
+  const where = locationLabel(currentDetails);
   // Match the sidebar preview: embedded GPS is more specific than the linked
   // location, but either is enough to locate the media on the enlarged map.
-  const mapPoint = details?.position ??
-    (details?.location?.lat !== undefined && details.location.lng !== undefined
-      ? { lat: details.location.lat, lng: details.location.lng, radius: details.location.radius }
+  const mapPoint = currentDetails?.position ??
+    (currentDetails?.location?.lat !== undefined && currentDetails.location.lng !== undefined
+      ? { lat: currentDetails.location.lat, lng: currentDetails.location.lng, radius: currentDetails.location.radius }
       : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
@@ -1767,7 +1781,7 @@ export function MediaLightbox() {
       addingFace={addingFace}
       // A video's box is drawn on a still frame, so the video stops for it; one that cannot be
       // played has no frame to draw on.
-      onAddFace={media.type === 'video' && faceDetails?.undecodable ? undefined : () => {
+      onAddFace={media.type === 'video' && currentDetails?.undecodable ? undefined : () => {
         const video = mediaRef.current;
         if (!addingFace && video instanceof HTMLVideoElement) video.pause();
         setAddingFace((value) => !value);
@@ -2093,7 +2107,7 @@ export function MediaLightbox() {
                     onStalled={() => setStalledId(media.id)}
                     onPlay={() => setStalledId(null)}
                     keysEnabled={playerKeys}
-                    transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
+                    transcript={currentDetails?.hasTranscript ? { language: currentDetails.transcriptLanguage, speakers: currentDetails.speakers } : undefined}
                     compact={isMobile}
                   />
                 )
@@ -2125,14 +2139,14 @@ export function MediaLightbox() {
                         onDraftChange={setFaceDraftReady}
                       />
                     )}
-                    transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
-                    chapters={faceDetails?.chapters}
+                    transcript={currentDetails?.hasTranscript ? { language: currentDetails.transcriptLanguage, speakers: currentDetails.speakers } : undefined}
+                    chapters={currentDetails?.chapters}
                     // The sheet's hash is in its URL: one made again under the same name would be served
                     // from the cache for an hour, and read with the new one's geometry.
-                    storyboard={faceDetails?.storyboard
+                    storyboard={currentDetails?.storyboard
                       ? {
-                        ...faceDetails.storyboard,
-                        url: `${fileUrl(media.path)}/thumbnails/${faceDetails.storyboard.name}?sha=${faceDetails.storyboard.sha256.slice(0, 16)}`,
+                        ...currentDetails.storyboard,
+                        url: `${fileUrl(media.path)}/thumbnails/${currentDetails.storyboard.name}?sha=${currentDetails.storyboard.sha256.slice(0, 16)}`,
                       }
                       : undefined}
                     compact={isMobile}
@@ -2234,7 +2248,7 @@ export function MediaLightbox() {
                   mediaRef={mediaRef}
                   path={media.path}
                   text={pictureText}
-                  truncated={faceDetails?.contentTruncated}
+                  truncated={currentDetails?.contentTruncated}
                   onEdit={mayWriteText ? () => setEditingText(true) : undefined}
                 />
               )}
@@ -2518,7 +2532,7 @@ export function MediaLightbox() {
           media={media}
           reloadToken={reloadToken}
           text={pictureText ?? ''}
-          truncated={faceDetails?.contentTruncated ?? false}
+          truncated={currentDetails?.contentTruncated ?? false}
           onSave={saveText}
           onClose={() => setEditingText(false)}
         />
@@ -2528,7 +2542,7 @@ export function MediaLightbox() {
           opened={editingSubtitles}
           media={media}
           reloadToken={reloadToken}
-          transcript={faceDetails?.hasTranscript ? { language: faceDetails.transcriptLanguage, speakers: faceDetails.speakers } : undefined}
+          transcript={currentDetails?.hasTranscript ? { language: currentDetails.transcriptLanguage, speakers: currentDetails.speakers } : undefined}
           onSave={saveSubtitles}
           onClose={() => setEditingSubtitles(false)}
         />

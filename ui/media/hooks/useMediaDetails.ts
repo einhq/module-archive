@@ -65,6 +65,54 @@ function encodeBody(text: string): string {
   return btoa(binary);
 }
 
+const detailsArgs = (path: string, albumPath?: string) => `${shq(path)}${albumPath ? ` --album ${shq(albumPath)}` : ''}`;
+
+/**
+ * Recent `media-details` answers, so a step onto a file read ahead (`prefetchMediaDetails`) or
+ * seen before shows its details with the picture instead of a beat after it. One younger than
+ * `DETAILS_FRESH_MS`, a run of swipes' read-ahead, is taken as it is; an older one is shown while
+ * it is read again, since other views change files too (the review names their faces). A change
+ * made through the hook empties it: naming a face renames that person on other files as well.
+ */
+const DETAILS_CACHE_SIZE = 32;
+const DETAILS_FRESH_MS = 5_000;
+const detailsCache = new Map<string, { details: MediaDetails; at: number }>();
+const detailsReads = new Map<string, Promise<MediaDetails>>();
+const detailsKey = (path: string, albumPath?: string) => `${albumPath ?? ''}\n${path}`;
+
+function forgetDetails(): void {
+  detailsCache.clear();
+  // A read already on its way may predate the change; it is still answered, but not kept.
+  detailsReads.clear();
+}
+
+/** One read of a file's details, shared with one already on its way unless `fresh`. */
+function readDetails(path: string, albumPath: string | undefined, fresh: boolean): Promise<MediaDetails> {
+  const key = detailsKey(path, albumPath);
+  const pending = detailsReads.get(key);
+  if (pending && !fresh) return pending;
+  const read = execCommand<MediaDetails>(`media-details ${detailsArgs(path, albumPath)}`).then((details) => {
+    if (detailsReads.get(key) === read) {
+      detailsCache.delete(key);
+      detailsCache.set(key, { details, at: Date.now() });
+      if (detailsCache.size > DETAILS_CACHE_SIZE) detailsCache.delete(detailsCache.keys().next().value!);
+    }
+    return details;
+  }).finally(() => {
+    if (detailsReads.get(key) === read) detailsReads.delete(key);
+  });
+  detailsReads.set(key, read);
+  return read;
+}
+
+/** Reads a file's details ahead of the lightbox stepping onto it; a fresh or pending one is left be. */
+export function prefetchMediaDetails(path: string, albumPath?: string): void {
+  const key = detailsKey(path, albumPath);
+  const cached = detailsCache.get(key);
+  if ((cached && Date.now() - cached.at < DETAILS_FRESH_MS) || detailsReads.has(key)) return;
+  void readDetails(path, albumPath, false).catch(() => {});
+}
+
 /**
  * Everything the lightbox sidebar shows for one media file, in one round-trip
  * (`media-details`). Responses for a previously-viewed file are dropped, so
@@ -80,18 +128,31 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
   const [rawExifLoading, setRawExifLoading] = useState(false);
   const generationRef = useRef(0);
 
-  const fetchDetails = useCallback(async () => {
+  // `reuse` is a step onto the file, which may take what is cached or on its way; everything else
+  // follows a change and reads afresh.
+  const fetchDetails = useCallback(async ({ reuse = false }: { reuse?: boolean } = {}) => {
     if (!path) {
       generationRef.current++;
       setDetails(null);
       return;
     }
     const generation = ++generationRef.current;
+    const cached = reuse ? detailsCache.get(detailsKey(path, albumPath)) : undefined;
+    if (cached) {
+      setDetails(cached.details);
+      setDetailsPath(path);
+      setError(null);
+      if (Date.now() - cached.at < DETAILS_FRESH_MS) {
+        setLoading(false);
+        return;
+      }
+    }
+    if (!reuse) forgetDetails();
 
     try {
       setLoading(true);
       setError(null);
-      const result = await execCommand<MediaDetails>(`media-details ${shq(path)}${albumPath ? ` --album ${shq(albumPath)}` : ''}`);
+      const result = await readDetails(path, albumPath, !reuse);
       if (generation !== generationRef.current) return;
       setDetails(result);
       setDetailsPath(path);
@@ -105,7 +166,7 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
   }, [albumPath, path]);
 
   useEffect(() => {
-    fetchDetails();
+    fetchDetails({ reuse: true });
     // A different file has a different dump; keep the collapsible closed-and-empty.
     setRawExif(null);
   }, [fetchDetails]);
@@ -117,7 +178,7 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
     if (!path || rawExif) return;
     setRawExifLoading(true);
     try {
-      const result = await execCommand<MediaDetails>(`media-details ${shq(path)}${albumPath ? ` --album ${shq(albumPath)}` : ''} --fields raw`);
+      const result = await execCommand<MediaDetails>(`media-details ${detailsArgs(path, albumPath)} --fields raw`);
       setRawExif(result.exif?.raw ?? {});
     } catch {
       setRawExif({});
@@ -179,12 +240,15 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
     await fetchDetails();
   }, [path, fetchDetails]);
 
+  // Handed to `onChanged` props and the like, which may pass arguments of their own.
+  const refetch = useCallback(() => fetchDetails(), [fetchDetails]);
+
   return {
     details,
     detailsPath,
     loading,
     error,
-    refetch: fetchDetails,
+    refetch,
     addComment,
     removeComment,
     setDescription,
