@@ -8,7 +8,7 @@ import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { SetCoverAction } from '../components/SetCoverAction.tsx';
 import { SetTimeAction } from '../components/SetTimeAction.tsx';
 import { StackAction } from '../components/StackAction.tsx';
-import { EntityDetailHeader, formatRange, GRID_GAP, HeaderChoices, HeaderDescription, ShareSelectionAction, SharingChip, TablerIcon } from '@ein/ui/components';
+import { EntityDetailHeader, FillWindow, formatRange, GRID_GAP, HeaderChoices, HeaderDescription, ShareSelectionAction, SharingChip, TablerIcon } from '@ein/ui/components';
 import { Badge, Box, Button, Group, SimpleGrid, Stack, Tabs, Text, Tooltip } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { AlbumSortSelect, useAlbumSort } from '../components/AlbumSort.tsx';
@@ -274,9 +274,9 @@ export default function AlbumDetailPage() {
 
       {
         /* The body pads itself (AppShell's padding is off so the cover can bleed); the
-          variable tells the grid's `bleed` how much to cancel on a phone. */
+          variable tells the grid's `bleed` how much to cancel on a phone. The map has none. */
       }
-      <Box px='md' py='md' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
+      <Box px='md' py='md' display={tab === 'map' ? 'none' : undefined} style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
         <Tabs.Panel value='media'>
           <Stack gap='md'>
             {/* Subfolders */}
@@ -322,10 +322,6 @@ export default function AlbumDetailPage() {
           </Tabs.Panel>
         )}
 
-        <Tabs.Panel value='map'>
-          <AlbumMap path={albumPath} from={info.timeStart} to={info.timeEnd} />
-        </Tabs.Panel>
-
         <Tabs.Panel value='info'>
           <AlbumInfoTab
             path={albumPath}
@@ -338,6 +334,13 @@ export default function AlbumDetailPage() {
           />
         </Tabs.Panel>
       </Box>
+
+      {/* The map takes the window below the header, edge to edge, outside the body's padding. */}
+      <Tabs.Panel value='map'>
+        <FillWindow>
+          <AlbumMap path={albumPath} from={info.timeStart} to={info.timeEnd} />
+        </FillWindow>
+      </Tabs.Panel>
 
       <AlbumEditModal
         opened={editing}

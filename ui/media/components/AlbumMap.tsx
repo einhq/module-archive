@@ -1,5 +1,5 @@
 import { type GeoBounds, MapMarkers, MapTracks, MapView } from '@ein/ui/components';
-import { Box, Card, Loader, Stack, Text } from '@mantine/core';
+import { Box, Center, Loader, Paper, Text } from '@mantine/core';
 import { execCommand, openMediaAt } from '@ein/ui/signals';
 import { shq } from '@ein/ui/lib';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -69,7 +69,7 @@ const listed = (names: string[]): string => names.length < 2 ? names.join('') : 
  *
  * The media are clustered by the server as on the map page (`find-within --under`), a cell of one
  * drawn as its picture and a pile as its count, which opens the pictures behind it. The map opens
- * fitted to the media and the routes together.
+ * fitted to the media and the routes together, and fills the box it is given.
  */
 export function AlbumMap({ path, from, to }: AlbumMapProps) {
   const filters = useMemo((): MapFilters => ({ under: path }), [path]);
@@ -105,16 +105,16 @@ export function AlbumMap({ path, from, to }: AlbumMapProps) {
   // Fitted once, to the media and the routes together, so both are waited for.
   if (points === null || tracksLoading) {
     return (
-      <Stack align='center' py='xl'>
+      <Center h='100%'>
         <Loader size='sm' />
-      </Stack>
+      </Center>
     );
   }
 
   const names = (deviceList?.devices ?? []).map((device) => device.name);
   if (!extent) {
     return (
-      <Text c='dimmed' ta='center' py='xl'>
+      <Text c='dimmed' ta='center' p='xl'>
         {names.length === 0
           ? 'Nothing in this album has a position, and it has no devices whose routes to show.'
           : `Nothing in this album has a position, and ${listed(names)} recorded no route while it was taken.`}
@@ -123,26 +123,24 @@ export function AlbumMap({ path, from, to }: AlbumMapProps) {
   }
 
   return (
-    <>
-      <Card radius='md' p={0} style={{ overflow: 'hidden', position: 'relative' }}>
-        <Box h='calc(100dvh - var(--mrx-stuck-header-height, 0px) - var(--app-shell-header-height) - 2 * var(--mantine-spacing-md))' mih={360}>
-          <MapView bounds={extent} onMoveEnd={onMoveEnd} style={{ height: '100%' }}>
-            <MapTracks tracks={segments} />
-            <MapMarkers markers={markers} />
-          </MapView>
+    <Box h='100%' pos='relative'>
+      <MapView bounds={extent} onMoveEnd={onMoveEnd} style={{ height: '100%' }}>
+        <MapTracks tracks={segments} />
+        <MapMarkers markers={markers} />
+      </MapView>
+      {loading && (
+        <Box pos='absolute' top={10} left={10} style={{ zIndex: 1000 }} role='status' aria-label='Loading the map'>
+          <Loader size={18} />
         </Box>
-        {loading && (
-          <Box pos='absolute' top={10} left={10} style={{ zIndex: 1000 }} role='status' aria-label='Loading the map'>
-            <Loader size={18} />
-          </Box>
-        )}
-      </Card>
+      )}
       {points.length === 0 && (
-        <Text size='sm' c='dimmed' mt='xs'>
-          Nothing in this album has a position; the map shows the routes its devices recorded while it was taken.
-        </Text>
+        <Paper pos='absolute' bottom={10} left={10} maw='calc(100% - 20px)' px='sm' py={6} radius='md' shadow='sm' style={{ zIndex: 1000 }}>
+          <Text size='sm' c='dimmed'>
+            Nothing in this album has a position; the map shows the routes its devices recorded while it was taken.
+          </Text>
+        </Paper>
       )}
       <MapClusterMedia open={open} filters={filters} onClose={() => setOpen(null)} />
-    </>
+    </Box>
   );
 }
