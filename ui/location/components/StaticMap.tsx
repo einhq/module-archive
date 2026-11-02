@@ -72,7 +72,10 @@ export function StaticMap({ lat, lng, zoom = DEFAULT_ZOOM }: StaticMapProps) {
     }
   }
 
-  const attribution = layer?.tiles.map((tile) => tile.options?.attribution).find((text) => typeof text === 'string');
+  const attribution = layer?.tiles
+    .map((tile) => tile.options?.attribution)
+    .filter((text) => typeof text === 'string')
+    .join(' · ');
 
   return (
     <Box ref={ref} pos='relative' w='100%' h='100%' style={{ overflow: 'hidden' }}>
