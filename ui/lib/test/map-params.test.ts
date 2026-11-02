@@ -24,7 +24,7 @@ Deno.test('map params: a full view round-trips', () => {
     layers: { media: true, locations: false, tracks: true },
     fromYear: 2015,
     toYear: 2016,
-    baseLayer: 'Satellite',
+    baseLayer: 'ui.satellite',
     filters: { query: 'segelbåt', person: 'Nils_J_Lund', location: 'Göteborg', tag: 'sailing' },
   };
 
@@ -34,7 +34,7 @@ Deno.test('map params: a full view round-trips', () => {
   assertEquals(params.get('layers'), 'media,tracks');
   assertEquals(params.get('from'), '2015');
   assertEquals(params.get('to'), '2016');
-  assertEquals(params.get('base'), 'Satellite');
+  assertEquals(params.get('base'), 'ui.satellite');
   assertEquals(params.get('q'), 'segelbåt');
   assertEquals(params.get('person'), 'Nils_J_Lund');
   assertEquals(params.get('location'), 'Göteborg');
@@ -78,7 +78,7 @@ Deno.test('map params: a parameter the map does not own survives a camera write'
 });
 
 Deno.test('map params: a carried parameter does not resurrect a map key the state dropped', () => {
-  const current = new URLSearchParams({ from: '2015', to: '2016', base: 'Satellite', q: 'old search', fullscreen: '/media/x' });
+  const current = new URLSearchParams({ from: '2015', to: '2016', base: 'ui.satellite', q: 'old search', fullscreen: '/media/x' });
   const params = paramsFromMapState({ layers: { ...ALL_LAYERS }, filters: {} }, current);
 
   assertEquals(params.toString(), 'fullscreen=%2Fmedia%2Fx');

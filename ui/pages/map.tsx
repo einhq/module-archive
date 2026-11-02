@@ -1,4 +1,4 @@
-import { BASE_LAYERS, GeoBounds, InterpretedFilter, MapMarkers, type MapMarkerSpec, MapTracks, MapView, SearchInput, TablerIcon } from '@ein/ui/components';
+import { GeoBounds, InterpretedFilter, MapMarkers, type MapMarkerSpec, MapTracks, MapView, SearchInput, TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Box, Group, Loader, Stack, Tooltip } from '@mantine/core';
 import { MAP_CONTROL_Z, MapBaseLayerPicker, MapTypeMenu, MapYears } from '../components/MapControls.tsx';
 import { MapClusterMedia } from '../components/MapClusterMedia.tsx';
@@ -9,7 +9,7 @@ import { useMapTracks } from '../location/hooks/useTracks.ts';
 import { useSearchFacets } from '../hooks/useSearchFacets.ts';
 import { kindFill, type Mention, type MentionKind, naturalSearchDetails, subjectRefs, textFromFilters } from '@ein/ui/lib';
 import { subjectsOf } from '../lib/subjects.ts';
-import { openMediaAt } from '@ein/ui/signals';
+import { mapLayers, openMediaAt } from '@ein/ui/signals';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { type MapFilters, type MapLayers, mapStateFromParams, paramsFromMapState } from '../lib/map-params.ts';
@@ -56,10 +56,9 @@ function openClusterFromState(state: unknown): OpenCluster | null {
 
 export const handle = { fullBleed: true };
 
-/** The base layer a plain /map opens on, which the URL then leaves out. */
-const DEFAULT_BASE = BASE_LAYERS[0].name;
-
 export default function MapPage() {
+  /** The base layer a plain /map opens on, which the URL then leaves out. */
+  const defaultBase = mapLayers()[0]?.id;
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -220,7 +219,7 @@ export default function MapPage() {
           center={opening.current.center}
           zoom={opening.current.zoom}
           onMoveEnd={onMoveEnd}
-          baseLayer={state.baseLayer ?? DEFAULT_BASE}
+          baseLayer={state.baseLayer ?? defaultBase}
           layerSwitcher={false}
           style={{ height: '100%' }}
         >
@@ -243,8 +242,8 @@ export default function MapPage() {
             options={MAP_LAYER_FILTERS}
           />
           <MapBaseLayerPicker
-            value={state.baseLayer ?? DEFAULT_BASE}
-            onChange={(name) => commit({ baseLayer: name === DEFAULT_BASE ? undefined : name })}
+            value={state.baseLayer ?? defaultBase}
+            onChange={(id) => commit({ baseLayer: id === defaultBase ? undefined : id })}
             center={state.center}
             zoom={state.zoom}
           />

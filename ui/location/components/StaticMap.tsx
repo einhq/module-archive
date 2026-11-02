@@ -1,14 +1,13 @@
 import { Box } from '@mantine/core';
 import { useElementSize } from '@mantine/hooks';
-import { BASE_LAYERS, MARKER_COLOR } from '@ein/ui/components';
+import { MARKER_COLOR } from '@ein/ui/components';
+import { mapLayers } from '@ein/ui/signals';
 
 const TILE_SIZE = 256;
 /** Street level: a building's block and the streets around it, which is what tells two addresses apart. */
 const DEFAULT_ZOOM = 15;
 /** Leaflet's default for `{s}`. */
 const SUBDOMAINS = 'abc';
-/** The map page's default base layer. */
-const LAYER = BASE_LAYERS[0];
 
 type StaticMapProps = {
   lat: number;
@@ -48,14 +47,16 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
  */
 export function StaticMap({ lat, lng, zoom = DEFAULT_ZOOM }: StaticMapProps) {
   const { ref, width, height } = useElementSize();
+  /** The map page's default base layer. */
+  const layer = mapLayers()[0];
 
   const tiles: { key: string; src: string; left: number; top: number }[] = [];
-  if (width > 0 && height > 0) {
+  if (layer && width > 0 && height > 0) {
     const center = worldPixel(lat, lng, zoom);
     const left = center.x - width / 2;
     const top = center.y - height / 2;
     const count = 2 ** zoom;
-    for (const [index, source] of LAYER.tiles.entries()) {
+    for (const [index, source] of layer.tiles.entries()) {
       for (let ty = Math.floor(top / TILE_SIZE); ty <= Math.floor((top + height) / TILE_SIZE); ty++) {
         if (ty < 0 || ty >= count) continue;
         for (let tx = Math.floor(left / TILE_SIZE); tx <= Math.floor((left + width) / TILE_SIZE); tx++) {
@@ -71,7 +72,7 @@ export function StaticMap({ lat, lng, zoom = DEFAULT_ZOOM }: StaticMapProps) {
     }
   }
 
-  const attribution = LAYER.tiles.find((tile) => tile.options.attribution)?.options.attribution;
+  const attribution = layer?.tiles.map((tile) => tile.options?.attribution).find((text) => typeof text === 'string');
 
   return (
     <Box ref={ref} pos='relative' w='100%' h='100%' style={{ overflow: 'hidden' }}>

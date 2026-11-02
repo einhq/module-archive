@@ -4,7 +4,8 @@
  * page floats over a map.
  */
 
-import { BASE_LAYERS, DEFAULT_CENTER, DEFAULT_ZOOM, TablerIcon } from '@ein/ui/components';
+import { DEFAULT_CENTER, DEFAULT_ZOOM, TablerIcon } from '@ein/ui/components';
+import { mapLayers, type MapTiles } from '@ein/ui/signals';
 import { ActionIcon, Group, Menu, Popover, RangeSlider, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { type ReactNode, useMemo, useState } from 'react';
 import { positionAtOrAfter, positionAtOrBefore, yearAt, yearScale } from '../lib/year-scale.ts';
@@ -76,9 +77,9 @@ export function MapYears({ bounds, years, value, onChange, onChangeEnd }: MapYea
 }
 
 type MapBaseLayerPickerProps = {
-  /** The base layer showing, by its `BASE_LAYERS` name. */
+  /** The base layer showing, by its id among the map layers. */
   value: string;
-  onChange: (name: string) => void;
+  onChange: (id: string) => void;
   /** Where the map is looking, so each preview shows this location in that style. */
   center?: { lat: number; lng: number };
   zoom?: number;
@@ -100,6 +101,18 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
 }
 
 /**
+ * The tile a tile set draws at a point and zoom, as Leaflet would: none outside its `minZoom` and
+ * `maxZoom`, and past its `maxNativeZoom` the coarser tile it stretches.
+ */
+function previewTile(tiles: MapTiles, lat: number, lng: number, z: number): string | undefined {
+  const { minZoom, maxZoom, maxNativeZoom } = tiles.options ?? {};
+  if ((typeof minZoom === 'number' && z < minZoom) || (typeof maxZoom === 'number' && z > maxZoom)) return undefined;
+  const at = typeof maxNativeZoom === 'number' ? Math.min(z, maxNativeZoom) : z;
+  const { x, y } = tileAt(lat, lng, at);
+  return tileUrl(tiles.url, at, x, y);
+}
+
+/**
  * The map's base layer, in its top-right corner: an icon button whose menu shows each
  * layer as a picture of where the map is looking rather than by name — one tile
  * of it, a step further out than the map so it holds more than a street. A layer
@@ -108,37 +121,42 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
  */
 export function MapBaseLayerPicker({ value, onChange, center, zoom }: MapBaseLayerPickerProps) {
   const [open, setOpen] = useState(false);
-  const selected = BASE_LAYERS.find((def) => def.name === value) ?? BASE_LAYERS[0];
+  const layers = mapLayers();
+  const selected = layers.find((def) => def.id === value) ?? layers[0];
   const at = center ?? DEFAULT_CENTER;
   const z = Math.min(Math.max(Math.round((zoom ?? DEFAULT_ZOOM) - 1), 2), 16);
-  const { x, y } = tileAt(at.lat, at.lng, z);
+  if (!selected) return null;
 
   return (
     <Popover opened={open} onChange={setOpen} position='left-start' shadow='md' withinPortal>
       <Popover.Target>
         <Tooltip label='Map style' position='left' disabled={open}>
-          <ActionIcon className='mrx-map-button' aria-label={`Map style: ${selected.name}`} onClick={() => setOpen((was) => !was)}>
+          <ActionIcon className='mrx-map-button' aria-label={`Map style: ${selected.label}`} onClick={() => setOpen((was) => !was)}>
             <TablerIcon name='stack-2' size={22} />
           </ActionIcon>
         </Tooltip>
       </Popover.Target>
       <Popover.Dropdown p='xs'>
         <Stack gap='xs'>
-          {BASE_LAYERS.map((def) => {
-            const chosen = def.name === selected.name;
+          {layers.map((def) => {
+            const chosen = def.id === selected.id;
             return (
-              <Tooltip key={def.name} label={def.name} position='left'>
+              <Tooltip key={def.id} label={def.label} position='left'>
                 <UnstyledButton
                   className='mrx-map-style'
                   data-selected={chosen || undefined}
-                  aria-label={def.name}
+                  aria-label={def.label}
                   aria-pressed={chosen}
                   onClick={() => {
-                    onChange(def.name);
+                    onChange(def.id);
                     setOpen(false);
                   }}
                 >
-                  {def.tiles.map((tile) => <img key={tile.url} src={tileUrl(tile.url, z, x, y)} alt='' loading='lazy' />)}
+                  {def.tiles.map((tiles) => {
+                    const src = previewTile(tiles, at.lat, at.lng, z);
+                    // A tile set with nothing at this place, such as a chart of another coast, leaves the picture to the sets below it.
+                    return src && <img key={tiles.url} src={src} alt='' loading='lazy' onError={(event) => (event.currentTarget.style.visibility = 'hidden')} />;
+                  })}
                 </UnstyledButton>
               </Tooltip>
             );

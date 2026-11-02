@@ -7,10 +7,10 @@
  * (`search-params.ts`), and pure for the same reason: no react-router and no
  * shell client, so it round-trips in a test.
  *
- *   /map?c=57.70123,11.97456&z=12&layers=media,tracks&from=2015&to=2016&base=Satellite&q=sailing
+ *   /map?c=57.70123,11.97456&z=12&layers=media,tracks&from=2015&to=2016&base=ui.satellite&q=sailing
  *
  * Defaults are absent rather than spelled out: all layers on, no year bound and
- * the default basemap (the first of `BASE_LAYERS`) write nothing, so a plain `/map` stays plain.
+ * the default basemap (the first of the map layers) write nothing, so a plain `/map` stays plain.
  *
  * The codec owns `MAP_PARAM_KEYS` and nothing else. Anything else in the query
  * string belongs to a feature layered over the map — the route open full screen
@@ -37,7 +37,7 @@ export type MapState = {
   /** Inclusive year bounds; both absent means no constraint. */
   fromYear?: number;
   toYear?: number;
-  /** Name of the base layer, as `layers.ts` calls it. */
+  /** The base layer's id among the map layers (`ui.satellite`). */
   baseLayer?: string;
   /** What is drawn and what a cluster opens. */
   filters: MapFilters;
