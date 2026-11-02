@@ -1531,9 +1531,6 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const openKeys = useMemo(() => new Set(cursor === null ? [] : [cursor]), [cursor]);
   const skeleton = useMemo(() => skeletonImage(phone), [phone]);
   const cursorProposal = cursorRow ? proposalFor(cursorRow) : undefined;
-  /** What Enter does where the keys are: on the open day or the selected pictures, or the whole group. */
-  const cursorEnter = cursorRow ? enterFor(cursorRow, filing) : undefined;
-  const canEnter = cursorEnter !== undefined;
   const cursorCandidates = useMemo(() => cursorRow ? candidatesOf(cursorRow) : [], [cursorRow, candidatesOf]);
   /** S can cut here: in a lane anything, elsewhere not before the group's first picture. */
   const canCut = cursorRow !== undefined && regrouping.length > 0 && (isLaneGroup(cursorRow) || regrouping[0] !== openItems[0]?.path);
