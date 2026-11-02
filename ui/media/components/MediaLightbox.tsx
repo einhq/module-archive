@@ -4,7 +4,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
 import { ActionIcon, Box, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
-import { effect } from '@preact/signals-react';
+import { effect, type Signal, signal } from '@preact/signals-react';
 import { useSignals } from '@preact/signals-react/runtime';
 import {
   type CSSProperties,
@@ -50,7 +50,7 @@ import {
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
 import { useAccessIds, useShortcutHelp, useSurface } from '@ein/ui/hooks';
-import { forgetMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
+import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import { useWakeLock } from '../hooks/useWakeLock.ts';
 import {
   albumMediaList,
@@ -250,10 +250,51 @@ function formatLightboxTaken(iso?: string, short = false): TakenParts {
 }
 
 /** Prefer a named location, then the best human-readable reverse-geocoded location. */
-function locationLabel(details: ReturnType<typeof useMediaDetails>['details']): string {
+function locationLabel(details: MediaDetails | null): string {
   if (details?.location?.name) return details.location.name;
   if (details?.position?.address) return details.position.address;
   return [details?.position?.city, details?.position?.country].filter(Boolean).join(', ');
+}
+
+/** What the bar says about one picture: where it is in the list, when and where it was taken. */
+type BarInfo = { index: number; taken: TakenParts; takenLabel: string; takenTooltip: string; where: string };
+
+/** `details` may be missing, or not read yet; the list item's date stands in until they are. */
+function barInfoOf(item: MediaItem, details: MediaDetails | null, index: number, short: boolean): BarInfo {
+  const takenAt = details?.takenAt ?? item.takenAt;
+  const taken = formatLightboxTaken(takenAt, short);
+  // A photograph is shown on the clock the photographer was reading. The viewer's own time is
+  // offered beside it only when the two differ, which on this archive means the pictures taken
+  // abroad and nothing else.
+  const takenHere = viewerLocalTime(takenAt, details?.takenAtUtc ?? item.takenAtUtc);
+  const takenSource = timeSourceLabel(details?.takenAtSource, details?.digitized);
+  return {
+    index,
+    taken,
+    takenLabel: taken.clock ? `${taken.date}, ${taken.clock}` : taken.date,
+    takenTooltip: [takenHere && `${takenHere} your time`, takenSource, details?.takenAtNote].filter(Boolean).join(' · '),
+    where: locationLabel(details),
+  };
+}
+
+/**
+ * The bar's counter, date and place, of the picture that fills most of the frame: during a swipe
+ * the incoming one's from the moment it is past half way, `step` pictures on from `current`.
+ * Only this renders again when that changes, never the lightbox, so the slide is not held back.
+ * The incoming picture's place is there when its details were read ahead with its picture.
+ */
+function SwipeInfo({ step, current, short, children }: {
+  step: Signal<number>;
+  current: BarInfo;
+  short: boolean;
+  children: (info: BarInfo) => ReactNode;
+}) {
+  useSignals();
+  const steps = step.value;
+  const list = albumMediaList.value;
+  const index = steps === 0 || list.length < 2 ? current.index : steps > 0 ? nextMediaIndex(current.index, list.length) : prevMediaIndex(current.index, list.length);
+  const item = index === current.index ? undefined : list[index];
+  return <>{children(item ? barInfoOf(item, peekMediaDetails(item.path, item.stackAlbumPath), index, short) : current)}</>;
 }
 
 const LIGHTBOX_SHORTCUTS = [
@@ -421,6 +462,24 @@ export function MediaLightbox() {
   // under the new frame until that has loaded.
   const [swipeTarget, setSwipeTarget] = useState<MediaItem | undefined>(undefined);
   const swipeTransitionTimerRef = useRef<number | undefined>(undefined);
+  /** The width a drag measures half way against, taken when the finger lands. */
+  const swipeWidthRef = useRef(0);
+  /**
+   * How many pictures on from the current one the bar describes (`SwipeInfo`). Read only there:
+   * the lightbox itself must not render again when it changes.
+   */
+  const swipeInfoStep = useMemo(() => signal(0), []);
+  const swipeInfoTimerRef = useRef<number | undefined>(undefined);
+  const showSwipeInfo = useCallback((step: number, afterMs = 0) => {
+    globalThis.clearTimeout(swipeInfoTimerRef.current);
+    if (afterMs > 0) {
+      swipeInfoTimerRef.current = globalThis.setTimeout(() => swipeInfoStep.value = step, afterMs);
+    } else swipeInfoStep.value = step;
+  }, [swipeInfoStep]);
+  /** A dragged frame turns the bar to its neighbour once that fills most of the frame. */
+  const followSwipeInfo = useCallback((offset: number) => {
+    showSwipeInfo(Math.abs(offset) > swipeWidthRef.current / 2 ? (offset < 0 ? 1 : -1) : 0);
+  }, [showSwipeInfo]);
   // Switches to the swiped-to media; run early when a new touch lands before the slide is over.
   const swipePendingRef = useRef<(() => void) | null>(null);
   const [stackPreview, setStackPreview] = useState<MediaItem | null>(null);
@@ -1094,7 +1153,8 @@ export function MediaLightbox() {
     const surface = gestureSurfaceRef.current;
     surface?.style.removeProperty('--swipe-transition');
     surface?.style.removeProperty('--swipe-x');
-  }, []);
+    showSwipeInfo(0);
+  }, [showSwipeInfo]);
 
   // Any change of media, a finished swipe included, starts the new frame centred. A layout
   // effect, so the frame is moved back in the same paint that first shows the new media.
@@ -1321,7 +1381,8 @@ export function MediaLightbox() {
 
   const settleSwipe = useCallback(() => {
     moveSwipe(0, { durationMs: SWIPE_ANIMATION_MS, easing: SWIPE_SETTLE_EASING });
-  }, [moveSwipe]);
+    showSwipeInfo(0);
+  }, [moveSwipe, showSwipeInfo]);
 
   const handleTouchStart = useCallback((event: TouchEvent<HTMLElement>) => {
     touchStartRef.current = null;
@@ -1374,8 +1435,11 @@ export function MediaLightbox() {
     swipeSamplesRef.current = [touchStartRef.current];
     // A finger that lands on a moving picture, sliding in or settling back, holds it where it is.
     swipeBaseRef.current = swipeOffsetNow();
+    // Measured once here: a layout read on every move would force a layout per frame.
+    swipeWidthRef.current = swipeFrameWidth();
     if (swipeBaseRef.current !== 0) moveSwipe(swipeBaseRef.current);
-  }, [addingFace, endSheet, isMobile, moveSwipe, resetSwipe, settleSwipe, slideshow, zoomFocal, zoomable]);
+    followSwipeInfo(swipeBaseRef.current);
+  }, [addingFace, endSheet, followSwipeInfo, isMobile, moveSwipe, resetSwipe, settleSwipe, slideshow, zoomFocal, zoomable]);
 
   const finishPhotoSwipe = useCallback((
     action: Extract<ReturnType<typeof lightboxSwipeAction>, 'next' | 'previous'>,
@@ -1406,6 +1470,10 @@ export function MediaLightbox() {
     const finish = lightboxSwipeFinish(Math.abs(travel) - Math.abs(releaseOffset), releaseVelocity * direction);
     const startedAt = performance.now();
     moveSwipe(travel, finish);
+    // The bar turns to the incoming picture as it passes half way, by the slide's own curve.
+    let halfWayMs = 0;
+    while (halfWayMs < finish.handoverMs && finish.leftAt(halfWayMs) > Math.abs(travel) / 2) halfWayMs++;
+    showSwipeInfo(-direction, halfWayMs);
     const complete = () => {
       swipePendingRef.current = null;
       // Hold the frames where the slide has got to, so nothing slides while the switch renders
@@ -1415,6 +1483,7 @@ export function MediaLightbox() {
       // frame has loaded.
       moveSwipe(travel - direction * finish.leftAt(performance.now() - startedAt));
       flushSync(() => {
+        showSwipeInfo(0);
         setSwipeTarget(target);
         if (action === 'next') goToNextMedia();
         else goToPrevMedia();
@@ -1429,7 +1498,7 @@ export function MediaLightbox() {
     };
     swipePendingRef.current = complete;
     swipeTimerRef.current = globalThis.setTimeout(complete, finish.handoverMs);
-  }, [moveSwipe, settleSwipe]);
+  }, [moveSwipe, settleSwipe, showSwipeInfo]);
 
   // The arrow buttons and keys slide the neighbour in as a released swipe would. A press while
   // a slide is still running lands that one and steps on at once, so holding a key or clicking
@@ -1503,11 +1572,13 @@ export function MediaLightbox() {
     if (touchAxisRef.current === 'x') {
       const allowed = dx < 0 ? hasNextMedia.value : hasPrevMedia.value;
       // With nothing to go to, give a small elastic response instead of moving into empty space.
-      moveSwipe(swipeBaseRef.current + (allowed ? dx : dx * 0.18));
+      const offset = swipeBaseRef.current + (allowed ? dx : dx * 0.18);
+      moveSwipe(offset);
+      followSwipeInfo(offset);
     } else if (touchAxisRef.current === 'sheet' && sheetDragRef.current) {
       moveSheet(sheetDragRef.current.from - dy / sheetDragRef.current.panelPx);
     }
-  }, [beginSheet, mobilePortrait, moveSheet, moveSwipe, setZoom, zoomFocal, zoomFrame]);
+  }, [beginSheet, followSwipeInfo, mobilePortrait, moveSheet, moveSwipe, setZoom, zoomFocal, zoomFrame]);
 
   const handleTouchEnd = useCallback((event: TouchEvent<HTMLElement>) => {
     if (pinchRef.current) {
@@ -1658,20 +1729,11 @@ export function MediaLightbox() {
   // player below would be controls over nothing. Say what is wrong instead. Only for a/v: it is
   // the only family `exif-extract` probes, and `details` is the read the sidebar already makes.
   const undecodable = (isVideo || isAudio) ? currentDetails?.undecodable : undefined;
-  // The list item's date is there the moment a swipe lands; `details` may still be the last file's.
-  const takenAt = currentDetails?.takenAt ?? media.takenAt;
   // An upright phone's slideshow bar carries the date beside the counter and location; the short
   // names keep it on one line.
-  const taken = formatLightboxTaken(takenAt, slideshow && mobilePortrait);
-  const takenLabel = taken.clock ? `${taken.date}, ${taken.clock}` : taken.date;
-  // A photograph is shown on the clock the photographer was reading. The viewer's own time is
-  // offered beside it only when the two differ, which on this archive means the pictures taken
-  // abroad and nothing else.
-  const takenHere = viewerLocalTime(takenAt, currentDetails?.takenAtUtc ?? media.takenAtUtc);
-  const takenSource = timeSourceLabel(currentDetails?.takenAtSource, currentDetails?.digitized);
-  const takenNote = currentDetails?.takenAtNote;
-  const takenTooltip = [takenHere && `${takenHere} your time`, takenSource, takenNote].filter(Boolean).join(' · ');
-  const where = locationLabel(currentDetails);
+  const shortTaken = slideshow && mobilePortrait;
+  // Only this file's details: straight after a step `details` may still be the last file's.
+  const barInfo = barInfoOf(media, currentDetails, currentMediaIndex.value, shortTaken);
   // Match the sidebar preview: embedded GPS is more specific than the linked
   // location, but either is enough to locate the media on the enlarged map.
   const mapPoint = currentDetails?.position ??
@@ -1830,36 +1892,41 @@ export function MediaLightbox() {
                 desktop bar has the room, and so has a slideshow's, which floats over the
                 picture and may wrap; both keep it down there beside the counter. */
           }
-          {taken.date && isMobile && !slideshow && (
-            <Box
-              data-lightbox-taken
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                zIndex: 10,
-                display: 'flex',
-                justifyContent: 'center',
-                pointerEvents: 'none',
-                padding: 'var(--mantine-spacing-xs) 56px',
-                color: 'white',
-                // Stays centred over the picture while a sideways panel moves (see `beginSheet`).
-                transform: 'translateX(calc(var(--sheet-p, 0) * var(--sheet-ix, 0px)))',
-                transition: 'var(--sheet-transition, none)',
-              }}
-            >
-              <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
-                {
-                  /* The day on one line and the clock beneath it, in a size that survives a
-                      glance; the icon would only crowd the narrow strip. */
-                }
-                <Stack gap={0} align='center' style={TAKEN_PILL_STYLE}>
-                  <Text size='md' fw={500} c='inherit' truncate='end'>{taken.date}</Text>
-                  {taken.clock && <Text size='sm' c='inherit'>{taken.clock}</Text>}
-                </Stack>
-              </Tooltip>
-            </Box>
+          {isMobile && !slideshow && (
+            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
+              {({ taken, takenTooltip }) =>
+                taken.date && (
+                  <Box
+                    data-lightbox-taken
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      zIndex: 10,
+                      display: 'flex',
+                      justifyContent: 'center',
+                      pointerEvents: 'none',
+                      padding: 'var(--mantine-spacing-xs) 56px',
+                      color: 'white',
+                      // Stays centred over the picture while a sideways panel moves (see `beginSheet`).
+                      transform: 'translateX(calc(var(--sheet-p, 0) * var(--sheet-ix, 0px)))',
+                      transition: 'var(--sheet-transition, none)',
+                    }}
+                  >
+                    <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
+                      {
+                        /* The day on one line and the clock beneath it, in a size that survives a
+                          glance; the icon would only crowd the narrow strip. */
+                      }
+                      <Stack gap={0} align='center' style={TAKEN_PILL_STYLE}>
+                        <Text size='md' fw={500} c='inherit' truncate='end'>{taken.date}</Text>
+                        {taken.clock && <Text size='sm' c='inherit'>{taken.clock}</Text>}
+                      </Stack>
+                    </Tooltip>
+                  </Box>
+                )}
+            </SwipeInfo>
           )}
 
           {
@@ -2292,23 +2359,29 @@ export function MediaLightbox() {
                 : {}),
             }}
           >
-            {!lightboxCountHidden.value && (
-              <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
-                <TablerIcon name='photo' size={barIconSize} style={{ flexShrink: 0 }} />
-                <Text size='md' c='inherit' truncate='end'>
-                  {currentMediaIndex.value + 1} of {albumMediaList.value.length}
-                </Text>
-              </Group>
-            )}
+            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
+              {({ index, taken, takenLabel, takenTooltip }) => (
+                <>
+                  {!lightboxCountHidden.value && (
+                    <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
+                      <TablerIcon name='photo' size={barIconSize} style={{ flexShrink: 0 }} />
+                      <Text size='md' c='inherit' truncate='end'>
+                        {index + 1} of {albumMediaList.value.length}
+                      </Text>
+                    </Group>
+                  )}
 
-            {(slideshow || !isMobile) && taken.date && (
-              <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
-                <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
-                  <TablerIcon name='calendar' size={barIconSize} style={{ flexShrink: 0 }} />
-                  <Text size='md' c='inherit' truncate='end'>{takenLabel}</Text>
-                </Group>
-              </Tooltip>
-            )}
+                  {(slideshow || !isMobile) && taken.date && (
+                    <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
+                      <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
+                        <TablerIcon name='calendar' size={barIconSize} style={{ flexShrink: 0 }} />
+                        <Text size='md' c='inherit' truncate='end'>{takenLabel}</Text>
+                      </Group>
+                    </Tooltip>
+                  )}
+                </>
+              )}
+            </SwipeInfo>
 
             {addingFace && (
               <Group data-lightbox-face-draw-hint gap='xs' wrap='nowrap'>
@@ -2334,14 +2407,17 @@ export function MediaLightbox() {
 
             {faceMessage && <Text size='xs' c={faceMessage.color ?? 'inherit'}>{faceMessage.text}</Text>}
 
-            {where && (
-              // Shrinks a thousand times as readily as the date and the counter, so they keep
-              // their words until this one is down to its pin.
-              <Group gap={6} wrap='nowrap' style={{ minWidth: barIconSize, flexShrink: 1000 }}>
-                <TablerIcon name='map-pin' size={barIconSize} style={{ flexShrink: 0 }} />
-                <Text size='md' c='inherit' truncate='end' maw={isMobile ? undefined : 360}>{where}</Text>
-              </Group>
-            )}
+            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
+              {({ where }) =>
+                where && (
+                  // Shrinks a thousand times as readily as the date and the counter, so they keep
+                  // their words until this one is down to its pin.
+                  <Group gap={6} wrap='nowrap' style={{ minWidth: barIconSize, flexShrink: 1000 }}>
+                    <TablerIcon name='map-pin' size={barIconSize} style={{ flexShrink: 0 }} />
+                    <Text size='md' c='inherit' truncate='end' maw={isMobile ? undefined : 360}>{where}</Text>
+                  </Group>
+                )}
+            </SwipeInfo>
 
             {!slideshow && !isMobile && mayStar && (
               <Tooltip label={starred ? 'Unfavourite (s)' : 'Favourite (s)'} withArrow>
@@ -2493,7 +2569,7 @@ export function MediaLightbox() {
         fullScreen={isMobile}
         size='min(1000px, calc(100vw - 32px))'
         zIndex={300}
-        title={where || 'Where it was taken'}
+        title={barInfo.where || 'Where it was taken'}
         subtitle={media.name}
         icon='map-pin'
         pattern='location'

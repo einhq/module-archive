@@ -103,6 +103,11 @@ function readDetails(path: string, albumPath: string | undefined, fresh: boolean
   return read;
 }
 
+/** A file's details if they have been read, for showing it before the lightbox steps onto it. */
+export function peekMediaDetails(path: string, albumPath?: string): MediaDetails | null {
+  return detailsCache.get(detailsKey(path, albumPath)) ?? null;
+}
+
 /** Reads a file's details ahead of the lightbox stepping onto it; one read or on its way is left be. */
 export function prefetchMediaDetails(path: string, albumPath?: string): void {
   const key = detailsKey(path, albumPath);
