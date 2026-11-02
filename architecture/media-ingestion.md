@@ -371,7 +371,7 @@ waits for rather than by a shared DAG:
    name hit below 0.75 on the `name` scale — the query begins a longer word or is inside the name
    — counts at a lower weight. A hit its provider
    marks `confident` counts as a name does, whatever its channel: `search-media` marks a transcript
-   hit at or above the text space's confident similarity (0.55, `embedQuery`), the recording meant
+   hit at or above the text space's confident similarity (0.68 for bge-m3, `embedQuery`), the recording meant
    rather than one where something like the query was said. What is said and what is written are also matched by
    their words: the query as a phrase in the `text` a transcript chunk's or an extracted text's
    vector node carries (`contains`, served by archive's `spoken_text` trigram index), from three
@@ -1094,17 +1094,18 @@ spend the service's time on it as often as they asked. The pipeline runs these a
 administrator, who is never refused.
 
 **The text space.** Every text
-is embedded by EMS's current text embedder (`text.embed` `model: current`, jina-embeddings-v5-text-small)
+is embedded by EMS's current text embedder (`text.embed` `model: current`, bge-m3)
 into a type per model, at a node named after the type beside the text:
-`metadata/content/text_jina5s` and `metadata/transcript/text_jina5s/t<second>` (a directory stamped
+`metadata/content/text_bgem3` and `metadata/transcript/text_bgem3/t<second>` (a directory stamped
 `embeddedBy` last). An extracted text longer than 6 000 characters is embedded in
-parts of about 400 tokens instead: `metadata/content/text_jina5s/c<N>`, a directory like the
+parts of about 400 tokens instead: `metadata/content/text_bgem3/c<N>`, a directory like the
 transcript's, each part cut at paragraphs and sentences and carrying its character `offset`
 (`contentParts`); `search-media` and `search-document` score the file by its best part. The
-**hand-written** `description` attr is embedded as `metadata/authored/text_jina5s` (no text node;
+**hand-written** `description` attr is embedded as `metadata/authored/text_bgem3` (no text node;
 the attr stays the one copy of the text) with an `authoredHash` of the text it was made from;
 `file-set-description` writes it on save and removes it on clear, and `search-media` ranks it as a
-channel of its own at the picture channel's weight, counting only hits from 0.50.
+channel of its own at the picture channel's weight, counting only hits from the space's `strict`
+level (0.66 for bge-m3), where judged pairs hold 0.9 precision.
 
 A vector carries nothing but `embeddedBy` and `embeddedAt`, and a transcript chunk's its start and
 end seconds and its `text`, the words it was made from, which search matches a phrase against. So a
@@ -1130,7 +1131,7 @@ understands: `get-file` serves the node with the mimetype it carries, so the lig
 player and the sidebar's transcript panel both read `/file/<path>/metadata/transcript` with no
 route, no converter and no second copy (one request between them, `useTranscriptCues`). The player
 draws the subtitles itself; its `<track>` is shown only in an iPhone's fullscreen, which is the
-system's player. Its `text_jina5s/t<second>` children are embedding nodes, one
+system's player. Its `text_bgem3/t<second>` children are embedding nodes, one
 per minute of speech (`CHUNK_TARGET_SECONDS`; it was 30 s, sized to MiniLM's 128-token window), so
 a hit says where in the recording it matched. A set carries the length it was cut at
 (`chunkSeconds`), and `media-reembed` re-chunks a set cut at another. Each chunk node is **named for

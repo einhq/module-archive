@@ -13,7 +13,7 @@ import { startStubEms, type StubAnswer } from '@ems/testing';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
 const PPOCR = 'PP-OCRv6_medium';
-const JINA = 'jina-embeddings-v5-text-small';
+const BGE = 'bge-m3';
 
 const SIGN = [
   { text: 'Hamngatan 4', box: [[0.1, 0.2], [0.5, 0.2], [0.5, 0.3], [0.1, 0.3]], score: 0.97 },
@@ -45,10 +45,10 @@ Deno.test({
   };
   let answer: StubAnswer = signAnswer;
   const stub = startStubEms({
-    capabilities: { models: { ocr: PPOCR, text_embed: JINA } },
+    capabilities: { models: { ocr: PPOCR, text_embed: BGE } },
     ops: {
       'ocr.read': () => answer,
-      'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0]), dimension: 2 }, producer: JINA }),
+      'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0]), dimension: 2 }, producer: BGE }),
     },
   });
   const run = (args: string) => client.exec(`CFG_EMS_URL=${stub.url} read-text ${args}`);
@@ -70,8 +70,8 @@ Deno.test({
       assertEquals([content.attrs.mimetype, content.attrs.lines], ['text/plain', SIGN]);
       assertEquals([content.attrs.ocrLanguage, content.attrs.ocrLanguageConfidence], ['sv', 0.97]);
       assertEquals('language' in asked.body, false);
-      const vector = await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`);
-      assertEquals([vector.attrs.embeddedBy, vector.attrs.text], [JINA, 'Hamngatan 4\nÖppet 10–18']);
+      const vector = await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`);
+      assertEquals([vector.attrs.embeddedBy, vector.attrs.text], [BGE, 'Hamngatan 4\nÖppet 10–18']);
 
       const attrs = (await vfs.get(ADMIN_ACCESS, photo)).attrs;
       assertEquals([attrs.ocrBy, attrs.wordCount, typeof attrs.textIndexedAt], [PPOCR, 4, 'string']);

@@ -78,9 +78,9 @@ Deno.test({
     });
 
     /** The current embedder's answer: a boat query points at the boats, anything else away from them. */
-    const JINA = (body: Record<string, unknown>) => ({
+    const BGE = (body: Record<string, unknown>) => ({
       result: { embeddings: (body.texts as string[]).map((text) => text.includes('boat') ? [1, 0, 0] : [0, 0, 1]), dimension: 3 },
-      producer: 'jina-embeddings-v5-text-small',
+      producer: 'bge-m3',
     });
 
     await t.step('a content hit carries the file id, climbed from its embedding', async () => {
@@ -89,14 +89,14 @@ Deno.test({
       const file = `${ALBUMS_ROOT}/vasan/files/DSC_4471.JPG`;
       await cmd.shouldSucceed(`mkdir -p ${file}/metadata`);
       await cmd.shouldSucceed(`mknode -t text ${file}/metadata/content`);
-      await cmd.shouldSucceed(`mknode -t embedding ${file}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=3`);
-      const handle = await vfs.open(ADMIN_ACCESS, `${file}/metadata/content/text_jina5s`, { mode: 'w' });
+      await cmd.shouldSucceed(`mknode -t embedding ${file}/metadata/content/text_bgem3 --as embeddingType=text_bgem3 --an capacity=3`);
+      const handle = await vfs.open(ADMIN_ACCESS, `${file}/metadata/content/text_bgem3`, { mode: 'w' });
       try {
         await handle.write(new TextEncoder().encode(JSON.stringify([1, 0, 0])));
       } finally {
         await handle.close();
       }
-      const stub = startStubEms({ ops: { 'text.embed': JINA } });
+      const stub = startStubEms({ ops: { 'text.embed': BGE } });
       try {
         const out = await client.execJson<{ results: ProviderHit[] }>(`CFG_EMS_URL=${stub.url} search-media 'a boat'`);
         assertEquals(out.results.map((hit) => [hit.path, hit.channel]), [[file, 'content']]);
@@ -116,15 +116,15 @@ Deno.test({
       await cmd.shouldSucceed(`mkdir -p ${description}/metadata`);
       await cmd.shouldSucceed(`mknode -t text ${description}/metadata/content`);
       await cmd.shouldSucceed(
-        `mknode -t embedding ${description}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=3 --as 'text=A boat on the lake'`,
+        `mknode -t embedding ${description}/metadata/content/text_bgem3 --as embeddingType=text_bgem3 --an capacity=3 --as 'text=A boat on the lake'`,
       );
-      const handle = await vfs.open(ADMIN_ACCESS, `${description}/metadata/content/text_jina5s`, { mode: 'w' });
+      const handle = await vfs.open(ADMIN_ACCESS, `${description}/metadata/content/text_bgem3`, { mode: 'w' });
       try {
         await handle.write(new TextEncoder().encode(JSON.stringify([1, 0, 0])));
       } finally {
         await handle.close();
       }
-      const stub = startStubEms({ ops: { 'text.embed': JINA } });
+      const stub = startStubEms({ ops: { 'text.embed': BGE } });
       try {
         const out = await client.execJson<{ results: ProviderHit[] }>(`CFG_EMS_URL=${stub.url} search-media 'a boat'`);
         assertEquals(out.results.map((hit) => [hit.path, hit.channel]), [[`${ALBUMS_ROOT}/vasan/files/DSC_4471.JPG`, 'content']]);
@@ -139,11 +139,11 @@ Deno.test({
       const far = `${ALBUMS_ROOT}/vasan/files/DSC_4472.JPG`;
       await cmd.shouldSucceed(`mkdir -p ${far}/metadata`);
       await cmd.shouldSucceed(`mknode -t text ${far}/metadata/content`);
-      await cmd.shouldSucceed(`mknode -t embedding ${far}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=3`);
-      const handle = await vfs.open(ADMIN_ACCESS, `${far}/metadata/content/text_jina5s`, { mode: 'w' });
+      await cmd.shouldSucceed(`mknode -t embedding ${far}/metadata/content/text_bgem3 --as embeddingType=text_bgem3 --an capacity=3`);
+      const handle = await vfs.open(ADMIN_ACCESS, `${far}/metadata/content/text_bgem3`, { mode: 'w' });
       try {
-        // A weak match (cosine 0.45), but above the text space's 0.35 floor.
-        await handle.write(new TextEncoder().encode(JSON.stringify([0.5, 1, 0])));
+        // A weak match (cosine 0.57), but above bge-m3's 0.50 floor.
+        await handle.write(new TextEncoder().encode(JSON.stringify([0.7, 1, 0])));
       } finally {
         await handle.close();
       }
@@ -158,7 +158,7 @@ Deno.test({
         return `/tmp/${name}`;
       };
       const farOnly = await within('far.json', [(await vfs.get(ADMIN_ACCESS, far)).id]);
-      const stub = startStubEms({ ops: { 'text.embed': JINA } });
+      const stub = startStubEms({ ops: { 'text.embed': BGE } });
       try {
         const everywhere = await client.execJson<{ results: ProviderHit[] }>(`CFG_EMS_URL=${stub.url} search-media 'a boat'`);
         assertEquals(everywhere.results[0].path, near);
@@ -172,7 +172,7 @@ Deno.test({
     });
 
     await t.step('a cancelled search hangs up its query embeds, which carry a minute of deadline', async () => {
-      const stub = startStubEms({ ops: { 'text.embed': JINA, 'vision.embed_text': { result: { embedding: [1, 0, 0] } } }, delayMs: 30_000 });
+      const stub = startStubEms({ ops: { 'text.embed': BGE, 'vision.embed_text': { result: { embedding: [1, 0, 0] } } }, delayMs: 30_000 });
       try {
         const controller = new AbortController();
         const started = Date.now();

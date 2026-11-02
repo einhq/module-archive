@@ -67,10 +67,9 @@ const PICTURE_CANDIDATE_CAP = 2000;
 
 /**
  * The `authored` channel: a hand-written description (`attrs.description`, embedded at
- * `metadata/authored/<type>`). Its floor is stricter than the text space's own: judged caption
- * pairs held 0.9+ precision from 0.50, against 0.50 precision at the space's general floor.
+ * `metadata/authored/<type>`). It counts from the text space's `strict` level, where judged pairs
+ * hold 0.9 precision, not from its floor, where they hold one in two.
  */
-const AUTHORED_FLOOR = 0.5;
 const AUTHORED = /^(.*)\/metadata\/authored\/[a-z]+_[a-z0-9]+$/;
 
 /**
@@ -484,8 +483,10 @@ const searchMedia = async (cmd: Command): CmdReturn => {
   // EMS drops the embed rather than run it for nobody.
   let namesFull = false;
   let saidFull = false;
-  // The text space's similarity from which a transcript hit is the recording meant.
+  // The text space's similarity from which a transcript hit is the recording meant, and the one
+  // from which a hand-written description counts.
   let confidentAt = Infinity;
+  let strictAt = Infinity;
   const none: Ranked = { matches: [], paths: new Map(), full: false };
   const [named, said, content, pictures] = like ? [new Map<string, { score: number; id: string }>(), [] as WordsHit[], none, like] : await Promise.all([
     byName(cmd, queryLower, limit, notWithin).then(({ hits, full }) => {
@@ -505,10 +506,11 @@ const searchMedia = async (cmd: Command): CmdReturn => {
     }),
     (async () => {
       // The text space has a floor of its own, as the picture channel does.
-      let embedded: { bytes: Uint8Array; type: string; floor: number; confident: number };
+      let embedded: Awaited<ReturnType<typeof embedQuery>>;
       try {
         embedded = await embedQuery(cmd, query);
         confidentAt = embedded.confident;
+        strictAt = embedded.strict;
         await trace('query embedded');
       } catch (error) {
         await cmd.writeError(`search-media: content match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -609,7 +611,7 @@ const searchMedia = async (cmd: Command): CmdReturn => {
 
       const own = AUTHORED.exec(embPath);
       if (own) {
-        if (match.similarity >= AUTHORED_FLOOR) {
+        if (match.similarity >= strictAt) {
           note(channels.authored, own[1], match.similarity);
           climb(own[1], embPath, match.id);
         }

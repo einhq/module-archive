@@ -10,7 +10,7 @@ import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from 
 import { startStubEms } from '@ems/testing';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
-const JINA = 'jina-embeddings-v5-text-small';
+const BGE = 'bge-m3';
 
 Deno.test({
   name: 'processing commands refuse a reader before asking EMS',
@@ -21,7 +21,7 @@ Deno.test({
   const admin = await testCtx.server.createShellClient();
   const cmd = testCommands(admin);
   // No op answers, but every request is recorded: a command that got past its check is seen.
-  const stub = startStubEms({ capabilities: { models: { text_embed: JINA } } });
+  const stub = startStubEms({ capabilities: { models: { text_embed: BGE } } });
   const readers: ShellClient[] = [];
 
   const write = async (path: string, body: string) => {

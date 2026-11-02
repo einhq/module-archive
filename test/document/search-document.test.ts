@@ -20,14 +20,14 @@ Deno.test({ name: 'search-document', sanitizeResources: false, sanitizeOps: fals
   const cmd = testCommands(client);
   const dir = `${ALBUMS_ROOT}/papers`;
 
-  /** A file with a text vector at `<file>/metadata/content/text_jina5s`, as index-document writes them. */
+  /** A file with a text vector at `<file>/metadata/content/text_bgem3`, as index-document writes them. */
   const embedded = async (name: string, mimetype: string, vector: number[]) => {
     const file = `${dir}/${name}`;
     await cmd.shouldSucceed(`mknode -t file ${file} --as name=${name} --as mimetype=${mimetype}`);
     await cmd.shouldSucceed(`mkdir -p ${file}/metadata`);
     await cmd.shouldSucceed(`mknode -t file ${file}/metadata/content --as mimetype=text/plain`);
-    await cmd.shouldSucceed(`mknode -t embedding ${file}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=3`);
-    const handle = await vfs.open(ADMIN_ACCESS, `${file}/metadata/content/text_jina5s`, { mode: 'w' });
+    await cmd.shouldSucceed(`mknode -t embedding ${file}/metadata/content/text_bgem3 --as embeddingType=text_bgem3 --an capacity=3`);
+    const handle = await vfs.open(ADMIN_ACCESS, `${file}/metadata/content/text_bgem3`, { mode: 'w' });
     try {
       await handle.write(new TextEncoder().encode(JSON.stringify(vector)));
     } finally {
@@ -49,7 +49,7 @@ Deno.test({ name: 'search-document', sanitizeResources: false, sanitizeOps: fals
   };
 
   const stub = startStubEms({
-    ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0, 0]), dimension: 3 }, producer: 'jina-embeddings-v5-text-small' }) },
+    ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0, 0]), dimension: 3 }, producer: 'bge-m3' }) },
   });
   const search = (args: string) => client.execJson<{ results: Hit[] }>(`CFG_EMS_URL=${stub.url} search-document ${args}`);
 
@@ -80,10 +80,10 @@ Deno.test({ name: 'search-document', sanitizeResources: false, sanitizeOps: fals
     await t.step('a long document in parts is one hit, at its best part', async () => {
       const report = `${dir}/report.pdf`;
       await cmd.shouldSucceed(`mknode -t file ${report} --as name=report.pdf --as mimetype=application/pdf`);
-      await cmd.shouldSucceed(`mkdir -p ${report}/metadata/content/text_jina5s`);
+      await cmd.shouldSucceed(`mkdir -p ${report}/metadata/content/text_bgem3`);
       for (const [name, vector] of [['c0', [0, 1, 0]], ['c1', [1, 0, 0]], ['c2', [0.9, 0.1, 0]]] as const) {
-        const path = `${report}/metadata/content/text_jina5s/${name}`;
-        await cmd.shouldSucceed(`mknode -t embedding ${path} --as embeddingType=text_jina5s --an capacity=3`);
+        const path = `${report}/metadata/content/text_bgem3/${name}`;
+        await cmd.shouldSucceed(`mknode -t embedding ${path} --as embeddingType=text_bgem3 --an capacity=3`);
         const handle = await vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
         try {
           await handle.write(new TextEncoder().encode(JSON.stringify(vector)));

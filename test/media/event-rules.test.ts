@@ -1104,48 +1104,48 @@ Deno.test('ocr: a picture read by the current engine or by Tesseract, never read
   assertEquals(ocrFacts(await deriveGaps(VID, tree(indexedVideo(), { ocrGeneration: PPOCR }), 100)), []);
 });
 
-const JINA = 'jina-embeddings-v5-text-small';
+const BGE = 'bge-m3';
 const textFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.textEmbeddingStale);
-const textVector = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id: 'tv', type: 'embedding', attrs: { embeddedBy: JINA, ...attrs } });
+const textVector = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id: 'tv', type: 'embedding', attrs: { embeddedBy: BGE, ...attrs } });
 
 /** A video whose extracted text and transcript have current vectors. */
 const embeddedVideo = (): Record<string, NodeSnapshot> => {
   const nodes = indexedVideo();
   nodes[`${VID}/metadata/content`] = { id: 'c1', type: 'file', attrs: { size: 120 } };
-  nodes[`${VID}/metadata/content/text_jina5s`] = textVector();
+  nodes[`${VID}/metadata/content/text_bgem3`] = textVector();
   nodes[`${VID}/metadata/transcript`] = transcribed({ size: 900, speech: true });
-  nodes[`${VID}/metadata/transcript/text_jina5s`] = { id: 'ts', type: 'directory', attrs: { embeddedBy: JINA, chunkSeconds: CHUNK_TARGET_SECONDS } };
+  nodes[`${VID}/metadata/transcript/text_bgem3`] = { id: 'ts', type: 'directory', attrs: { embeddedBy: BGE, chunkSeconds: CHUNK_TARGET_SECONDS } };
   return nodes;
 };
 
 Deno.test('text: texts with vectors from the current embedder are not a gap', async () => {
-  assertEquals(textFacts(await deriveGaps(VID, tree(embeddedVideo(), { textGeneration: JINA }), 100)), []);
+  assertEquals(textFacts(await deriveGaps(VID, tree(embeddedVideo(), { textGeneration: BGE }), 100)), []);
 });
 
 Deno.test('text: a missing vector, another model and another chunk length are announced, per text', async () => {
   const nodes = embeddedVideo();
-  nodes[`${VID}/metadata/transcript/text_jina5s`].attrs.chunkSeconds = 30;
-  nodes[`${VID}/metadata/content/text_jina5s`] = textVector({ embeddedBy: 'another-text-model' });
+  nodes[`${VID}/metadata/transcript/text_bgem3`].attrs.chunkSeconds = 30;
+  nodes[`${VID}/metadata/content/text_bgem3`] = textVector({ embeddedBy: 'another-text-model' });
 
-  const facts = textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: JINA }), 100));
+  const facts = textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: BGE }), 100));
 
   assertEquals(facts.length, 1);
   assertEquals(facts[0].subject, VID);
-  assertEquals(facts[0].data, { mimetype: 'video/mp4', stale: ['content', 'transcript'], expected: JINA });
+  assertEquals(facts[0].data, { mimetype: 'video/mp4', stale: ['content', 'transcript'], expected: BGE });
 });
 
 Deno.test('text: a hand-written description needs a vector of its text as it is now', async () => {
   const text = 'Anna Andersson on a sailboat';
   const nodes = embeddedVideo();
   nodes[VID].attrs.description = `${text} `;
-  const ctx = tree(nodes, { textGeneration: JINA });
+  const ctx = tree(nodes, { textGeneration: BGE });
   assertEquals(textFacts(await deriveGaps(VID, ctx, 100)).map((f) => f.data?.stale), [['authored']]);
 
   nodes[`${VID}/metadata/authored`] = { id: 'a1', type: 'directory', attrs: {} };
-  nodes[`${VID}/metadata/authored/text_jina5s`] = textVector({ authoredHash: await authoredHash('an earlier text') });
+  nodes[`${VID}/metadata/authored/text_bgem3`] = textVector({ authoredHash: await authoredHash('an earlier text') });
   assertEquals(textFacts(await deriveGaps(VID, ctx, 100)).map((f) => f.data?.stale), [['authored']]);
 
-  nodes[`${VID}/metadata/authored/text_jina5s`] = textVector({ authoredHash: await authoredHash(text) });
+  nodes[`${VID}/metadata/authored/text_bgem3`] = textVector({ authoredHash: await authoredHash(text) });
   assertEquals(textFacts(await deriveGaps(VID, ctx, 100)), []);
 });
 
@@ -1153,16 +1153,16 @@ Deno.test('text: a text with nothing to embed is never a gap', async () => {
   // A silent recording keeps no chunk set and an empty text node gives no vector, so announcing
   // either would republish the file on every scan.
   const nodes = embeddedVideo();
-  delete nodes[`${VID}/metadata/content/text_jina5s`];
-  delete nodes[`${VID}/metadata/transcript/text_jina5s`];
+  delete nodes[`${VID}/metadata/content/text_bgem3`];
+  delete nodes[`${VID}/metadata/transcript/text_bgem3`];
   nodes[`${VID}/metadata/content`].attrs.size = 0;
   nodes[`${VID}/metadata/transcript`].attrs.speech = false;
-  assertEquals(textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: JINA }), 100)), []);
+  assertEquals(textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: BGE }), 100)), []);
 });
 
 Deno.test('text: no answer from EMS, or a model with no type, asks nothing', async () => {
   const nodes = embeddedVideo();
-  delete nodes[`${VID}/metadata/content/text_jina5s`];
+  delete nodes[`${VID}/metadata/content/text_bgem3`];
   assertEquals(textFacts(await deriveGaps(VID, tree(nodes), 100)), []);
   assertEquals(textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: 'a-model-nothing-knows' }), 100)), []);
 });
@@ -1172,8 +1172,8 @@ Deno.test('text: a file announced for a new transcript is not also announced for
   const nodes = embeddedVideo();
   nodes[`${VID}/metadata/transcript`].attrs.transcribedBy = 'whisper-large-v3';
   nodes[`${VID}/metadata/transcript`].attrs.transcribedWith = 'old-settings';
-  delete nodes[`${VID}/metadata/transcript/text_jina5s`];
-  const facts = await deriveGaps(VID, tree(nodes, { textGeneration: JINA, transcriptGeneration: 'new-settings' }), 100);
+  delete nodes[`${VID}/metadata/transcript/text_bgem3`];
+  const facts = await deriveGaps(VID, tree(nodes, { textGeneration: BGE, transcriptGeneration: 'new-settings' }), 100);
   assertEquals(facts.map((f) => f.type).includes(MEDIA_EVENTS.transcriptStale), true);
   assertEquals(textFacts(facts), []);
 });

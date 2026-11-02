@@ -14,7 +14,7 @@ import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
-const JINA = 'jina-embeddings-v5-text-small';
+const BGE = 'bge-m3';
 
 /**
  * A toy space: one axis per topic word, so a query and the text about it meet at cosine 1, and an
@@ -47,8 +47,8 @@ Deno.test({
   };
 
   const stub = startStubEms({
-    capabilities: { models: { text_embed: JINA } },
-    ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(toy), dimension: 5 }, producer: JINA }) },
+    capabilities: { models: { text_embed: BGE } },
+    ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(toy), dimension: 5 }, producer: BGE }) },
   });
   const env = `CFG_EMS_URL=${stub.url}`;
 
@@ -97,23 +97,23 @@ Deno.test({
       const out = await client.execJson<{ embedded: number; transcripts: number; failed: number; complete: boolean }>(`${env} media-reembed`);
       assertEquals([out.embedded, out.transcripts, out.failed, out.complete], [2, 1, 0, true]);
 
-      const sign = await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`);
-      assertEquals(sign.attrs.embeddingType, 'text_jina5s');
-      assertEquals(sign.attrs.embeddedBy, JINA);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${album}/files/notes.txt/text_jina5s`), false);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, '/var/logs/jobs/scan/stdout.log/metadata/content/text_jina5s'), false);
+      const sign = await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`);
+      assertEquals(sign.attrs.embeddingType, 'text_bgem3');
+      assertEquals(sign.attrs.embeddedBy, BGE);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${album}/files/notes.txt/text_bgem3`), false);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/var/logs/jobs/scan/stdout.log/metadata/content/text_bgem3'), false);
       // Nothing said is done too: an empty set, stamped, so the next pass does not read it again.
-      const silence = await vfs.get(ADMIN_ACCESS, `${quiet}/metadata/transcript/text_jina5s`);
-      assertEquals([silence.type, silence.attrs.embeddedBy], ['directory', JINA]);
+      const silence = await vfs.get(ADMIN_ACCESS, `${quiet}/metadata/transcript/text_bgem3`);
+      assertEquals([silence.type, silence.attrs.embeddedBy], ['directory', BGE]);
 
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${scan}/metadata/content/text_jina5s`)).attrs.embeddingType, 'text_jina5s');
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${scan}/metadata/content/text_bgem3`)).attrs.embeddingType, 'text_bgem3');
 
-      const chunks = (await vfs.children(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).map((c) => c.name).sort();
+      const chunks = (await vfs.children(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).map((c) => c.name).sort();
       assertEquals(chunks, ['t0', 't70']);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s/t70`)).attrs.startSeconds, 70);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3/t70`)).attrs.startSeconds, 70);
       // Stamped with the length it was cut at, so a new length re-chunks it.
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).attrs.chunkSeconds, 60);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).attrs.embeddedBy, JINA);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).attrs.chunkSeconds, 60);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).attrs.embeddedBy, BGE);
 
       // Documents, not queries: the embedder reads them differently.
       const embeds = stub.requests.filter((r) => r.op === 'text.embed');
@@ -152,7 +152,7 @@ Deno.test({
 
     await t.step('what is said is found by its words, at the minute that says them', async () => {
       // The chunk carries the text it was embedded from.
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s/t70`)).attrs.text, 'Nu ska vi åka och fiske i sjön.');
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3/t70`)).attrs.text, 'Nu ska vi åka och fiske i sjön.');
       // "sjön" is about no topic, so its vector meets the minute about nothing, at 0 s; its words are
       // said at 70 s.
       const lake = await search('search-media', 'Sjön');
@@ -181,7 +181,7 @@ Deno.test({
 
     await t.step('what is written is found by its words, which its vector does not say', async () => {
       // The vector carries the text it was embedded from.
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`)).attrs.text, 'Segelbåtar uthyres');
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`)).attrs.text, 'Segelbåtar uthyres');
       // "uthyres" is about no topic, so its vector meets nothing; the sign says it.
       const rent = await search('search-media', 'Uthyres');
       const hit = rent.results.find((result) => result.path === photo && result.channel === 'content');
@@ -207,8 +207,8 @@ Deno.test({
       await cmd.shouldSucceed(`mknode -t file ${hand} --as name=hand.jpg --as mimetype=image/jpeg`);
       const set = await client.exec(`${env} file-set-description --text 'Mormor dansar runt midsommarstången' ${hand}`);
       assertEquals(set.success, true, set.error);
-      const vector = await vfs.get(ADMIN_ACCESS, `${hand}/metadata/authored/text_jina5s`);
-      assertEquals(vector.attrs.embeddedBy, JINA);
+      const vector = await vfs.get(ADMIN_ACCESS, `${hand}/metadata/authored/text_bgem3`);
+      assertEquals(vector.attrs.embeddedBy, BGE);
       assertEquals(typeof vector.attrs.authoredHash, 'string');
 
       const found = await search('search-media', 'midsommar');
@@ -243,14 +243,14 @@ Deno.test({
       const filler = Array.from({ length: 6 }, (_, i) => `Avsnitt ${i}. ${'Styrelsen gick igenom budgeten och protokollet. '.repeat(30)}`);
       await write(`${report}/metadata/content`, [...filler, 'Till sist: sommarens fiske vid sjön.'].join('\n\n'));
       // One current vector of the opening only, which a run must redo.
-      await cmd.shouldSucceed(`mknode -t embedding ${report}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=5 --as embeddedBy=${JINA}`);
-      await write(`${report}/metadata/content/text_jina5s`, JSON.stringify([0, 0, 0, 0, 1]));
+      await cmd.shouldSucceed(`mknode -t embedding ${report}/metadata/content/text_bgem3 --as embeddingType=text_bgem3 --an capacity=5 --as embeddedBy=${BGE}`);
+      await write(`${report}/metadata/content/text_bgem3`, JSON.stringify([0, 0, 0, 0, 1]));
 
       const out = await client.execJson<{ embedded: number; failed: number }>(`${env} media-reembed`);
       assertEquals([out.embedded, out.failed], [1, 0]);
-      const dir = await vfs.get(ADMIN_ACCESS, `${report}/metadata/content/text_jina5s`);
-      assertEquals([dir.type, dir.attrs.embeddedBy], ['directory', JINA]);
-      const parts = (await vfs.children(ADMIN_ACCESS, `${report}/metadata/content/text_jina5s`)).map((c) => c.name);
+      const dir = await vfs.get(ADMIN_ACCESS, `${report}/metadata/content/text_bgem3`);
+      assertEquals([dir.type, dir.attrs.embeddedBy], ['directory', BGE]);
+      const parts = (await vfs.children(ADMIN_ACCESS, `${report}/metadata/content/text_bgem3`)).map((c) => c.name);
       assert(parts.length > 3 && parts.includes('c0'), JSON.stringify(parts));
 
       assertEquals((await search('search-media', 'fiske')).results.some((hit) => hit.path === report), true);
@@ -264,10 +264,10 @@ Deno.test({
 
     await t.step('a chunk set cut at another length is chunked again', async () => {
       // A set with no stamped length, cut at 30 s.
-      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`, { attrs: { chunkSeconds: 30 } });
+      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`, { attrs: { chunkSeconds: 30 } });
       const out = await client.execJson<{ transcripts: number }>(`${env} media-reembed`);
       assertEquals(out.transcripts, 1);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).attrs.chunkSeconds, 60);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).attrs.chunkSeconds, 60);
       assertEquals((await client.execJson<{ transcripts: number }>(`${env} media-reembed`)).transcripts, 0);
     });
 
@@ -275,24 +275,40 @@ Deno.test({
       await write(`${clip}/metadata/transcript`, 'WEBVTT\n\n00:00:00.000 --> 00:00:10.000\nBara fiske nu.\n');
       const out = await client.exec(`${env} media-reembed -f`);
       assertEquals(out.success, true, out.error);
-      const chunks = (await vfs.children(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).map((c) => c.name);
+      const chunks = (await vfs.children(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).map((c) => c.name);
       assertEquals(chunks, ['t0']);
     });
 
+    await t.step("a re-embed into the current model removes the previous model's vectors beside it", async () => {
+      // jina-v5-text-small's vectors, as a file embedded before the switch to bge-m3 keeps them.
+      const previous = 'jina-embeddings-v5-text-small';
+      await vfs.update(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`, { attrs: { embeddedBy: 'another-text-model' } });
+      await cmd.shouldSucceed(`mknode -t embedding ${photo}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=5 --as embeddedBy=${previous}`);
+      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`, { attrs: { chunkSeconds: 30 } });
+      await cmd.shouldSucceed(`mkdir -p ${clip}/metadata/transcript/text_jina5s`);
+      await cmd.shouldSucceed(`mknode -t embedding ${clip}/metadata/transcript/text_jina5s/t0 --as embeddingType=text_jina5s --an capacity=5`);
+
+      const out = await client.execJson<{ embedded: number; transcripts: number; failed: number }>(`${env} media-reembed ${photo} ${clip}`);
+      assertEquals([out.embedded, out.transcripts, out.failed], [1, 1, 0]);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`), false);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`), false);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`)).attrs.embeddedBy, BGE);
+    });
+
     await t.step('media-reembed with paths embeds what those files lack, and nothing elsewhere', async () => {
-      await vfs.update(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`, { attrs: { embeddedBy: 'another-text-model' } });
-      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`, { attrs: { chunkSeconds: 30 } });
+      await vfs.update(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`, { attrs: { embeddedBy: 'another-text-model' } });
+      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`, { attrs: { chunkSeconds: 30 } });
       await vfs.update(ADMIN_ACCESS, scan, { attrs: { description: 'Ett kvitto på en tårta' } });
 
       const one = await client.execJson<{ embedded: number; transcripts: number; authored: number; failed: number }>(`${env} media-reembed ${photo}`);
       assertEquals([one.embedded, one.transcripts, one.authored, one.failed], [1, 0, 0, 0]);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`)).attrs.embeddedBy, JINA);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).attrs.chunkSeconds, 30);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`)).attrs.embeddedBy, BGE);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).attrs.chunkSeconds, 30);
 
       const two = await client.execJson<{ embedded: number; transcripts: number; authored: number; skipped: number }>(`${env} media-reembed ${clip} ${scan}`);
       assertEquals([two.embedded, two.transcripts, two.authored, two.skipped], [0, 1, 1, 1]);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`)).attrs.chunkSeconds, 60);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${scan}/metadata/authored/text_jina5s`), true);
+      assertEquals((await vfs.get(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`)).attrs.chunkSeconds, 60);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${scan}/metadata/authored/text_bgem3`), true);
 
       const again = await client.execJson<{ embedded: number; transcripts: number; authored: number }>(`${env} media-reembed ${photo} ${clip} ${scan}`);
       assertEquals([again.embedded, again.transcripts, again.authored], [0, 0, 0]);

@@ -153,19 +153,19 @@ Deno.test('vtt timestamps parse with and without the hours field', () => {
 
 Deno.test('a chunk embedding path resolves to its file and its moment', () => {
   assertEquals(
-    resolveChunkPath('/archive/albums/sommar/files/IMG_1.mp4/metadata/transcript/text_jina5s/t2400'),
+    resolveChunkPath('/archive/albums/sommar/files/IMG_1.mp4/metadata/transcript/text_bgem3/t2400'),
     { path: '/archive/albums/sommar/files/IMG_1.mp4', atSeconds: 2400 },
   );
   assertEquals(
-    resolveChunkPath('/a/b.mp3/metadata/transcript/text_jina5s/t0'),
+    resolveChunkPath('/a/b.mp3/metadata/transcript/text_bgem3/t0'),
     { path: '/a/b.mp3', atSeconds: 0 },
   );
 });
 
 Deno.test('other embedding layouts are left for the caller to strip', () => {
   // These must fall through, not be mistaken for chunks — a caption is not a moment.
-  assertEquals(resolveChunkPath('/a/b.jpg/metadata/content/text_jina5s'), null);
-  assertEquals(resolveChunkPath('/a/b.pdf/metadata/content/text_jina5s'), null);
+  assertEquals(resolveChunkPath('/a/b.jpg/metadata/content/text_bgem3'), null);
+  assertEquals(resolveChunkPath('/a/b.pdf/metadata/content/text_bgem3'), null);
   // MiniLM's chunk sets are not read.
   assertEquals(resolveChunkPath('/a/b.mp3/metadata/transcript/chunks/t0'), null);
   assertEquals(resolveChunkPath('/a/b.jpg/fingerprints/description'), null);

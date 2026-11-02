@@ -111,15 +111,15 @@ Deno.test({
     });
 
     await t.step('the chunks are embedded ahead of batch work, and an absent EMS does not hold the save up', async () => {
-      const JINA = 'jina-embeddings-v5-text-small';
+      const BGE = 'bge-m3';
       const stub = startStubEms({
-        ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0]), dimension: 2 }, producer: JINA }) },
+        ops: { 'text.embed': (body) => ({ result: { embeddings: (body.texts as string[]).map(() => [1, 0]), dimension: 2 }, producer: BGE }) },
       });
       try {
         await cmd.shouldSucceed(`CFG_EMS_URL=${stub.url} file-set-transcript ${CLIP} --vtt-base64 ${base64(CORRECTED)}`);
         const embed = stub.requests.find((request) => request.op === 'text.embed');
         assertEquals((embed?.body.options as { priority?: string } | undefined)?.priority, 'interactive');
-        assertEquals((await vfs.get(ADMIN_ACCESS, `${TRANSCRIPT}/text_jina5s`)).attrs.embeddedBy, JINA);
+        assertEquals((await vfs.get(ADMIN_ACCESS, `${TRANSCRIPT}/text_bgem3`)).attrs.embeddedBy, BGE);
       } finally {
         await stub.close();
       }
