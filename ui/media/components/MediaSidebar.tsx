@@ -466,7 +466,11 @@ export function MediaSidebar(
   const pathRef = useRef(media.path);
   pathRef.current = media.path;
   const scrollRef = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => scrollRef.current?.scrollTo({ top: 0 }), [media.path]);
+  // A block, not an expression: newer browsers' scrollTo returns a promise, which React would take
+  // for the effect's cleanup and call.
+  useLayoutEffect(() => {
+    scrollRef.current?.scrollTo({ top: 0 });
+  }, [media.path]);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
