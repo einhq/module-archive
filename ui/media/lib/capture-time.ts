@@ -61,7 +61,20 @@ export const isVague = (value?: string): boolean => {
   return precision === 'year' || precision === 'month';
 };
 
-const MONTHS = (locale?: string) => new Intl.DateTimeFormat(locale, { month: 'long', timeZone: 'UTC' });
+const formats = new Map<string, Intl.DateTimeFormat>();
+
+/**
+ * An `Intl.DateTimeFormat` for `locale` and `options`, made once: making one takes far longer than
+ * formatting with it, and the lightbox formats a time for every picture it steps to.
+ */
+function dateFormat(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale ?? ''}|${JSON.stringify(options)}`;
+  let format = formats.get(key);
+  if (!format) formats.set(key, format = new Intl.DateTimeFormat(locale, options));
+  return format;
+}
+
+const MONTHS = (locale?: string) => dateFormat(locale, { month: 'long', timeZone: 'UTC' });
 
 /** A capture time split into what a caption can lay out on separate lines. */
 export type TakenParts = {
@@ -107,11 +120,11 @@ export function formatTakenParts(value?: string, locale?: string, options: Forma
 
   const day = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day)));
   const calendar = options.long
-    ? new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(day)
-    : new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(day);
+    ? dateFormat(locale, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(day)
+    : dateFormat(locale, { dateStyle: 'medium', timeZone: 'UTC' }).format(day);
   // `dateStyle` refuses to be combined with `weekday`, so the name is formatted on its own.
   const weekday = options.weekday === 'short' ? 'short' : 'long';
-  const date = options.weekday ? `${new Intl.DateTimeFormat(locale, { weekday, timeZone: 'UTC' }).format(day)}, ${calendar}` : calendar;
+  const date = options.weekday ? `${dateFormat(locale, { weekday, timeZone: 'UTC' }).format(day)}, ${calendar}` : calendar;
   if (parts.precision === 'day') return { date };
 
   // Below a day the wall clock is printed as written, not reformatted: it is already in the
@@ -153,7 +166,7 @@ export function viewerLocalTime(takenAt?: string, takenAtUtc?: string, locale?: 
   // `getTimezoneOffset` counts minutes *behind* UTC, hence the sign flip.
   if (-at.getTimezoneOffset() * 60 === captureOffset) return undefined;
 
-  return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(at);
+  return dateFormat(locale, { dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(at);
 }
 
 /** How a source is worth naming to a reader. */
