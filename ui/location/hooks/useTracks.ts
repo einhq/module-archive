@@ -191,10 +191,16 @@ export function useMapTracks(enabled: boolean): { segments: MapTrackSpec[]; load
 }
 
 /**
- * The devices' routes over a span of time — what an album shows: every track that
- * recorded anything between `from` and `to`, read for that span alone.
+ * The routes of `devices` over a span of time — what an album shows: each of their tracks that
+ * recorded anything between `from` and `to`, read for that span alone. `devices` is null while it
+ * is still being asked.
  */
-export function useSpanTracks(from: string | undefined, to: string | undefined, maxPoints = 4000): { segments: MapTrackSpec[]; loading: boolean } {
+export function useSpanTracks(
+  from: string | undefined,
+  to: string | undefined,
+  devices: string[] | null,
+  maxPoints = 4000,
+): { segments: MapTrackSpec[]; loading: boolean } {
   const { tracks, loading: listLoading } = useTracks();
   const [segments, setSegments] = useState<MapTrackSpec[]>([]);
   const [loading, setLoading] = useState(false);
@@ -204,11 +210,13 @@ export function useSpanTracks(from: string | undefined, to: string | undefined, 
     // last. Compared as instants, since a span's ends may be written with or without a zone.
     const start = from ? Date.parse(`${from.slice(0, 10)}T00:00:00`) : NaN;
     const end = to ? Date.parse(`${to.slice(0, 10)}T23:59:59.999`) : NaN;
+    const listed = new Set(devices ?? []);
     const during = Number.isNaN(start) || Number.isNaN(end)
       ? []
-      : tracks.filter((track) => track.firstTs && track.lastTs && Date.parse(track.firstTs) <= end && Date.parse(track.lastTs) >= start);
+      : tracks.filter((track) => listed.has(track.device) && track.firstTs && track.lastTs && Date.parse(track.firstTs) <= end && Date.parse(track.lastTs) >= start);
     if (during.length === 0) {
       setSegments([]);
+      setLoading(false);
       return;
     }
     let cancelled = false;
@@ -229,7 +237,7 @@ export function useSpanTracks(from: string | undefined, to: string | undefined, 
     return () => {
       cancelled = true;
     };
-  }, [tracks, from, to, maxPoints]);
+  }, [tracks, from, to, devices, maxPoints]);
 
-  return { segments, loading: loading || listLoading };
+  return { segments, loading: loading || listLoading || devices === null };
 }

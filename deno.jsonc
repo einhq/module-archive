@@ -23,6 +23,7 @@
     "@archive/location/location-link": "./lib/location/location-link.ts",
     "@archive/location/track": "./lib/location/track.ts",
     "@archive/location/types": "./types/location/mod.ts",
+    "@archive/media/album-devices": "./lib/media/album-devices.ts",
     "@archive/media/album-members": "./lib/media/album-members.ts",
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",

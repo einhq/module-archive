@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { MapClusterMedia } from '../../components/MapClusterMedia.tsx';
 import { type MapCluster, useMapMedia } from '../../hooks/useMapMedia.ts';
 import { useSpanTracks } from '../../location/hooks/useTracks.ts';
+import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
 import { cellFor, clusterMarkers } from '../../lib/map-clusters.ts';
 import { hitToMediaItem, type MediaHit } from '../../lib/map-hits.ts';
 import type { MapFilters } from '../../lib/map-params.ts';
@@ -13,7 +14,7 @@ import type { MapFilters } from '../../lib/map-params.ts';
 type AlbumMapProps = {
   /** The album or folder whose media are drawn. */
   path: string;
-  /** Its span, for the tracks the devices recorded while it was taken. */
+  /** Its span, for the tracks its devices recorded while it was taken. */
   from?: string;
   to?: string;
 };
@@ -59,8 +60,12 @@ function useAlbumPoints(path: string): { lat: number; lng: number }[] | null {
   return points;
 }
 
+/** `names` as a sentence's list: "A", "A and B", "A, B and C". */
+const listed = (names: string[]): string => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
 /**
- * An album's media on a map, and the routes the devices recorded while they were taken.
+ * An album's media on a map, and the routes its devices (`album-device-list`) recorded while they
+ * were taken.
  *
  * The media are clustered by the server as on the map page (`find-within --under`), a cell of one
  * drawn as its picture and a pile as its count, which opens the pictures behind it. The map opens
@@ -69,7 +74,9 @@ function useAlbumPoints(path: string): { lat: number; lng: number }[] | null {
 export function AlbumMap({ path, from, to }: AlbumMapProps) {
   const filters = useMemo((): MapFilters => ({ under: path }), [path]);
   const { clusters, loading, query } = useMapMedia({}, filters);
-  const { segments, loading: tracksLoading } = useSpanTracks(from, to);
+  const { list: deviceList, loading: devicesLoading } = useAlbumDevices(path);
+  const devices = useMemo(() => devicesLoading ? null : (deviceList?.devices ?? []).map((device) => device.path), [deviceList, devicesLoading]);
+  const { segments, loading: tracksLoading } = useSpanTracks(from, to, devices);
   const points = useAlbumPoints(path);
   const [zoom, setZoom] = useState(12);
   const [open, setOpen] = useState<{ cluster: MapCluster; bounds: GeoBounds } | null>(null);
@@ -104,8 +111,15 @@ export function AlbumMap({ path, from, to }: AlbumMapProps) {
     );
   }
 
+  const names = (deviceList?.devices ?? []).map((device) => device.name);
   if (!extent) {
-    return <Text c='dimmed' ta='center' py='xl'>Nothing in this album has a position, and no device recorded a route while it was taken.</Text>;
+    return (
+      <Text c='dimmed' ta='center' py='xl'>
+        {names.length === 0
+          ? 'Nothing in this album has a position, and it has no devices whose routes to show.'
+          : `Nothing in this album has a position, and ${listed(names)} recorded no route while it was taken.`}
+      </Text>
+    );
   }
 
   return (
@@ -123,7 +137,11 @@ export function AlbumMap({ path, from, to }: AlbumMapProps) {
           </Box>
         )}
       </Card>
-      {points.length === 0 && <Text size='sm' c='dimmed' mt='xs'>Nothing in this album has a position; the map shows the routes recorded while it was taken.</Text>}
+      {points.length === 0 && (
+        <Text size='sm' c='dimmed' mt='xs'>
+          Nothing in this album has a position; the map shows the routes its devices recorded while it was taken.
+        </Text>
+      )}
       <MapClusterMedia open={open} filters={filters} onClose={() => setOpen(null)} />
     </>
   );

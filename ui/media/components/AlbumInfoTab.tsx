@@ -1,15 +1,20 @@
 import { CoverAvatar, formatRange, TablerIcon } from '@ein/ui/components';
-import { Anchor, Badge, Button, Group, Loader, SimpleGrid, Text } from '@mantine/core';
+import { ActionIcon, Anchor, Badge, Button, Group, Loader, SimpleGrid, Text, Tooltip } from '@mantine/core';
 import { countOf, paramsFromFilters, type SearchFilters, subjectArg } from '@ein/ui/lib';
-import type { SubjectTally } from '@archive/media/api';
-import { useState } from 'react';
+import type { AlbumDevice, SubjectTally } from '@archive/media/api';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { EntityPicker } from '../../components/EntityPicker.tsx';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { useDevices } from '../../device/hooks/useDevices.ts';
+import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
 import { useContainerSubjects } from '../hooks/useContainerSubjects.ts';
 
 type AlbumInfoTabProps = {
   path: string;
+  /** Whether the reader may change the album's list of devices: an album they may write. */
+  editable: boolean;
   title: string;
   description?: string;
   timeStart?: string;
@@ -43,7 +48,7 @@ const searchIn = (under: string, filters: SearchFilters): string => `/search?${p
  * The subjects of one kind, the most counted first: each opens its page, and its count the album's
  * media that have it, when `search` can ask for that (`subject`).
  */
-function SubjectList({ under, kind, rows, subject }: { under: string; kind: 'person' | 'location' | 'device'; rows: SubjectTally[]; subject: boolean }) {
+function SubjectList({ under, kind, rows, subject }: { under: string; kind: 'person' | 'location'; rows: SubjectTally[]; subject: boolean }) {
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, SHOWN);
   return (
@@ -72,13 +77,111 @@ function SubjectList({ under, kind, rows, subject }: { under: string; kind: 'per
   );
 }
 
+/** One device on the album's list, or removed from it: its page, then its media or how it got there, then the change offered. */
+function DeviceRow({ under, device, action }: { under: string; device: AlbumDevice; action?: { label: string; icon: string; run: () => void } }) {
+  return (
+    <Group gap='sm' wrap='nowrap' justify='space-between'>
+      <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
+        <CoverAvatar path={device.path} size={28} radius='xl' alt='' fallback={<TablerIcon name={ICONS.device} size={16} />} />
+        <Anchor component={Link} to={`${ROUTES.device}/${slugOf(device.path)}`} size='sm' truncate>{device.name}</Anchor>
+      </Group>
+      <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
+        {device.source === 'media'
+          ? (
+            <Anchor component={Link} to={searchIn(under, { subjects: [subjectArg('device', device.path)] })} size='xs' c='dimmed'>
+              {device.media.toLocaleString()}
+            </Anchor>
+          )
+          : <Text size='xs' c='dimmed'>added</Text>}
+        {action && (
+          <Tooltip label={action.label}>
+            <ActionIcon variant='subtle' size='sm' color='gray' aria-label={`${action.label}: ${device.name}`} onClick={action.run}>
+              <TablerIcon name={action.icon} size={14} />
+            </ActionIcon>
+          </Tooltip>
+        )}
+      </Group>
+    </Group>
+  );
+}
+
+/** Every registered device not on the list, to add one; the registry is read only where this is offered. */
+function AddDevice({ listed, onAdd }: { listed: AlbumDevice[]; onAdd: (device: string) => void }) {
+  const { devices } = useDevices();
+  const options = useMemo(() => {
+    const on = new Set(listed.map((device) => device.path));
+    return devices
+      .filter((device) => !on.has(device.path))
+      .map((device) => ({ value: device.path, label: device.name }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'sv'));
+  }, [listed, devices]);
+  return (
+    <EntityPicker
+      kind='device'
+      size='xs'
+      mt='xs'
+      placeholder='Add a device to the map'
+      data={options}
+      value={null}
+      onChange={(device) => device && onAdd(device)}
+    />
+  );
+}
+
+/**
+ * The devices whose routes the album's map draws (`album-device-list`): those that took its media,
+ * with how many, and those added by hand. Whoever may write the album adds a device to the list,
+ * takes one off, and puts back one of its media's devices that was taken off.
+ */
+function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
+  const { list, loading, add, remove } = useAlbumDevices(path);
+  const [error, setError] = useState<string | null>(null);
+
+  const change = (run: () => Promise<void>) => () => {
+    setError(null);
+    run().catch((err) => setError(err instanceof Error ? err.message : String(err)));
+  };
+
+  if (loading || !list) return null;
+  if (!editable && list.devices.length === 0) return null;
+
+  return (
+    <InfoSection title='Devices'>
+      {list.devices.length === 0 && <Text size='sm' c='dimmed'>No devices: the map shows no routes.</Text>}
+      {list.devices.map((device) => (
+        <DeviceRow
+          key={device.path}
+          under={path}
+          device={device}
+          action={editable ? { label: 'Take off the map', icon: 'x', run: change(() => remove(device.path)) } : undefined}
+        />
+      ))}
+      {editable && list.removed.length > 0 && (
+        <>
+          <Text size='xs' c='dimmed' mt='xs'>Taken off the map</Text>
+          {list.removed.map((device) => (
+            <DeviceRow
+              key={device.path}
+              under={path}
+              device={device}
+              action={{ label: 'Put back on the map', icon: 'plus', run: change(() => add(device.path)) }}
+            />
+          ))}
+        </>
+      )}
+      {editable && <AddDevice listed={list.devices} onAdd={(device) => change(() => add(device))()} />}
+      {error && <Text size='xs' c='red'>{error}</Text>}
+    </InfoSection>
+  );
+}
+
 /**
  * What an album is and what is in it: its dates, its media by kind and how many have a position,
- * and who and what its media have — the people in them, where they were taken, the devices that
- * took them, who held the camera and the labels they carry (`subjects-in`). Each opens its own page,
- * and its count a search of this album's media that have it.
+ * and who and what its media have — the people in them, where they were taken, who held the camera
+ * and the labels they carry (`subjects-in`) — and the devices whose routes its map draws. Each opens
+ * its own page, and its count a search of this album's media that have it.
  */
-export function AlbumInfoTab({ path, title, description, timeStart, timeEnd, facets }: AlbumInfoTabProps) {
+export function AlbumInfoTab({ path, editable, title, description, timeStart, timeEnd, facets }: AlbumInfoTabProps) {
   const { subjects, loading } = useContainerSubjects(path);
   const kinds = (facets?.kinds ?? []).filter((bucket) => KIND_WORDS[bucket.kind]);
 
@@ -123,11 +226,7 @@ export function AlbumInfoTab({ path, title, description, timeStart, timeEnd, fac
         </InfoSection>
       )}
 
-      {subjects && subjects.devices.length > 0 && (
-        <InfoSection title='Devices'>
-          <SubjectList under={path} kind='device' rows={subjects.devices} subject />
-        </InfoSection>
-      )}
+      <AlbumDevices path={path} editable={editable} />
 
       {subjects && subjects.photographers.length > 0 && (
         <InfoSection title='Photographers'>

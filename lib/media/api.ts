@@ -879,6 +879,27 @@ export type AlbumScores = {
 /** One subject a container's media have, and how many of them have it. */
 export type SubjectTally = { path: string; name: string; count: number };
 
+/** One device on an album's list: the device's path and name, and why it is there. */
+export type AlbumDevice = {
+  path: string;
+  name: string;
+  /** `media`: it took some of the album's media. `added`: it was added to the list by hand. */
+  source: 'media' | 'added';
+  /** How many of the media the album shows it took. */
+  media: number;
+};
+
+/**
+ * `album-device-list <album>`: the devices whose tracks the album's map draws, the most media first
+ * and those added by hand after them; and the devices that took some of its media but were removed
+ * from the list. A folder that is not an album lists the devices of its media and removes none.
+ */
+export type AlbumDeviceList = {
+  album: string;
+  devices: AlbumDevice[];
+  removed: AlbumDevice[];
+};
+
 /**
  * `subjects-in <container>`: who and what the media a container shows have — the people in them,
  * the locations they are linked to, the devices that took them and who held the camera — each

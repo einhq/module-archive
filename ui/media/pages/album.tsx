@@ -320,6 +320,7 @@ export default function AlbumDetailPage() {
         <Tabs.Panel value='info'>
           <AlbumInfoTab
             path={albumPath}
+            editable={editable && info.type === 'album'}
             title={info.title}
             description={info.description}
             timeStart={info.timeStart}

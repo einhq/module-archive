@@ -590,7 +590,8 @@ waits for rather than by a shared DAG:
    layout), softlink members followed (so a file added to an album, or a staging suggestion's members,
    answer like held ones), the
    `coverPhoto` link and the `previous`/`next` links to the albums beside it in a series left out
-   (`NON_MEMBER_LINK_NAMES`), stacks folded. `album-span`, `album-cover` and `album-stack` call
+   (`NON_MEMBER_LINK_NAMES`), stacks folded; an album's `events/` and `devices/` directories are
+   not members either. `album-span`, `album-cover` and `album-stack` call
    the same library directly. Core's `members <path>` answers with either listing, for anyone else
    who asks. **This is what the album page browses** — it is why an album has an order and dates, none
    of which a directory listing carries. Ordinary callers can page it by position. The album UI
@@ -767,6 +768,14 @@ waits for rather than by a shared DAG:
    `album-cover --all --stale` and `album-profile --all --stale` hourly — filling what the bridge
    cannot see (a hard link into `files/`, a fact lost while the bridge was down, and for a profile
    a face named or a position arriving, which reach it once a week).
+
+   An album's **devices**, whose tracks its Map tab draws over its span, are not kept by the
+   pipeline: `album-device-list` reads the devices of its members' `devicePath` each time it is
+   asked, so a member linked to its device after joining needs no fact. Beside them it lists the
+   devices added by hand, softlinks in the album's `devices/` directory (`album-device-add`), and
+   leaves out the devices of its media named in the album's `devicesRemoved` attr
+   (`album-device-rm`), which keeps a removal as more of that device's media joins
+   (`lib/media/album-devices.ts`).
 
    `timeline` also **filters**: `--q` over an entry's title and description, and `--person`,
    `--location`, `--tag`. A subject matches two ways — an entry _about_ them (`ownerPath`, `people`)
