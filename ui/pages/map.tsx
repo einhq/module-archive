@@ -6,6 +6,8 @@ import { hitToMediaItem, type MediaHit } from '../lib/map-hits.ts';
 import { cellFor, clusterMarkers } from '../lib/map-clusters.ts';
 import { type MapCluster, useMapMedia } from '../hooks/useMapMedia.ts';
 import { useMapTracks } from '../location/hooks/useTracks.ts';
+import { useLiveTracks } from '../location/hooks/useLiveTracks.ts';
+import { LiveDeviceList, LiveTrackLayers } from '../location/components/LiveTracks.tsx';
 import { useSearchFacets } from '../hooks/useSearchFacets.ts';
 import { kindFill, type Mention, type MentionKind, naturalSearchDetails, subjectRefs, textFromFilters } from '@ein/ui/lib';
 import { subjectsOf } from '../lib/subjects.ts';
@@ -116,7 +118,12 @@ export default function MapPage() {
   const { clusters, locations, loading, query, total } = useMapMedia({ fromYear, toYear }, filters);
   // What the map shows now, for listing every picture in it.
   const [viewBounds, setViewBounds] = useState<GeoBounds | null>(null);
-  const { segments, loading: tracksLoading, query: queryTracks } = useMapTracks(layers.tracks);
+  const { tracks, refetchTracks, segments, loading: tracksLoading, query: queryTracks } = useMapTracks(layers.tracks);
+  // The devices recording now, drawn with the tracks. Following one keeps it in view until the map is dragged.
+  const { live: liveTracks, now } = useLiveTracks(tracks, refetchTracks);
+  const live = layers.tracks ? liveTracks : [];
+  const [following, setFollowing] = useState<string | null>(null);
+  const stopFollowing = useCallback(() => setFollowing(null), []);
 
   const [zoom, setZoom] = useState(opening.current.zoom ?? 12);
 
@@ -225,14 +232,22 @@ export default function MapPage() {
         >
           <MapMarkers markers={markers} />
           <MapTracks tracks={segments} />
+          <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
         </MapView>
 
-        {/* What the map is reading for where it was moved to. A search shows its own in the box. Zoom is by wheel and pinch, so the top-left corner is free. */}
-        {(loading === 'view' || tracksLoading) && (
-          <Box className='mrx-map-loading' role='status' aria-label='Loading the map' style={{ zIndex: MAP_CONTROL_Z }}>
-            <Loader size={18} />
-          </Box>
-        )}
+        {/* Zoom is by wheel and pinch, so the top-left corner is free: what the map is reading for where it was moved to (a search shows its own in the box), then the live devices. */}
+        <Stack gap='xs' align='flex-start' style={{ position: 'absolute', top: 10, left: 10, zIndex: MAP_CONTROL_Z, maxWidth: 'calc(100% - 84px)' }}>
+          {(loading === 'view' || tracksLoading) && (
+            <Box className='mrx-map-loading' role='status' aria-label='Loading the map' style={{ position: 'static' }}>
+              <Loader size={18} />
+            </Box>
+          )}
+          {live.length > 0 && (
+            <Box className='mrx-map-live' w={240} maw='100%'>
+              <LiveDeviceList live={live} now={now} following={following} onFollow={setFollowing} />
+            </Box>
+          )}
+        </Stack>
 
         {/* The map's own layer switcher is off, so Leaflet leaves the top-right corner free. */}
         <Stack className='mrx-map-corner' gap='xs' style={{ zIndex: MAP_CONTROL_Z }}>

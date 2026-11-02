@@ -88,6 +88,8 @@ export type TrackPoint = {
   lat: number;
   lng: number;
   ts?: string;
+  /** Metres per second, as the device reported it. Only on a read that was not simplified. */
+  speed?: number;
 };
 
 /**

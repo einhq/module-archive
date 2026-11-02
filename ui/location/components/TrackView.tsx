@@ -1,9 +1,11 @@
 import { EmptyState, MapTracks, MapView, PageLoader } from '@ein/ui/components';
-import { Box, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Badge, Box, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useTrack } from '../hooks/useTracks.ts';
+import { useLiveTracks } from '../hooks/useLiveTracks.ts';
 import { TrackUpload } from './TrackUpload.tsx';
+import { FollowButton, liveSummary, LiveTrackLayers } from './LiveTracks.tsx';
 import { trackDistance } from '../lib/track-segments.ts';
-import { useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSourceFiles } from '../../hooks/useSourceFiles.ts';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
 
@@ -29,7 +31,9 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 /**
  * A device's track: its route on a map, what the route adds up to, and the GPX files it was read
- * from. `device` is the device's slug; `editable` offers GPX files to add to it.
+ * from. While its last fix is recent, a live card says how fast it is going and how old the fix is,
+ * and the map draws where it is now and can follow it. `device` is the device's slug; `editable`
+ * offers GPX files to add to it.
  */
 export function TrackView({ device, editable }: { device: string; editable: boolean }) {
   const { track, segments, truncated, loading, refetch } = useTrack(device);
@@ -39,6 +43,12 @@ export function TrackView({ device, editable }: { device: string; editable: bool
     refetchFiles();
   };
   const upload = editable && <TrackUpload device={device} onImported={imported} />;
+
+  const listed = useMemo(() => track ? [track] : [], [track]);
+  const { live, now } = useLiveTracks(listed, refetch);
+  const current = live[0];
+  const [following, setFollowing] = useState<string | null>(null);
+  const stopFollowing = useCallback(() => setFollowing(null), []);
 
   // Summed per segment, so a day boundary or a gap adds no phantom distance.
   const distance = useMemo(() => trackDistance(segments.map((segment) => ({ day: segment.id, points: segment.points }))), [segments]);
@@ -60,10 +70,22 @@ export function TrackView({ device, editable }: { device: string; editable: bool
   return (
     <Stack gap='lg'>
       {upload && <Group justify='flex-end'>{upload}</Group>}
+      {current && (
+        <Card radius='md' withBorder>
+          <Group justify='space-between' wrap='nowrap'>
+            <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
+              <Badge color='green' variant='light' leftSection={<Box w={8} h={8} bg='green' style={{ borderRadius: '50%' }} />}>Live</Badge>
+              <Text size='sm' truncate>{liveSummary(current, now)}</Text>
+            </Group>
+            <FollowButton entry={current} following={following === current.track.path} onFollow={setFollowing} />
+          </Group>
+        </Card>
+      )}
       <Card radius='md' p={0} style={{ overflow: 'hidden' }}>
         <Box h={480}>
           <MapView>
             <MapTracks tracks={segments} fit />
+            <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
           </MapView>
         </Box>
       </Card>

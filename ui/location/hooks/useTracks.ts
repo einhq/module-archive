@@ -117,13 +117,16 @@ const toleranceForZoom = (zoom: number): number => (360 / (256 * 2 ** zoom)) * 1
 const POINT_LIMIT = 5000;
 
 /**
- * Track geometry for a map viewport, split per day and colored.
+ * Track geometry for a map viewport, split per day and colored, and the track list it is read
+ * from.
  *
  * Debounced, and guarded by a generation — a pan fires `moveend` repeatedly and
  * only the last one is worth reading for.
  */
-export function useMapTracks(enabled: boolean): { segments: MapTrackSpec[]; loading: boolean; query: (bounds: GeoBounds, zoom: number) => void } {
-  const { tracks } = useTracks();
+export function useMapTracks(
+  enabled: boolean,
+): { tracks: TrackEntry[]; refetchTracks: () => void; segments: MapTrackSpec[]; loading: boolean; query: (bounds: GeoBounds, zoom: number) => void } {
+  const { tracks, refetch: refetchTracks } = useTracks();
   const [segments, setSegments] = useState<MapTrackSpec[]>([]);
   const [loading, setLoading] = useState(false);
   const timerRef = useRef<number | null>(null);
@@ -187,7 +190,7 @@ export function useMapTracks(enabled: boolean): { segments: MapTrackSpec[]; load
     if (last) run(last.bounds, last.zoom, tracks);
   }, [enabled, tracks, run]);
 
-  return { segments, loading, query };
+  return { tracks, refetchTracks, segments, loading, query };
 }
 
 /**

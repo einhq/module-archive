@@ -1,0 +1,9 @@
+/* The live devices over the map, in the surface the map's own buttons use. */
+.mrx-map-live {
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+  border: 1px solid var(--mrx-hairline);
+  border-radius: var(--mantine-radius-md);
+  background: color-mix(in srgb, var(--mrx-surface-raised) 82%, transparent);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .45);
+  backdrop-filter: blur(6px);
+}
