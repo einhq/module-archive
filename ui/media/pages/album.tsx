@@ -1,6 +1,7 @@
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { AlbumInfoTab } from '../components/AlbumInfoTab.tsx';
 import { AlbumMap } from '../components/AlbumMap.tsx';
+import { AlbumTripTab } from '../components/AlbumTripTab.tsx';
 import { AlbumSeriesLinks } from '../components/AlbumSeriesLinks.tsx';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
@@ -42,7 +43,7 @@ const SIGNALS: [keyof AlbumScores, string, string][] = [
   ['semantic', 'Subject', 'How closely their descriptions agree'],
 ];
 
-const TABS = ['media', 'map', 'info'] as const;
+const TABS = ['media', 'trip', 'map', 'info'] as const;
 type AlbumTab = typeof TABS[number];
 
 const isTab = (value: string | null): value is AlbumTab => value !== null && (TABS as readonly string[]).includes(value);
@@ -56,7 +57,7 @@ export default function AlbumDetailPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // The media are what an album is for, so it opens on them; the map and the info are linkable.
+  // The media are what an album is for, so it opens on them; the trip, the map and the info are linkable.
   const tab: AlbumTab = isTab(searchParams.get('tab')) ? searchParams.get('tab') as AlbumTab : 'media';
   const setTab = (value: string | null) => {
     const next = new URLSearchParams(searchParams);
@@ -139,6 +140,8 @@ export default function AlbumDetailPage() {
         tabs={
           <Tabs.List>
             <Tabs.Tab value='media' leftSection={<TablerIcon name='photo' size={16} />}>Media</Tabs.Tab>
+            {/* An album made of a trip of a device's track (`trip-album`). */}
+            {info.trip && <Tabs.Tab value='trip' leftSection={<TablerIcon name='map-route' size={16} />}>Trip</Tabs.Tab>}
             <Tabs.Tab value='map' leftSection={<TablerIcon name='map' size={16} />}>Map</Tabs.Tab>
             <Tabs.Tab value='info' leftSection={<TablerIcon name='info-circle' size={16} />}>Info</Tabs.Tab>
           </Tabs.List>
@@ -312,6 +315,12 @@ export default function AlbumDetailPage() {
             />
           </Stack>
         </Tabs.Panel>
+
+        {info.trip && (
+          <Tabs.Panel value='trip'>
+            <AlbumTripTab album={albumPath} title={info.title} trip={info.trip} editable={editable && info.type === 'album'} onChanged={refetchInfo} />
+          </Tabs.Panel>
+        )}
 
         <Tabs.Panel value='map'>
           <AlbumMap path={albumPath} from={info.timeStart} to={info.timeEnd} />

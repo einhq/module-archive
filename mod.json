@@ -95,6 +95,7 @@
     "@archive/media/speakers": "./lib/media/speakers.ts",
     "@archive/media/transcode": "./lib/media/transcode.ts",
     "@archive/media/transcript": "./lib/media/transcript.ts",
+    "@archive/media/trip-album": "./lib/media/trip-album.ts",
     "@archive/media/types": "./types/media/mod.ts",
     "@archive/media/video-codec": "./lib/media/video-codec.ts",
     "@archive/media/writable": "./lib/media/writable.ts",
@@ -553,6 +554,13 @@
     "/archive/sources"
   ],
   "indexes": [
+    {
+      "name": "trip_device",
+      "on": [
+        "trip.device"
+      ],
+      "partial": "trip.device"
+    },
     {
       "name": "event_date",
       "on": [

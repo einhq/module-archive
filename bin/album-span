@@ -16,9 +16,9 @@
  *
  * The span reaches out to `spanStart` / `spanEnd`, the days it was set by hand to start and end on
  * (`album set`), while those lie beyond the media; once a capture reaches one, it is dropped here
- * (`@archive/media/album-span`).
+ * (`@archive/media/album-span`). An album made of a trip (`trip-album`) spans the trip too.
  *
- * An album whose media are all undated, and that has no span set by hand, gets no `timeStart` and is therefore
+ * An album whose media are all undated, and that has no span set by hand and no trip, gets no `timeStart` and is therefore
  * absent from any time-ordered query. That is the intended outcome, not a gap to
  * paper over — `orderBy` excludes rows without the ordering attr.
  */
@@ -159,7 +159,8 @@ const albumSpan = async (cmd: Command): CmdReturn => {
 albumSpan.spec = {
   name: 'album-span',
   effect: 'write' as const,
-  description: "Write an album's time span (timeStart/timeEnd/mediaCount) onto the album node: its media's, widened to the days set by hand (spanStart/spanEnd)",
+  description:
+    "Write an album's time span (timeStart/timeEnd/mediaCount) onto the album node: its media's, widened to the days set by hand (spanStart/spanEnd) and to its trip",
   args: [
     { name: 'album', type: 'path' as const, description: 'album path (repeatable)' },
   ],

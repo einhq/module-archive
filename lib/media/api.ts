@@ -7,6 +7,7 @@
  */
 
 import type { CommentEntry, NodeOwnership } from '@ein/api';
+import type { TripLeg, TripPlace, TripStay } from '@archive/location/api';
 import type { PersonFace, PersonVoice } from '@archive/people/api';
 import type { StagingGroupDetail, StagingRowInfo } from '@archive/staging/api';
 
@@ -899,6 +900,35 @@ export type AlbumDeviceList = {
   devices: AlbumDevice[];
   removed: AlbumDevice[];
 };
+
+/**
+ * An album's attr `trip`: the trip of a device's track the album was made, as `trip-album` wrote
+ * it. Its stays are the ones it starts and ends at and those along the way, and the places and legs
+ * name them by their index in `stays`. It is written again whenever the device's trips are.
+ */
+export type AlbumTrip = {
+  device: string;
+  /** Its first local day, `YYYY-MM-DD`. */
+  day: string;
+  /** Its first and last fix, ISO. */
+  start: string;
+  end: string;
+  /** The device's timezone, which its days are in; UTC without one. */
+  timezone?: string;
+  ongoing: boolean;
+  from: TripPlace;
+  to: TripPlace;
+  /** The farthest stay it reached from where it started; the farthest fix when it stayed nowhere. */
+  destination: { lat: number; lng: number; stay?: number };
+  stays: TripStay[];
+  /** One for each local day. */
+  legs: TripLeg[];
+  /** The length of its track, in metres. */
+  distanceM: number;
+};
+
+/** `trip-album`: the album the trip was made, or the one it was taken from with `--detach`. */
+export type TripAlbumAnswer = { album: string };
 
 /**
  * `subjects-in <container>`: who and what the media a container shows have — the people in them,

@@ -7,6 +7,8 @@
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more fixes before that point than it had.
  * A stay derived again from the same first fix keeps the location `track-places` gave it.
+ * Whenever `.trips` is written, the albums made of the device's trips are written anew from it
+ * (`@archive/media/trip-album`).
  */
 
 import type { Command } from '@ein/client';
@@ -16,6 +18,7 @@ import { trackOf } from '@archive/location/track';
 import { trackProfile } from '@archive/location/track-profile';
 import { numberTrips, segmentTrips, type TripFix, type TripHome, type TripSegmentation, type TripSettings } from '@archive/location/trips';
 import { albumDevices } from '@archive/media/album-devices';
+import { refreshTripAlbums } from '@archive/media/trip-album';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 
@@ -58,7 +61,7 @@ export const readDeviceTrips = async (cmd: Command, device: string): Promise<Dev
   }
 };
 
-/** Write the device's trips to its `.trips`, shared as the device is. */
+/** Write the device's trips to its `.trips`, shared as the device is, and the albums made of them. */
 export const writeDeviceTrips = async (cmd: Command, device: string, trips: DeviceTrips): Promise<void> => {
   const { mode, gid, acl } = (await cmd.sys.vfs.get(cmd.access, device)).props;
   await cmd.sys.vfs.ensure(cmd.access, 'file', device, TRIPS_FILE, { props: { mode, gid, ...(acl?.length ? { acl } : {}) }, attrs: { mimetype: 'application/json' } });
@@ -71,6 +74,7 @@ export const writeDeviceTrips = async (cmd: Command, device: string, trips: Devi
     await handle.close();
   }
   await cmd.sys.vfs.update(cmd.access, path, { attrs: { size: bytes.length } });
+  await refreshTripAlbums(cmd, trips);
 };
 
 /** Every fix at or after `from` (epoch ms), a window at a time, up to the track's last. */

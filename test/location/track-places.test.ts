@@ -2,14 +2,15 @@
  * track-places on a device's stays, against stub Overpass and Nominatim servers on loopback: a
  * stay near a location is at it, one near a named harbour gets a location named after it, one with
  * none gets the town; a failed lookup is asked again on the next run, a place with no name is not,
- * a placed stay is never looked up again, and `--rename` leaves a name given by hand alone. The
- * track and the places are invented.
+ * a placed stay is never looked up again, the album of a trip gets the locations of its stays, and
+ * `--rename` leaves a name given by hand alone. The track and the places are invented.
  */
 
-import { DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { DeviceTrips, TrackPlaces, TripList } from '@archive/location/api';
+import type { AlbumTrip } from '@archive/media/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
@@ -79,6 +80,8 @@ Deno.test({
     await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/the-jetty/position --lat=${59 + 10_080 * M2DEG} --lng=18`);
     await append([...rest(0, 4, 0), ...out(4, 0, 10_000), ...rest(5, 4, 10_000), ...out(9, 10_000, 20_000), ...rest(10, 4, 20_000)]);
     await cmd.shouldSucceed('track-trips the-sailboat');
+    await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
+    await cmd.shouldSucceed('trip-album the-sailboat 2025-06-05 --new --name Out');
 
     await t.step('a dry run looks the places up and makes nothing', async () => {
       const dry = await places('--dry-run');
@@ -113,6 +116,11 @@ Deno.test({
         [`${LOCATIONS_ROOT}/the-jetty`, 'The jetty'],
         [`${LOCATIONS_ROOT}/exempelby`, 'Exempelby'],
       ]);
+    });
+
+    await t.step('the album of a trip gets the locations its stays were put at', async () => {
+      const trip = (await client.execJson<{ trip?: AlbumTrip }>(`attrs ${ALBUMS_ROOT}/Out`)).trip;
+      assertEquals(trip?.stays.map((stay) => stay.location), [`${LOCATIONS_ROOT}/exempelhamnen`, `${LOCATIONS_ROOT}/the-jetty`]);
     });
 
     await t.step('a placed stay is not looked up again, and deriving the trips again keeps its place', async () => {

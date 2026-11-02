@@ -1,8 +1,9 @@
 /**
  * An album's time span: its media's, from the first capture to the last, reaching out to the days
- * it was set by hand to start and end on (`spanStart`, `spanEnd`). A trip starts before its first
+ * it was set by hand to start and end on (`spanStart`, `spanEnd`) and to the first and last fix of
+ * the trip it was made (`trip`, `@archive/media/trip-album`). A trip starts before its first
  * photo — the drive out, the flight — and the span is what the album's map draws routes for
- * (ein/core#468).
+ * (ein/core#468). An album of a trip has a span with no photos at all.
  *
  * A hand-set end only ever widens the span. It is kept while it lies beyond the media and dropped
  * once a capture reaches it, so the span follows the media from then on.
@@ -10,7 +11,7 @@
 
 import type { Command } from '@ein/client';
 import { albumMembers } from '@archive/media/album-members';
-import type { AlbumSpanRow } from '@archive/media/api';
+import type { AlbumSpanRow, AlbumTrip } from '@archive/media/api';
 
 /**
  * Earliest plausible capture date; the first surviving photograph is 1826, the
@@ -56,10 +57,48 @@ export const mediaSpan = async (cmd: Command, path: string): Promise<MediaSpan> 
 
 const day = (attr: unknown): string | undefined => typeof attr === 'string' && SPAN_DAY.test(attr) ? attr : undefined;
 
+/** An instant as the wall clock in `timezone`, `YYYY-MM-DDTHH:MM:SS`, as a capture's `takenAt` is. */
+const wallClock = (iso: string, timezone: string): string | undefined => {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return undefined;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    })
+      .formatToParts(ms).map((part) => [part.type, part.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+};
+
+/** The first and last fix of the album's trip, as wall clocks where its device was; none without a trip. */
+const tripSpan = (attr: unknown): { start: string; end: string } | undefined => {
+  const trip = attr as Partial<AlbumTrip> | null | undefined;
+  if (!trip || typeof trip.start !== 'string' || typeof trip.end !== 'string') return undefined;
+  const timezone = typeof trip.timezone === 'string' && trip.timezone ? trip.timezone : 'UTC';
+  try {
+    const start = wallClock(trip.start, timezone);
+    const end = wallClock(trip.end, timezone);
+    return start && end ? { start, end } : undefined;
+  } catch {
+    // A timezone Intl does not know.
+    return undefined;
+  }
+};
+
+const earliest = (...values: (string | undefined)[]): string | undefined => values.filter((value) => value !== undefined).sort()[0];
+const latest = (...values: (string | undefined)[]): string | undefined => values.filter((value) => value !== undefined).sort().pop();
+
 /**
- * The span an album has, from its media and the ends set on it. A hand-set start is kept while
- * its day is before the media's first, a hand-set end while its day is after the media's last;
- * an album with nothing dated takes them as they are.
+ * The span an album has, from its media, the ends set on it and its trip. A hand-set start is kept
+ * while its day is before the media's first, a hand-set end while its day is after the media's
+ * last; an album with nothing dated takes them as they are. The trip widens the span past both.
  */
 export const albumSpan = (media: MediaSpan, attrs: Record<string, unknown>): Omit<AlbumSpanRow, 'path'> => {
   const firstDay = media.mediaStart?.slice(0, 10);
@@ -68,10 +107,11 @@ export const albumSpan = (media: MediaSpan, attrs: Record<string, unknown>): Omi
   const end = day(attrs.spanEnd);
   const spanStart = start && (!firstDay || start < firstDay) ? start : undefined;
   const spanEnd = end && (!lastDay || end > lastDay) ? end : undefined;
+  const trip = tripSpan(attrs.trip);
   return {
     ...media,
-    timeStart: spanStart ?? media.mediaStart ?? spanEnd,
-    timeEnd: spanEnd ?? media.mediaEnd ?? spanStart,
+    timeStart: earliest(spanStart ?? media.mediaStart, trip?.start) ?? spanEnd,
+    timeEnd: latest(spanEnd ?? media.mediaEnd, trip?.end) ?? spanStart,
     spanStart,
     spanEnd,
   };

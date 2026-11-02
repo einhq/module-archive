@@ -35,14 +35,58 @@ function PlaceLabel({ list, place }: { list: TripList; place: Pick<TripPlace, 's
 /** The day, of the trip's legs, a trip joined to it by a merge began on. */
 const joinedDay = (trip: Trip, start: string): string | undefined => trip.legs.find((leg) => leg.start <= start && start <= leg.end)?.day;
 
+/**
+ * The album the trip was made, or, until it is one, the albums it may belong to: offered to whoever
+ * may change the device as "New album" and "Use" each, and listed to anyone else.
+ */
+function TripAlbum(
+  { trip, editable, busy, onAlbum }: { trip: Trip; editable: boolean; busy: boolean; onAlbum: (name: string, album: 'new' | 'detach' | string) => void },
+) {
+  if (trip.album) {
+    return (
+      <Group gap='xs'>
+        <Text size='sm' c='dimmed'>Album:</Text>
+        <Anchor component={Link} to={albumRoute(trip.album)} size='sm'>{nameOf(trip.album)}</Anchor>
+        {editable && (
+          <Button size='compact-xs' variant='subtle' color='gray' disabled={busy} onClick={() => onAlbum(trip.id, 'detach')}>
+            Take off the album
+          </Button>
+        )}
+      </Group>
+    );
+  }
+  if (editable) {
+    return (
+      <Group gap='xs'>
+        <Button size='compact-xs' variant='light' disabled={busy} leftSection={<TablerIcon name='photo-plus' size={14} />} onClick={() => onAlbum(trip.id, 'new')}>
+          New album
+        </Button>
+        {trip.albums.map((album) => (
+          <Button key={album} size='compact-xs' variant='subtle' disabled={busy} onClick={() => onAlbum(trip.id, album)}>
+            Use {nameOf(album)}
+          </Button>
+        ))}
+      </Group>
+    );
+  }
+  if (trip.albums.length === 0) return null;
+  return (
+    <Group gap='xs'>
+      <Text size='sm' c='dimmed'>Maybe in:</Text>
+      {trip.albums.map((album) => <Anchor key={album} component={Link} to={albumRoute(album)} size='sm'>{nameOf(album)}</Anchor>)}
+    </Group>
+  );
+}
+
 function TripCard(
-  { list, trip, first, editable, busy, onEdit }: {
+  { list, trip, first, editable, busy, onEdit, onAlbum }: {
     list: TripList;
     trip: Trip;
     first: boolean;
     editable: boolean;
     busy: boolean;
     onEdit: (name: string, how: 'merge' | 'split') => void;
+    onAlbum: (name: string, album: 'new' | 'detach' | string) => void;
   },
 ) {
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
@@ -78,12 +122,7 @@ function TripCard(
             </>
           )}
         </Text>
-        {trip.albums.length > 0 && (
-          <Group gap='xs'>
-            <Text size='sm' c='dimmed'>Albums:</Text>
-            {trip.albums.map((album) => <Anchor key={album} component={Link} to={albumRoute(album)} size='sm'>{nameOf(album)}</Anchor>)}
-          </Group>
-        )}
+        <TripAlbum trip={trip} editable={editable} busy={busy} onAlbum={onAlbum} />
         {editable && trip.joined?.map((start) => {
           const day = joinedDay(trip, start);
           return day && (
@@ -130,11 +169,12 @@ function TripCard(
 
 /**
  * A device's trips, newest first, as derived from its track: each with its days, distance, where
- * it went and the albums it may belong to. `device` is the device's path; `editable` offers joining
- * a trip to the one before it, parting it again, and deriving them all again.
+ * it went, and its album or the albums it may belong to. `device` is the device's path; `editable`
+ * offers making a trip an album and taking it off again, joining a trip to the one before it,
+ * parting it again, and deriving them all again.
  */
 export function DeviceTripsTab({ device, editable }: { device: string; editable: boolean }) {
-  const { trips, loading, error, edit, derive } = useDeviceTrips(device);
+  const { trips, loading, error, edit, derive, makeAlbum } = useDeviceTrips(device);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -184,6 +224,10 @@ export function DeviceTripsTab({ device, editable }: { device: string; editable:
                 editable={editable}
                 busy={busy}
                 onEdit={(name, how) => run(() => edit(name, how))}
+                onAlbum={(name, album) =>
+                  run(async () => {
+                    await makeAlbum(name, album);
+                  })}
               />
             ))}
           </>

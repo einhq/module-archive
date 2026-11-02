@@ -157,7 +157,7 @@ export type TripPlace = {
 type TripBounds = { north: number; south: number; east: number; west: number };
 
 /** One local day of a trip. */
-type TripLeg = {
+export type TripLeg = {
   /** The day, `YYYY-MM-DD`, in the device's timezone. */
   day: string;
   /** Its first and last fix, ISO. */
@@ -199,6 +199,8 @@ export type Trip = {
   joined?: string[];
   /** Albums whose span overlaps it and whose devices include the device. */
   albums: string[];
+  /** `trip-list`: the album it was made (`trip-album`). `.trips` does not keep it. */
+  album?: string;
 };
 
 /** Changes made by hand to how a device's track is cut into trips: its attr `tripEdits`. */
