@@ -18,7 +18,7 @@ import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
 import type { DomainEvent } from '@ein/client';
-import { isTrashPath, TEMP_PATH } from '@ein/paths';
+import { DEV_PATH, ETC_PATH, isTrashPath, TEMP_PATH, USR_PATH, VAR_PATH } from '@ein/paths';
 import { deferredCopy } from '@archive/staging/deferral';
 import { authoredHash, textEmbeddingType } from '@ems/text-embedding';
 
@@ -1236,14 +1236,21 @@ function deriveForRemoval(event: VfsEventInput, now: number): Omit<DomainEvent, 
  * Map one VFS mutation to the facts it reveals. Returns an empty array for the
  * overwhelming majority of events — that is the point.
  */
+/**
+ * The regions that are never the archive's: configuration, machine state, code and its payload
+ * (a module's own pictures, written file by file as it is installed), endpoints, and scratch — a
+ * picture put in /tmp to search with, indexed, would answer every search through its vectors.
+ */
+const NOT_ARCHIVE = [ETC_PATH, VAR_PATH, USR_PATH, DEV_PATH, TEMP_PATH];
+
+const isArchivePath = (path: string): boolean => !NOT_ARCHIVE.some((region) => path === region || path.startsWith(`${region}/`));
+
 export async function deriveEvents(
   event: VfsEventInput,
   ctx: RuleContext,
   now: number = Date.now(),
 ): Promise<Omit<DomainEvent, 'id'>[]> {
-  // Scratch is never the archive's: a picture put in /tmp to search with is not indexed, and
-  // indexed it would answer every search through its vectors.
-  if (event.path === TEMP_PATH || event.path.startsWith(`${TEMP_PATH}/`)) return [];
+  if (!isArchivePath(event.path)) return [];
 
   // Membership events name the container, whatever its type, so they are sorted
   // by event before the node type below gets to say anything.

@@ -125,6 +125,13 @@ Deno.test('rule: a picture in /tmp is never discovered, nor anything else there'
   assertEquals(await deriveEvents(event('embedding', `${scratch}/metadata/picture/embedding`), ctx, 100), []);
 });
 
+Deno.test('rule: a picture outside the archive and the homes, such as a module installed, is never discovered', async () => {
+  const paths = ['/var/lib/modules/charts/tiles/12/2183/1240.png', '/usr/modules/charts/icon.png', '/etc/ui/logo.png'];
+  const ctx = tree(Object.fromEntries(paths.map((path, i) => [path, file(`f${i}`)])));
+
+  for (const path of paths) assertEquals(await deriveEvents(event('file', path), ctx, 100), []);
+});
+
 Deno.test('rule: a file node with no bytes yet is ignored', async () => {
   const ctx = tree({ [IMG]: file('f1', { size: 0 }) });
 
