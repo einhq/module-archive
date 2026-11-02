@@ -68,19 +68,17 @@ function encodeBody(text: string): string {
 const detailsArgs = (path: string, albumPath?: string) => `${shq(path)}${albumPath ? ` --album ${shq(albumPath)}` : ''}`;
 
 /**
- * Recent `media-details` answers, so a step onto a file read ahead (`prefetchMediaDetails`) or
- * seen before shows its details with the picture instead of a beat after it. One younger than
- * `DETAILS_FRESH_MS`, a run of swipes' read-ahead, is taken as it is; an older one is shown while
- * it is read again, since other views change files too (the review names their faces). A change
- * made through the hook empties it: naming a face renames that person on other files as well.
+ * The `media-details` answers the lightbox has read, ahead (`prefetchMediaDetails`, beside the
+ * neighbours' pictures) or on the way, so a step onto one shows its details with the picture
+ * instead of a beat after it. A change made through the hook empties it — naming a face renames
+ * that person on other files too — and so does closing the lightbox (`forgetMediaDetails`).
  */
 const DETAILS_CACHE_SIZE = 32;
-const DETAILS_FRESH_MS = 5_000;
-const detailsCache = new Map<string, { details: MediaDetails; at: number }>();
+const detailsCache = new Map<string, MediaDetails>();
 const detailsReads = new Map<string, Promise<MediaDetails>>();
 const detailsKey = (path: string, albumPath?: string) => `${albumPath ?? ''}\n${path}`;
 
-function forgetDetails(): void {
+export function forgetMediaDetails(): void {
   detailsCache.clear();
   // A read already on its way may predate the change; it is still answered, but not kept.
   detailsReads.clear();
@@ -94,7 +92,7 @@ function readDetails(path: string, albumPath: string | undefined, fresh: boolean
   const read = execCommand<MediaDetails>(`media-details ${detailsArgs(path, albumPath)}`).then((details) => {
     if (detailsReads.get(key) === read) {
       detailsCache.delete(key);
-      detailsCache.set(key, { details, at: Date.now() });
+      detailsCache.set(key, details);
       if (detailsCache.size > DETAILS_CACHE_SIZE) detailsCache.delete(detailsCache.keys().next().value!);
     }
     return details;
@@ -105,11 +103,10 @@ function readDetails(path: string, albumPath: string | undefined, fresh: boolean
   return read;
 }
 
-/** Reads a file's details ahead of the lightbox stepping onto it; a fresh or pending one is left be. */
+/** Reads a file's details ahead of the lightbox stepping onto it; one read or on its way is left be. */
 export function prefetchMediaDetails(path: string, albumPath?: string): void {
   const key = detailsKey(path, albumPath);
-  const cached = detailsCache.get(key);
-  if ((cached && Date.now() - cached.at < DETAILS_FRESH_MS) || detailsReads.has(key)) return;
+  if (detailsCache.has(key) || detailsReads.has(key)) return;
   void readDetails(path, albumPath, false).catch(() => {});
 }
 
@@ -139,15 +136,13 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
     const generation = ++generationRef.current;
     const cached = reuse ? detailsCache.get(detailsKey(path, albumPath)) : undefined;
     if (cached) {
-      setDetails(cached.details);
+      setDetails(cached);
       setDetailsPath(path);
       setError(null);
-      if (Date.now() - cached.at < DETAILS_FRESH_MS) {
-        setLoading(false);
-        return;
-      }
+      setLoading(false);
+      return;
     }
-    if (!reuse) forgetDetails();
+    if (!reuse) forgetMediaDetails();
 
     try {
       setLoading(true);

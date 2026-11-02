@@ -50,7 +50,7 @@ import {
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
 import { useAccessIds, useShortcutHelp, useSurface } from '@ein/ui/hooks';
-import { prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
+import { forgetMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import { useWakeLock } from '../hooks/useWakeLock.ts';
 import {
   albumMediaList,
@@ -500,6 +500,8 @@ export function MediaLightbox() {
   const editing = editingText || editingSubtitles;
   useEffect(() => {
     if (isOpen) return;
+    // Opened again, it reads the details anew: other pages change files too.
+    forgetMediaDetails();
     setShowText(false);
     setEditingText(false);
     setEditingSubtitles(false);
@@ -726,7 +728,8 @@ export function MediaLightbox() {
     return () => globalThis.clearTimeout(timer);
   }, [advanceSlideshow, loadedPhotoId, media?.id, media?.type, slideDurationMs, slideshow]);
 
-  // Warm the browser cache with the pictures a run of swipes or arrow presses reaches next,
+  // Warm the browser cache with the pictures a run of swipes or arrow presses reaches next, and
+  // the details cache with their details,
   // `PRELOAD_DEPTH` on each side, nearest first and `PRELOAD_PARALLEL` at a time; those already
   // passed on the way are in the cache and come back at once. It waits for the current photo so
   // the visible picture never competes with invisible ones; a slideshow's dwell timer still
@@ -750,7 +753,10 @@ export function MediaLightbox() {
     neighbourPreloadRef.current = loading;
     const loadNext = () => {
       while (!stopped && queue.length > 0) {
-        const image = preloadPicture(queue.shift()!, loadNext);
+        const item = queue.shift()!;
+        // Its details too, so the place, the faces and the panel come with the picture.
+        prefetchMediaDetails(item.path, item.stackAlbumPath);
+        const image = preloadPicture(item, loadNext);
         if (image) {
           loading.push(image);
           return;
@@ -763,19 +769,6 @@ export function MediaLightbox() {
       stopped = true;
     };
   }, [loadedPhotoId, media?.id, media?.type]);
-
-  // The files a step reaches next have their details read once this one's are in, so the place,
-  // the faces and the panel arrive with the picture rather than a beat after it.
-  const currentDetailsIn = currentDetails !== null;
-  useEffect(() => {
-    const list = albumMediaList.value;
-    if (!media || !currentDetailsIn || list.length < 2) return;
-    const index = currentMediaIndex.value;
-    for (const at of [index + 1, index - 1]) {
-      const item = list[((at % list.length) + list.length) % list.length];
-      if (item.id !== media.id) prefetchMediaDetails(item.path, item.stackAlbumPath);
-    }
-  }, [currentDetailsIn, media?.id]);
 
   // Hotkeys remain available while presenting. A direct navigation interrupts the automatic
   // transition rather than reviving its outgoing frame on a later slide.
