@@ -252,7 +252,8 @@ export default function AlbumDetailPage() {
             trash: suggested ? undefined : { path: albumPath, name: info.title, leaveTo: '/albums' },
           }
           : undefined}
-        controls={
+        // None when they would be empty, so a phone floats nothing over the other tabs' foot.
+        controls={(suggested?.overall !== undefined || tab === 'media') && (
           <Group justify='flex-end' gap='xs'>
             {suggested?.overall !== undefined && (
               <Tooltip label='How confidently these were grouped together'>
@@ -269,7 +270,7 @@ export default function AlbumDetailPage() {
               </HeaderChoices>
             )}
           </Group>
-        }
+        )}
       />
 
       {
