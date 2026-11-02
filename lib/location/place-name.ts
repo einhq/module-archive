@@ -18,11 +18,15 @@ import { NOMINATIM_REVERSE_URL, nominatimFetch } from '@archive/location/geocode
 const PLACE_RADIUS_M = 500;
 
 /** The public Overpass instances, tried in turn. */
-export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter'];
 
 /** The public instances ask for no more than about one request a second. */
 const OVERPASS_MIN_INTERVAL_MS = 1100;
-const OVERPASS_MAX_ATTEMPTS = 5;
+const OVERPASS_MAX_ATTEMPTS = 4;
+/** The query asks the server to give up after 25 s; a mirror that has not answered well after that is down. */
+const OVERPASS_REQUEST_TIMEOUT_MS = 45_000;
+/** What an overloaded public instance answers. */
+const OVERPASS_BUSY = new Set([429, 502, 503, 504]);
 const OVERPASS_BACKOFF_MS = 3000;
 const OVERPASS_MAX_BACKOFF_MS = 60_000;
 const USER_AGENT = 'EiN/1.0';
@@ -131,8 +135,9 @@ const throttleOverpass = async (url: URL): Promise<void> => {
 };
 
 /**
- * One Overpass query, paced, on the endpoints in turn. A busy answer (429, 504) or a failed
- * connection is retried on the next one after a backoff, or `Retry-After` when it says longer.
+ * One Overpass query, paced, on the endpoints in turn. A busy answer (429, 502, 503, 504), a failed
+ * connection or no answer within `OVERPASS_REQUEST_TIMEOUT_MS` is retried on the next one after a
+ * backoff, or `Retry-After` when it says longer.
  * Throws once the attempts are spent, or on any other answer.
  */
 const overpassQuery = async (endpoints: string[], query: string): Promise<OverpassElement[]> => {
@@ -147,6 +152,7 @@ const overpassQuery = async (endpoints: string[], query: string): Promise<Overpa
         method: 'POST',
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `data=${encodeURIComponent(query)}`,
+        signal: AbortSignal.timeout(OVERPASS_REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
       if (last) throw new Error(`overpass: ${error instanceof Error ? error.message : String(error)}`);
@@ -159,7 +165,7 @@ const overpassQuery = async (endpoints: string[], query: string): Promise<Overpa
       return Array.isArray(answer.elements) ? answer.elements : [];
     }
     await response.body?.cancel();
-    if ((response.status !== 429 && response.status !== 504) || last) throw new Error(`overpass returned ${response.status}`);
+    if (!OVERPASS_BUSY.has(response.status) || last) throw new Error(`overpass returned ${response.status}`);
     const retryAfter = Number(response.headers.get('retry-after'));
     const wait = Math.min(Math.max(backoff, Number.isFinite(retryAfter) ? retryAfter * 1000 : 0), OVERPASS_MAX_BACKOFF_MS);
     if (!isLoopback(url)) await sleep(wait);

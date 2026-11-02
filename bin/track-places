@@ -13,8 +13,9 @@
  *   island or bay around it, or the town. It has `locationSource: 'track'`, its `placeKind` and its
  *   `nameSource`, and the next stay within `SNAP_M` of it is at it too.
  *
- * A lookup that fails leaves its stay unplaced, and the next run asks again; one that finds no
- * name marks the stay `unnamed`. `--rename` looks the names of the locations the stays are at up
+ * A lookup that fails leaves its stay unplaced, and the next run asks again; the rest of the run
+ * asks nobody, since the services are down or overloaded. One that finds no name marks the stay
+ * `unnamed`. `--rename` looks the names of the locations the stays are at up
  * again and takes a new answer, except where a name was changed by hand (`location-update --name`
  * removes `nameSource`).
  *
@@ -108,6 +109,8 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
   const byPath = new Map(known.map((location) => [location.path, location]));
   const lookup: PlaceLookupOptions = { overpass: overpassEndpoints(cmd.env.OVERPASS_URL), nominatimReverse: cmd.env.NOMINATIM_REVERSE_URL || undefined };
   const taken = new Set<string>();
+  /** Why a lookup failed in this run; the stays after it are left for the next. */
+  let down: string | undefined;
 
   for (const [index, stay] of trips.stays.entries()) {
     if (!unplaced(stay, byPath)) continue;
@@ -123,9 +126,11 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
 
     let place: PlaceName | undefined;
     try {
+      if (down) throw new Error(`not asked: ${down}`);
       place = await lookupPlaceName(stay.lat, stay.lng, lookup);
     } catch (error) {
       entry.error = message(error);
+      down ??= entry.error;
       result.failed++;
       continue;
     }
@@ -148,7 +153,7 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
     Object.assign(entry, { outcome: 'created', location: path, name: place.name });
   }
 
-  if (opts.rename) {
+  if (opts.rename && !down) {
     const at = new Set([...trips.stays.map((stay) => stay.location), ...result.stays.map((entry) => entry.location)]);
     for (const location of known) {
       // A location made in this run was named a moment ago.
