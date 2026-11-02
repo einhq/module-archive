@@ -3,6 +3,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
 import { shq } from '@ein/client';
 import { OWNERS_DIR, readDevice } from '@archive/device/device';
+import { type DeviceKind, isDeviceKind } from '@archive/location/track-profile';
 
 type OwnerInfo = {
   name: string;
@@ -19,6 +20,7 @@ type DeviceInfo = {
   model?: string;
   serialNumber?: string;
   timezone?: string;
+  kind?: DeviceKind;
   digitizer?: boolean;
   quicktimeUtc?: boolean;
   description?: string;
@@ -99,6 +101,7 @@ const deviceInfo = async (cmd: Command): CmdReturn => {
     ...(attrs.model ? { model: attrs.model } : {}),
     ...(attrs.serialNumber ? { serialNumber: attrs.serialNumber } : {}),
     ...(attrs.timezone ? { timezone: attrs.timezone } : {}),
+    ...(isDeviceKind(attrs.kind) ? { kind: attrs.kind } : {}),
     ...(attrs.digitizer ? { digitizer: true } : {}),
     ...(attrs.quicktimeUtc ? { quicktimeUtc: true } : {}),
     ...(attrs.description ? { description: attrs.description as string } : {}),
@@ -115,6 +118,7 @@ const deviceInfo = async (cmd: Command): CmdReturn => {
   if (info.model) await cmd.writeLn(`Model: ${info.model}`);
   if (info.serialNumber) await cmd.writeLn(`Serial: ${info.serialNumber}`);
   if (info.timezone) await cmd.writeLn(`Timezone: ${info.timezone}`);
+  if (info.kind) await cmd.writeLn(`Kind: ${info.kind}`);
   if (info.digitizer) await cmd.writeLn('Digitizer: yes');
   if (info.quicktimeUtc) await cmd.writeLn('Video times: UTC');
   if (info.description) await cmd.writeLn(`Description: ${info.description}`);

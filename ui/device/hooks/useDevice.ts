@@ -12,6 +12,8 @@ export type DeviceFields = {
   model: string;
   serial: string;
   timezone: string;
+  /** How it travels (`DeviceKind`), or empty when not said. */
+  kind: string;
   description: string;
   digitizer: boolean;
   quicktimeUtc: boolean;
@@ -51,7 +53,7 @@ type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-const EMPTY: DeviceFields = { name: '', make: '', model: '', serial: '', timezone: '', description: '', digitizer: false, quicktimeUtc: false };
+const EMPTY: DeviceFields = { name: '', make: '', model: '', serial: '', timezone: '', kind: '', description: '', digitizer: false, quicktimeUtc: false };
 
 /** Flag name for each field, as `device-update` spells it. */
 type TextDeviceField = Exclude<keyof DeviceFields, 'digitizer' | 'quicktimeUtc'>;
@@ -61,6 +63,7 @@ const FLAGS: Record<TextDeviceField, string> = {
   model: 'model',
   serial: 'serial',
   timezone: 'timezone',
+  kind: 'kind',
   description: 'description',
 };
 
@@ -106,6 +109,7 @@ export function useDevice(id: string | undefined): UseDeviceResult {
         model: str(attrs.model),
         serial: str(attrs.serialNumber),
         timezone: str(attrs.timezone),
+        kind: str(attrs.kind),
         description: str(attrs.description),
         digitizer: attrs.digitizer === true,
         quicktimeUtc: attrs.quicktimeUtc === true,

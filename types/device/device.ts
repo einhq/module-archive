@@ -1,3 +1,5 @@
+import type { DeviceKind } from '@archive/location/track-profile';
+
 // deno-lint-ignore no-explicit-any
 type NodeAttrs = Record<string, any>;
 type NodeType = string;
@@ -17,6 +19,8 @@ export type DeviceAttrs = NodeAttrs & {
   digitizer?: boolean;
   /** Keeps a video's QuickTime `CreateDate` in UTC, even where the file does not say so. */
   quicktimeUtc?: boolean;
+  /** How it travels, which sets how its track is read and the units it is shown in. */
+  kind?: DeviceKind;
 };
 
 export const NODE_TYPE_DEVICE: NodeType = 'device';

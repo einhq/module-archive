@@ -10,6 +10,8 @@ import { canWrite, subjectArg } from '@ein/ui/lib';
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { DeviceEditModal } from '../components/DeviceEditModal.tsx';
 import { DeviceOwnersTab } from '../components/DeviceOwnersTab.tsx';
+import { DeviceHomesCard } from '../components/DeviceHomesCard.tsx';
+import { DEVICE_KIND_LABELS, isDeviceKind } from '@archive/location/track-profile';
 import { TrackView } from '../../location/components/TrackView.tsx';
 import { useDevice } from '../hooks/useDevice.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
@@ -192,6 +194,7 @@ export default function DeviceDetailPage() {
                       <InfoRow label='Model' value={device.model} />
                       <InfoRow label='Serial number' value={device.serial} />
                       <InfoRow label='Timezone' value={device.timezone} />
+                      <InfoRow label='Travels as' value={isDeviceKind(device.kind) ? DEVICE_KIND_LABELS[device.kind] : undefined} />
                       {device.digitizer && (
                         <div>
                           <Text size='xs' c='dimmed'>Capture dates</Text>
@@ -205,9 +208,8 @@ export default function DeviceDetailPage() {
                         </div>
                       )}
                       <InfoRow label='Description' value={device.description} written />
-                      {!device.make && !device.model && !device.serial && !device.timezone && !device.digitizer && !device.quicktimeUtc && !device.description && (
-                        <Text size='sm' c='dimmed'>Nothing recorded beyond the name.</Text>
-                      )}
+                      {!device.make && !device.model && !device.serial && !device.timezone && !device.kind && !device.digitizer && !device.quicktimeUtc &&
+                        !device.description && <Text size='sm' c='dimmed'>Nothing recorded beyond the name.</Text>}
                       {!matchable && (
                         <Text size='xs' c='yellow'>
                           No serial and no make/model — nothing is matched to this device automatically; <Code>device-link --device</Code> links files to it by hand.
@@ -234,13 +236,16 @@ export default function DeviceDetailPage() {
               </Grid.Col>
 
               <Grid.Col span={{ base: 12, md: 5 }}>
-                <CurrentPeopleCard
-                  title='Current owners'
-                  people={owners}
-                  emptyText={owners.length > 0 ? 'Nobody owns it now, as far as the archive knows.' : 'Nobody is recorded as owning this.'}
-                  onShowAll={() => setTab('owners')}
-                  showAllLabel='All owners'
-                />
+                <Stack gap='md'>
+                  <CurrentPeopleCard
+                    title='Current owners'
+                    people={owners}
+                    emptyText={owners.length > 0 ? 'Nobody owns it now, as far as the archive knows.' : 'Nobody is recorded as owning this.'}
+                    onShowAll={() => setTab('owners')}
+                    showAllLabel='All owners'
+                  />
+                  <DeviceHomesCard device={device.path} editable={editable} />
+                </Stack>
               </Grid.Col>
             </Grid>
           </Tabs.Panel>
@@ -268,7 +273,7 @@ export default function DeviceDetailPage() {
           </Tabs.Panel>
 
           <Tabs.Panel value='track'>
-            <TrackView device={device.id} editable={editable} />
+            <TrackView device={device.id} kind={device.kind} editable={editable} />
           </Tabs.Panel>
 
           <Tabs.Panel value='owners'>

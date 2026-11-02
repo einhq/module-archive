@@ -4,7 +4,8 @@ import { useTrack } from '../hooks/useTracks.ts';
 import { useLiveTracks } from '../hooks/useLiveTracks.ts';
 import { TrackUpload } from './TrackUpload.tsx';
 import { FollowButton, liveSummary, LiveTrackLayers } from './LiveTracks.tsx';
-import { trackDistance } from '../lib/track-segments.ts';
+import { movingSpeed, trackDistance } from '../lib/track-segments.ts';
+import { formatDistance, formatSpeed, trackProfile } from '@archive/location/track-profile';
 import { useCallback, useMemo, useState } from 'react';
 import { useSourceFiles } from '../../hooks/useSourceFiles.ts';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
@@ -32,10 +33,11 @@ function Stat({ label, value }: { label: string; value: string }) {
 /**
  * A device's track: its route on a map, what the route adds up to, and the GPX files it was read
  * from. While its last fix is recent, a live card says how fast it is going and how old the fix is,
- * and the map draws where it is now and can follow it. `device` is the device's slug; `editable`
+ * and the map draws where it is now and can follow it. `device` is the device's slug, and its
+ * `kind` says the units: knots and nautical miles for a boat, km/h and km otherwise. `editable`
  * offers GPX files to add to it.
  */
-export function TrackView({ device, editable }: { device: string; editable: boolean }) {
+export function TrackView({ device, kind, editable }: { device: string; kind?: string; editable: boolean }) {
   const { track, segments, truncated, loading, refetch } = useTrack(device);
   const { files, refetch: refetchFiles } = useSourceFiles(track?.path);
   const imported = () => {
@@ -50,8 +52,11 @@ export function TrackView({ device, editable }: { device: string; editable: bool
   const [following, setFollowing] = useState<string | null>(null);
   const stopFollowing = useCallback(() => setFollowing(null), []);
 
+  const profile = trackProfile(kind);
   // Summed per segment, so a day boundary or a gap adds no phantom distance.
-  const distance = useMemo(() => trackDistance(segments.map((segment) => ({ day: segment.id, points: segment.points }))), [segments]);
+  const runs = useMemo(() => segments.map((segment) => ({ day: segment.id, points: segment.points })), [segments]);
+  const distance = useMemo(() => trackDistance(runs), [runs]);
+  const speed = useMemo(() => movingSpeed(runs, profile), [runs, profile]);
 
   if (loading && !track) {
     return <PageLoader label='Loading track…' />;
@@ -90,10 +95,11 @@ export function TrackView({ device, editable }: { device: string; editable: bool
         </Box>
       </Card>
 
-      <SimpleGrid cols={{ base: 2, sm: 4 }}>
+      <SimpleGrid cols={{ base: 2, sm: 5 }}>
         <Stat label='Points' value={track.points.toLocaleString()} />
         <Stat label='Days' value={String(days || 0)} />
-        <Stat label='Distance' value={distance > 0 ? `${(distance / 1000).toFixed(1)} km` : '—'} />
+        <Stat label='Distance' value={distance > 0 ? formatDistance(distance, profile.units) : '—'} />
+        <Stat label='Average speed' value={speed !== undefined ? formatSpeed(speed, profile.units) : '—'} />
         <Stat label='Duration' value={duration(track.firstTs, track.lastTs) ?? '—'} />
       </SimpleGrid>
 

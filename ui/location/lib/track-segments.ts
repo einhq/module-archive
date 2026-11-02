@@ -33,3 +33,35 @@ export function trackDistance(segments: TrackSegment[]): number {
 
   return total;
 }
+
+/** The longest step between two fixes that still counts towards a speed; a longer one is a gap. */
+const MAX_STEP_MS = 60 * 60 * 1000;
+
+/**
+ * Average speed while moving, in m/s, or undefined when the track has no timed movement.
+ *
+ * Only steps between consecutive timed fixes count, and only those faster than `stillMaxSpeedMps`
+ * (lying still) and no faster than `maxSpeedMps` (a GPS glitch); a step longer than an hour is a
+ * gap in the recording, not travel.
+ */
+export function movingSpeed(segments: TrackSegment[], limits: { stillMaxSpeedMps: number; maxSpeedMps: number }): number | undefined {
+  let metres = 0;
+  let ms = 0;
+
+  for (const segment of segments) {
+    for (let i = 1; i < segment.points.length; i++) {
+      const a = segment.points[i - 1];
+      const b = segment.points[i];
+      if (!a.ts || !b.ts) continue;
+      const step = Date.parse(b.ts) - Date.parse(a.ts);
+      if (!(step > 0 && step <= MAX_STEP_MS)) continue;
+      const distance = trackDistance([{ day: segment.day, points: [a, b] }]);
+      const speed = distance / (step / 1000);
+      if (speed <= limits.stillMaxSpeedMps || speed > limits.maxSpeedMps) continue;
+      metres += distance;
+      ms += step;
+    }
+  }
+
+  return ms > 0 ? metres / (ms / 1000) : undefined;
+}

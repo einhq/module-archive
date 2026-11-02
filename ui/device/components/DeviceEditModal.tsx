@@ -1,6 +1,7 @@
 import { Alert, Button, Select, SimpleGrid, Stack, Switch, TextInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type { RelinkResult } from '@archive/device/api';
+import { DEVICE_KIND_LABELS, DEVICE_KINDS } from '@archive/location/track-profile';
 import { Dialog, DialogActions, MarkdownEditor, TablerIcon } from '@ein/ui/components';
 import type { DeviceDetail, DeviceFields } from '../hooks/useDevice.ts';
 import { LabelsField, useLabelsDraft } from '../../components/NodeLabels.tsx';
@@ -16,6 +17,8 @@ const TIMEZONES = (() => {
     return [] as string[];
   }
 })();
+
+const KIND_OPTIONS = DEVICE_KINDS.map((kind) => ({ value: kind, label: DEVICE_KIND_LABELS[kind] }));
 
 type TextField = Exclude<keyof DeviceFields, 'digitizer' | 'quicktimeUtc'>;
 
@@ -101,6 +104,15 @@ export function DeviceEditModal({ opened, onClose, device, save, onSaved }: Devi
           clearable
           limit={50}
           nothingFoundMessage='No such timezone'
+        />
+        <Select
+          label='Travels as'
+          placeholder='Not set'
+          description='How it travels. A boat’s track is shown in knots and nautical miles, the others’ in km/h and km.'
+          data={KIND_OPTIONS}
+          value={field('kind') || null}
+          onChange={(value) => setField('kind', value ?? '')}
+          clearable
         />
         <Switch
           label='Scanner or digitizer'

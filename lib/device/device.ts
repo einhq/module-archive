@@ -21,6 +21,7 @@ import type { Command, NodeChildEntry } from '@ein/client';
 import type { NodeOwnership } from '@ein/api';
 import { nodeOwnership, shq } from '@ein/client';
 import type { DeviceAttrs } from '@archive/device/types';
+import { type DeviceKind, isDeviceKind } from '@archive/location/track-profile';
 
 export { DEVICES_ROOT };
 export const NODE_TYPE_DEVICE = 'device';
@@ -36,6 +37,7 @@ export type DeviceEntry = {
   model?: string;
   serialNumber?: string;
   timezone?: string;
+  kind?: DeviceKind;
   digitizer?: boolean;
   quicktimeUtc?: boolean;
   description?: string;
@@ -88,6 +90,7 @@ export const listDevices = async (cmd: Command, root: string = DEVICES_ROOT): Pr
         model: str(attrs.model),
         serialNumber: str(attrs.serialNumber),
         timezone: str(attrs.timezone),
+        kind: isDeviceKind(attrs.kind) ? attrs.kind : undefined,
         digitizer: bool(attrs.digitizer),
         quicktimeUtc: bool(attrs.quicktimeUtc),
         description: str((attrs as Record<string, unknown>).description),

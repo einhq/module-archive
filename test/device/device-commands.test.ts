@@ -5,8 +5,8 @@
  * for) and `device-relink` (go and attach the files a newly registered one took).
  */
 
-import { DEVICES_ROOT, PEOPLE_ROOT } from '@archive/paths';
-import type { ScanResult } from '@archive/device/api';
+import { DEVICES_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import type { DeviceHomes, ScanResult } from '@archive/device/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext, type ShellClient, testCommands } from '@ein/testing';
@@ -276,6 +276,48 @@ Deno.test({
       // A sweep is over the whole registry by definition, so naming one device as well is a
       // contradiction rather than a narrowing.
       await cmd.shouldFail(`device-relink --all ${DEVICES_ROOT}/iPhone_12`);
+    });
+    await t.step('device-update sets a kind, refuses one it does not know, and --clear removes it', async () => {
+      const device = `${DEVICES_ROOT}/Canon_EOS_5D_Mark_III`;
+      await cmd.shouldSucceed(`device-update ${device} --kind boat`);
+      assertEquals((await client.execJson<{ kind?: string }>(`device-info ${device}`)).kind, 'boat');
+      await cmd.shouldFail(`device-update ${device} --kind submarine`);
+      await cmd.shouldSucceed(`device-update ${device} --clear kind`);
+      assertEquals((await client.execJson<{ kind?: string }>(`attrs ${device}`)).kind, undefined);
+    });
+
+    await t.step("device-home lists its own home bases, and its owners' homes while it has none", async () => {
+      const boat = `${DEVICES_ROOT}/Exempelbaten`;
+      await cmd.shouldSucceed('device-create --name Exempelbaten');
+      await cmd.shouldSucceed(`mkdir -p ${LOCATIONS_ROOT}`);
+      await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/hamnen --as name=Hamnen`);
+      await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/hamnen/position --lat=57.5 --lng=11.9`);
+      await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/huset --as name=Huset`);
+      await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/torpet --as name=Torpet`);
+      await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/berit --name Berit`);
+      await cmd.shouldSucceed(`device-set-owner ${boat} ${PEOPLE_ROOT}/berit --from 2010 --to 2020`);
+      await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/huset --from 2005`);
+      await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/torpet --from 1990 --to 2000`);
+
+      // Only the residence that overlaps the ownership counts, and only for the overlap.
+      let homes = await client.execJson<DeviceHomes>(`device-home ${boat} list`);
+      assertEquals(homes.homes.map((home) => [home.source, home.name, home.from, home.to]), [['owner', 'Huset', '2010', '2020']]);
+      assertEquals(homes.homes[0].owner, `${PEOPLE_ROOT}/berit`);
+
+      await cmd.shouldSucceed('device-home Exempelbaten add hamnen');
+      await cmd.shouldSucceed(`device-home ${boat} add ${LOCATIONS_ROOT}/hamnen`);
+      homes = await client.execJson<DeviceHomes>(`device-home ${boat}`);
+      assertEquals(homes.homes.map((home) => [home.source, home.name, home.lat, home.lng]), [['device', 'Hamnen', 57.5, 11.9]]);
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${boat}/homes/hamnen`)).softlink, `${LOCATIONS_ROOT}/hamnen`);
+
+      // A person is no place to come home to.
+      await cmd.shouldFail(`device-home ${boat} add ${PEOPLE_ROOT}/berit`);
+      await cmd.shouldFail(`device-home ${boat} rm huset`);
+
+      await cmd.shouldSucceed(`device-home ${boat} rm hamnen`);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${boat}/homes`), false);
+      homes = await client.execJson<DeviceHomes>(`device-home ${boat} list`);
+      assertEquals(homes.homes.map((home) => home.source), ['owner']);
     });
   } finally {
     client.close();

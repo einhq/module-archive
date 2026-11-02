@@ -53,3 +53,23 @@ export type DeviceCoverResult = { path: string; cover: string; replaced?: string
 
 /** `device-cover`: how many devices it looked at, and the ones whose cover it wrote. */
 export type DeviceCoverSweep = { scanned: number; updated: number; devices: DeviceCoverResult[] };
+
+/** One place where arriving ends a device's trip. */
+export type DeviceHome = {
+  /** The location's path. */
+  location: string;
+  name: string;
+  /** `device` when the device lists it in its `homes/`; `owner` when it is an owner's residence, used because the device lists none. */
+  source: 'device' | 'owner';
+  /** Whose residence it is, for `owner`. */
+  owner?: string;
+  /** For `owner`, the part of the residence that falls while they owned the device; either end may be open. */
+  from?: string;
+  to?: string;
+  /** Where it is, when the location has a position. */
+  lat?: number;
+  lng?: number;
+};
+
+/** `device-home <device> list`: its home bases. */
+export type DeviceHomes = { device: string; homes: DeviceHome[] };
