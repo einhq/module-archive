@@ -19,6 +19,8 @@ const ZOOM_EASING = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
 const HANDOFF_MS = 140;
 /** How many frames a closing picture waits for its tile to be scrolled into view and hold still (~1/2 s). */
 const SETTLE_FRAMES = 30;
+/** How many frames a grid has to draw the tile it takes back before there is taken to be none (the map). */
+const NO_GRID_FRAMES = 3;
 /** How long the thumbnail waits for the full picture before giving way regardless. */
 const HANDOFF_WAIT_MS = 1500;
 
@@ -42,9 +44,14 @@ function reducedMotion(): boolean {
   return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 }
 
-/** The on-screen tile for `path` and its loaded thumbnail. Iterated rather than a selector, so a path needs no escaping. */
+/** The tile for `path`, on screen or not. Iterated rather than a selector, so a path needs no escaping. */
+function tileOf(path: string): HTMLElement | undefined {
+  return [...document.querySelectorAll<HTMLElement>('[data-media-path]')].find((el) => el.dataset.mediaPath === path);
+}
+
+/** The on-screen tile for `path` and its loaded thumbnail. */
 function findTile(path: string): { tile: HTMLElement; thumb: HTMLImageElement } | undefined {
-  const tile = [...document.querySelectorAll<HTMLElement>('[data-media-path]')].find((el) => el.dataset.mediaPath === path);
+  const tile = tileOf(path);
   const thumb = tile?.querySelector('img');
   if (!tile || !thumb || !thumb.complete || thumb.naturalWidth === 0) return undefined;
   if (!onScreen(tile.getBoundingClientRect())) return undefined;
@@ -199,7 +206,8 @@ export function zoomToTile(
   // the opaque backdrop, until the grid has marked the tile revealed and it has held
   // still for a frame — the jump is never seen, and the copy flies to where the tile
   // ends up rather than where it was. Give up after `SETTLE_FRAMES` and fade the copy
-  // where it is.
+  // where it is — at once when nothing on the page has a tile for it, as on the map, where
+  // waiting would only hold the closed picture on screen.
   let frames = 0;
   let last: DOMRect | undefined;
   const settle = () => {
@@ -209,7 +217,7 @@ export function zoomToTile(
     const still = rect && last && Math.abs(rect.top - last.top) < 1 && Math.abs(rect.left - last.left) < 1;
     if (found && rect && still) return fly(found.tile, found.thumb, rect);
     last = rect;
-    if (frames >= SETTLE_FRAMES) return fadeAway();
+    if (frames >= SETTLE_FRAMES || (frames >= NO_GRID_FRAMES && !tileOf(path))) return fadeAway();
     requestAnimationFrame(settle);
   };
   const fadeAway = () => {

@@ -135,8 +135,10 @@ export default function MapPage() {
   // lightbox it opens into carries this state into its own entry, so Back from
   // a picture lands on the grid again.
   const openCluster = openClusterFromState(location.state);
-  const openClusterRef = useRef(openCluster);
-  openClusterRef.current = openCluster;
+  // A pan rewrites the entry it is on, which keeps its state: the open cluster, and the mark the
+  // lightbox's opening leaves on its own entry, without which closing it would not step Back.
+  const entryStateRef = useRef(location.state);
+  entryStateRef.current = location.state;
   const showCluster = useCallback((open: OpenCluster) => {
     navigate({ search: location.search }, { state: { mapCluster: open } });
   }, [location.search, navigate]);
@@ -164,7 +166,7 @@ export default function MapPage() {
     const center = { lat: (bounds.north + bounds.south) / 2, lng: (bounds.east + bounds.west) / 2 };
     setSearchParams((current) => paramsFromMapState({ ...mapStateFromParams(current), center, zoom: z }, current), {
       replace: true,
-      state: openClusterRef.current ? { mapCluster: openClusterRef.current } : undefined,
+      state: entryStateRef.current,
     });
   }, [query, queryTracks, setSearchParams]);
 
