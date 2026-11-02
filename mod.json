@@ -2,7 +2,7 @@
   "name": "archive",
   "version": "0.9.5",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
-  "coreApi": "^0.9.0",
+  "coreApi": "^0.9.1",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -34,6 +34,7 @@
     "@archive/device/device": "./lib/device/device.ts",
     "@archive/device/device-zone": "./lib/device/device-zone.ts",
     "@archive/device/homes": "./lib/device/homes.ts",
+    "@archive/device/qr": "./lib/device/qr.ts",
     "@archive/device/types": "./types/device/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",
@@ -153,7 +154,8 @@
     "@std/streams": "jsr:@std/streams@^1.0.17",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "@std/yaml": "jsr:@std/yaml@^1.0.11",
-    "pg": "npm:pg@^8.16.3"
+    "pg": "npm:pg@^8.16.3",
+    "qrcode-generator": "npm:qrcode-generator@^2.0.4"
   },
   "config": {
     "options": [

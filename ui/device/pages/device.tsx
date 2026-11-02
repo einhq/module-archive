@@ -13,6 +13,7 @@ import { DeviceOwnersTab } from '../components/DeviceOwnersTab.tsx';
 import { DeviceHomesCard } from '../components/DeviceHomesCard.tsx';
 import { DEVICE_KIND_LABELS, isDeviceKind } from '@archive/location/track-profile';
 import { TrackView } from '../../location/components/TrackView.tsx';
+import { TrackerSetup } from '../components/TrackerSetup.tsx';
 import { useDevice } from '../hooks/useDevice.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -273,7 +274,10 @@ export default function DeviceDetailPage() {
           </Tabs.Panel>
 
           <Tabs.Panel value='track'>
-            <TrackView device={device.id} kind={device.kind} editable={editable} />
+            <Stack gap='lg'>
+              <TrackView device={device.id} kind={device.kind} editable={editable} />
+              {editable && <TrackerSetup device={device.id} />}
+            </Stack>
           </Tabs.Panel>
 
           <Tabs.Panel value='owners'>

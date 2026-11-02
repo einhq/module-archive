@@ -9,6 +9,7 @@
     "@archive/device/device": "./lib/device/device.ts",
     "@archive/device/device-zone": "./lib/device/device-zone.ts",
     "@archive/device/homes": "./lib/device/homes.ts",
+    "@archive/device/qr": "./lib/device/qr.ts",
     "@archive/device/types": "./types/device/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",
@@ -162,6 +163,7 @@
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "@std/yaml": "jsr:@std/yaml@^1.0.11",
     "pg": "npm:pg@^8.16.3",
+    "qrcode-generator": "npm:qrcode-generator@^2.0.4",
     "react": "npm:react@^19.2.3",
     "react-dom": "npm:react-dom@^19.2.3",
     "react-router-dom": "npm:react-router-dom@^7.12.0"

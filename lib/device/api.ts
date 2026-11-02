@@ -73,3 +73,21 @@ export type DeviceHome = {
 
 /** `device-home <device> list`: its home bases. */
 export type DeviceHomes = { device: string; homes: DeviceHome[] };
+
+/**
+ * `tracker-setup`: whether a phone or GPS tracker may post the device's fixes, and the link it posts
+ * them to.
+ */
+export type TrackerSetup = {
+  /** The device's path. */
+  device: string;
+  /** Its track's path. */
+  track: string;
+  enabled: boolean;
+  /** The server URL a phone is given, `<origin>/tracker/<id>.<token>`, or its path without `--origin`; absent while turned off. */
+  url?: string;
+  /** What the QR code says: the URL with the device's slug as Traccar Client's device identifier. */
+  qrText?: string;
+  /** The QR code as an SVG document; only with `--origin`. */
+  qrSvg?: string;
+};
