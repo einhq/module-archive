@@ -38,7 +38,7 @@ containerTest('media pipeline fan-out E2E', async (t) => {
   // Files must live on disk under the shared scratch, which EMS mounts at the same path.
   const fileRoot = await Deno.makeTempDir({ prefix: 'ein-e2e-files-', dir: Deno.env.get('EIN_TEST_FILE_ROOT') || undefined });
   const harness = new SystemTestHarness({ ssh: false, boot: true, fileRoot, modules: ['archive'] });
-  const { baseUrl } = await harness.startPrimary();
+  const { baseUrl } = await harness.start();
   const client = await harness.createShellClient();
   const { cookie } = await harness.createHttpSession();
 

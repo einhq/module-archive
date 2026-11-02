@@ -14,7 +14,7 @@ const FILES = '/home/admin/staging/files';
 pgTest('staging retime of 2,000 photos takes a few statements per page', async (t) => {
   const ctx = pgTestContext();
   const harness = new SystemTestHarness({ ssh: false, modules: ['archive'], pg: { pool: ctx.pool, prefix: ctx.prefix } });
-  const { vfs } = await harness.startPrimary();
+  const { vfs } = await harness.start();
   const client = await harness.createShellClient();
   const cmd = testCommands(client);
 

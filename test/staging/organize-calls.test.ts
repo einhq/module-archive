@@ -17,7 +17,7 @@ const FILES = '/home/admin/staging/files';
 pgTest('staging organize reads as many statements for 400 photos as for 50', async (t) => {
   const ctx = pgTestContext();
   const harness = new SystemTestHarness({ ssh: false, modules: ['archive'], pg: { pool: ctx.pool, prefix: ctx.prefix } });
-  const { vfs } = await harness.startPrimary();
+  const { vfs } = await harness.start();
   const client = await harness.createShellClient();
   const cmd = testCommands(client);
 

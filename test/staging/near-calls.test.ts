@@ -45,7 +45,7 @@ const photo = (name: string, attrs: Record<string, unknown>) => ({
 pgTest('a near check is an HNSW lookup that finds every planted look-alike in a few milliseconds', async (t) => {
   const ctx = pgTestContext();
   const harness = new SystemTestHarness({ ssh: false, modules: ['archive'], pg: { pool: ctx.pool, prefix: ctx.prefix, embeddings: true } });
-  const { vfs } = await harness.startPrimary();
+  const { vfs } = await harness.start();
   const client = await harness.createShellClient();
   const cmd = testCommands(client);
 

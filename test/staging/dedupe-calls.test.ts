@@ -17,7 +17,7 @@ const FILES = '/home/admin/staging/files';
 pgTest('staging dedupe --apply and undo make as many statements for 32 sets as for 8', async (t) => {
   const ctx = pgTestContext();
   const harness = new SystemTestHarness({ ssh: false, modules: ['archive'], pg: { pool: ctx.pool, prefix: ctx.prefix } });
-  const { vfs } = await harness.startPrimary();
+  const { vfs } = await harness.start();
   const client = await harness.createShellClient();
   const cmd = testCommands(client);
 

@@ -31,7 +31,7 @@ Deno.test({
   sanitizeResources: false,
   sanitizeOps: false,
 }, async (t) => {
-  const { vfs } = await harness.startPrimary();
+  const { vfs } = await harness.start();
   const client = await harness.createShellClient();
 
   const writeFile = async (path: string, body: Uint8Array) => {
@@ -78,7 +78,7 @@ Deno.test({
     await t.step('a zip uploaded over HTTP is expanded once its upload has ended', async () => {
       const { cookie } = await harness.createHttpSession();
       await run(`mkdir -p ${inbox}/web`);
-      const res = await fetch(`${harness.primary!.baseUrl}/file${inbox}/web/?name=web.zip`, { method: 'POST', headers: { cookie }, body: await Deno.readFile(ZIP) });
+      const res = await fetch(`${harness.instance!.baseUrl}/file${inbox}/web/?name=web.zip`, { method: 'POST', headers: { cookie }, body: await Deno.readFile(ZIP) });
       assertEquals(res.status, 201);
       await waitFor(() => vfs.exists(ADMIN_ACCESS, `${inbox}/web/Exempelresa/dag-2/väder.txt`), 'the expanded files');
       await waitFor(async () => !(await vfs.exists(ADMIN_ACCESS, `${inbox}/web/web.zip`)), 'the zip to be removed');
@@ -116,7 +116,7 @@ Deno.test({
 
       const { cookie } = await harness.createHttpSession();
       await run(`mkdir -p ${inbox}/frozen`);
-      const res = await fetch(`${harness.primary!.baseUrl}/file${inbox}/frozen/?name=frozen.zip`, { method: 'POST', headers: { cookie }, body: await Deno.readFile(ZIP) });
+      const res = await fetch(`${harness.instance!.baseUrl}/file${inbox}/frozen/?name=frozen.zip`, { method: 'POST', headers: { cookie }, body: await Deno.readFile(ZIP) });
       assertEquals(res.status, 201);
       await waitFor(async () => !(await vfs.exists(ADMIN_ACCESS, `${inbox}/frozen/frozen.zip`)), 'the zip to be expanded and removed');
 
