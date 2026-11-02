@@ -34,7 +34,10 @@ function useTracks(): { tracks: TrackEntry[]; loading: boolean; error: Error | n
   return { tracks, loading, error, refetch: fetchTracks };
 }
 
-/** A track read, as one colored line per day, labelled by `label`. */
+/**
+ * A track read, as one colored line per day, labelled by `label`. Every read here is
+ * `--still`: a device lying still is drawn as one point where it lay, not as its GPS drift.
+ */
 const toSpecs = (path: string, read: TrackRead, label: (day: string) => string): MapTrackSpec[] =>
   (read.segments ?? []).map((segment, index): MapTrackSpec => ({
     id: `${path}|${segment.day}|${index}`,
@@ -75,7 +78,7 @@ export function useTrack(
       try {
         setLoading(true);
         setError(null);
-        const result = await execCommand<TrackRead>(`track-read ${shq(path)} --limit=${maxPoints}`);
+        const result = await execCommand<TrackRead>(`track-read ${shq(path)} --limit=${maxPoints} --still`);
         if (cancelled) return;
 
         setTruncated(result.truncated === true);
@@ -154,7 +157,7 @@ export function useMapTracks(
 
         const reads = await Promise.all(candidates.map(async (track) => {
           const result = await execCommand<TrackRead>(
-            `track-read ${shq(track.path)} --bbox=${bbox} --tolerance=${tolerance} --limit=${POINT_LIMIT}`,
+            `track-read ${shq(track.path)} --bbox=${bbox} --tolerance=${tolerance} --limit=${POINT_LIMIT} --still`,
           ).catch((): TrackRead => ({ segments: [], points: 0, truncated: false }));
           return { track, read: result };
         }));
@@ -229,7 +232,7 @@ export function useSpanTracks(
       setLoading(true);
       const reads = await Promise.all(during.map(async (track) => ({
         track,
-        read: await execCommand<TrackRead>(`track-read ${shq(track.path)} ${window} --limit=${maxPoints}`)
+        read: await execCommand<TrackRead>(`track-read ${shq(track.path)} ${window} --limit=${maxPoints} --still`)
           .catch((): TrackRead => ({ segments: [], points: 0, truncated: false })),
       })));
       if (cancelled) return;

@@ -51,6 +51,8 @@ export type TrackReadOptions = {
   to?: string;
   tolerance?: number;
   limit?: number;
+  /** Drop spikes and collapse each stay into two points: metres, ms and m/s. */
+  still?: { radius?: number; minMs?: number; stillSpeed?: number; maxSpeed?: number };
 };
 
 type TrackReadResult = {
@@ -124,7 +126,7 @@ export async function ensureTrack(cmd: Command, target: string): Promise<string>
 }
 
 /** Open the track a target names (see `trackOf`), verifying its type. Caller closes. */
-export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 'w'): Promise<{ path: string; handle: TrackLikeHandle }> {
+export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 'w'): Promise<{ path: string; device: string; handle: TrackLikeHandle }> {
   const { path, device } = await trackOf(cmd, target);
   let node;
   try {
@@ -136,7 +138,7 @@ export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 
     throw new Error(`${path}: not a track node (is ${node.type})`);
   }
   const handle = await cmd.sys.vfs.open(cmd.access, path, { mode });
-  return { path, handle: handle as unknown as TrackLikeHandle };
+  return { path, device, handle: handle as unknown as TrackLikeHandle };
 }
 
 /**

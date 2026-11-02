@@ -85,7 +85,7 @@ Deno.test({
   const cmd = testCommands(client);
 
   try {
-    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'hike']) {
+    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike']) {
       await cmd.shouldSucceed(`mknode -p -t device ${DEVICES_ROOT}/${device} --as name=${device}`);
     }
 
@@ -230,6 +230,37 @@ Deno.test({
       const result = await client.execJson<ReadResult>(`track-read ${DEVICES_ROOT}/paused/track`);
       assertEquals(result.segments.length, 2);
       assertEquals(result.segments.map((segment) => segment.points.length), [2, 2]);
+    });
+
+    await t.step("--still draws a stay as two points, and the device's kind says what a spike is", async () => {
+      await cmd.shouldSucceed('track-create moored');
+      // Half an hour drifting ten metres either way on a berth, a fix a minute, with one fix
+      // thrown 3 km north: 50 m/s there and back, a glitch for a boat but not for a car.
+      const metre = 1 / 111_320;
+      const points = Array.from({ length: 31 }, (_, i) => ({
+        lat: 57.7 + (i === 15 ? 3000 : ((i % 3) - 1) * 10) * metre,
+        lng: 11.97,
+        ts: new Date(Date.parse('2021-04-01T10:00:00Z') + i * 60_000).toISOString(),
+      }));
+      await cmd.shouldSucceed(`track-append ${DEVICES_ROOT}/moored/track --json '${JSON.stringify(points)}'`);
+      const spiked = (read: ReadResult) => flat(read).some((p) => p.lat > 57.7 + 1000 * metre);
+
+      assertEquals((await client.execJson<ReadResult>(`track-read moored`)).points, 31);
+
+      const asCar = await client.execJson<ReadResult>(`track-read moored --still`);
+      assertEquals(spiked(asCar), true);
+      assertEquals(asCar.points < 31, true);
+
+      const slower = await client.execJson<ReadResult>(`track-read moored --still --max-speed=20`);
+      assertEquals(slower.points, 2);
+
+      await cmd.shouldSucceed(`device-update ${DEVICES_ROOT}/moored --kind boat`);
+      const asBoat = await client.execJson<ReadResult>(`track-read moored --still`);
+      assertEquals(asBoat.points, 2);
+      assertEquals(flat(asBoat).map((p) => p.ts), [points[0].ts, points[30].ts]);
+      assertEquals(spiked(asBoat), false);
+
+      await cmd.shouldFailWith('track-read moored --max-speed=20', '--max-speed needs --still');
     });
 
     await t.step('--tolerance thins the line, --limit caps it', async () => {
@@ -381,7 +412,7 @@ Deno.test({
 
     await t.step('track-list names the devices that have a track', async () => {
       const tracks = await client.execJson<{ id: string; path: string; name: string; points: number }[]>('track-list');
-      assertEquals(tracks.map((track) => track.id).sort(), ['backfill', 'hike', 'live', 'logger', 'paused', 'south', 'thin', 'trip1']);
+      assertEquals(tracks.map((track) => track.id).sort(), ['backfill', 'hike', 'live', 'logger', 'moored', 'paused', 'south', 'thin', 'trip1']);
       const hike = tracks.find((track) => track.id === 'hike')!;
       assertEquals([hike.path, hike.name, hike.points], [`${DEVICES_ROOT}/hike/track`, 'hike', 3]);
     });

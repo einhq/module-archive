@@ -33,7 +33,8 @@ const RELIST_MS = 10_000;
  * as they grow.
  *
  * One subscription to `updated` events on the tracks under the devices root: an event for a live
- * track reads it from its last fix on (`track-read --from`) and appends what is new; an event for
+ * track reads it from its last fix on (`track-read --from --still`, which drops a new fix that is a
+ * spike) and appends what is new; an event for
  * any other track asks for the list again through `relist`, since that track may just have woken
  * up. A reconnect reads every live track again, since events may have been missed. `now` is the
  * clock the liveness was judged by, for the ages shown beside it.
@@ -67,7 +68,7 @@ export function useLiveTracks(tracks: TrackEntry[], relist: () => void): { live:
     }
     reading.current.set(path, 'busy');
     try {
-      const result = await execCommand<TrackRead>(`track-read ${shq(path)} --from=${fromTs}`);
+      const result = await execCommand<TrackRead>(`track-read ${shq(path)} --from=${fromTs} --still`);
       if (!mounted.current) return;
       const incoming = (result.segments ?? []).flatMap((segment) => segment.points);
       setFixes((current) => {
