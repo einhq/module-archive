@@ -13,6 +13,11 @@
  * face are permanent clutter on the photo. They stay as invisible hit targets, and hovering
  * one (or a name in the sidebar) fades in that one alone; `pinned` keeps them all up, which
  * is also how they are reachable without a pointer.
+ *
+ * Only a pinned box is a link: a click on it opens the person, or asks who an unnamed one is.
+ * Unpinned, a box is part of the picture, so a double tap or double click that lands on a face
+ * zooms instead of opening a person by accident. The lightbox's gestures leave alone what is
+ * marked `data-face-link`.
  */
 
 import { TablerIcon } from '@ein/ui/components';
@@ -183,6 +188,7 @@ export function FaceOverlay(
 
   // Pinned, drawing and the slideshow show every face; otherwise only the hovered one is drawn.
   const allShown = labelsOnly || drawing || pinned;
+  const linked = pinned && !drawing && !labelsOnly;
   const pointIn = (event: ReactPointerEvent<HTMLElement>): DrawPoint => {
     // The bounding rect is in transformed screen pixels; `rect` is not.
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -374,7 +380,7 @@ export function FaceOverlay(
           borderRadius: px(3),
           boxShadow: !labelsOnly && active ? '0 0 0 9999px rgba(0,0,0,0.25)' : undefined,
           pointerEvents: labelsOnly ? 'none' : 'auto',
-          cursor: labelsOnly ? undefined : drawing && !fixedBoxes ? 'move' : 'pointer',
+          cursor: drawing ? (fixedBoxes ? 'pointer' : 'move') : linked ? 'pointer' : undefined,
           visibility: selected ? 'hidden' : undefined,
           // Entering slideshow must drop the boxes immediately; carrying the normal
           // border transition over would leave a brief outline around each label.
@@ -387,14 +393,16 @@ export function FaceOverlay(
           <Box
             data-face-mark={face.key}
             data-face-path={face.facePath || undefined}
+            data-face-link={linked || undefined}
             data-tag={face.hasFace ? undefined : true}
             title={face.hasFace || labelsOnly ? undefined : TAG_TITLE}
             key={face.key}
             style={boxStyle}
-            onMouseEnter={() => onHover(face.key)}
-            onMouseLeave={() => onHover(null)}
+            // A finger points at nothing: a tap would leave the face lit, the picture dimmed around it.
+            onPointerEnter={(event) => event.pointerType !== 'touch' && onHover(face.key)}
+            onPointerLeave={(event) => event.pointerType !== 'touch' && onHover(null)}
           >
-            {drawing ? label : labelsOnly ? label : face.named
+            {!linked ? label : face.named
               ? (
                 <Box
                   // The route takes the person's directory name. Neither `personPath` itself (a VFS

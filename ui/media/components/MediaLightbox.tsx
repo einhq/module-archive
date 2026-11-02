@@ -133,7 +133,7 @@ const PRELOAD_PARALLEL = 2;
  */
 const LIGHTBOX_REST_MS = 600;
 const NATIVE_EDGE_GESTURE_PX = 24;
-const GESTURE_CONTROL_SELECTOR = 'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-mark], [data-text-overlay], [data-video-controls]';
+const GESTURE_CONTROL_SELECTOR = 'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-link], [data-text-overlay], [data-video-controls]';
 
 type SlideshowPhotoTransition = {
   outgoing: MediaItem;
@@ -1331,11 +1331,11 @@ export function MediaLightbox() {
     }
     // Drawing a face box takes the finger for itself.
     if (!isMobile || slideshow || addingFace) return;
-    // A face box is tapped to open it but is no reason to refuse a drag across the picture; group
-    // photos are mostly faces.
-    const onFaceMark = event.target instanceof Element && event.target.closest('[data-face-mark]') !== null;
+    // A pinned face box is tapped to open it but is no reason to refuse a drag across the picture;
+    // group photos are mostly faces.
+    const onFaceLink = event.target instanceof Element && event.target.closest('[data-face-link]') !== null;
     // A video's picture swipes like a photo; its controls are controls (`data-video-controls`).
-    if (isGestureControl(event.target) && !onFaceMark) return;
+    if (isGestureControl(event.target) && !onFaceLink) return;
 
     if (event.touches.length === 2 && zoomable) {
       // A second finger during a swipe turns it into a pinch; drop the swipe where it is.
@@ -1358,7 +1358,7 @@ export function MediaLightbox() {
     // the history-backed lightbox instead of being mistaken for previous/next media,
     // or for a pan.
     if (touch.clientX <= NATIVE_EDGE_GESTURE_PX || touch.clientX >= globalThis.innerWidth - NATIVE_EDGE_GESTURE_PX) return;
-    if (!onFaceMark) tapStartRef.current = touchPoint(touch, event.timeStamp);
+    if (!onFaceLink) tapStartRef.current = touchPoint(touch, event.timeStamp);
     if (zoomable && isZoomed(zoomRef.current)) {
       // One finger on a zoomed picture drags it; previous/next wait until it is back at fit.
       touchPanRef.current = { x: touch.clientX, y: touch.clientY };
