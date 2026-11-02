@@ -35,7 +35,7 @@ export const freeName = (name: string, taken: ReadonlySet<string>): string => {
 };
 
 /** `path` and every directory above it that is missing. */
-const ensureFolder = async (vfs: Vfs, access: Access, path: string): Promise<void> => {
+export const ensureFolder = async (vfs: Vfs, access: Access, path: string): Promise<void> => {
   if (path === '/' || await vfs.exists(access, path)) return;
   await ensureFolder(vfs, access, dirname(path));
   await vfs.ensure(access, 'directory', dirname(path), basename(path));

@@ -24,7 +24,8 @@
     "./staging/init": "./lib/staging/init.ts",
     "./staging/paths": "./lib/staging/paths.ts",
     "./staging/proposal": "./lib/staging/proposal.ts",
-    "./timeline/api": "./lib/timeline/api.ts"
+    "./timeline/api": "./lib/timeline/api.ts",
+    "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
     "ems": "^0.5.0"
@@ -153,6 +154,12 @@
     "@archive/timeline": "./lib/timeline/mod.ts",
     "@archive/timeline/facets": "./lib/timeline/facets.ts",
     "@archive/timeline/paging": "./lib/timeline/paging.ts",
+    "@archive/weather/api": "./lib/weather/api.ts",
+    "@archive/weather/at": "./lib/weather/at.ts",
+    "@archive/weather/cache": "./lib/weather/cache.ts",
+    "@archive/weather/fetch": "./lib/weather/fetch.ts",
+    "@archive/weather/open-meteo": "./lib/weather/open-meteo.ts",
+    "@archive/weather/smhi": "./lib/weather/smhi.ts",
     "@std/assert": "jsr:@std/assert@^1.0.16",
     "@std/encoding": "jsr:@std/encoding@^1.0.10",
     "@std/path": "jsr:@std/path@^1.1.3",
@@ -468,6 +475,24 @@
         "restarts": [
           "album-metadata"
         ]
+      },
+      {
+        "key": "CFG_WEATHER",
+        "scope": "system",
+        "type": "boolean",
+        "default": "false",
+        "label": "Look up the weather",
+        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time. Each lookup sends the coordinates and the date to them, so it is off until you turn it on.",
+        "group": "Places"
+      },
+      {
+        "key": "CFG_WEATHER_SMHI_KM",
+        "scope": "system",
+        "type": "number",
+        "default": "30",
+        "label": "SMHI station distance (km)",
+        "description": "How far from a place the nearest SMHI weather station may be and still give its weather. Farther away, and outside Sweden, the weather comes from Open-Meteo's reanalysis instead. 0 leaves SMHI out.",
+        "group": "Places"
       }
     ]
   },
@@ -489,6 +514,18 @@
       "kind": "option",
       "default": "https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter",
       "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a device stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
+    },
+    {
+      "key": "SMHI_METOBS_URL",
+      "kind": "option",
+      "default": "https://opendata-download-metobs.smhi.se/api/version/1.0",
+      "description": "Where weather asks SMHI's meteorological observations for the weather stations and their hourly values."
+    },
+    {
+      "key": "OPEN_METEO_ARCHIVE_URL",
+      "kind": "option",
+      "default": "https://archive-api.open-meteo.com/v1/archive",
+      "description": "Where weather asks Open-Meteo's historical weather API for the hourly weather of places with no SMHI station near them."
     }
   ],
   "nodeTypes": [

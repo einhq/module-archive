@@ -1,0 +1,110 @@
+#!ts
+/**
+ * weather — the weather at a place and time.
+ *
+ *   weather <lat> <lng> <time>
+ *   weather --lat=<lat> --lng=<lng> <time>
+ *
+ * Answers the air temperature, the wind's speed and direction and the cloud cover of the hour
+ * nearest `<time>` (`@archive/weather/at`): each from the nearest SMHI station that measured it,
+ * when one is within `CFG_WEATHER_SMHI_KM`, and otherwise from Open-Meteo's reanalysis. A time
+ * without an offset is UTC. What the services answered is kept under `/archive/sources/weather`,
+ * so an hour is asked of them once.
+ *
+ * It asks only when `CFG_WEATHER` is `true`, since every lookup sends the place and the date to
+ * SMHI or Open-Meteo. `SMHI_METOBS_URL` and `OPEN_METEO_ARCHIVE_URL` say where they are.
+ *
+ * A western or southern coordinate takes the flag form: parseArgs reads the leading `-` of a
+ * positional `-3.5` as a flag (wow/notes/negative-argument-values.md).
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, readSettings, reportUnknownFlags } from '@ein/client';
+import type { WeatherReading, WeatherValue } from '@archive/weather/api';
+import { WEATHER_PARAMETERS, WeatherLookup } from '@archive/weather/at';
+import { OPEN_METEO_ARCHIVE_URL } from '@archive/weather/open-meteo';
+import { SMHI_METOBS_URL } from '@archive/weather/smhi';
+
+const USAGE = 'weather: usage: weather <lat> <lng> <time>, or weather --lat=<lat> --lng=<lng> <time>\n';
+const DEFAULT_SMHI_KM = 30;
+
+/** A time as `Date` reads it, a date and time without an offset taken as UTC; NaN when it is none. */
+const parseTime = (text: string): number => Date.parse(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text) ? `${text.replace(' ', 'T')}Z` : text);
+
+const LABELS: Record<keyof Omit<WeatherReading, 'lat' | 'lng' | 'time'>, [string, string]> = {
+  temperature: ['temperature', '°C'],
+  windSpeed: ['wind speed', 'm/s'],
+  windDirection: ['wind from', '°'],
+  cloudCover: ['cloud cover', '%'],
+};
+
+const sourceText = ({ source, at }: WeatherValue): string =>
+  (source.kind === 'smhi' ? `SMHI ${source.name}, ${(source.distanceM / 1000).toFixed(1)} km away` : `Open-Meteo, cell ${source.lat}, ${source.lng}`) +
+  `, ${at.slice(0, 16).replace('T', ' ')} UTC`;
+
+const weather = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['lat', 'lng'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const positionals = flags._.map(String);
+  const flagForm = flags.lat !== undefined || flags.lng !== undefined;
+  const [latArg, lngArg, timeArg] = flagForm ? [flags.lat, flags.lng, positionals[0]] : positionals;
+  const lat = Number(latArg);
+  const lng = Number(lngArg);
+  const time = parseTime(timeArg ?? '');
+  if (!latArg || !lngArg || positionals.length !== (flagForm ? 1 : 3) || !(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180) || Number.isNaN(time)) {
+    await cmd.writeError(USAGE);
+    return 1;
+  }
+
+  const settings = await readSettings(cmd, cmd.access);
+  if (settings.CFG_WEATHER !== 'true') {
+    await cmd.writeError('weather: weather lookups are off: set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo\n');
+    return 1;
+  }
+  const km = parseFloat(settings.CFG_WEATHER_SMHI_KM ?? '');
+  const lookup = new WeatherLookup(cmd, {
+    smhi: cmd.env.SMHI_METOBS_URL || SMHI_METOBS_URL,
+    openMeteo: cmd.env.OPEN_METEO_ARCHIVE_URL || OPEN_METEO_ARCHIVE_URL,
+    smhiRadiusM: (Number.isFinite(km) ? km : DEFAULT_SMHI_KM) * 1000,
+  });
+
+  let reading: WeatherReading;
+  try {
+    reading = await lookup.at(lat, lng, time);
+  } catch (error) {
+    await cmd.writeError(`weather: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (cmd.json) {
+    await cmd.writeJSON(reading satisfies WeatherReading);
+    return 0;
+  }
+  await cmd.writeLn(`${lat}, ${lng} at ${reading.time}`);
+  const found = WEATHER_PARAMETERS.filter((parameter) => reading[parameter]);
+  if (!found.length) await cmd.writeLn(time > Date.now() ? '  not yet: the time is still to come' : '  no weather known for this place and hour');
+  for (const parameter of found) {
+    const value = reading[parameter]!;
+    const [label, unit] = LABELS[parameter];
+    await cmd.writeLn(`  ${label.padEnd(12)} ${`${value.value} ${unit}`.padEnd(10)} ${sourceText(value)}`);
+  }
+  return 0;
+};
+
+weather.spec = {
+  name: 'weather',
+  effect: 'write' as const,
+  description: 'The weather at a place and time: temperature, wind and cloud cover from the nearest SMHI station, or from Open-Meteo',
+  args: [
+    { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
+    { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
+    { name: 'time', type: 'string' as const, description: 'when, ISO 8601; UTC unless it gives an offset' },
+  ],
+  flags: [
+    { name: 'lat', type: 'string' as const, description: 'latitude, as --lat=<n>, the form a negative one needs' },
+    { name: 'lng', type: 'string' as const, description: 'longitude, as --lng=<n>, the form a negative one needs' },
+  ],
+  examples: ['weather 59.33 18.07 2024-07-14T15:00', 'weather --lat=48.85 --lng=-3.01 2023-08-02T09:30+02:00'],
+  returns: 'WeatherReading: each parameter with its value, the hour it holds for and where it came from; one neither source has is left out.',
+};
+
+export default weather;

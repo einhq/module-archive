@@ -10,10 +10,10 @@
  * once per tile and point.
  */
 
-import { basename, dirname } from '@std/path';
 import { toText } from '@std/streams';
 import { type Command, haversineMeters } from '@ein/client';
 import { SOURCES_ROOT } from '@archive/paths';
+import { ensureFolder } from '@archive/sources';
 import { fetchOverpassTile, nominatimTown, type OverpassElement, pickPlace, type PlaceName, tileOf } from '@archive/location/place-name';
 
 /** Where the answers are kept. */
@@ -29,16 +29,6 @@ type TileCache = {
   elements?: OverpassElement[];
   /** The points Nominatim was asked about, when, and the town it gave; no `name` where it gave none. */
   towns: { lat: number; lng: number; at: string; name?: string }[];
-};
-
-type Vfs = Command['sys']['vfs'];
-type Access = Command['access'];
-
-/** `path` and every folder above it that is missing. */
-const ensureFolder = async (vfs: Vfs, access: Access, path: string): Promise<void> => {
-  if (path === '/' || await vfs.exists(access, path)) return;
-  await ensureFolder(vfs, access, dirname(path));
-  await vfs.ensure(access, 'directory', dirname(path), basename(path));
 };
 
 type PlaceNamerOptions = {
