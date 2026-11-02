@@ -22,12 +22,15 @@ const slugOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 const CLOCK: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' };
 const DAY_AND_CLOCK: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
 
-/** Times as they were where the device was; as the reader's own when its timezone is unknown here. */
+/**
+ * Times on the device's clock, as its days are: UTC for a device without a timezone, and for one
+ * whose timezone the browser does not know.
+ */
 const formatIn = (timezone: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
   try {
-    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: timezone });
+    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: timezone ?? 'UTC' });
   } catch {
-    return new Intl.DateTimeFormat(undefined, options);
+    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' });
   }
 };
 
@@ -98,7 +101,7 @@ export function AlbumTripTab(
   /** Where a trip or leg starts or ends: its stay's location when it has one, else what kind of stay. */
   const place = (at: { stay?: number }): ReactNode => {
     const stay = at.stay === undefined ? undefined : trip.stays[at.stay];
-    if (!stay) return 'on the way';
+    if (!stay) return 'a point on the way';
     const where = stay.location ?? stay.home;
     const label = where ? names.get(where) ?? slugOf(where) : stay.kind === 'home' ? 'home' : stay.kind === 'rest' ? 'a long stay' : 'an overnight stay';
     return where ? <Anchor component={Link} to={`/locations/${encodeURIComponent(slugOf(where))}`} size='sm'>{label}</Anchor> : label;
