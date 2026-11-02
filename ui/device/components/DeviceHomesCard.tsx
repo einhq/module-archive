@@ -24,7 +24,10 @@ export function DeviceHomesCard({ device, editable }: { device: string; editable
   const [error, setError] = useState<string | null>(null);
 
   const own = homes.filter((home) => home.source === 'device');
-  const owners = homes.filter((home) => home.source === 'owner');
+  // Owners who lived together give the same place for the same years; it is listed once.
+  const owners = homes
+    .filter((home) => home.source === 'owner')
+    .filter((home, index, all) => all.findIndex((other) => other.location === home.location && spanLine(other) === spanLine(home)) === index);
 
   // Listed only while adding: a picker nobody opened is not worth a listing of every location.
   useEffect(() => {
@@ -95,7 +98,7 @@ export function DeviceHomesCard({ device, editable }: { device: string; editable
           </Text>
         )}
         {owners.map((home) => (
-          <Group key={`${home.owner}|${home.location}`} gap='xs' wrap='nowrap' justify='space-between'>
+          <Group key={`${home.location}|${spanLine(home)}`} gap='xs' wrap='nowrap' justify='space-between'>
             <Group gap='xs' wrap='nowrap' style={{ minWidth: 0 }}>
               <TablerIcon name='home' size={16} color='gray' style={{ flexShrink: 0 }} />
               <Anchor component={Link} to={locationRoute(home.location)} size='sm' lineClamp={1}>{home.name}</Anchor>
