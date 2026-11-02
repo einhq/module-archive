@@ -1,7 +1,7 @@
 /**
  * VFS mutation -> location domain fact.
  *
- * What `archive-bridge` applies to the location events on its queue. Two facts, one
+ * What `archive-bridge` applies to the location events on its queue. Three facts, one
  * per thing that can go out of date:
  *
  * - **A location's position** (`<location>/position`) depends on its address, its name
@@ -12,6 +12,11 @@
  * - **A photo's location** depends on its GPS point, `<file>/position`. The point
  *   being written is `location.point.changed`, and `location-link-point` links the
  *   photo to the location containing it.
+ *
+ * - **A device's trips** (`<device>/.trips`) depend on its track, on how it travels and in which
+ *   timezone (`kind`, `timezone`), and on its homes. Points appended to the track (a content
+ *   write of its `track` child), one of those attrs changing, or a home added or taken off
+ *   (a link in its `homes/`) is `track.changed`, and `track-trips` derives them again.
  *
  * Rules read fresh state rather than trusting the payload, so a
  * fact is right whichever order messages arrive in. A spurious fact is cheap:
@@ -24,17 +29,23 @@
  * losing a photo is picked up the next time anything else about it changes.
  */
 
-import { LOCATIONS_ROOT } from '@archive/paths';
+import { DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import type { DomainEvent } from '@ein/client';
 import { LOCATION_LINK_NAME, POSITION_CHILD, SHAPE_LINK_SOURCE } from '@archive/location/location-link';
 
 const LOCATION_EVENT_SOURCE = 'archive-bridge';
+
+/** A device's track, and the directory of its homes. */
+const TRACK_CHILD = 'track';
+const HOMES_DIR = 'homes';
 
 export const LOCATION_EVENTS = {
   /** Something a location's position or photo set is derived from changed. Subject is the location. */
   locationChanged: 'location.changed',
   /** A photo's GPS point was written. Subject is its `<file>/position` node. */
   pointChanged: 'location.point.changed',
+  /** Something a device's trips are derived from changed. Subject is the device. */
+  trackChanged: 'track.changed',
 } as const;
 
 /**
@@ -48,6 +59,9 @@ export const LOCATION_BRIDGE_ROUTING_KEYS = [
   'system.vfs.position.created',
   'system.vfs.position.updated',
   'system.vfs.softlink.created',
+  'system.vfs.softlink.deleted',
+  'system.vfs.track.updated',
+  'system.vfs.device.updated',
 ];
 
 /**
@@ -55,6 +69,9 @@ export const LOCATION_BRIDGE_ROUTING_KEYS = [
  * is bookkeeping — most often the pipeline's own — and announces nothing.
  */
 const LOCATION_INPUT_ATTRS = new Set(['address', 'displayName', 'name', 'locationSource']);
+
+/** The device attrs its trips are derived from. `tripEdits` is not one: `trip-edit` derives them itself. */
+const DEVICE_TRIP_ATTRS = new Set(['kind', 'timezone']);
 
 export type VfsEventInput = {
   type: string;
@@ -83,6 +100,9 @@ const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 /** A location is a location node directly under the locations root. */
 const isLocation = (path: string): boolean => parentOf(path) === LOCATIONS_ROOT;
+
+/** A device is a device node directly under the devices root. */
+const isDevice = (path: string): boolean => parentOf(path) === DEVICES_ROOT;
 
 export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRuleContext, now: number = Date.now()): Promise<Fact[]> {
   const fact = (type: string, subject: string, nodeId: string | undefined, cause: string): Fact => ({
@@ -119,6 +139,22 @@ export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRu
     }
     if (contentWrite) return [fact(LOCATION_EVENTS.pointChanged, event.path, event.nodeId, 'moved')];
     return [];
+  }
+
+  if (event.nodeType === 'track') {
+    const device = parentOf(event.path);
+    const contentWrite = event.type === 'updated' && event.changedAttrs !== undefined && event.changedAttrs.length === 0;
+    return contentWrite && nameOf(event.path) === TRACK_CHILD && isDevice(device) ? [fact(LOCATION_EVENTS.trackChanged, device, undefined, 'points')] : [];
+  }
+
+  if (event.nodeType === 'device') {
+    if (event.type !== 'updated' || !isDevice(event.path) || !event.changedAttrs?.some((name) => DEVICE_TRIP_ATTRS.has(name))) return [];
+    return [fact(LOCATION_EVENTS.trackChanged, event.path, event.nodeId, 'attrs')];
+  }
+
+  if (event.nodeType === 'softlink' && (event.type === 'created' || event.type === 'deleted') && nameOf(parentOf(event.path)) === HOMES_DIR) {
+    const device = parentOf(parentOf(event.path));
+    return isDevice(device) ? [fact(LOCATION_EVENTS.trackChanged, device, undefined, 'homes')] : [];
   }
 
   if (event.nodeType === 'softlink' && event.type === 'created' && nameOf(event.path) === LOCATION_LINK_NAME) {

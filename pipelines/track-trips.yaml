@@ -1,0 +1,20 @@
+name: track-trips
+description: Derive a device's trips and stays again when its track, kind, timezone or homes change
+
+# Subject is the device. The fact comes from archive-bridge: points were appended to its
+# track, its kind or timezone changed, or a home was added or taken off.
+trigger:
+  on: track.changed
+
+steps:
+  trips:
+    command: track-trips $NODE_PATH
+    description: Read the track from where its trips are settled, and write them to the device's .trips
+
+options:
+  # A live tracker appends every few seconds. Waiting ten minutes from the first append of a burst
+  # folds it into one run, and `rerun` gives the appends a run could not have seen one more.
+  coalesce: rerun
+  debounceMs: 600000
+  maxAttempts: 2
+  priority: 5

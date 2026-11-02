@@ -116,3 +116,119 @@ export type GeocodePositionResult =
   }
   | { skipped: 'no position data' }
   | { skipped: 'geocoded already'; geocodedAt: string };
+
+/**
+ * A place a device stayed, derived from its track by `track-trips`. Its position is the mean of
+ * its fixes, which for a long stay lands on the berth or the parking spot.
+ *
+ * - `home`: at one of the device's homes; it ends the trip arriving there.
+ * - `rest`: longer than the device's long rest anywhere else; it ends the trip arriving there too.
+ * - `overnight`: two hours or more across a local midnight, within a trip.
+ */
+export type TripStay = {
+  lat: number;
+  lng: number;
+  /** The first and the last fix of the stay, ISO. */
+  start: string;
+  end: string;
+  kind: 'home' | 'rest' | 'overnight';
+  /** `home`: the home's location. */
+  home?: string;
+};
+
+/** Where a trip or a leg starts or ends: a stay (its index in `stays`), or the fix it was at. */
+export type TripPlace = {
+  lat: number;
+  lng: number;
+  /** ISO. */
+  time: string;
+  stay?: number;
+};
+
+type TripBounds = { north: number; south: number; east: number; west: number };
+
+/** One local day of a trip. */
+export type TripLeg = {
+  /** The day, `YYYY-MM-DD`, in the device's timezone. */
+  day: string;
+  /** Its first and last fix, ISO. */
+  start: string;
+  end: string;
+  from: TripPlace;
+  to: TripPlace;
+  /** The length of the track that day, in metres. */
+  distanceM: number;
+  bounds: TripBounds;
+};
+
+/** A trip derived from a device's track, from one home or long rest to the next. */
+export type Trip = {
+  /**
+   * What names it to `trip-edit`: its first local day, `YYYY-MM-DD`, and for a further trip
+   * starting that day `-2`, `-3` after it.
+   */
+  id: string;
+  /** Its first local day, `YYYY-MM-DD`. */
+  day: string;
+  /** Its first and last fix, ISO. */
+  start: string;
+  end: string;
+  /** It has not ended at a stay, and its last fix is under 48 hours old. */
+  ongoing: boolean;
+  from: TripPlace;
+  to: TripPlace;
+  /** The farthest stay it reached from where it started; the farthest fix when it stayed nowhere. */
+  destination: { lat: number; lng: number; stay?: number };
+  /** The length of its track, and how far from its start it got, in metres. */
+  distanceM: number;
+  maxDistanceM: number;
+  /** Its local days, one leg each. */
+  days: string[];
+  legs: TripLeg[];
+  bounds: TripBounds;
+  /** The first fixes, ISO, of the trips joined to it by a merge, each of which `trip-edit --split` parts again. */
+  joined?: string[];
+  /** Albums whose span overlaps it and whose devices include the device. */
+  albums: string[];
+};
+
+/** Changes made by hand to how a device's track is cut into trips: its attr `tripEdits`. */
+export type TripEdits = {
+  /** The first fixes, ISO, of trips joined to the trip before them. */
+  merge?: string[];
+  /** Local days, `YYYY-MM-DD`, that start a trip at their midnight. */
+  split?: string[];
+};
+
+/** `track-trips`: a device's trips and stays, as kept in `<device>/.trips`. */
+export type DeviceTrips = {
+  device: string;
+  /** When they were derived, ISO. */
+  computedAt: string;
+  /** The track's last fix, ISO. */
+  lastFix?: string;
+  /** From here on the next run reads the track again; before it, trips and stays are kept. ISO. */
+  settledUntil?: string;
+  /**
+   * How many fixes the track had before `settledUntil`. When it has more, fixes were added earlier
+   * in the track, and the next run reads all of it.
+   */
+  settledPoints?: number;
+  /** What they were derived with besides the track: thresholds, timezone, homes and edits. */
+  basis: string;
+  trips: Trip[];
+  stays: TripStay[];
+};
+
+/** `trip-list`: a device's trips and stays as last derived; none when they never were. */
+export type TripList = {
+  device: string;
+  /** When they were derived, ISO; absent when they never were. */
+  computedAt?: string;
+  /** The track's last fix, ISO. */
+  lastFix?: string;
+  /** What the device's kind shows distances in. */
+  units: 'nautical' | 'metric';
+  trips: Trip[];
+  stays: TripStay[];
+};

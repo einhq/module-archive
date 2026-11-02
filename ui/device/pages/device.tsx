@@ -12,6 +12,7 @@ import { DeviceEditModal } from '../components/DeviceEditModal.tsx';
 import { DeviceOwnersTab } from '../components/DeviceOwnersTab.tsx';
 import { DeviceHomesCard } from '../components/DeviceHomesCard.tsx';
 import { DEVICE_KIND_LABELS, isDeviceKind } from '@archive/location/track-profile';
+import { DeviceTripsTab } from '../components/DeviceTripsTab.tsx';
 import { TrackView } from '../../location/components/TrackView.tsx';
 import { TrackerSetup } from '../components/TrackerSetup.tsx';
 import { useDevice } from '../hooks/useDevice.ts';
@@ -21,7 +22,7 @@ import { CurrentPeopleCard, CurrentPeopleLine } from '../../components/CurrentPe
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { UserText } from '../../components/UserText.tsx';
 
-const TABS = ['info', 'timeline', 'media', 'track', 'owners'] as const;
+const TABS = ['info', 'timeline', 'media', 'track', 'trips', 'owners'] as const;
 type DeviceTab = typeof TABS[number];
 
 const isTab = (value: string | null): value is DeviceTab => value !== null && (TABS as readonly string[]).includes(value);
@@ -130,6 +131,7 @@ export default function DeviceDetailPage() {
             <Tabs.Tab value='timeline' leftSection={<TablerIcon name='calendar-event' size={16} />}>Timeline</Tabs.Tab>
             <Tabs.Tab value='media' leftSection={<TablerIcon name='photo' size={16} />}>Media</Tabs.Tab>
             <Tabs.Tab value='track' leftSection={<TablerIcon name='route' size={16} />}>Track</Tabs.Tab>
+            <Tabs.Tab value='trips' leftSection={<TablerIcon name='map-route' size={16} />}>Trips</Tabs.Tab>
             <Tabs.Tab value='owners' leftSection={<TablerIcon name='users' size={16} />}>Owners</Tabs.Tab>
           </Tabs.List>
         }
@@ -278,6 +280,10 @@ export default function DeviceDetailPage() {
               <TrackView device={device.id} kind={device.kind} editable={editable} />
               {editable && <TrackerSetup device={device.id} />}
             </Stack>
+          </Tabs.Panel>
+
+          <Tabs.Panel value='trips'>
+            <DeviceTripsTab device={device.path} editable={editable} />
           </Tabs.Panel>
 
           <Tabs.Panel value='owners'>

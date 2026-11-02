@@ -3,7 +3,7 @@
  * and — as much the point — which are not.
  */
 
-import { ALBUMS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { deriveLocationEvents, LOCATION_EVENTS, type LocationRuleContext, type VfsEventInput } from '../../lib/location/event-rules.ts';
 
@@ -82,4 +82,25 @@ Deno.test('rule: other softlinks are ignored', async () => {
   const context = ctx({ links: { [`${ALBUMS_ROOT}/trip/cover`]: { target: `${ALBUMS_ROOT}/trip/files/a.jpg` }, [LINK]: { target: '/somewhere/else' } } });
   assertEquals(await types(event('softlink', `${ALBUMS_ROOT}/trip/cover`, 'created'), context), []);
   assertEquals(await types(event('softlink', LINK, 'created'), context), []);
+});
+
+const DEVICE = `${DEVICES_ROOT}/the-sailboat`;
+
+Deno.test("rule: points appended to a device's track are announced for the device", async () => {
+  assertEquals(await types(event('track', `${DEVICE}/track`, 'updated', [])), [`${LOCATION_EVENTS.trackChanged} ${DEVICE}`]);
+  // An attr written on the track, or a track that is not a device's, is not.
+  assertEquals(await types(event('track', `${DEVICE}/track`, 'updated', ['description'])), []);
+  assertEquals(await types(event('track', '/home/someone/route', 'updated', [])), []);
+});
+
+Deno.test("rule: a device's kind or timezone changing is announced, other attrs are not", async () => {
+  assertEquals(await types(event('device', DEVICE, 'updated', ['kind'])), [`${LOCATION_EVENTS.trackChanged} ${DEVICE}`]);
+  assertEquals(await types(event('device', DEVICE, 'updated', ['timezone', 'name'])), [`${LOCATION_EVENTS.trackChanged} ${DEVICE}`]);
+  assertEquals(await types(event('device', DEVICE, 'updated', ['name', 'tripEdits'])), []);
+});
+
+Deno.test('rule: a home added to or taken off a device is announced', async () => {
+  assertEquals(await types(event('softlink', `${DEVICE}/homes/the-berth`, 'created')), [`${LOCATION_EVENTS.trackChanged} ${DEVICE}`]);
+  assertEquals(await types(event('softlink', `${DEVICE}/homes/the-berth`, 'deleted')), [`${LOCATION_EVENTS.trackChanged} ${DEVICE}`]);
+  assertEquals(await types(event('softlink', `${ALBUMS_ROOT}/trip/homes/x`, 'created')), []);
 });
