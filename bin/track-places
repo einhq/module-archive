@@ -1,0 +1,242 @@
+#!ts
+/**
+ * track-places — put each of a device's stays at a location, and name the locations it makes.
+ *
+ *   track-places <device> [--rename] [--dry-run]
+ *
+ * `<device>` is a device's slug or path, or its track's path. It reads the stays `track-trips`
+ * keeps in `<device>/.trips` and gives each one not placed yet a `location`:
+ *
+ * - a stay at one of the device's homes, that home;
+ * - else the location whose position is within `SNAP_M` of the stay, the nearest;
+ * - else a new location there, named by `@archive/location/place-name`: the harbour, boatyard,
+ *   island or bay around it, or the town. It has `locationSource: 'track'`, its `placeKind` and its
+ *   `nameSource`, and the next stay within `SNAP_M` of it is at it too.
+ *
+ * A lookup that fails leaves its stay unplaced, and the next run asks again; one that finds no
+ * name marks the stay `unnamed`. `--rename` looks the names of the locations the stays are at up
+ * again and takes a new answer, except where a name was changed by hand (`location-update --name`
+ * removes `nameSource`).
+ *
+ * Every location's position is read once and matched here, since a search by area would return
+ * every photo there as well. `OVERPASS_URL` names the Overpass endpoints and
+ * `NOMINATIM_REVERSE_URL` the reverse geocoder. The `track-trips` pipeline runs it after
+ * `track-trips`.
+ */
+
+import { LOCATIONS_ROOT } from '@archive/paths';
+import { type CmdReturn, collectUnknownFlags, type Command, haversineMeters, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { DeviceTrips, TrackPlaces, TrackPlacesStay, TripStay } from '@archive/location/api';
+import { readDeviceTrips, writeDeviceTrips } from '@archive/location/device-trips';
+import { POSITION_CHILD } from '@archive/location/location-link';
+import { lookupPlaceName, overpassEndpoints, type PlaceLookupOptions, type PlaceName } from '@archive/location/place-name';
+import { trackOf } from '@archive/location/track';
+import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
+import { slugifyName } from '@archive/people/person';
+
+/** A stay this close to a location is at it. Also the radius of a location made for a stay. */
+const SNAP_M = 150;
+
+type Known = { path: string; name: string; attrs: LocationAttrs; lat: number; lng: number };
+
+/** Every location that has a point, with it. */
+const readLocations = async (cmd: Command): Promise<Known[]> => {
+  if (!(await cmd.sys.vfs.exists(cmd.access, LOCATIONS_ROOT))) return [];
+  const entries = (await cmd.sys.vfs.children<LocationAttrs>(cmd.access, LOCATIONS_ROOT, { childLinks: true }))
+    .filter((entry) => entry.node.type === NODE_TYPE_LOCATION);
+  const shapes = new Map(entries.flatMap((entry) => {
+    const shape = entry.children?.find((child) => child.name === POSITION_CHILD);
+    return shape ? [[shape.id, entry] as const] : [];
+  }));
+  const points = await cmd.sys.vfs.getPoints(cmd.access, [...shapes.keys()]);
+  return [...shapes].flatMap(([id, entry]) => {
+    const point = points.get(id);
+    if (!point) return [];
+    const name = typeof entry.node.attrs.name === 'string' && entry.node.attrs.name.trim() ? entry.node.attrs.name : entry.name;
+    return [{ path: `${LOCATIONS_ROOT}/${entry.name}`, name, attrs: entry.node.attrs, lat: point.lat, lng: point.lng }];
+  });
+};
+
+/** The nearest location within `SNAP_M` of a point. */
+const nearest = (known: Known[], lat: number, lng: number): Known | undefined => {
+  let best: Known | undefined;
+  let bestM = SNAP_M;
+  for (const location of known) {
+    const d = haversineMeters(lat, lng, location.lat, location.lng);
+    if (d <= bestM) {
+      best = location;
+      bestM = d;
+    }
+  }
+  return best;
+};
+
+/** `<slug>`, else `<slug>-2`, `<slug>-3`, …: the first free under the locations root and not in `taken`. */
+const freePath = async (cmd: Command, name: string, taken: Set<string>): Promise<string> => {
+  const stem = slugifyName(name) || 'place';
+  for (let n = 1;; n++) {
+    const path = `${LOCATIONS_ROOT}/${n === 1 ? stem : `${stem}-${n}`}`;
+    if (!taken.has(path) && !(await cmd.sys.vfs.exists(cmd.access, path, { follow: false }))) return path;
+  }
+};
+
+/** A location at the point, named `place`, with a circle of `SNAP_M` around it. */
+const createLocation = async (cmd: Command, path: string, place: PlaceName, lat: number, lng: number): Promise<void> => {
+  const attrs: LocationAttrs = { name: place.name, locationSource: 'track', placeKind: place.kind, nameSource: place.source };
+  await cmd.sys.vfs.create(cmd.access, NODE_TYPE_LOCATION, LOCATIONS_ROOT, path.slice(LOCATIONS_ROOT.length + 1), { attrs });
+  await cmd.sys.vfs.ensure(cmd.access, 'position', path, POSITION_CHILD);
+  const handle = await cmd.sys.vfs.open(cmd.access, `${path}/${POSITION_CHILD}`, { mode: 'w' });
+  try {
+    await handle.write(new TextEncoder().encode(JSON.stringify({ lat, lng, radius: SNAP_M })));
+  } finally {
+    await handle.close();
+  }
+};
+
+const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
+/** Whether a stay still needs a place: it has none, or the location it had is gone. */
+const unplaced = (stay: TripStay, known: Map<string, Known>): boolean => !stay.unnamed && (!stay.location || !known.has(stay.location));
+
+const placeStays = async (cmd: Command, target: string, opts: { rename: boolean; dryRun: boolean }): Promise<TrackPlaces> => {
+  const { device } = await trackOf(cmd, target);
+  const result: TrackPlaces = { device, stays: [], renamed: [], failed: 0 };
+  const trips = await readDeviceTrips(cmd, device);
+  if (!trips) return result;
+
+  const known = await readLocations(cmd);
+  const byPath = new Map(known.map((location) => [location.path, location]));
+  const lookup: PlaceLookupOptions = { overpass: overpassEndpoints(cmd.env.OVERPASS_URL), nominatimReverse: cmd.env.NOMINATIM_REVERSE_URL || undefined };
+  const taken = new Set<string>();
+
+  for (const [index, stay] of trips.stays.entries()) {
+    if (!unplaced(stay, byPath)) continue;
+    const entry: TrackPlacesStay = { stay: index, start: stay.start, lat: stay.lat, lng: stay.lng, outcome: 'failed' };
+    result.stays.push(entry);
+
+    const home = stay.kind === 'home' && stay.home ? stay.home : undefined;
+    const near = home ? undefined : nearest(known, stay.lat, stay.lng);
+    if (home || near) {
+      Object.assign(entry, { outcome: home ? 'home' : 'near', location: home ?? near!.path, ...(near ? { name: near.name } : {}) });
+      continue;
+    }
+
+    let place: PlaceName | undefined;
+    try {
+      place = await lookupPlaceName(stay.lat, stay.lng, lookup);
+    } catch (error) {
+      entry.error = message(error);
+      result.failed++;
+      continue;
+    }
+    if (!place) {
+      entry.outcome = 'unnamed';
+      continue;
+    }
+    const path = await freePath(cmd, place.name, taken);
+    taken.add(path);
+    if (!opts.dryRun) await createLocation(cmd, path, place, stay.lat, stay.lng);
+    const made: Known = {
+      path,
+      name: place.name,
+      attrs: { name: place.name, locationSource: 'track', placeKind: place.kind, nameSource: place.source },
+      lat: stay.lat,
+      lng: stay.lng,
+    };
+    known.push(made);
+    byPath.set(path, made);
+    Object.assign(entry, { outcome: 'created', location: path, name: place.name });
+  }
+
+  if (opts.rename) {
+    const at = new Set([...trips.stays.map((stay) => stay.location), ...result.stays.map((entry) => entry.location)]);
+    for (const location of known) {
+      // A location made in this run was named a moment ago.
+      if (!at.has(location.path) || !location.attrs.nameSource || taken.has(location.path)) continue;
+      let place: PlaceName | undefined;
+      try {
+        place = await lookupPlaceName(location.lat, location.lng, lookup);
+      } catch {
+        result.failed++;
+        continue;
+      }
+      if (!place || place.name === location.name) continue;
+      if (!opts.dryRun) {
+        await cmd.sys.vfs.update(cmd.access, location.path, { attrs: { name: place.name, placeKind: place.kind, nameSource: place.source } });
+      }
+      result.renamed.push({ location: location.path, from: location.name, to: place.name });
+    }
+  }
+
+  if (!opts.dryRun && result.stays.some((entry) => entry.outcome !== 'failed')) await recordPlaces(cmd, device, result.stays);
+  return result;
+};
+
+/**
+ * Write where the stays are into `.trips`, read again first: `track-trips` may have written it
+ * since. A stay is matched by its first fix; one derived differently since is left for the next run.
+ */
+const recordPlaces = async (cmd: Command, device: string, placed: TrackPlacesStay[]): Promise<void> => {
+  const current = await readDeviceTrips(cmd, device);
+  if (!current) return;
+  const byStart = new Map(placed.map((entry) => [entry.start, entry]));
+  let changed = false;
+  const stays = current.stays.map((stay) => {
+    const entry = byStart.get(stay.start);
+    if (!entry || entry.outcome === 'failed') return stay;
+    changed = true;
+    const { location: _location, unnamed: _unnamed, ...rest } = stay;
+    return entry.outcome === 'unnamed' ? { ...rest, unnamed: true as const } : { ...rest, location: entry.location! };
+  });
+  if (changed) await writeDeviceTrips(cmd, device, { ...current, stays } satisfies DeviceTrips);
+};
+
+const trackPlaces = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['rename', 'dry-run'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const target = flags._[0] === undefined ? undefined : String(flags._[0]);
+  if (!target) {
+    await cmd.writeError('track-places: usage: track-places <device> [--rename] [--dry-run]\n');
+    return 1;
+  }
+
+  try {
+    const result = await placeStays(cmd, target, { rename: flags.rename, dryRun: flags['dry-run'] });
+    if (cmd.json) {
+      await cmd.writeJSON(result satisfies TrackPlaces);
+      return 0;
+    }
+    for (const entry of result.stays) {
+      const where = entry.name ?? entry.location ?? '';
+      await cmd.writeLn(`${entry.start}  ${entry.outcome.padEnd(7)}  ${entry.outcome === 'failed' ? entry.error : where}`);
+    }
+    for (const renamed of result.renamed) await cmd.writeLn(`renamed  ${renamed.location}: ${renamed.from} → ${renamed.to}`);
+    const count = (outcome: TrackPlacesStay['outcome']) => result.stays.filter((entry) => entry.outcome === outcome).length;
+    await cmd.writeLn(
+      `${result.device}: ${count('home') + count('near')} at known places, ${count('created')} new, ${count('unnamed')} unnamed` +
+        (result.failed ? `, ${result.failed} failed (asked again next run)` : '') +
+        (flags['dry-run'] ? ' (dry run, nothing written)' : ''),
+    );
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`track-places: ${message(error)}\n`);
+    return 1;
+  }
+};
+
+trackPlaces.spec = {
+  name: 'track-places',
+  effect: 'write' as const,
+  description: "Put each of a device's stays at a location, naming the ones it makes after the harbour, island, bay or town there",
+  args: [
+    { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
+  ],
+  flags: [
+    { name: 'rename', type: 'bool' as const, description: "look the names of the stays' locations up again, except names changed by hand" },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'look the places up and show them without making locations or writing .trips' },
+  ],
+  examples: ['track-places the-sailboat', 'track-places /archive/devices/the-sailboat --dry-run'],
+};
+
+export default trackPlaces;

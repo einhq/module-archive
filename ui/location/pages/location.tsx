@@ -234,6 +234,8 @@ export default function LocationDetailPage() {
                             : location.locationSource === 'media-centroid'
                             ? `Derived from ${location.locationPoints ?? 0} geotagged photo${location.locationPoints === 1 ? '' : 's'}` +
                               (location.locationSpread !== undefined ? ` spread over ${location.locationSpread} m` : '')
+                            : location.locationSource === 'track'
+                            ? 'Where a device stayed, from its track'
                             : 'Geocoded from the address'}
                         </Text>
                       )}

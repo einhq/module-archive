@@ -17,12 +17,19 @@ const span = (trip: Trip): string => trip.days.length === 1 ? showDay(trip.day) 
 
 const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
-/** What a place a trip or leg starts or ends at was: one of the stays, or a fix along the way. */
-function placeLabel(list: TripList, place: Pick<TripPlace, 'stay'>): string {
+/**
+ * What a place a trip or leg starts or ends at was: one of the stays, by the name of its location
+ * and linked to it once it has one, or a fix along the way.
+ */
+function PlaceLabel({ list, place }: { list: TripList; place: Pick<TripPlace, 'stay'> }) {
   const stay = place.stay === undefined ? undefined : list.stays[place.stay];
-  if (!stay) return 'on the way';
-  if (stay.kind === 'home') return stay.home ? `home (${nameOf(stay.home)})` : 'home';
-  return stay.kind === 'rest' ? 'a long stay' : 'an overnight stay';
+  if (!stay) return <>on the way</>;
+  if (stay.location && stay.name) {
+    const link = <Anchor component={Link} to={`/locations/${nameOf(stay.location)}`} inherit>{stay.name}</Anchor>;
+    return stay.kind === 'home' ? <>home ({link})</> : link;
+  }
+  if (stay.kind === 'home') return <>{stay.home ? `home (${nameOf(stay.home)})` : 'home'}</>;
+  return <>{stay.kind === 'rest' ? 'a long stay' : 'an overnight stay'}</>;
 }
 
 /** The day, of the trip's legs, a trip joined to it by a merge began on. */
@@ -64,8 +71,12 @@ function TripCard(
           out at most
         </Text>
         <Text size='sm'>
-          From {placeLabel(list, trip.from)} to {placeLabel(list, trip.to)}
-          {destination && destination.kind !== 'home' && `, farthest at ${placeLabel(list, trip.destination)}`}
+          From <PlaceLabel list={list} place={trip.from} /> to <PlaceLabel list={list} place={trip.to} />
+          {destination && destination.kind !== 'home' && (
+            <>
+              , farthest at <PlaceLabel list={list} place={trip.destination} />
+            </>
+          )}
         </Text>
         {trip.albums.length > 0 && (
           <Group gap='xs'>
@@ -96,7 +107,9 @@ function TripCard(
                         <Table.Td>{showDay(leg.day)}</Table.Td>
                         <Table.Td c='dimmed'>{timeFormat.format(new Date(leg.start))}–{timeFormat.format(new Date(leg.end))}</Table.Td>
                         <Table.Td>{formatDistance(leg.distanceM, list.units)}</Table.Td>
-                        <Table.Td c='dimmed'>to {placeLabel(list, leg.to)}</Table.Td>
+                        <Table.Td c='dimmed'>
+                          to <PlaceLabel list={list} place={leg.to} />
+                        </Table.Td>
                         <Table.Td>
                           {editable && index > 0 && (
                             <Button size='compact-xs' variant='subtle' disabled={busy} onClick={() => onEdit(leg.day, 'split')}>Start a trip here</Button>

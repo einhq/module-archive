@@ -15,7 +15,7 @@ export type LocationEntry = {
   displayName?: string;
   geocodeStatus?: 'applied' | 'review' | 'none';
   /** Where the coordinates came from, once there are any. */
-  locationSource?: 'media-centroid' | 'nominatim' | 'manual';
+  locationSource?: 'media-centroid' | 'track' | 'nominatim' | 'manual';
   /** `media-centroid` only: how many geotagged files the position rests on. */
   locationPoints?: number;
   /** How many candidates are waiting for someone to pick one. */
@@ -134,6 +134,15 @@ export type TripStay = {
   kind: 'home' | 'rest' | 'overnight';
   /** `home`: the home's location. */
   home?: string;
+  /**
+   * The location it was at, from `track-places`: its home, the location within 150 m of it, or
+   * one made for it and named after the harbour, island, bay or town there.
+   */
+  location?: string;
+  /** `trip-list`: that location's name as it is now. */
+  name?: string;
+  /** `track-places` found no name for where it is (out at sea), and does not look again. */
+  unnamed?: true;
 };
 
 /** Where a trip or a leg starts or ends: a stay (its index in `stays`), or the fix it was at. */
@@ -148,7 +157,7 @@ export type TripPlace = {
 type TripBounds = { north: number; south: number; east: number; west: number };
 
 /** One local day of a trip. */
-export type TripLeg = {
+type TripLeg = {
   /** The day, `YYYY-MM-DD`, in the device's timezone. */
   day: string;
   /** Its first and last fix, ISO. */
@@ -218,6 +227,36 @@ export type DeviceTrips = {
   basis: string;
   trips: Trip[];
   stays: TripStay[];
+};
+
+/** How `track-places` placed one stay. */
+export type TrackPlacesStay = {
+  /** Its index in the device's stays, and its first fix, ISO. */
+  stay: number;
+  start: string;
+  lat: number;
+  lng: number;
+  /**
+   * - `home`: at its home's location.
+   * - `near`: at a location within 150 m of it.
+   * - `created`: at a location made for it, named by a lookup.
+   * - `unnamed`: the lookups found no name for where it is.
+   * - `failed`: a lookup failed; the next run asks again.
+   */
+  outcome: 'home' | 'near' | 'created' | 'unnamed' | 'failed';
+  location?: string;
+  name?: string;
+  /** `failed`: why. */
+  error?: string;
+};
+
+/** `track-places`: the stays it placed, and the names it looked up again under `--rename`. */
+export type TrackPlaces = {
+  device: string;
+  stays: TrackPlacesStay[];
+  renamed: { location: string; from: string; to: string }[];
+  /** How many lookups failed; their stays are asked about again on the next run. */
+  failed: number;
 };
 
 /** `trip-list`: a device's trips and stays as last derived; none when they never were. */

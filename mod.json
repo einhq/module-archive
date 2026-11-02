@@ -48,6 +48,7 @@
     "@archive/location/geocode": "./lib/location/geocode.ts",
     "@archive/location/event-rules": "./lib/location/event-rules.ts",
     "@archive/location/location-link": "./lib/location/location-link.ts",
+    "@archive/location/place-name": "./lib/location/place-name.ts",
     "@archive/location/track": "./lib/location/track.ts",
     "@archive/location/track-profile": "./lib/location/track-profile.ts",
     "@archive/location/trips": "./lib/location/trips.ts",
@@ -474,6 +475,18 @@
       "kind": "option",
       "default": "https://nominatim.openstreetmap.org/search",
       "description": "Where geocoding asks Nominatim for an address, as geocode-location and location-region do. Point it at your own server to avoid the public one's rate limit."
+    },
+    {
+      "key": "NOMINATIM_REVERSE_URL",
+      "kind": "option",
+      "default": "https://nominatim.openstreetmap.org/reverse",
+      "description": "Where Nominatim is asked for the address at a point: a picture's street address (geocode-position), and the town around a stay that has no harbour, island or bay nearby (track-places)."
+    },
+    {
+      "key": "OVERPASS_URL",
+      "kind": "option",
+      "default": "https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter",
+      "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a device stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
     }
   ],
   "nodeTypes": [

@@ -5,14 +5,32 @@
  *   trip-list <device>
  *
  * `<device>` is a device's slug or path, or its track's path. Nothing is derived here: a device
- * whose trips never were has none.
+ * whose trips never were has none. A stay `track-places` put at a location carries that
+ * location's name as it is now.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { TripList } from '@archive/location/api';
+import type { TripList, TripStay } from '@archive/location/api';
+import { basename } from '@std/path';
 import { readDeviceTrips } from '@archive/location/device-trips';
 import { trackOf } from '@archive/location/track';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
+
+/** The stays, each at a location with that location's name as it is now. */
+const withNames = async (cmd: Command, stays: TripStay[]): Promise<TripStay[]> => {
+  const names = new Map<string, Promise<string | undefined>>();
+  const nameOf = (path: string) =>
+    cmd.sys.vfs.get(cmd.access, path).then(
+      (node) => typeof node.attrs.name === 'string' && node.attrs.name.trim() ? node.attrs.name : basename(path),
+      () => undefined,
+    );
+  return await Promise.all(stays.map(async (stay) => {
+    if (!stay.location) return stay;
+    if (!names.has(stay.location)) names.set(stay.location, nameOf(stay.location));
+    const name = await names.get(stay.location);
+    return name ? { ...stay, name } : stay;
+  }));
+};
 
 const tripList = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -29,7 +47,7 @@ const tripList = async (cmd: Command): CmdReturn => {
     const { units } = trackProfile((await cmd.sys.vfs.get(cmd.access, device)).attrs.kind);
     const kept = await readDeviceTrips(cmd, device);
     const list: TripList = kept
-      ? { device, computedAt: kept.computedAt, ...(kept.lastFix ? { lastFix: kept.lastFix } : {}), units, trips: kept.trips, stays: kept.stays }
+      ? { device, computedAt: kept.computedAt, ...(kept.lastFix ? { lastFix: kept.lastFix } : {}), units, trips: kept.trips, stays: await withNames(cmd, kept.stays) }
       : { device, units, trips: [], stays: [] };
     if (cmd.json) {
       await cmd.writeJSON(list satisfies TripList);
@@ -38,10 +56,11 @@ const tripList = async (cmd: Command): CmdReturn => {
     } else {
       for (const trip of list.trips) {
         const days = trip.days.length === 1 ? '1 day' : `${trip.days.length} days`;
+        const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay]?.name;
         await cmd.writeLn(
           `${trip.id.padEnd(13)} ${days.padEnd(8)} ${formatDistance(trip.distanceM, units).padStart(9)}${trip.ongoing ? '  ongoing' : ''}${
-            trip.albums.length ? `  ${trip.albums.join(', ')}` : ''
-          }`,
+            destination ? `  to ${destination}` : ''
+          }${trip.albums.length ? `  ${trip.albums.join(', ')}` : ''}`,
         );
       }
     }

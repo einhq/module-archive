@@ -27,7 +27,7 @@ export type LocationDetail = {
   geocodedAt?: string;
   geocodeStatus?: 'applied' | 'review' | 'none';
   /** Where the coordinates came from, once there are any. */
-  locationSource?: 'media-centroid' | 'nominatim' | 'manual';
+  locationSource?: 'media-centroid' | 'track' | 'nominatim' | 'manual';
   /** `media-centroid` only: how many geotagged files the position rests on. */
   locationPoints?: number;
   /** `media-centroid` only: how far those files spread, in meters. */

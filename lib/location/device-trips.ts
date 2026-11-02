@@ -6,10 +6,11 @@
  * `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more fixes before that point than it had.
+ * A stay derived again from the same first fix keeps the location `track-places` gave it.
  */
 
 import type { Command } from '@ein/client';
-import type { DeviceTrips, Trip, TripEdits, TripPlace } from '@archive/location/api';
+import type { DeviceTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api';
 import { readDeviceHomes } from '@archive/device/homes';
 import { trackOf } from '@archive/location/track';
 import { trackProfile } from '@archive/location/track-profile';
@@ -19,7 +20,7 @@ import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 
 /** The device's child holding its trips. A dotfile, so nothing indexes it. */
-export const TRIPS_FILE = '.trips';
+const TRIPS_FILE = '.trips';
 /** The device attr holding the edits made by hand. */
 export const TRIP_EDITS_ATTR = 'tripEdits';
 
@@ -58,7 +59,7 @@ export const readDeviceTrips = async (cmd: Command, device: string): Promise<Dev
 };
 
 /** Write the device's trips to its `.trips`, shared as the device is. */
-const writeDeviceTrips = async (cmd: Command, device: string, trips: DeviceTrips): Promise<void> => {
+export const writeDeviceTrips = async (cmd: Command, device: string, trips: DeviceTrips): Promise<void> => {
   const { mode, gid, acl } = (await cmd.sys.vfs.get(cmd.access, device)).props;
   await cmd.sys.vfs.ensure(cmd.access, 'file', device, TRIPS_FILE, { props: { mode, gid, ...(acl?.length ? { acl } : {}) }, attrs: { mimetype: 'application/json' } });
   const path = `${device}/${TRIPS_FILE}`;
@@ -116,6 +117,13 @@ const candidateAlbums = async (cmd: Command, device: string, trip: Omit<Trip, 'a
 /** A place with its stay index moved by `offset`. */
 const shiftPlace = <T extends Pick<TripPlace, 'stay'>>(place: T, offset: number): T => place.stay === undefined ? place : { ...place, stay: place.stay + offset };
 
+/** The stay with the place an earlier stay from the same fix was given, if any. */
+const withPlace = (stay: TripStay, placed: Map<string, TripStay>): TripStay => {
+  const earlier = placed.get(stay.start);
+  if (!earlier) return stay;
+  return { ...stay, ...(earlier.location ? { location: earlier.location } : {}), ...(earlier.unnamed ? { unnamed: true } : {}) };
+};
+
 /**
  * Derive the device's trips again (see the file comment), write them unless `dryRun`, and return
  * them. `target` is the device, by slug or path, or its track.
@@ -149,7 +157,8 @@ export const deriveDeviceTrips = async (cmd: Command, target: string, opts: { fu
   const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [trackId])).get(trackId);
   if (!summary?.firstTs || !summary.lastTs) return empty;
 
-  const before = opts.full ? undefined : await readDeviceTrips(cmd, device);
+  const prior = await readDeviceTrips(cmd, device);
+  const before = opts.full ? undefined : prior;
   const settled = before?.basis === basis && before.settledUntil ? Date.parse(before.settledUntil) : undefined;
   const handle = await cmd.sys.vfs.open(cmd.access, trackPath, { mode: 'r' }) as unknown as TrackReader;
   let previous: DeviceTrips | undefined;
@@ -183,6 +192,9 @@ export const deriveDeviceTrips = async (cmd: Command, target: string, opts: { fu
   const keptStays = previous ? previous.stays.filter((stay) => Date.parse(stay.start) < from) : [];
   const offset = keptStays.length;
 
+  // Where `track-places` placed a stay holds for the stay derived again from the same first fix.
+  const placed = new Map((prior?.stays ?? []).filter((stay) => stay.location || stay.unnamed).map((stay) => [stay.start, stay]));
+
   const devicesOf = new Map<string, Promise<string[]>>();
   const derived: Trip[] = [];
   for (const trip of seg.trips) {
@@ -205,7 +217,7 @@ export const deriveDeviceTrips = async (cmd: Command, target: string, opts: { fu
     ...(settledUntil !== undefined ? { settledUntil: new Date(settledUntil).toISOString(), settledPoints } : {}),
     basis,
     trips: numberTrips([...keptTrips, ...derived]),
-    stays: [...keptStays, ...seg.stays],
+    stays: [...keptStays, ...seg.stays.map((stay) => withPlace(stay, placed))],
   };
   if (!opts.dryRun) await writeDeviceTrips(cmd, device, trips);
   return trips;

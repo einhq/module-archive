@@ -80,8 +80,9 @@ const locationUpdate = async (cmd: Command): CmdReturn => {
   }
 
   try {
-    // A null deletes the attr.
-    await cmd.sys.vfs.update(cmd.access, path, { attrs: patch });
+    // A null deletes the attr. A name given here is a person's, which `track-places --rename`
+    // leaves alone once it has no `nameSource`.
+    await cmd.sys.vfs.update(cmd.access, path, { attrs: { ...patch, ...('name' in patch ? { nameSource: null } : {}) } });
   } catch (err) {
     await cmd.writeError(`location-update: ${path}: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
@@ -103,7 +104,7 @@ locationUpdate.spec = {
     { name: 'target', type: 'path' as const, description: 'VFS path to location node' },
   ],
   flags: [
-    { name: 'name', type: 'string' as const, description: 'what the location is called' },
+    { name: 'name', type: 'string' as const, description: 'what the location is called; a name given here is never looked up again (track-places --rename)' },
     { name: 'address', type: 'string' as const, description: 'the written address; a change is geocoded again by location-upkeep' },
     { name: 'description', type: 'string' as const, description: 'free text about the location' },
     { name: 'city', type: 'string' as const, description: 'city' },

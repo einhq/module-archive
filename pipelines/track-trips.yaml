@@ -1,5 +1,5 @@
 name: track-trips
-description: Derive a device's trips and stays again when its track, kind, timezone or homes change
+description: Derive a device's trips and stays again when its track, kind, timezone or homes change, and put the stays at named locations
 
 # Subject is the device. The fact comes from archive-bridge: points were appended to its
 # track, its kind or timezone changed, or a home was added or taken off.
@@ -10,6 +10,11 @@ steps:
   trips:
     command: track-trips $NODE_PATH
     description: Read the track from where its trips are settled, and write them to the device's .trips
+  places:
+    # Network lookups for the stays not placed yet; one that fails is asked again on the next run.
+    command: track-places $NODE_PATH
+    description: Put each new stay at the location within 150 m, or at one named after the harbour, island, bay or town there
+    dependsOn: [trips]
 
 options:
   # A live tracker appends every few seconds. Waiting ten minutes from the first append of a burst

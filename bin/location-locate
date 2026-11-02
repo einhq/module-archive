@@ -22,7 +22,9 @@
  * `--refresh` is the form the `location-upkeep` pipeline runs whenever a location or
  * its photos change. It re-derives instead of skipping a placed location, but
  * writes only what moved, so a location's own writes announcing it again cost one
- * run that changes nothing. Coordinates set by hand are never touched.
+ * run that changes nothing. Coordinates set by hand are never touched, and a
+ * location `track-places` made where a device stayed keeps that point until its
+ * photos give it a centroid.
  */
 import { LOCATIONS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
@@ -346,9 +348,9 @@ const locateOne = async (
     // ----- fall back to the written address -----
     const centroidReason = centroid.reason;
     // A photo unlinked from a location does not make where the rest of them were
-    // wrong, and the address is the weaker source: keep the centroid.
-    if (opts.refresh && alreadyPlaced && attrs.locationSource === 'media-centroid') {
-      return { path, status: 'skipped', source: 'media-centroid', reason: `kept (${centroidReason})` };
+    // wrong, and the address is the weaker source: keep the centroid, and a stay's mean.
+    if (opts.refresh && alreadyPlaced && (attrs.locationSource === 'media-centroid' || attrs.locationSource === 'track')) {
+      return { path, status: 'skipped', source: attrs.locationSource, reason: `kept (${centroidReason})` };
     }
     if (!opts.geocode) {
       return { path, status: centroid.status === 'empty' ? 'empty' : 'poor', reason: centroidReason, used: centroid.used };

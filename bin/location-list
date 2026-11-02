@@ -32,7 +32,8 @@ type LocationListAttrs = {
 const geocodeStatusOf = (value: unknown): LocationEntry['geocodeStatus'] => value === 'applied' || value === 'review' || value === 'none' ? value : undefined;
 
 /** Where a location's position came from; anything else is not a source this module writes. */
-const locationSourceOf = (value: unknown): LocationEntry['locationSource'] => value === 'media-centroid' || value === 'nominatim' || value === 'manual' ? value : undefined;
+const locationSourceOf = (value: unknown): LocationEntry['locationSource'] =>
+  value === 'media-centroid' || value === 'track' || value === 'nominatim' || value === 'manual' ? value : undefined;
 
 const string = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
 

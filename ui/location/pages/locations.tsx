@@ -113,6 +113,8 @@ export default function LocationsPage() {
                               ? 'set by hand'
                               : location.locationSource === 'media-centroid'
                               ? `from ${location.locationPoints ?? 0} photo${location.locationPoints === 1 ? '' : 's'}`
+                              : location.locationSource === 'track'
+                              ? 'from a track'
                               : 'from address'}
                           </Badge>
                         )
