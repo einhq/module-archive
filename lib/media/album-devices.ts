@@ -146,14 +146,19 @@ export const addAlbumDevice = async (cmd: Command, albumPath: string, device: st
 };
 
 /**
- * Take `device` off the album's list: its link in `devices/` goes, and when it took some of the
- * album's media it is named as removed, which keeps it off as more of its media joins. True when
- * the list changed.
+ * Take `device` off the album's list: its link in `devices/` goes (and `devices/` with the last
+ * one), and when it took some of the album's media it is named as removed, which keeps it off as
+ * more of its media joins. True when the list changed.
  */
 export const removeAlbumDevice = async (cmd: Command, albumPath: string, device: string): Promise<boolean> => {
   const album = await albumNode(cmd, albumPath);
   const link = (await addedDevices(cmd, albumPath)).get(device);
-  if (link) await cmd.sys.vfs.unlink(cmd.access, `${albumPath}/${ALBUM_DEVICES_DIR}/${link}`, `${albumPath}/${ALBUM_DEVICES_DIR}`, { readlink: true });
+  if (link) {
+    const dir = `${albumPath}/${ALBUM_DEVICES_DIR}`;
+    await cmd.sys.vfs.unlink(cmd.access, `${dir}/${link}`, dir, { readlink: true });
+    // The last device added by hand takes its directory with it.
+    if ((await cmd.sys.vfs.childCount(cmd.access, dir, { all: true })) === 0) await cmd.sys.vfs.unlink(cmd.access, dir, albumPath);
+  }
 
   const removed = removedOf(album);
   if (removed.includes(device) || !(await mediaDevices(cmd, albumPath)).has(device)) return link !== undefined;

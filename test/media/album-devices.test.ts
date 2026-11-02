@@ -75,9 +75,9 @@ Deno.test({
       assertEquals((await list()).removed, []);
     });
 
-    await t.step('a device added by hand and taken off is gone', async () => {
+    await t.step('a device added by hand and taken off is gone, and the last one takes devices/ with it', async () => {
       await cmd.shouldSucceed(`album-device-rm ${album} tracker`);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${album}/devices/tracker`, { follow: false }), false);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${album}/devices`, { follow: false }), false);
       assertEquals((await listed()).map((device) => device.path), [camera, phone]);
       assertEquals((await list()).removed, []);
     });
