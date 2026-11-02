@@ -471,6 +471,20 @@ export function MediaSidebar(
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
   useEffect(() => onLayer(editing || sharing || asking !== null || menuOpen), [editing, sharing, asking, menuOpen]);
+  // Escape closes the edit menu, and not the lightbox beneath. Mantine's menu answers Escape only
+  // with the focus inside it, and a click on its button leaves the focus on the button, so the key
+  // is taken here, at the window, first.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setMenuOpen(false);
+    };
+    globalThis.addEventListener('keydown', onKeyDown, true);
+    return () => globalThis.removeEventListener('keydown', onKeyDown, true);
+  }, [menuOpen]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
   // a folder above it, changes.
   const changed = sharingChanged.value;
