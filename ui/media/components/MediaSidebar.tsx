@@ -434,7 +434,7 @@ export function MediaSidebar(
     stackBusy?: boolean;
     onStackPreview: (member: StackMemberRef) => void;
     onStackAction: (action: 'front' | 'separate' | 'allow', member: StackMemberRef) => Promise<void>;
-    /** A dialog of the sidebar's opened or closed over the lightbox, which leaves it the keys while open. */
+    /** A dialog or the edit menu of the sidebar's opened or closed over the lightbox, which leaves it the keys while open. */
     onLayer: (open: boolean) => void;
   },
 ) {
@@ -470,7 +470,7 @@ export function MediaSidebar(
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || sharing || asking !== null), [editing, sharing, asking]);
+  useEffect(() => onLayer(editing || sharing || asking !== null || menuOpen), [editing, sharing, asking, menuOpen]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
   // a folder above it, changes.
   const changed = sharingChanged.value;

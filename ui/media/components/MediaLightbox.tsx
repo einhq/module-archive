@@ -633,7 +633,7 @@ export function MediaLightbox() {
     // The unknown-person review dialog is layered above this modal and owns
     // Escape while it is open. Let its capture handler close only that layer.
     if (reviewPersonId) return;
-    // So does a dialog the sidebar opened, the edit or the sharing dialog.
+    // So does a dialog the sidebar opened, the edit or the sharing dialog, or its edit menu.
     if (sidebarLayer) return;
     if (addingFace) {
       setAddingFace(false);
