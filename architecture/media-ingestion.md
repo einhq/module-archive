@@ -371,7 +371,7 @@ waits for rather than by a shared DAG:
    name hit below 0.75 on the `name` scale — the query begins a longer word or is inside the name
    — counts at a lower weight. A hit its provider
    marks `confident` counts as a name does, whatever its channel: `search-media` marks a transcript
-   hit at or above the text space's confident similarity (0.68 for bge-m3, `embedQuery`), the recording meant
+   hit at or above the text space's confident similarity (0.70 for bge-m3, `embedQuery`), the recording meant
    rather than one where something like the query was said. What is said and what is written are also matched by
    their words: the query as a phrase in the `text` a transcript chunk's or an extracted text's
    vector node carries (`contains`, served by archive's `spoken_text` trigram index), from three

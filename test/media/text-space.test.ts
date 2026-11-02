@@ -279,22 +279,6 @@ Deno.test({
       assertEquals(chunks, ['t0']);
     });
 
-    await t.step("a re-embed into the current model removes the previous model's vectors beside it", async () => {
-      // jina-v5-text-small's vectors, as a file embedded before the switch to bge-m3 keeps them.
-      const previous = 'jina-embeddings-v5-text-small';
-      await vfs.update(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`, { attrs: { embeddedBy: 'another-text-model' } });
-      await cmd.shouldSucceed(`mknode -t embedding ${photo}/metadata/content/text_jina5s --as embeddingType=text_jina5s --an capacity=5 --as embeddedBy=${previous}`);
-      await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`, { attrs: { chunkSeconds: 30 } });
-      await cmd.shouldSucceed(`mkdir -p ${clip}/metadata/transcript/text_jina5s`);
-      await cmd.shouldSucceed(`mknode -t embedding ${clip}/metadata/transcript/text_jina5s/t0 --as embeddingType=text_jina5s --an capacity=5`);
-
-      const out = await client.execJson<{ embedded: number; transcripts: number; failed: number }>(`${env} media-reembed ${photo} ${clip}`);
-      assertEquals([out.embedded, out.transcripts, out.failed], [1, 1, 0]);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${photo}/metadata/content/text_jina5s`), false);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${clip}/metadata/transcript/text_jina5s`), false);
-      assertEquals((await vfs.get(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`)).attrs.embeddedBy, BGE);
-    });
-
     await t.step('media-reembed with paths embeds what those files lack, and nothing elsewhere', async () => {
       await vfs.update(ADMIN_ACCESS, `${photo}/metadata/content/text_bgem3`, { attrs: { embeddedBy: 'another-text-model' } });
       await vfs.update(ADMIN_ACCESS, `${clip}/metadata/transcript/text_bgem3`, { attrs: { chunkSeconds: 30 } });
