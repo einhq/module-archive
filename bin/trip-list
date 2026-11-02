@@ -62,7 +62,9 @@ const tripList = async (cmd: Command): CmdReturn => {
 
   try {
     const { device } = await trackOf(cmd, target);
-    const { units } = trackProfile((await cmd.sys.vfs.get(cmd.access, device)).attrs.kind);
+    const attrs = (await cmd.sys.vfs.get(cmd.access, device)).attrs;
+    const { units } = trackProfile(attrs.kind);
+    const zone = typeof attrs.timezone === 'string' && attrs.timezone ? { timezone: attrs.timezone } : {};
     const kept = await readDeviceTrips(cmd, device);
     const list: TripList = kept
       ? {
@@ -70,10 +72,11 @@ const tripList = async (cmd: Command): CmdReturn => {
         computedAt: kept.computedAt,
         ...(kept.lastFix ? { lastFix: kept.lastFix } : {}),
         units,
+        ...zone,
         trips: await withAlbums(cmd, kept),
         stays: await withNames(cmd, kept.stays),
       }
-      : { device, units, trips: [], stays: [] };
+      : { device, units, ...zone, trips: [], stays: [] };
     if (cmd.json) {
       await cmd.writeJSON(list satisfies TripList);
     } else if (!kept) {

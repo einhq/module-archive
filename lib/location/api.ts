@@ -270,6 +270,8 @@ export type TripList = {
   lastFix?: string;
   /** What the device's kind shows distances in. */
   units: 'nautical' | 'metric';
+  /** The IANA timezone the legs' days are cut in; UTC when absent. */
+  timezone?: string;
   trips: Trip[];
   stays: TripStay[];
 };

@@ -8,7 +8,6 @@ import { albumRoute } from '../../media/lib/album-path.ts';
 import { useDeviceTrips } from '../hooks/useDeviceTrips.ts';
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' });
 
 /** A local day, `YYYY-MM-DD`, as a date; the day is already the device's, so it is read as UTC. */
 const showDay = (day: string): string => dayFormat.format(new Date(`${day}T00:00:00Z`));
@@ -23,7 +22,7 @@ const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
  */
 function PlaceLabel({ list, place }: { list: TripList; place: Pick<TripPlace, 'stay'> }) {
   const stay = place.stay === undefined ? undefined : list.stays[place.stay];
-  if (!stay) return <>on the way</>;
+  if (!stay) return <>a point on the way</>;
   if (stay.location && stay.name) {
     const link = <Anchor component={Link} to={`/locations/${nameOf(stay.location)}`} inherit>{stay.name}</Anchor>;
     return stay.kind === 'home' ? <>home ({link})</> : link;
@@ -90,6 +89,8 @@ function TripCard(
   },
 ) {
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
+  // The legs' days are the device's, so their times are told on its clock too.
+  const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: list.timezone ?? 'UTC' });
   return (
     <Card radius='md' withBorder>
       <Stack gap='xs'>
