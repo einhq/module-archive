@@ -100,13 +100,21 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
   return template.replace('{s}', 'a').replace('{z}', String(z)).replace('{x}', String(x)).replace('{y}', String(y)).replace('{r}', '');
 }
 
+/** Whether a point lies in a tile set's `bounds`, `[[south, west], [north, east]]`; anywhere when it has none. */
+function inBounds(bounds: unknown, lat: number, lng: number): boolean {
+  if (!Array.isArray(bounds) || bounds.length !== 2) return true;
+  const [[south, west], [north, east]] = bounds as [number, number][];
+  return lat >= south && lat <= north && lng >= west && lng <= east;
+}
+
 /**
- * The tile a tile set draws at a point and zoom, as Leaflet would: none outside its `minZoom` and
- * `maxZoom`, and past its `maxNativeZoom` the coarser tile it stretches.
+ * The tile a tile set draws at a point and zoom, as Leaflet would: none outside its `minZoom`,
+ * `maxZoom` and `bounds`, and past its `maxNativeZoom` the coarser tile it stretches.
  */
 function previewTile(tiles: MapTiles, lat: number, lng: number, z: number): string | undefined {
-  const { minZoom, maxZoom, maxNativeZoom } = tiles.options ?? {};
+  const { minZoom, maxZoom, maxNativeZoom, bounds } = tiles.options ?? {};
   if ((typeof minZoom === 'number' && z < minZoom) || (typeof maxZoom === 'number' && z > maxZoom)) return undefined;
+  if (!inBounds(bounds, lat, lng)) return undefined;
   const at = typeof maxNativeZoom === 'number' ? Math.min(z, maxNativeZoom) : z;
   const { x, y } = tileAt(lat, lng, at);
   return tileUrl(tiles.url, at, x, y);
