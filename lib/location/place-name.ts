@@ -2,13 +2,15 @@
  * The name of the place a device stayed at (`@archive/location/place-name`).
  *
  * A boat stays at harbours, islands and bays, which a reverse geocoder names only by the town
- * around them. So OpenStreetMap's Overpass API is asked first for named features within
- * `PLACE_RADIUS_M`: a marina or a seamark harbour, then a boatyard ("varv"), then an island or
- * islet, then a bay, the nearest within a rank. Only when it has none is Nominatim asked for the
- * town, village or area around the point.
+ * around them. So the named features OpenStreetMap's Overpass API has within `PLACE_RADIUS_M`
+ * come first: a marina or a seamark harbour, then a boatyard ("varv"), then an island or islet,
+ * then a bay, the nearest within a rank (`pickPlace`). Only when there is none is Nominatim asked
+ * for the town, village or area around the point (`nominatimTown`).
  *
- * Overpass is paced `OVERPASS_MIN_INTERVAL_MS` apart, and a busy answer is retried on the next
- * endpoint of the list: the public instances are mirrors of each other.
+ * Overpass is asked for a whole `PlaceTile` at a time, with a margin of `PLACE_RADIUS_M` around
+ * it, so one answer names every point in the tile. It is paced `OVERPASS_MIN_INTERVAL_MS` apart,
+ * and a busy answer is retried on the next endpoint of the list: the public instances are mirrors
+ * of each other.
  */
 
 import { haversineMeters } from '@ein/client';
@@ -23,7 +25,7 @@ export const OVERPASS_URLS = ['https://overpass-api.de/api/interpreter', 'https:
 /** The public instances ask for no more than about one request a second. */
 const OVERPASS_MIN_INTERVAL_MS = 1100;
 const OVERPASS_MAX_ATTEMPTS = 4;
-/** The query asks the server to give up after 25 s; a mirror that has not answered well after that is down. */
+/** The query asks the server to give up after 30 s; a mirror that has not answered well after that is down. */
 const OVERPASS_REQUEST_TIMEOUT_MS = 45_000;
 /** What an overloaded public instance answers. */
 const OVERPASS_BUSY = new Set([429, 502, 503, 504]);
@@ -82,10 +84,41 @@ const rankOf = (tags: Record<string, string>): { rank: number; kind: PlaceKind }
   return undefined;
 };
 
-/** The Overpass query for the named features around a point. */
-const overpassPlaceQuery = (lat: number, lng: number): string =>
-  `[out:json][timeout:25];nwr(around:${PLACE_RADIUS_M},${lat},${lng})` +
-  '[~"^(leisure|natural|place|seamark:type)$"~"^(marina|bay|island|islet|harbour)$"][name];out center tags;';
+/** A tile's size in degrees: about 5.5 km north to south, and as far east to west at 60° N. */
+const TILE_LAT = 0.05;
+const TILE_LNG = 0.1;
+
+/** A tile of the map Overpass is asked for at once. `key` names it: its south-west corner. */
+type PlaceTile = { key: string; south: number; west: number; north: number; east: number };
+
+/** The tile a point is in. */
+export const tileOf = (lat: number, lng: number): PlaceTile => {
+  const i = Math.floor(lat / TILE_LAT);
+  const j = Math.floor(lng / TILE_LNG);
+  const south = i * TILE_LAT;
+  const west = j * TILE_LNG;
+  return { key: `${south.toFixed(2)}_${west.toFixed(1)}`, south, west, north: south + TILE_LAT, east: west + TILE_LNG };
+};
+
+/** The tags `pickPlace` reads; the rest of an answer is dropped before it is kept. */
+const KEPT_TAGS = ['name', 'leisure', 'place', 'natural', 'seamark:type'];
+
+/** The Overpass query for the named features in a tile and `PLACE_RADIUS_M` around it. */
+const overpassTileQuery = (tile: PlaceTile): string => {
+  const marginLat = PLACE_RADIUS_M / 111_320;
+  const marginLng = marginLat / Math.max(Math.cos(((tile.south + tile.north) / 2) * Math.PI / 180), 0.01);
+  const bbox = [tile.south - marginLat, tile.west - marginLng, tile.north + marginLat, tile.east + marginLng].map((value) => value.toFixed(5)).join(',');
+  return `[out:json][timeout:30];nwr(${bbox})` +
+    '[~"^(leisure|natural|place|seamark:type)$"~"^(marina|bay|island|islet|harbour)$"][name];out center tags;';
+};
+
+/** The named features in a tile and around it, with only the tags `pickPlace` reads. Throws when Overpass fails. */
+export const fetchOverpassTile = async (endpoints: string[], tile: PlaceTile): Promise<OverpassElement[]> =>
+  (await overpassQuery(endpoints, overpassTileQuery(tile))).map((element) => ({
+    ...(element.lat !== undefined && element.lon !== undefined ? { lat: element.lat, lon: element.lon } : {}),
+    ...(element.center ? { center: element.center } : {}),
+    tags: Object.fromEntries(Object.entries(element.tags ?? {}).filter(([key]) => KEPT_TAGS.includes(key))),
+  }));
 
 /** The best of the features Overpass answered for a point: by rank, then by distance. */
 export const pickPlace = (lat: number, lng: number, elements: OverpassElement[]): PlaceName | undefined => {
@@ -173,29 +206,17 @@ const overpassQuery = async (endpoints: string[], query: string): Promise<Overpa
   }
 };
 
-export type PlaceLookupOptions = {
-  /** Overpass endpoints, tried in turn. */
-  overpass: string[];
-  /** Nominatim's reverse endpoint. */
-  nominatimReverse?: string;
-};
-
 /**
- * The name of the place at a point: the best named feature around it, or else the town. Undefined
- * when neither has a name for it. Throws when a lookup it needed failed, so that a failure is not
- * taken for a place without a name.
+ * The town, village or area Nominatim gives for a point; undefined where it has none, as out at
+ * sea. Throws when the request fails.
  */
-export const lookupPlaceName = async (lat: number, lng: number, opts: PlaceLookupOptions): Promise<PlaceName | undefined> => {
-  const place = pickPlace(lat, lng, await overpassQuery(opts.overpass, overpassPlaceQuery(lat, lng)));
-  if (place) return place;
-
-  const url = new URL(opts.nominatimReverse || NOMINATIM_REVERSE_URL);
+export const nominatimTown = async (lat: number, lng: number, reverseUrl?: string): Promise<string | undefined> => {
+  const url = new URL(reverseUrl || NOMINATIM_REVERSE_URL);
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lon', String(lng));
   url.searchParams.set('format', 'jsonv2');
   url.searchParams.set('zoom', '12');
   const answer = await (await nominatimFetch(url)).json();
-  // Out at sea Nominatim answers 200 with an error and no address: a place with no name.
-  const town = answer && typeof answer === 'object' && !('error' in answer) ? townOf(answer) : undefined;
-  return town ? { name: town, kind: 'town', source: 'nominatim' } : undefined;
+  // Where it has no name for the place Nominatim answers 200 with an error and no address.
+  return answer && typeof answer === 'object' && !('error' in answer) ? townOf(answer) : undefined;
 };

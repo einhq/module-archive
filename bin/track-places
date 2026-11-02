@@ -20,7 +20,9 @@
  * removes `nameSource`).
  *
  * Every location's position is read once and matched here, since a search by area would return
- * every photo there as well. `OVERPASS_URL` names the Overpass endpoints and
+ * every photo there as well. A name comes from the services' answers kept in
+ * `@archive/location/place-cache` whenever they hold one, so a place is asked of them once;
+ * `--rename` asks them again. `OVERPASS_URL` names the Overpass endpoints and
  * `NOMINATIM_REVERSE_URL` the reverse geocoder. The `track-trips` pipeline runs it after
  * `track-trips`.
  */
@@ -30,7 +32,8 @@ import { type CmdReturn, collectUnknownFlags, type Command, haversineMeters, par
 import type { DeviceTrips, TrackPlaces, TrackPlacesStay, TripStay } from '@archive/location/api';
 import { readDeviceTrips, writeDeviceTrips } from '@archive/location/device-trips';
 import { POSITION_CHILD } from '@archive/location/location-link';
-import { lookupPlaceName, overpassEndpoints, type PlaceLookupOptions, type PlaceName } from '@archive/location/place-name';
+import { PlaceNamer } from '@archive/location/place-cache';
+import { overpassEndpoints, type PlaceName } from '@archive/location/place-name';
 import { trackOf } from '@archive/location/track';
 import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
 import { slugifyName } from '@archive/people/person';
@@ -101,13 +104,14 @@ const unplaced = (stay: TripStay, known: Map<string, Known>): boolean => !stay.u
 
 const placeStays = async (cmd: Command, target: string, opts: { rename: boolean; dryRun: boolean }): Promise<TrackPlaces> => {
   const { device } = await trackOf(cmd, target);
-  const result: TrackPlaces = { device, stays: [], renamed: [], failed: 0 };
+  const result: TrackPlaces = { device, stays: [], renamed: [], failed: 0, requests: 0 };
   const trips = await readDeviceTrips(cmd, device);
   if (!trips) return result;
 
   const known = await readLocations(cmd);
   const byPath = new Map(known.map((location) => [location.path, location]));
-  const lookup: PlaceLookupOptions = { overpass: overpassEndpoints(cmd.env.OVERPASS_URL), nominatimReverse: cmd.env.NOMINATIM_REVERSE_URL || undefined };
+  const lookup = { overpass: overpassEndpoints(cmd.env.OVERPASS_URL), nominatimReverse: cmd.env.NOMINATIM_REVERSE_URL || undefined, write: !opts.dryRun };
+  const namer = new PlaceNamer(cmd, lookup);
   const taken = new Set<string>();
   /** Why a lookup failed in this run; the stays after it are left for the next. */
   let down: string | undefined;
@@ -127,7 +131,7 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
     let place: PlaceName | undefined;
     try {
       if (down) throw new Error(`not asked: ${down}`);
-      place = await lookupPlaceName(stay.lat, stay.lng, lookup);
+      place = await namer.name(stay.lat, stay.lng);
     } catch (error) {
       entry.error = message(error);
       down ??= entry.error;
@@ -154,16 +158,18 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
   }
 
   if (opts.rename && !down) {
+    const renamer = new PlaceNamer(cmd, { ...lookup, refresh: true });
     const at = new Set([...trips.stays.map((stay) => stay.location), ...result.stays.map((entry) => entry.location)]);
     for (const location of known) {
       // A location made in this run was named a moment ago.
       if (!at.has(location.path) || !location.attrs.nameSource || taken.has(location.path)) continue;
       let place: PlaceName | undefined;
       try {
-        place = await lookupPlaceName(location.lat, location.lng, lookup);
+        place = await renamer.name(location.lat, location.lng);
       } catch {
+        // Down or overloaded: the rest keep their names until the next --rename.
         result.failed++;
-        continue;
+        break;
       }
       if (!place || place.name === location.name) continue;
       if (!opts.dryRun) {
@@ -171,8 +177,10 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
       }
       result.renamed.push({ location: location.path, from: location.name, to: place.name });
     }
+    result.requests += renamer.requests;
   }
 
+  result.requests += namer.requests;
   if (!opts.dryRun && result.stays.some((entry) => entry.outcome !== 'failed')) await recordPlaces(cmd, device, result.stays);
   return result;
 };
@@ -221,6 +229,7 @@ const trackPlaces = async (cmd: Command): CmdReturn => {
     await cmd.writeLn(
       `${result.device}: ${count('home') + count('near')} at known places, ${count('created')} new, ${count('unnamed')} unnamed` +
         (result.failed ? `, ${result.failed} failed (asked again next run)` : '') +
+        `; ${result.requests} request${result.requests === 1 ? '' : 's'} to Overpass and Nominatim` +
         (flags['dry-run'] ? ' (dry run, nothing written)' : ''),
     );
     return 0;
@@ -238,7 +247,7 @@ trackPlaces.spec = {
     { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
   ],
   flags: [
-    { name: 'rename', type: 'bool' as const, description: "look the names of the stays' locations up again, except names changed by hand" },
+    { name: 'rename', type: 'bool' as const, description: "ask Overpass and Nominatim again for the names of the stays' locations, except names changed by hand" },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'look the places up and show them without making locations or writing .trips' },
   ],
   examples: ['track-places the-sailboat', 'track-places /archive/devices/the-sailboat --dry-run'],

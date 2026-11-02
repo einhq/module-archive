@@ -3,7 +3,9 @@
  * stay near a location is at it, one near a named harbour gets a location named after it, one with
  * none gets the town; a failed lookup is asked again on the next run, a place with no name is not,
  * a placed stay is never looked up again, the album of a trip gets the locations of its stays, and
- * `--rename` leaves a name given by hand alone. The track and the places are invented.
+ * `--rename` leaves a name given by hand alone. What the services answered is kept: Overpass is
+ * asked once per tile, and another device at the same places asks nobody. The track and the
+ * places are invented.
  */
 
 import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
@@ -16,6 +18,9 @@ const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
 
 const DEVICE = `${DEVICES_ROOT}/the-sailboat`;
+const DINGHY = `${DEVICES_ROOT}/the-dinghy`;
+/** Where the first stay is; away from a tile's edge, so the stays 10 km apart are in tiles of their own. */
+const BASE_LAT = 59.02;
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -23,12 +28,12 @@ const T0 = Date.UTC(2025, 5, 1);
 
 type Point = { lat: number; lng: number; ts: string };
 
-const fix = (d: number, h: number, northM: number): Point => ({ lat: 59 + northM * M2DEG, lng: 18, ts: new Date(T0 + d * DAY + h * HOUR).toISOString() });
+const fix = (d: number, h: number, northM: number): Point => ({ lat: BASE_LAT + northM * M2DEG, lng: 18, ts: new Date(T0 + d * DAY + h * HOUR).toISOString() });
 const rest = (d: number, days: number, northM: number): Point[] => Array.from({ length: days * 4 }, (_, i) => fix(d + Math.floor(i / 4), (i % 4) * 6, northM));
 const out = (d: number, fromM: number, toM: number): Point[] => Array.from({ length: 4 }, (_, i) => fix(d, 9 + i, fromM + ((toM - fromM) * (i + 1)) / 4));
 
-/** How far north of 59° a query asks about, to the kilometre. */
-const kmNorth = (lat: number): number => Math.round((lat - 59) / M2DEG / 1000);
+/** How far north of the first stay a point is, to the kilometre. */
+const kmNorth = (lat: number): number => Math.round((lat - BASE_LAT) / M2DEG / 1000);
 
 Deno.test({
   name: 'track-places',
@@ -39,25 +44,25 @@ Deno.test({
   client = await testCtx.server.createShellClient();
   const cmd = testCommands(client);
 
-  // What the stubs answer, by how far north the stay is.
+  // The named features the Overpass stub knows, by the first stay; the Nominatim stub answers by
+  // how far north a point is.
   let harbourAt0 = 'Exempelhamnen';
   let overpassDown = false;
   let townAt20 = 'Exempelby';
+  const features = () => [
+    { type: 'node', lat: BASE_LAT, lon: 18, tags: { leisure: 'marina', name: 'Gästhamn' } },
+    { type: 'way', center: { lat: BASE_LAT + 200 * M2DEG, lon: 18 }, tags: { leisure: 'marina', name: harbourAt0, operator: 'Exempelklubben' } },
+    { type: 'way', center: { lat: BASE_LAT + 50 * M2DEG, lon: 18 }, tags: { place: 'island', name: 'Exempelön' } },
+  ];
+  /** The requests the stubs had: `overpass <south edge of the box>`, `nominatim <km north>`. */
   const asked: string[] = [];
   const overpass = Deno.serve({ port: 0, onListen: () => {} }, async (req) => {
     const query = new URLSearchParams(await req.text()).get('data') ?? '';
-    const [, lat, lng] = query.match(/around:\d+,([\d.]+),([\d.]+)/) ?? [];
-    const km = kmNorth(Number(lat));
-    asked.push(`overpass ${km}`);
+    const [south, west, north, east] = (query.match(/nwr\(([-\d.,]+)\)/)?.[1] ?? '').split(',').map(Number);
+    asked.push(`overpass ${south.toFixed(2)}`);
     if (overpassDown) return new Response('busy', { status: 504 });
-    const elements = km === 0
-      ? [
-        { type: 'node', lat: Number(lat), lon: Number(lng), tags: { leisure: 'marina', name: 'Gästhamn' } },
-        { type: 'way', center: { lat: Number(lat) + 200 * M2DEG, lon: Number(lng) }, tags: { leisure: 'marina', name: harbourAt0 } },
-        { type: 'way', center: { lat: Number(lat) + 50 * M2DEG, lon: Number(lng) }, tags: { place: 'island', name: 'Exempelön' } },
-      ]
-      : [];
-    return Response.json({ elements });
+    const inside = (at: { lat: number; lon: number }) => at.lat >= south && at.lat <= north && at.lon >= west && at.lon <= east;
+    return Response.json({ elements: features().filter((element) => inside(element.center ?? { lat: element.lat!, lon: element.lon! })) });
   });
   const nominatim = Deno.serve({ port: 0, onListen: () => {} }, (req) => {
     const km = kmNorth(Number(new URL(req.url).searchParams.get('lat')));
@@ -77,7 +82,7 @@ Deno.test({
     await cmd.shouldSucceed('track-create the-sailboat');
     // A jetty 80 m from where the second stay is.
     await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/the-jetty --as name='The jetty'`);
-    await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/the-jetty/position --lat=${59 + 10_080 * M2DEG} --lng=18`);
+    await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/the-jetty/position --lat=${BASE_LAT + 10_080 * M2DEG} --lng=18`);
     await append([...rest(0, 4, 0), ...out(4, 0, 10_000), ...rest(5, 4, 10_000), ...out(9, 10_000, 20_000), ...rest(10, 4, 20_000)]);
     await cmd.shouldSucceed('track-trips the-sailboat');
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
@@ -99,8 +104,12 @@ Deno.test({
         ['near', 'The jetty'],
         ['created', 'Exempelby'],
       ]);
-      // The jetty is matched without asking anyone.
-      assertEquals(asked, ['overpass 0', 'overpass 20', 'nominatim 20']);
+      // The jetty is matched without asking anyone; the dry run kept nothing.
+      assertEquals(asked, ['overpass 59.00', 'overpass 59.15', 'nominatim 20']);
+      assertEquals(placed.requests, 3);
+      // Only the tags a name is chosen by are kept.
+      const tile = await client.execJson<{ elements: { tags: Record<string, string> }[] }>('cat /archive/sources/places/59.00_18.0.json');
+      assertEquals(tile.elements.map((element) => 'operator' in element.tags), [false, false, false]);
 
       const harbour = `${LOCATIONS_ROOT}/exempelhamnen`;
       const attrs = await client.execJson<Record<string, unknown>>(`attrs ${harbour}`);
@@ -146,9 +155,23 @@ Deno.test({
       asked.length = 0;
       const again = await places();
       assertEquals(again.stays.map((stay) => [stay.stay, stay.outcome]), [[4, 'unnamed']]);
-      assertEquals(asked, ['overpass 30', 'nominatim 30']);
+      assertEquals(asked, ['overpass 59.25', 'nominatim 30']);
       assertEquals((await list()).stays[4].unnamed, true);
       assertEquals((await places()).stays, []);
+    });
+
+    await t.step('another device at the same places asks nobody', async () => {
+      // 200 m from where the sailboat found no name, and 300 m from its town: no location within
+      // 150 m of either, but the answers there are kept.
+      await cmd.shouldSucceed(`mknode -p -t device ${DINGHY} --as name=the-dinghy --as kind=boat`);
+      await cmd.shouldSucceed('track-create the-dinghy');
+      await cmd.shouldSucceed(`track-append ${DINGHY} --json '${JSON.stringify([...rest(30, 4, 30_200), ...out(34, 30_200, 19_700), ...rest(35, 4, 19_700)])}'`);
+      await cmd.shouldSucceed('track-trips the-dinghy');
+      asked.length = 0;
+      const placed = await client.execJson<TrackPlaces>(`${env} track-places the-dinghy`);
+      assertEquals(placed.stays.map((stay) => [stay.outcome, stay.name]), [['unnamed', undefined], ['created', 'Exempelby']]);
+      assertEquals(asked, []);
+      assertEquals(placed.requests, 0);
     });
 
     await t.step('--rename takes a new name, except one given by hand', async () => {
@@ -156,7 +179,10 @@ Deno.test({
       assertEquals((await client.execJson<Record<string, unknown>>(`attrs ${LOCATIONS_ROOT}/exempelby`)).nameSource, undefined);
       harbourAt0 = 'Nyhamnen';
       townAt20 = 'Annanby';
+      asked.length = 0;
       const renamed = await places('--rename');
+      // Only the harbour's name came from a service and was not changed by hand.
+      assertEquals(asked, ['overpass 59.00']);
       assertEquals(renamed.renamed, [{ location: `${LOCATIONS_ROOT}/exempelhamnen`, from: 'Exempelhamnen', to: 'Nyhamnen' }]);
       const names = (await list()).stays.map((stay) => stay.name);
       assertEquals(names, ['Nyhamnen', 'The jetty', 'Our cove', 'Nyhamnen', undefined]);
@@ -167,6 +193,14 @@ Deno.test({
       const placed = await places();
       assertEquals(placed.stays.map((stay) => [stay.stay, stay.outcome, stay.name]), [[1, 'created', 'Mellanby']]);
       assertEquals((await list()).stays[1].location, `${LOCATIONS_ROOT}/mellanby`);
+    });
+
+    await t.step('a location made for a stay is made again from the kept answers once it is gone', async () => {
+      await cmd.shouldSucceed(`rm -r ${LOCATIONS_ROOT}/exempelhamnen`);
+      asked.length = 0;
+      const placed = await places();
+      assertEquals(placed.stays.map((stay) => [stay.stay, stay.outcome, stay.name]), [[0, 'created', 'Nyhamnen'], [3, 'near', 'Nyhamnen']]);
+      assertEquals(asked, []);
     });
   } finally {
     await overpass.shutdown();

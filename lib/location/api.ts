@@ -259,6 +259,8 @@ export type TrackPlaces = {
   renamed: { location: string; from: string; to: string }[];
   /** How many lookups failed; their stays are asked about again on the next run. */
   failed: number;
+  /** How many requests went to Overpass and Nominatim; every other name came from their kept answers. */
+  requests: number;
 };
 
 /** `trip-list`: a device's trips and stays as last derived; none when they never were. */

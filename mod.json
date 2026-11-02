@@ -48,6 +48,7 @@
     "@archive/location/geocode": "./lib/location/geocode.ts",
     "@archive/location/event-rules": "./lib/location/event-rules.ts",
     "@archive/location/location-link": "./lib/location/location-link.ts",
+    "@archive/location/place-cache": "./lib/location/place-cache.ts",
     "@archive/location/place-name": "./lib/location/place-name.ts",
     "@archive/location/track": "./lib/location/track.ts",
     "@archive/location/track-profile": "./lib/location/track-profile.ts",
