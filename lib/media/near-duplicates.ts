@@ -10,7 +10,9 @@
  * taken:
  *
  * - two capture times read from the same kind of clock (both the camera's, or both GPS) a second
- *   or more apart are two shots;
+ *   or more apart are two shots. Two copies of one picture can carry one reading of the camera's
+ *   clock that two guesses of its time zone made into two instants, so the times are a second
+ *   apart only when both the instants and the readings are;
  * - two frames of one size from one camera in the same second are two shots when their sub-second
  *   times differ, and one capture when both have the same one (an edit keeps it: a filter, a
  *   mirror, black and white). With no sub-second time to tell, they are taken for one picture only
@@ -73,6 +75,8 @@ export type NearFacts = {
   height?: number;
   takenAtUtc?: string;
   takenAtSource?: string;
+  /** The capture time as the clock read it, without its offset (`takenAt`'s wall clock). */
+  clock?: string;
   /** The camera, by its device node's path, when it is known. */
   device?: string;
   /** The capture time's fraction of a second (EXIF `SubSecTimeOriginal`), when the file has one. */
@@ -119,17 +123,36 @@ const seconds = (iso: string | undefined): number | undefined => {
   return Number.isNaN(ms) ? undefined : ms / 1000;
 };
 
+/** A clock reading to the second, as seconds on a scale of its own; undefined for anything coarser. */
+const readingSeconds = (clock: string | undefined): number | undefined =>
+  clock !== undefined && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?$/.test(clock) ? seconds(`${clock}Z`) : undefined;
+
+/**
+ * How many seconds apart `a` and `b` were taken, both timed by a clock of one kind: the lesser of
+ * the gap between their instants and the gap between their readings. Undefined when they were not
+ * timed so, or nothing says.
+ */
+const clockGap = (a: NearFacts, b: NearFacts): number | undefined => {
+  if (!CLOCKS.has(a.takenAtSource ?? '') || a.takenAtSource !== b.takenAtSource) return undefined;
+  const gaps: number[] = [];
+  const ta = seconds(a.takenAtUtc);
+  const tb = seconds(b.takenAtUtc);
+  if (ta !== undefined && tb !== undefined) gaps.push(Math.abs(ta - tb));
+  const ca = readingSeconds(a.clock);
+  const cb = readingSeconds(b.clock);
+  if (ca !== undefined && cb !== undefined) gaps.push(Math.abs(ca - cb));
+  return gaps.length > 0 ? Math.min(...gaps) : undefined;
+};
+
 /**
  * Whether `a` and `b` were taken at two moments: both timed by a clock of one kind, a second or
  * more apart, or — one size, one camera, the same second — with sub-second times that differ.
  * False when nothing says so.
  */
 const twoMoments = (a: NearFacts, b: NearFacts): boolean => {
-  if (!CLOCKS.has(a.takenAtSource ?? '') || a.takenAtSource !== b.takenAtSource) return false;
-  const ta = seconds(a.takenAtUtc);
-  const tb = seconds(b.takenAtUtc);
-  if (ta === undefined || tb === undefined) return false;
-  if (Math.abs(ta - tb) >= NEAR.momentSeconds) return true;
+  const gap = clockGap(a, b);
+  if (gap === undefined) return false;
+  if (gap >= NEAR.momentSeconds) return true;
   return sameShot(a, b) && a.subSecond !== undefined && b.subSecond !== undefined && a.subSecond !== b.subSecond;
 };
 
@@ -140,10 +163,8 @@ const twoMoments = (a: NearFacts, b: NearFacts): boolean => {
 export const sameShot = (a: NearFacts, b: NearFacts): boolean => {
   if (a.width === undefined || a.width !== b.width || a.height !== b.height) return false;
   if (a.device !== b.device) return false;
-  if (!CLOCKS.has(a.takenAtSource ?? '') || a.takenAtSource !== b.takenAtSource) return false;
-  const ta = seconds(a.takenAtUtc);
-  const tb = seconds(b.takenAtUtc);
-  return ta !== undefined && tb !== undefined && Math.abs(ta - tb) < NEAR.momentSeconds;
+  const gap = clockGap(a, b);
+  return gap !== undefined && gap < NEAR.momentSeconds;
 };
 
 /**

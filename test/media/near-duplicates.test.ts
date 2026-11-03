@@ -53,6 +53,16 @@ Deno.test('capture times a second or more apart from one kind of clock are two s
   assertEquals(nearPictures(photo('a'), photo('b', { takenAtSource: 'name', takenAtUtc: '2021-07-04T00:00:00Z', width: 1600, height: 1200 }), 0.9), true);
 });
 
+Deno.test('one reading of the camera clock made into two instants by two time zones is one moment', () => {
+  // The library's copy knew the trip's zone (+01:00); the staged one was placed in the archive's (+02:00).
+  const library = photo('a', { takenAtUtc: '2014-04-25T11:48:38Z', clock: '2014-04-25T12:48:38' });
+  const staged = photo('b', { takenAtUtc: '2014-04-25T10:48:38Z', clock: '2014-04-25T12:48:38', width: 2000, height: 1500 });
+  assertEquals(nearPictures(library, staged, 0.99), true);
+  assertEquals(nearPictures(library, { ...staged, width: 4000, height: 3000 }, 0.9), false, 'one size: still perhaps a burst');
+  assertEquals(nearPictures(library, { ...staged, clock: '2014-04-25T12:48:40' }, 0.99), false, 'readings apart too: two shots');
+  assertEquals(nearPictures(library, { ...staged, clock: '2014-04-25' }, 0.99), false, 'a reading to the day says nothing');
+});
+
 Deno.test('frames of one size from one camera in one second are two shots unless one capture or as alike as a re-save', () => {
   const frame = photo('b');
   assertEquals(nearPictures(photo('a'), frame, 0.9), false, 'no sub-second time: only a re-save passes');

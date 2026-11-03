@@ -52,7 +52,7 @@ import { chromaprintsOf, nearCandidates, nearFilesOf, ownPrints, type PrintKind,
 import { nodesAt } from '@archive/staging/nodes-at';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
 import type { AttrRef, Command, NodeProps } from '@ein/client';
-import { accessOfUser, EVENTS_NODE_PATH, NOT_DERIVED } from '@ein/client';
+import { accessOfUser, EVENTS_NODE_PATH, NOT_DERIVED, wallClockOf } from '@ein/client';
 import { HOMES_PATH, isTrashPath } from '@ein/paths';
 import { ulid } from '@std/ulid';
 
@@ -773,6 +773,7 @@ const factsOf = (id: string, attrs: Record<string, unknown>): NearFacts => {
     ...size,
     ...(typeof attrs.takenAtUtc === 'string' ? { takenAtUtc: attrs.takenAtUtc } : {}),
     ...(typeof attrs.takenAtSource === 'string' ? { takenAtSource: attrs.takenAtSource } : {}),
+    ...(typeof attrs.takenAt === 'string' ? { clock: wallClockOf(attrs.takenAt) } : {}),
     ...(typeof attrs.devicePath === 'string' ? { device: attrs.devicePath } : {}),
     ...(typeof attrs.duration === 'number' ? { duration: attrs.duration } : {}),
   };
