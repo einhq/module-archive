@@ -1,8 +1,8 @@
-import { Alert, Anchor, Container, Grid, Stack, Tabs, Text } from '@mantine/core';
+import { Alert, Anchor, Button, Container, Grid, Group, Stack, Tabs, Text } from '@mantine/core';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
 import { TimelineFeed } from '../../components/TimelineFeed.tsx';
-import { EntityDetailHeader, PageLoader, TablerIcon } from '@ein/ui/components';
+import { Dialog, EntityDetailHeader, PageLoader, TablerIcon } from '@ein/ui/components';
 import { forgetSubjectFacets, useSubjectFacets } from '../../hooks/useSubjectFacets.ts';
 import { useSubjectTimeline } from '../../hooks/useSubjectTimeline.ts';
 import { useAccessIds } from '@ein/ui/hooks';
@@ -13,6 +13,7 @@ import { DeviceInfo } from '../components/DeviceInfo.tsx';
 import { DeviceTripsTab } from '../components/DeviceTripsTab.tsx';
 import { TrackView } from '../../location/components/TrackView.tsx';
 import { useHasTrack } from '../../location/hooks/useTracks.ts';
+import { useTrackUpload } from '../../location/hooks/useTrackUpload.tsx';
 import { TrackerSetup } from '../components/TrackerSetup.tsx';
 import { useDevice } from '../hooks/useDevice.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
@@ -55,6 +56,10 @@ export default function DeviceDetailPage() {
 
   const [editing, setEditing] = useState(false);
   const [addingEvent, setAddingEvent] = useState(false);
+  const [tracking, setTracking] = useState(false);
+  // Raised by an upload, so the Track tab reads the track again.
+  const [trackRead, setTrackRead] = useState(0);
+  const upload = useTrackUpload(id ?? '', () => setTrackRead((n) => n + 1));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +89,8 @@ export default function DeviceDetailPage() {
   }
 
   const editable = canWrite(device.ownership, access);
+  // Recording a track is for a device that is said to travel, by whoever may change it.
+  const records = editable && Boolean(device.kind);
 
   const runRelink = async () => {
     try {
@@ -156,7 +163,11 @@ export default function DeviceDetailPage() {
           ? {
             share: device.path,
             edit: () => setEditing(true),
-            items: [{ label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) }],
+            items: [
+              ...(records ? [{ label: upload.sending ? 'Uploading GPX…' : 'Upload GPX', icon: 'upload', button: true, disabled: upload.sending, onClick: upload.open }] : []),
+              { label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) },
+              ...(records ? [{ label: 'Live tracking', icon: 'broadcast', onClick: () => setTracking(true) }] : []),
+            ],
             trash: { path: device.path, name: device.name, leaveTo: '/devices' },
           }
           : undefined}
@@ -232,7 +243,17 @@ export default function DeviceDetailPage() {
 
       {/* The track's map takes the window below the header, edge to edge, outside the body's padding. */}
       <Tabs.Panel value='track'>
-        <TrackView device={device.id} kind={device.kind} editable={editable} more={editable && <TrackerSetup device={device.id} />} />
+        <TrackView
+          key={trackRead}
+          device={device.id}
+          kind={device.kind}
+          emptyActions={records && (
+            <Group gap='xs' justify='center'>
+              <Button variant='light' leftSection={<TablerIcon name='upload' size={16} />} loading={upload.sending} onClick={upload.open}>Upload GPX</Button>
+              <Button variant='default' leftSection={<TablerIcon name='broadcast' size={16} />} onClick={() => setTracking(true)}>Live tracking</Button>
+            </Group>
+          )}
+        />
       </Tabs.Panel>
 
       <DeviceEditModal
@@ -245,6 +266,20 @@ export default function DeviceDetailPage() {
           setMessage(note ?? null);
         }}
       />
+      {records && upload.input}
+      {records && (
+        <Dialog
+          opened={tracking}
+          onClose={() => setTracking(false)}
+          title='Live tracking from a phone'
+          subtitle={device.name}
+          icon='broadcast'
+          pattern='device'
+          size='lg'
+        >
+          <TrackerSetup device={device.id} />
+        </Dialog>
+      )}
       <EventModal
         ownerPath={device.path}
         ownerName={device.name}

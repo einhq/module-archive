@@ -1,7 +1,5 @@
-import { Button, FileButton } from '@mantine/core';
-import { useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import { TEMP_PATH } from '@ein/paths';
-import { TablerIcon } from '@ein/ui/components';
 import { fileUrl, shq, uuidv4 } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
 import type { TrackStageResult } from '@archive/location/api';
@@ -27,10 +25,12 @@ const putInTemp = async (file: File): Promise<string> => {
 /**
  * GPX files into one device's track. The device is the one whose page this is, so the files go
  * straight into its track rather than through staging, which would have to guess it from the file.
- * `device` is the device's slug or path.
+ * `device` is the device's slug or path. `open` raises a file picker that offers GPX files only;
+ * `input`, the picker, has to be rendered somewhere on the page, and `sending` is true while files go.
  */
-export function TrackUpload({ device, onImported }: { device: string; onImported?: () => void }) {
+export function useTrackUpload(device: string, onImported?: () => void): { open: () => void; sending: boolean; input: ReactNode } {
   const [sending, setSending] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
 
   const upload = async (files: File[]) => {
     if (files.length === 0) return;
@@ -54,13 +54,21 @@ export function TrackUpload({ device, onImported }: { device: string; onImported
     }
   };
 
-  return (
-    <FileButton onChange={upload} accept='.gpx,.GPX,application/gpx+xml' multiple>
-      {(props) => (
-        <Button {...props} variant='default' size='sm' leftSection={<TablerIcon name='upload' size={16} />} loading={sending}>
-          Upload GPX
-        </Button>
-      )}
-    </FileButton>
+  const input = (
+    <input
+      ref={picker}
+      type='file'
+      accept='.gpx,.GPX,application/gpx+xml'
+      multiple
+      hidden
+      onChange={(event) => {
+        const files = [...(event.currentTarget.files ?? [])];
+        // Emptied, so the same file chosen again still changes it.
+        event.currentTarget.value = '';
+        void upload(files);
+      }}
+    />
   );
+
+  return { open: () => picker.current?.click(), sending, input };
 }
