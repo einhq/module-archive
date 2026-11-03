@@ -12,8 +12,9 @@
  * - two capture times read from the same kind of clock (both the camera's, or both GPS) a second
  *   or more apart are two shots;
  * - two frames of one size from one camera in the same second are two shots when their sub-second
- *   times differ, and are taken for one picture only when they are as alike as a re-save
- *   (`NEAR.burstScore`) when there is no sub-second time to tell.
+ *   times differ, and one capture when both have the same one (an edit keeps it: a filter, a
+ *   mirror, black and white). With no sub-second time to tell, they are taken for one picture only
+ *   when they are as alike as a re-save (`NEAR.burstScore`).
  *
  * A video is alike another when most of its keyframes (`NEAR.keyframeShare`) each have a keyframe
  * of the other at `NEAR.video` or above, and the two last as long, give or take
@@ -145,10 +146,17 @@ export const sameShot = (a: NearFacts, b: NearFacts): boolean => {
   return ta !== undefined && tb !== undefined && Math.abs(ta - tb) < NEAR.momentSeconds;
 };
 
+/**
+ * Whether `a` and `b`, two frames of one shot (`sameShot`), carry the same sub-second time: one
+ * capture, as no burst takes two frames in one hundredth of a second. A time of only zeros says
+ * nothing, as some cameras write it for every frame.
+ */
+const oneCapture = (a: NearFacts, b: NearFacts): boolean => a.subSecond !== undefined && a.subSecond === b.subSecond && !/^0+$/.test(a.subSecond);
+
 /** Whether two pictures, their fingerprints `score` alike, are one picture. */
 export const nearPictures = (a: NearFacts, b: NearFacts, score: number): boolean => {
   if (score < NEAR.image || twoMoments(a, b)) return false;
-  return !sameShot(a, b) || score >= NEAR.burstScore;
+  return !sameShot(a, b) || oneCapture(a, b) || score >= NEAR.burstScore;
 };
 
 /** Whether two recordings last as long, as `NEAR` allows. True when either length is unknown. */

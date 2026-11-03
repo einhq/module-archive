@@ -53,12 +53,15 @@ Deno.test('capture times a second or more apart from one kind of clock are two s
   assertEquals(nearPictures(photo('a'), photo('b', { takenAtSource: 'name', takenAtUtc: '2021-07-04T00:00:00Z', width: 1600, height: 1200 }), 0.9), true);
 });
 
-Deno.test('frames of one size from one camera in one second are two shots unless as alike as a re-save', () => {
+Deno.test('frames of one size from one camera in one second are two shots unless one capture or as alike as a re-save', () => {
   const frame = photo('b');
   assertEquals(nearPictures(photo('a'), frame, 0.9), false, 'no sub-second time: only a re-save passes');
   assertEquals(nearPictures(photo('a'), frame, 0.97), true);
   assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '48' }), 0.99), false, 'different sub-seconds: a burst');
   assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '21' }), 0.97), true, 'a re-save keeps the sub-second');
+  assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '21' }), 0.86), true, 'so does an edit, black and white or mirrored');
+  assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '21' }), 0.74), false, 'one capture still needs the likeness floor');
+  assertEquals(nearPictures(photo('a', { subSecond: '00' }), photo('b', { subSecond: '00' }), 0.9), false, 'zeros may be written for every frame');
   assertEquals(nearPictures(photo('a'), photo('b', { device: '/devices/camera-b' }), 0.9), true, 'two cameras: no burst');
 });
 
