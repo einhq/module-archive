@@ -1097,10 +1097,14 @@ Deno.test('ocr: a picture read by another engine is read again', async () => {
   assertEquals(facts.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', ocrBy: 'PP-OCRv6_small', expected: PPOCR }]]);
 });
 
-Deno.test('ocr: a picture read by the current engine or by Tesseract, never read, undecodable, or with EMS silent asks nothing', async () => {
+Deno.test('ocr: a picture marked read with no engine named is read again', async () => {
+  const facts = ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT }), { ocrGeneration: PPOCR }), 100));
+  assertEquals(facts.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', ocrBy: '', expected: PPOCR }]]);
+});
+
+Deno.test('ocr: a picture read by the current engine, written by hand, never read, undecodable, or with EMS silent asks nothing', async () => {
   assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, ocrBy: PPOCR }), { ocrGeneration: PPOCR }), 100)), []);
-  // Tesseract stamped no engine: its reading stays until a reset reads the picture anew.
-  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT }), { ocrGeneration: PPOCR }), 100)), []);
+  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, textManual: true, ocrBy: null }), { ocrGeneration: PPOCR }), 100)), []);
   // Never read is the text gap's, not this one.
   assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed(), { ocrGeneration: PPOCR }), 100)), []);
   assertEquals(

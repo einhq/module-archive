@@ -98,8 +98,9 @@ export const MEDIA_EVENTS = {
    */
   facesStale: 'media.faces.stale',
   /**
-   * A picture's text was read by another engine than EMS reads with now (`ocrBy`). Its own fact
-   * because `media-ocr`'s ordinary triggers skip every picture already read.
+   * A picture's text was read by another engine than EMS reads with now, or by none named
+   * (`ocrBy`). Its own fact because `media-ocr`'s ordinary triggers skip every picture already
+   * read.
    */
   ocrStale: 'media.ocr.stale',
   /**
@@ -324,10 +325,9 @@ export type RuleContext = {
   pictureGeneration?: string;
   /**
    * The engine EMS reads pictures' text with now (`ocrGeneration()` in `@ems/client`). A picture
-   * whose `ocrBy` names another engine is read again. One with no `ocrBy` was read by Tesseract and
-   * keeps that reading until a reset or import reads it anew (user, 2026-10-18: no archive-wide
-   * re-read). Derived from EMS like `pictureGeneration`, and undefined when EMS cannot be asked,
-   * which disables the check.
+   * marked read whose `ocrBy` names another engine, or none, is read again; one whose text a
+   * person wrote is not. Derived from EMS like `pictureGeneration`, and undefined when EMS cannot
+   * be asked, which disables the check.
    */
   ocrGeneration?: string;
   /**
@@ -807,17 +807,19 @@ export async function deriveGaps(
     }
   }
 
-  // Text in a picture read by another engine. A picture never read is `media.text.missing`'s, and
-  // one without `ocrBy` keeps Tesseract's reading (`ocrGeneration`).
+  // Text in a picture read by another engine than EMS reads with now, or marked read with none
+  // named. A picture never read (no `textIndexedAt`) is `media.text.missing`'s, so it is not
+  // announced twice, and one whose text a person wrote (`textManual`) is never read again.
   const ocrBy = str(file.attrs.ocrBy);
-  if (ctx.ocrGeneration && !undecodable && isImage && ocrBy && ocrBy !== ctx.ocrGeneration) {
+  const read = Boolean(str(file.attrs.textIndexedAt)) && file.attrs.textManual !== true;
+  if (ctx.ocrGeneration && !undecodable && isImage && read && ocrBy !== ctx.ocrGeneration) {
     events.push({
       type: MEDIA_EVENTS.ocrStale,
       subject: filePath,
       nodeId: file.id,
       time: now,
       source: MEDIA_EVENT_SOURCE,
-      data: { mimetype, ocrBy, expected: ctx.ocrGeneration },
+      data: { mimetype, ocrBy: ocrBy ?? '', expected: ctx.ocrGeneration },
     });
   }
 

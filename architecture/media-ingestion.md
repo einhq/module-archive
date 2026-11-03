@@ -279,10 +279,10 @@ waits for rather than by a shared DAG:
    and on a `moved`. It asks EMS `ocr.read` (PP-OCRv6) for the original's lines and keeps them
    beside the text, `lines` on `<file>/metadata/content` (each line's words, four corners as
    fractions of the picture, and score), and stamps the file `ocrBy`. `media-scan` announces
-   `media.ocr.stale` for a picture whose `ocrBy` names another engine than EMS names in
-   `capabilities.models.ocr`, and `media-ocr` reads it again with `-f`; a reading without text
-   removes the old one. A picture Tesseract read has no `ocrBy` and keeps that reading until a
-   reset or import reads it anew. Plan: wow `history/ocr-tiers.md`.
+   `media.ocr.stale` for a read picture whose `ocrBy` names another engine than EMS names in
+   `capabilities.models.ocr`, or none, and `media-ocr` reads it again with `-f`; a reading without
+   text removes the old one. A picture never read has no `textIndexedAt` and is
+   `media.text.missing`'s. Plan: wow `history/ocr-tiers.md`.
    EMS tells the language of the text from its reading, and the language picks the transcriber
    that writes the picture's handwriting (Swedish and Finnish, or English); `read-text` keeps it
    as `ocrLanguage` and `ocrLanguageConfidence` on `<file>/metadata/content`, none when there is

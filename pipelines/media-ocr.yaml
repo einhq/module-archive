@@ -53,8 +53,8 @@ triggers:
       FORCE: -f
     priority: 50
 
-  # Emitted by the scan for a picture read by another engine than EMS runs now (`ocrBy`); one
-  # Tesseract read has none and keeps its reading. The fact is the guard, so there is no
+  # Emitted by the scan for a picture read by another engine than EMS runs now, or by none named
+  # (`ocrBy`); one never read is `media.text.missing`'s. The fact is the guard, so there is no
   # skipIfAttr. Behind new media and the picture vectors (20): a reading makes a file findable by
   # its words only when it has some.
   - on: media.ocr.stale
