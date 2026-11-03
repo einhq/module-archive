@@ -37,6 +37,8 @@ Deno.test({
     await file('DSC_4472.JPG');
     await file('vasaloppet.jpg');
     await file('vasaloppet-2011.jpg');
+    // Imported: the path has underscores where the display name has spaces.
+    await cmd.shouldSucceed(`mknode -t file ${ALBUMS_ROOT}/vasan/files/S_Vasan1966_1_029.jpg --as 'name=S Vasan1966 1 029.jpg' --as mimetype=image/jpeg`);
     await file('vasaloppet.jpg-thumb.jpg', '--as sourceId=01ABCDEFGHJKMNPQRSTVWXYZ00');
     // Not media: reachable by name, but not something this provider returns.
     await cmd.shouldSucceed(`mknode -t file ${ALBUMS_ROOT}/vasan/files/vasaloppet.txt --as name=vasaloppet.txt --as mimetype=text/plain`);
@@ -49,6 +51,13 @@ Deno.test({
     await t.step('matches case-insensitively', async () => {
       const out = await search('dsc_4472');
       assertEquals(paths(out.results), [`${ALBUMS_ROOT}/vasan/files/DSC_4472.JPG`]);
+    });
+
+    await t.step('underscores and spaces in a name are alike, either way round', async () => {
+      for (const query of ['S_Vasan1966_1_029', "'S Vasan1966 1 029'"]) {
+        const out = await search(query);
+        assertEquals(out.results.map((hit) => [hit.path, hit.score]), [[`${ALBUMS_ROOT}/vasan/files/S_Vasan1966_1_029.jpg`, 0.95]]);
+      }
     });
 
     await t.step('an exact name outranks a prefix', async () => {

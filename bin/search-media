@@ -82,12 +82,19 @@ const NAME_EXACT = 0.95;
 const NAME_PREFIX = 0.7;
 const NAME_CONTAINS = 0.6;
 
-/** The file's own name, and the display name if it carries one. */
+/**
+ * A name with its underscores read as spaces. An imported file's path has `S_England1966_1_029.jpg`
+ * where its display name has `S England1966 1 029.jpg`, and a person types either.
+ */
+const spaced = (value: string): string => value.replaceAll('_', ' ');
+
+/** The file's own name, and the display name if it carries one, underscores and spaces alike. */
 const nameScore = (query: string, path: string, attrs: { name?: string }): number => {
   const candidates = [attrs.name, path.split('/').pop()].filter((value): value is string => Boolean(value));
+  query = spaced(query);
   let best = 0;
   for (const candidate of candidates) {
-    const value = candidate.toLowerCase();
+    const value = spaced(candidate.toLowerCase());
     // The extension is not part of what anything is called.
     const stem = value.replace(/\.[a-z0-9]{1,5}$/, '');
     if (value === query || stem === query) return NAME_EXACT;
@@ -100,7 +107,9 @@ const nameScore = (query: string, path: string, attrs: { name?: string }): numbe
 /**
  * Media whose name matches, in one indexed query: the candidates the store ranks best by the
  * `name` attr (`orderBy` with `match`), so an exact name is among them however many names hold the
- * query. Within one step of that ranking the store breaks ties by id.
+ * query. Within one step of that ranking the store breaks ties by id. A query with underscores is
+ * asked once more with spaces, for the display names that have spaces where the path has
+ * underscores (`spaced`).
  *
  * Originals only (`sourceId` missing) — a rendition is never a result. The
  * mimetype narrowing stays on this side: media is what most of the corpus is, so
@@ -112,18 +121,21 @@ const byName = async (cmd: Command, query: string, limit: number, notWithin: str
   const hits = new Map<string, { score: number; id: string }>();
   const candidates = Math.min(Math.max(limit * 4, NAME_CANDIDATE_FLOOR), NAME_CANDIDATE_CAP);
 
-  const page = await cmd.sys.vfs.query(cmd.access, {
-    types: ['file'],
-    where: [
-      { ref: 'name', op: 'contains', value: query },
-      { ref: 'sourceId', op: 'missing' },
-    ],
-    orderBy: { ref: 'name', dir: 'asc', match: query },
-    ...(notWithin.length > 0 ? { notWithin } : {}),
-    limit: candidates,
-  });
+  const asked = query.includes('_') ? [query, spaced(query)] : [query];
+  const pages = await Promise.all(asked.map((value) =>
+    cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      where: [
+        { ref: 'name', op: 'contains', value },
+        { ref: 'sourceId', op: 'missing' },
+      ],
+      orderBy: { ref: 'name', dir: 'asc', match: value },
+      ...(notWithin.length > 0 ? { notWithin } : {}),
+      limit: candidates,
+    })
+  ));
 
-  for (const entry of page) {
+  for (const entry of pages.flat()) {
     const attrs = entry.node.attrs as { name?: string; mimetype?: string };
     const mimetype = attrs.mimetype ?? '';
     if (!mimetype.startsWith('image/') && !mimetype.startsWith('video/') && !mimetype.startsWith('audio/')) continue;
@@ -131,7 +143,7 @@ const byName = async (cmd: Command, query: string, limit: number, notWithin: str
     if (score > 0) hits.set(entry.absPath, { score, id: entry.id });
   }
 
-  return { hits, full: page.length >= candidates };
+  return { hits, full: pages.some((page) => page.length >= candidates) };
 };
 
 /**
