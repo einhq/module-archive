@@ -13,3 +13,18 @@ export const namesHaveWords = (words: string[], names: (string | undefined)[]): 
   const lower = names.filter((name): name is string => !!name).map((name) => name.toLowerCase());
   return words.length > 0 && words.every((word) => lower.some((name) => name.includes(word)));
 };
+
+/** A name's whole words, lower case: split at spaces and hyphens, so "Runge-Broberg" holds "broberg". */
+const wholeWords = (name: string): string[] => name.toLowerCase().split(/[\s-]+/).filter(Boolean);
+
+/**
+ * Whether `query` is two or more whole words of `name`, in any order and with other names between:
+ * what a person types for someone whose name has more in it, "Anna Andersson" for "Anna B Andersson"
+ * or "Anna Berg-Andersson". One word alone is not: a surname is a whole family's.
+ */
+export const nameHasWholeWords = (query: string, name: string | undefined): boolean => {
+  const asked = wholeWords(query);
+  if (!name || asked.length < 2) return false;
+  const whole = new Set(wholeWords(name));
+  return asked.every((word) => whole.has(word));
+};

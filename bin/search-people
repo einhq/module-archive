@@ -3,7 +3,13 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
 import { nameScore } from '@archive/media/name-quality';
-import { namesHaveWords, nameWords } from '@archive/people/name-match';
+import { nameHasWholeWords, namesHaveWords, nameWords } from '@archive/people/name-match';
+
+/**
+ * A name typed as whole words of the person's, "Anna Andersson" for "Anna B Andersson": as sure as a
+ * prefix that ends a word (`nameScore`), so `search` takes it as the person meant (ein/core#524).
+ */
+const WHOLE_WORDS = 0.8;
 
 const searchPeople = async (cmd: Command): CmdReturn => {
   // `search` asks every provider what it can answer before fanning out, so a
@@ -56,7 +62,9 @@ const searchPeople = async (cmd: Command): CmdReturn => {
       const nameFields = [nameLower, fullnameLower, birthnameLower];
 
       let score = Math.max(...nameFields.map((field) => nameScore(queryLower, field)));
-      if (score === 0 && namesHaveWords(queryWords, nameFields)) {
+      if (score < WHOLE_WORDS && nameFields.some((field) => nameHasWholeWords(query, field))) {
+        score = WHOLE_WORDS;
+      } else if (score === 0 && namesHaveWords(queryWords, nameFields)) {
         // Word order and intervening names should not matter: "Andersson An" is
         // still a partial match for "Anna B Andersson". All words must belong
         // to this one person; matches from different people are never combined.
