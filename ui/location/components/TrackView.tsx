@@ -1,5 +1,5 @@
 import { EmptyState, FillWindow, MapTracks, MapView, PageLoader } from '@ein/ui/components';
-import { Badge, Box, Container, Group, Paper, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Badge, Box, Container, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useTrack } from '../hooks/useTracks.ts';
 import { useLiveTracks } from '../hooks/useLiveTracks.ts';
 import { FollowButton, liveSummary, LiveTrackLayers } from './LiveTracks.tsx';
@@ -80,18 +80,7 @@ export function TrackView({ device, kind, emptyActions }: TrackViewProps) {
           <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
         </MapView>
 
-        <Paper
-          pos='absolute'
-          bottom={10}
-          left={10}
-          right={10}
-          maw={760}
-          mx='auto'
-          p='sm'
-          radius='md'
-          shadow='md'
-          style={{ zIndex: 1000 }}
-        >
+        <Box className='mrx-map-panel' pos='absolute' bottom={10} left={10} right={10} maw={760} mx='auto' p='sm' style={{ zIndex: 1000 }}>
           <Stack gap='xs'>
             {current && (
               <Group justify='space-between' wrap='nowrap'>
@@ -110,7 +99,7 @@ export function TrackView({ device, kind, emptyActions }: TrackViewProps) {
               <Stat label='Duration' value={duration(track.firstTs, track.lastTs) ?? '—'} />
             </SimpleGrid>
           </Stack>
-        </Paper>
+        </Box>
       </Box>
     </FillWindow>
   );
