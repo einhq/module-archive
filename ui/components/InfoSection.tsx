@@ -1,12 +1,19 @@
 import { Group, Paper, Stack, Text, Title } from '@mantine/core';
 import type { ReactNode } from 'react';
 
-/** One box of an Info tab: a heading over its rows. */
-export function InfoSection({ title, children }: { title: string; children: ReactNode }) {
+/** One box of an Info tab: a heading, with what can be done to its rows beside it, over the rows. */
+export function InfoSection({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
     <Paper p='md' radius='md' bg='var(--mrx-surface-raised)'>
       <Stack gap='xs'>
-        <Title order={4}>{title}</Title>
+        {action
+          ? (
+            <Group justify='space-between' wrap='nowrap'>
+              <Title order={4}>{title}</Title>
+              {action}
+            </Group>
+          )
+          : <Title order={4}>{title}</Title>}
         {children}
       </Stack>
     </Paper>

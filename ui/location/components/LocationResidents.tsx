@@ -1,6 +1,6 @@
 import { TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
-import { ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Paper, Radio, Stack, Text, TextInput } from '@mantine/core';
+import { ActionIcon, Alert, Anchor, Badge, Button, Group, Paper, Radio, Stack, Text, TextInput } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { LocationDetail, ResidentEntry } from '../hooks/useLocationDetail.ts';
@@ -8,10 +8,11 @@ import { usePeople } from '../../people/hooks/usePeople.ts';
 import { shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
+import { InfoSection } from '../../components/InfoSection.tsx';
 import { spanLine } from '../../lib/residence-span.ts';
 import { personSlug } from '../../people/lib/person-slug.ts';
 
-type LocationResidentsTabProps = {
+type LocationResidentsProps = {
   location: LocationDetail;
   residents: ResidentEntry[];
   /** The server still authorizes the command; this just keeps controls out of read-only views. */
@@ -37,11 +38,11 @@ const order = (a: ResidentRow, b: ResidentRow): number => {
 };
 
 /**
- * Who has lived at a location, and when — the location-side twin of a person's Homes
- * tab, laid out and edited the same way, so a residence reads alike from
- * either end. Both write through `person-set-home`, which takes the person first.
+ * Who has lived at a location, and when, as a section of its Info tab — the location-side twin of a
+ * person's Homes tab, edited the same way, so a residence reads alike from either end. Both write
+ * through `person-set-home`, which takes the person first.
  */
-export function LocationResidentsTab({ location, residents, editable, onApplied }: LocationResidentsTabProps) {
+export function LocationResidents({ location, residents, editable, onApplied }: LocationResidentsProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [personMode, setPersonMode] = useState<'existing' | 'new'>('existing');
   const [pick, setPick] = useState<string | null>(null);
@@ -118,12 +119,12 @@ export function LocationResidentsTab({ location, residents, editable, onApplied 
   };
 
   return (
-    <Stack gap='md' maw={760}>
-      <Group justify='space-between'>
-        <Text c='dimmed' size='sm'>Who has lived at {location.name}, and when.</Text>
-        {editable && <Button size='compact-sm' variant='light' leftSection={<TablerIcon name='plus' size={14} />} onClick={() => open({ kind: 'add' })}>Add resident</Button>}
-      </Group>
-
+    <InfoSection
+      title='Residents'
+      action={editable && (
+        <Button size='compact-sm' variant='light' leftSection={<TablerIcon name='plus' size={14} />} onClick={() => open({ kind: 'add' })}>Add resident</Button>
+      )}
+    >
       {editor && (
         <Paper withBorder p='md' radius='md'>
           <Stack gap='md'>
@@ -162,52 +163,50 @@ export function LocationResidentsTab({ location, residents, editable, onApplied 
         </Paper>
       )}
 
-      <Card withBorder={editable} radius='md'>
-        {rows.length === 0 ? <Text c='dimmed' size='sm'>No known residents.</Text> : (
-          <Stack gap='xs'>
-            {rows.map((row) => {
-              const past = Boolean(row.to);
-              return (
-                <Stack key={row.path} gap='xs'>
-                  <Group gap='xs' wrap='nowrap' justify='space-between'>
-                    <Group gap='xs' wrap='nowrap' style={{ minWidth: 0 }}>
-                      <TablerIcon name='user' size={16} color='gray' style={{ flexShrink: 0, opacity: past ? 0.5 : 1 }} />
-                      <Anchor component={Link} to={`/people/${encodeURIComponent(row.slug)}`} size='sm' c={past ? 'dimmed' : undefined} lineClamp={1}>
-                        {row.name}
-                      </Anchor>
-                    </Group>
-                    <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
-                      <Text size='xs' c='dimmed'>{spanLine(row)}</Text>
-                      {!past && row.from && <Badge size='xs' variant='light'>current</Badge>}
-                      {editable && (
-                        <>
-                          <ActionIcon variant='subtle' size='sm' aria-label={`Edit ${row.name}`} onClick={() => open({ kind: 'edit', row })}>
-                            <TablerIcon name='pencil' size={14} />
-                          </ActionIcon>
-                          <ActionIcon variant='subtle' size='sm' color='red' aria-label={`Remove ${row.name}`} onClick={() => setRemoving(row)}>
-                            <TablerIcon name='trash' size={14} />
-                          </ActionIcon>
-                        </>
-                      )}
-                    </Group>
+      {rows.length === 0 ? <Text c='dimmed' size='sm'>No known residents.</Text> : (
+        <Stack gap='xs'>
+          {rows.map((row) => {
+            const past = Boolean(row.to);
+            return (
+              <Stack key={row.path} gap='xs'>
+                <Group gap='xs' wrap='nowrap' justify='space-between'>
+                  <Group gap='xs' wrap='nowrap' style={{ minWidth: 0 }}>
+                    <TablerIcon name='user' size={16} color='gray' style={{ flexShrink: 0, opacity: past ? 0.5 : 1 }} />
+                    <Anchor component={Link} to={`/people/${encodeURIComponent(row.slug)}`} size='sm' c={past ? 'dimmed' : undefined} lineClamp={1}>
+                      {row.name}
+                    </Anchor>
                   </Group>
-                  {removing?.path === row.path && (
-                    <Paper withBorder p='sm' bg='var(--mantine-color-red-light)'>
-                      <Group justify='space-between' wrap='wrap'>
-                        <Text size='sm'>Remove {row.name} from the residents of {location.name}?</Text>
-                        <Group gap='xs'>
-                          <Button size='compact-xs' variant='subtle' onClick={() => setRemoving(null)} disabled={busy}>Cancel</Button>
-                          <Button size='compact-xs' color='red' onClick={remove} loading={busy}>Remove</Button>
-                        </Group>
+                  <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
+                    <Text size='xs' c='dimmed'>{spanLine(row)}</Text>
+                    {!past && row.from && <Badge size='xs' variant='light'>current</Badge>}
+                    {editable && (
+                      <>
+                        <ActionIcon variant='subtle' size='sm' aria-label={`Edit ${row.name}`} onClick={() => open({ kind: 'edit', row })}>
+                          <TablerIcon name='pencil' size={14} />
+                        </ActionIcon>
+                        <ActionIcon variant='subtle' size='sm' color='red' aria-label={`Remove ${row.name}`} onClick={() => setRemoving(row)}>
+                          <TablerIcon name='trash' size={14} />
+                        </ActionIcon>
+                      </>
+                    )}
+                  </Group>
+                </Group>
+                {removing?.path === row.path && (
+                  <Paper withBorder p='sm' bg='var(--mantine-color-red-light)'>
+                    <Group justify='space-between' wrap='wrap'>
+                      <Text size='sm'>Remove {row.name} from the residents of {location.name}?</Text>
+                      <Group gap='xs'>
+                        <Button size='compact-xs' variant='subtle' onClick={() => setRemoving(null)} disabled={busy}>Cancel</Button>
+                        <Button size='compact-xs' color='red' onClick={remove} loading={busy}>Remove</Button>
                       </Group>
-                    </Paper>
-                  )}
-                </Stack>
-              );
-            })}
-          </Stack>
-        )}
-      </Card>
-    </Stack>
+                    </Group>
+                  </Paper>
+                )}
+              </Stack>
+            );
+          })}
+        </Stack>
+      )}
+    </InfoSection>
   );
 }
