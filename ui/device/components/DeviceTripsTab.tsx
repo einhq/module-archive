@@ -6,6 +6,7 @@ import type { Trip, TripList, TripPlace } from '@archive/location/api';
 import { formatDistance } from '@archive/location/track-profile';
 import { albumRoute } from '../../media/lib/album-path.ts';
 import { useDeviceTrips } from '../hooks/useDeviceTrips.ts';
+import { AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
@@ -34,13 +35,16 @@ function PlaceLabel({ list, place }: { list: TripList; place: Pick<TripPlace, 's
 /** The day, of the trip's legs, a trip joined to it by a merge began on. */
 const joinedDay = (trip: Trip, start: string): string | undefined => trip.legs.find((leg) => leg.start <= start && start <= leg.end)?.day;
 
+/** What a trip's album is to be: a new one (named `name`, or after the trip), one that is there by its path, or none. */
+type OnAlbum = (trip: string, album: 'new' | 'detach' | string, name?: string) => void;
+
 /**
- * The album the trip was made, or, until it is one, the albums it may belong to: offered to whoever
- * may change the device as "New album" and "Use" each, and listed to anyone else.
+ * The album the trip was made, or, until it is one, the albums it may belong to. Whoever may change
+ * the device gets **New album**, named after the trip, and **Put in an album…**, which picks any album
+ * they may change, the ones its pictures are in first, or names a new one; anyone else gets the list.
  */
-function TripAlbum(
-  { trip, editable, busy, onAlbum }: { trip: Trip; editable: boolean; busy: boolean; onAlbum: (name: string, album: 'new' | 'detach' | string) => void },
-) {
+function TripAlbum({ trip, editable, busy, onAlbum }: { trip: Trip; editable: boolean; busy: boolean; onAlbum: OnAlbum }) {
+  const [picking, setPicking] = useState(false);
   if (trip.album) {
     return (
       <Group gap='xs'>
@@ -60,11 +64,21 @@ function TripAlbum(
         <Button size='compact-xs' variant='light' disabled={busy} leftSection={<TablerIcon name='photo-plus' size={14} />} onClick={() => onAlbum(trip.id, 'new')}>
           New album
         </Button>
-        {trip.albums.map((album) => (
-          <Button key={album} size='compact-xs' variant='subtle' disabled={busy} onClick={() => onAlbum(trip.id, album)}>
-            Use {nameOf(album)}
-          </Button>
-        ))}
+        <Button size='compact-xs' variant='subtle' disabled={busy} leftSection={<TablerIcon name='library-plus' size={14} />} onClick={() => setPicking(true)}>
+          Put in an album…
+        </Button>
+        <AlbumPickerDialog
+          opened={picking}
+          title='Put the trip in an album'
+          subtitle={span(trip)}
+          suggested={trip.albums.map((album) => ({ path: album, title: nameOf(album) }))}
+          busy={busy}
+          onClose={() => setPicking(false)}
+          onPick={(choice) => {
+            setPicking(false);
+            onAlbum(trip.id, choice.create ? 'new' : choice.path, choice.create ? choice.title : undefined);
+          }}
+        />
       </Group>
     );
   }
@@ -85,7 +99,7 @@ function TripCard(
     editable: boolean;
     busy: boolean;
     onEdit: (name: string, how: 'merge' | 'split') => void;
-    onAlbum: (name: string, album: 'new' | 'detach' | string) => void;
+    onAlbum: OnAlbum;
   },
 ) {
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
@@ -225,9 +239,9 @@ export function DeviceTripsTab({ device, editable }: { device: string; editable:
                 editable={editable}
                 busy={busy}
                 onEdit={(name, how) => run(() => edit(name, how))}
-                onAlbum={(name, album) =>
+                onAlbum={(name, album, title) =>
                   run(async () => {
-                    await makeAlbum(name, album);
+                    await makeAlbum(name, album, title);
                   })}
               />
             ))}

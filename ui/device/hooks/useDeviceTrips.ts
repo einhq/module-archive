@@ -21,7 +21,8 @@ type UseDeviceTrips = {
    * Make the trip a new album (`new`) or the album at a path, or take it off its album (`detach`);
    * answers the album.
    */
-  makeAlbum: (trip: string, album: 'new' | 'detach' | string) => Promise<string>;
+  /** Make the trip an album: a new one (named `name`, or after the trip), one that is there by its path, or none (`detach`). */
+  makeAlbum: (trip: string, album: 'new' | 'detach' | string, name?: string) => Promise<string>;
 };
 
 /** A device's trips as `trip-list` gives them, read again whenever its `.trips` is written. */
@@ -65,8 +66,8 @@ export function useDeviceTrips(devicePath: string): UseDeviceTrips {
     refetch();
   }, [devicePath, refetch]);
 
-  const makeAlbum = useCallback(async (trip: string, album: 'new' | 'detach' | string) => {
-    const how = album === 'new' ? '--new' : album === 'detach' ? '--detach' : `--album=${shq(album)}`;
+  const makeAlbum = useCallback(async (trip: string, album: 'new' | 'detach' | string, name?: string) => {
+    const how = album === 'new' ? `--new${name ? ` --name=${shq(name)}` : ''}` : album === 'detach' ? '--detach' : `--album=${shq(album)}`;
     const answer = await execCommand<TripAlbumAnswer>(`trip-album ${shq(devicePath)} ${shq(trip)} ${how}`);
     refetch();
     return answer.album;
