@@ -1,7 +1,8 @@
 /**
  * track-places on a device's stays, against stub Overpass and Nominatim servers on loopback: a
- * stay near a location is at it, one near a named harbour gets a location named after it, one with
- * none gets the town; a failed lookup is asked again on the next run, a place with no name is not,
+ * stay near a location is at it, past the photos nearer to it, one near a named harbour gets a
+ * location named after it, one with none gets the town; a failed lookup is asked again on the next
+ * run, a place with no name is not,
  * a placed stay is never looked up again, the album of a trip gets the locations of its stays, and
  * `--rename` leaves a name given by hand alone. What the services answered is kept: Overpass is
  * asked once per tile, and another device at the same places asks nobody. The track and the
@@ -83,6 +84,12 @@ Deno.test({
     // A jetty 80 m from where the second stay is.
     await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/the-jetty --as name='The jetty'`);
     await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/the-jetty/position --lat=${BASE_LAT + 10_080 * M2DEG} --lng=18`);
+    // Photos where the second stay is, nearer to it than the jetty: the jetty is found past them.
+    await cmd.shouldSucceed('mkdir -p /photos');
+    for (let n = 1; n <= 6; n++) {
+      await cmd.shouldSucceed(`mknode -t file /photos/p${n}.jpg`);
+      await cmd.shouldSucceed(`position-set /photos/p${n}.jpg/position --lat=${BASE_LAT + 10_000 * M2DEG} --lng=18`);
+    }
     await append([...rest(0, 4, 0), ...out(4, 0, 10_000), ...rest(5, 4, 10_000), ...out(9, 10_000, 20_000), ...rest(10, 4, 20_000)]);
     await cmd.shouldSucceed('track-trips the-sailboat');
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);

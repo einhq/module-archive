@@ -5,16 +5,17 @@
  * `find-within` is deliberately a media-map command: after its geometry scan it
  * classifies media, reads their dates, sorts them and resolves their paths.  A
  * Locations grid needs none of that.  It lists `/locations` with each location's child
- * edges, and joins the id of its `position` child with the registry coordinates.
+ * edges, and joins the id of its `position` child with the points of the locations' positions.
  */
 import { LOCATIONS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs } from '@ein/client';
 import type { LocationEntry } from '@archive/location/api';
 import { POSITION_CHILD } from '@archive/location/location-link';
+import { NODE_TYPE_LOCATION } from '@archive/location/types';
 
 const DEFAULT_ROOT = LOCATIONS_ROOT;
-/** A whole-archive registry scan; location entries themselves are normally few. */
+/** Ceiling on the scan of the locations' points. */
 const SCAN_LIMIT = 200000;
 const WORLD = { north: 90, south: -90, east: 180, west: -180 };
 
@@ -48,12 +49,12 @@ const locationList = async (cmd: Command): CmdReturn => {
     // the Locations grid used to take seconds on a large archive.
     const [children, hits] = await Promise.all([
       cmd.sys.vfs.children<LocationListAttrs>(cmd.access, root, { childLinks: withCoordinates }),
-      withCoordinates ? cmd.sys.vfs.findWithin(cmd.access, WORLD, SCAN_LIMIT) : Promise.resolve([]),
+      withCoordinates ? cmd.sys.vfs.findWithin(cmd.access, WORLD, SCAN_LIMIT, { ownerTypes: [NODE_TYPE_LOCATION] }) : Promise.resolve([]),
     ]);
     const points = new Map(hits.map((hit) => [hit.id, { lat: hit.lat, lng: hit.lng }]));
 
     const locations = children
-      .filter((entry) => entry.node.type === 'location')
+      .filter((entry) => entry.node.type === NODE_TYPE_LOCATION)
       .map((entry) => {
         const attrs = entry.node.attrs;
         const shape = entry.children?.find((child) => child.name === POSITION_CHILD);

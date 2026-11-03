@@ -24,10 +24,13 @@ import type { CmdReturn, Command, Node } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { dirname, resolve } from '@std/path';
 import { isShapeLink, LOCATION_LINK_NAME, POSITION_CHILD, SHAPE_LINK_SOURCE } from '@archive/location/location-link';
+import { NODE_TYPE_LOCATION } from '@archive/location/types';
 
 const SCAN_LIMIT = 100000;
 const WORLD = { north: 90, south: -90, east: 180, west: -180 };
 const METERS_PER_DEGREE = 111_320;
+/** The positions of files: what the scans link. */
+const FILES = { ownerTypes: ['file'] };
 
 type Point = { lat: number; lng: number };
 type Shape = Point & { radius?: number; polygon?: Point[] };
@@ -88,7 +91,7 @@ const locationLinkMedia = async (cmd: Command): CmdReturn => {
 
   /** The nearest location whose shape (`<location>/position`) covers the point. */
   const containingLocation = async (point: Point): Promise<string | undefined> => {
-    const matches = await vfs.findContaining(access, point.lat, point.lng, 5);
+    const matches = await vfs.findContaining(access, point.lat, point.lng, 5, { ownerTypes: [NODE_TYPE_LOCATION] });
     if (matches.length === 0) return undefined;
     const paths = await vfs.resolveIdPaths(access, matches.map((match) => match.id));
     for (const match of matches) {
@@ -132,7 +135,7 @@ const locationLinkMedia = async (cmd: Command): CmdReturn => {
     return existing ? 'relinked' : 'linked';
   };
 
-  /** File path -> its GPS point, for every media position id given. */
+  /** File path -> its GPS point, for every file position id given that lies under the root. */
   const filePoints = async (hits: { id: string; lat: number; lng: number }[]): Promise<Map<string, Point>> => {
     const files = new Map<string, Point>();
     const paths = await vfs.resolveIdPaths(access, hits.map((hit) => hit.id));
@@ -160,7 +163,7 @@ const locationLinkMedia = async (cmd: Command): CmdReturn => {
       const locationPath = resolve(cmd.cwd, flags.location as string);
       const shape = await readShape(cmd, `${locationPath}/${POSITION_CHILD}`);
       const bounds = shape ? boundsOf(shape) : undefined;
-      work = new Map(bounds ? await filePoints(await vfs.findWithin(access, bounds, SCAN_LIMIT)) : []);
+      work = new Map(bounds ? await filePoints(await vfs.findWithin(access, bounds, SCAN_LIMIT, FILES)) : []);
 
       // The files it shape-linked earlier, which the new shape may no longer cover.
       for (const link of await vfs.findLinks(access, locationPath, SCAN_LIMIT)) {
@@ -169,7 +172,7 @@ const locationLinkMedia = async (cmd: Command): CmdReturn => {
         if (!work.has(filePath)) work.set(filePath, await readShape(cmd, `${filePath}/${POSITION_CHILD}`));
       }
     } else {
-      work = await filePoints(await vfs.findWithin(access, WORLD, SCAN_LIMIT));
+      work = await filePoints(await vfs.findWithin(access, WORLD, SCAN_LIMIT, FILES));
     }
 
     for (const [filePath, point] of work) counts[await settle(filePath, point)]++;

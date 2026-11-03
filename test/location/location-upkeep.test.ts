@@ -46,7 +46,7 @@ Deno.test({
   };
   /** A photo with a GPS point, written the way exif-extract writes one: node first, point after. */
   const photo = async (name: string, lat: number, lng: number) => {
-    await client.exec(`mknode -p -t directory ${FILES}/${name}`);
+    await client.exec(`mknode -p -t file ${FILES}/${name}`);
     await client.exec(`mknode -t position ${FILES}/${name}/position`);
     await client.exec(`position-set ${FILES}/${name}/position --lat=${lat} --lng=${lng}`);
   };

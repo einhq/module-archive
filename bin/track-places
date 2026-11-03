@@ -19,8 +19,8 @@
  * again and takes a new answer, except where a name was changed by hand (`location-update --name`
  * removes `nameSource`).
  *
- * Every location's position is read once and matched here, since a search by area would return
- * every photo there as well. A name comes from the services' answers kept in
+ * A stay finds its location by a search of the locations' positions around it, and only `--rename`
+ * reads the locations the stays are at. A name comes from the services' answers kept in
  * `@archive/location/place-cache` whenever they hold one, so a place is asked of them once;
  * `--rename` asks them again. `OVERPASS_URL` names the Overpass endpoints and
  * `NOMINATIM_REVERSE_URL` the reverse geocoder. The `track-trips` pipeline runs it after
@@ -28,6 +28,7 @@
  */
 
 import { LOCATIONS_ROOT } from '@archive/paths';
+import { basename, dirname } from '@std/path';
 import { type CmdReturn, collectUnknownFlags, type Command, haversineMeters, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { DeviceTrips, TrackPlaces, TrackPlacesStay, TripStay } from '@archive/location/api';
 import { readDeviceTrips, writeDeviceTrips } from '@archive/location/device-trips';
@@ -41,36 +42,64 @@ import { slugifyName } from '@archive/people/person';
 /** A stay this close to a location is at it. Also the radius of a location made for a stay. */
 const SNAP_M = 150;
 
+/** The location positions within `SNAP_M` a search looks through for one under the locations root. */
+const NEAR_CANDIDATES = 5;
+
 type Known = { path: string; name: string; attrs: LocationAttrs; lat: number; lng: number };
 
-/** Every location that has a point, with it. */
-const readLocations = async (cmd: Command): Promise<Known[]> => {
-  if (!(await cmd.sys.vfs.exists(cmd.access, LOCATIONS_ROOT))) return [];
-  const entries = (await cmd.sys.vfs.children<LocationAttrs>(cmd.access, LOCATIONS_ROOT, { childLinks: true }))
-    .filter((entry) => entry.node.type === NODE_TYPE_LOCATION);
-  const shapes = new Map(entries.flatMap((entry) => {
-    const shape = entry.children?.find((child) => child.name === POSITION_CHILD);
-    return shape ? [[shape.id, entry] as const] : [];
-  }));
-  const points = await cmd.sys.vfs.getPoints(cmd.access, [...shapes.keys()]);
-  return [...shapes].flatMap(([id, entry]) => {
-    const point = points.get(id);
-    if (!point) return [];
-    const name = typeof entry.node.attrs.name === 'string' && entry.node.attrs.name.trim() ? entry.node.attrs.name : entry.name;
-    return [{ path: `${LOCATIONS_ROOT}/${entry.name}`, name, attrs: entry.node.attrs, lat: point.lat, lng: point.lng }];
+/** The path and node id of each node under the locations root, from its edges alone. */
+const locationIds = async (cmd: Command): Promise<Map<string, string>> => {
+  if (!(await cmd.sys.vfs.exists(cmd.access, LOCATIONS_ROOT))) return new Map();
+  const root = await cmd.sys.vfs.get(cmd.access, LOCATIONS_ROOT);
+  const links = (await cmd.sys.vfs.getChildLinksByIds(cmd.access, [root.id])).get(root.id) ?? [];
+  return new Map(links.map((link) => [`${LOCATIONS_ROOT}/${link.name}`, link.id]));
+};
+
+/** Each of `ids` (path → node id) that is a location with a point, with it. */
+const readLocations = async (cmd: Command, ids: Map<string, string>): Promise<Known[]> => {
+  if (ids.size === 0) return [];
+  const [nodes, children] = await Promise.all([
+    cmd.sys.vfs.getNodesByIds<LocationAttrs>(cmd.access, [...ids.values()]),
+    cmd.sys.vfs.getChildLinksByIds(cmd.access, [...ids.values()]),
+  ]);
+  const shapes = new Map<string, string>();
+  for (const [id, links] of children) {
+    const shape = links.find((child) => child.name === POSITION_CHILD);
+    if (shape) shapes.set(id, shape.id);
+  }
+  const points = await cmd.sys.vfs.getPoints(cmd.access, [...shapes.values()]);
+  return [...ids].flatMap(([path, id]) => {
+    const node = nodes.get(id);
+    const shape = shapes.get(id);
+    const point = shape ? points.get(shape) : undefined;
+    if (node?.type !== NODE_TYPE_LOCATION || !point) return [];
+    const name = typeof node.attrs.name === 'string' && node.attrs.name.trim() ? node.attrs.name : basename(path);
+    return [{ path, name, attrs: node.attrs, lat: point.lat, lng: point.lng }];
   });
 };
 
-/** The nearest location within `SNAP_M` of a point. */
-const nearest = (known: Known[], lat: number, lng: number): Known | undefined => {
+/**
+ * The nearest location within `SNAP_M` of a point: of the locations' positions, and of `made`, the
+ * locations this run made, which a dry run has not written.
+ */
+const nearest = async (cmd: Command, made: Known[], lat: number, lng: number): Promise<Known | undefined> => {
   let best: Known | undefined;
   let bestM = SNAP_M;
-  for (const location of known) {
+  for (const location of made) {
     const d = haversineMeters(lat, lng, location.lat, location.lng);
     if (d <= bestM) {
       best = location;
       bestM = d;
     }
+  }
+
+  const matches = await cmd.sys.vfs.findNearby(cmd.access, lat, lng, bestM, NEAR_CANDIDATES, { ownerTypes: [NODE_TYPE_LOCATION] });
+  const entries = await cmd.sys.vfs.resolveIdEntries(cmd.access, matches.map((match) => match.id));
+  for (const match of matches) {
+    const entry = entries.get(match.id)?.find((entry) => basename(entry.path) === POSITION_CHILD && dirname(dirname(entry.path)) === LOCATIONS_ROOT);
+    if (!entry) continue;
+    const [location] = await readLocations(cmd, new Map([[dirname(entry.path), entry.parentId]]));
+    if (location) return location;
   }
   return best;
 };
@@ -100,7 +129,7 @@ const createLocation = async (cmd: Command, path: string, place: PlaceName, lat:
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 /** Whether a stay still needs a place: it has none, or the location it had is gone. */
-const unplaced = (stay: TripStay, known: Map<string, Known>): boolean => !stay.unnamed && (!stay.location || !known.has(stay.location));
+const unplaced = (stay: TripStay, locations: Map<string, string>): boolean => !stay.unnamed && (!stay.location || !locations.has(stay.location));
 
 const placeStays = async (cmd: Command, target: string, opts: { rename: boolean; dryRun: boolean }): Promise<TrackPlaces> => {
   const { device } = await trackOf(cmd, target);
@@ -108,8 +137,9 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
   const trips = await readDeviceTrips(cmd, device);
   if (!trips) return result;
 
-  const known = await readLocations(cmd);
-  const byPath = new Map(known.map((location) => [location.path, location]));
+  const locations = await locationIds(cmd);
+  /** The locations this run made. */
+  const made: Known[] = [];
   const lookup = { overpass: overpassEndpoints(cmd.env.OVERPASS_URL), nominatimReverse: cmd.env.NOMINATIM_REVERSE_URL || undefined, write: !opts.dryRun };
   const namer = new PlaceNamer(cmd, lookup);
   const taken = new Set<string>();
@@ -117,12 +147,12 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
   let down: string | undefined;
 
   for (const [index, stay] of trips.stays.entries()) {
-    if (!unplaced(stay, byPath)) continue;
+    if (!unplaced(stay, locations)) continue;
     const entry: TrackPlacesStay = { stay: index, start: stay.start, lat: stay.lat, lng: stay.lng, outcome: 'failed' };
     result.stays.push(entry);
 
     const home = stay.kind === 'home' && stay.home ? stay.home : undefined;
-    const near = home ? undefined : nearest(known, stay.lat, stay.lng);
+    const near = home ? undefined : await nearest(cmd, made, stay.lat, stay.lng);
     if (home || near) {
       Object.assign(entry, { outcome: home ? 'home' : 'near', location: home ?? near!.path, ...(near ? { name: near.name } : {}) });
       continue;
@@ -145,24 +175,23 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
     const path = await freePath(cmd, place.name, taken);
     taken.add(path);
     if (!opts.dryRun) await createLocation(cmd, path, place, stay.lat, stay.lng);
-    const made: Known = {
+    made.push({
       path,
       name: place.name,
       attrs: { name: place.name, locationSource: 'track', placeKind: place.kind, nameSource: place.source },
       lat: stay.lat,
       lng: stay.lng,
-    };
-    known.push(made);
-    byPath.set(path, made);
+    });
     Object.assign(entry, { outcome: 'created', location: path, name: place.name });
   }
 
   if (opts.rename && !down) {
     const renamer = new PlaceNamer(cmd, { ...lookup, refresh: true });
+    // A location made in this run was named a moment ago.
     const at = new Set([...trips.stays.map((stay) => stay.location), ...result.stays.map((entry) => entry.location)]);
-    for (const location of known) {
-      // A location made in this run was named a moment ago.
-      if (!at.has(location.path) || !location.attrs.nameSource || taken.has(location.path)) continue;
+    const named = await readLocations(cmd, new Map([...locations].filter(([path]) => at.has(path) && !taken.has(path))));
+    for (const location of named) {
+      if (!location.attrs.nameSource) continue;
       let place: PlaceName | undefined;
       try {
         place = await renamer.name(location.lat, location.lng);

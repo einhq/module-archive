@@ -16,7 +16,7 @@
  *     locations that carry a name and nothing else, or that were never
  *     photographed with a GPS.
  *
- * Everything is gathered in three batched passes over the whole corpus rather
+ * Everything is gathered in a few batched passes over the whole corpus rather
  * than per location — see `collectPoints`.
  *
  * `--refresh` is the form the `location-upkeep` pipeline runs whenever a location or
@@ -35,7 +35,7 @@ import { basename, dirname, resolve } from '@std/path';
 import { isShapeLink, LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
 import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
 
-/** The whole earth: one bounding-box scan returns every stored point. */
+/** The whole earth: one bounding-box scan returns every location's point. */
 const WORLD = { north: 90, south: -90, east: 180, west: -180 };
 /** Ceiling on the registry scan and the backlink scan. */
 const SCAN_LIMIT = 200000;
@@ -91,10 +91,11 @@ type LocationResult = {
  * The geotagged media behind every location, and which locations already sit
  * somewhere.
  *
- * Three batched calls for the entire corpus, not one per location: the registry
- * scan (~5k points), one resolve of those ids to their paths, and one backlink
- * lookup for every location at once. The join is on the file's node id, which both
- * `resolveIdEntries` and `findLinks` hand back directly — no path arithmetic.
+ * Batched for the entire corpus, not one call per location: one scan of the
+ * locations' own points, one backlink lookup for every location at once, then
+ * the `position` child of every linked file and its point. The join is on the
+ * file's node id, which `findLinks` hands back as the link's parent — no path
+ * arithmetic.
  */
 const collectPoints = async (
   cmd: Command,
@@ -102,42 +103,38 @@ const collectPoints = async (
 ): Promise<{ points: Map<string, Point[]>; placed: Set<string> }> => {
   const vfs = cmd.sys.vfs;
   const access = cmd.access;
-
-  const hits = await vfs.findWithin(access, WORLD, SCAN_LIMIT);
-  const byId = new Map(hits.map((hit) => [hit.id, { lat: hit.lat, lng: hit.lng }]));
-
-  // A position's id says nothing about what it belongs to; its parent does.
-  const resolved = await vfs.resolveIdEntries(access, [...byId.keys()]);
-
-  /** File node id -> that file's own GPS point. */
-  const filepoints = new Map<string, Point>();
-  /** Location paths that already have a shape — a position without one never comes back. */
-  const placed = new Set<string>();
   const wanted = new Set(locationPaths);
 
-  for (const [id, entries] of resolved) {
-    const point = byId.get(id);
-    if (!point) continue;
-    for (const entry of entries) {
-      if (basename(entry.path) !== POSITION_CHILD) continue;
-      const owner = dirname(entry.path);
-      if (wanted.has(owner)) placed.add(owner);
-      else filepoints.set(entry.parentId, point);
+  /** Location paths that already have a shape — a position without one never comes back. */
+  const placed = new Set<string>();
+  const shapes = await vfs.findWithin(access, WORLD, SCAN_LIMIT, { ownerTypes: [NODE_TYPE_LOCATION] });
+  for (const paths of (await vfs.resolveIdPaths(access, shapes.map((shape) => shape.id))).values()) {
+    for (const path of paths) {
+      if (basename(path) === POSITION_CHILD && wanted.has(dirname(path))) placed.add(dirname(path));
     }
   }
 
-  const links = await vfs.findLinks(access, locationPaths, SCAN_LIMIT);
-  const points = new Map<string, Point[]>();
-
-  for (const link of links) {
+  const links = (await vfs.findLinks(access, locationPaths, SCAN_LIMIT)).filter((link) =>
     // Only `<file>/location`. A resident relation or a label pointing at the same
     // location is not media and has no position of its own.
-    if (basename(link.absPath) !== LOCATION_LINK_NAME) continue;
-    if (!wanted.has(link.target)) continue;
+    basename(link.absPath) === LOCATION_LINK_NAME && wanted.has(link.target) &&
     // A link made *because* the photo is inside the shape says nothing about
     // where the location is, and counting it would let the shape define itself.
-    if (isShapeLink(link.node)) continue;
-    const point = filepoints.get(link.parentId);
+    !isShapeLink(link.node)
+  );
+
+  /** File node id -> the id of its `position` child. */
+  const positions = new Map<string, string>();
+  for (const [file, children] of await vfs.getChildLinksByIds(access, [...new Set(links.map((link) => link.parentId))])) {
+    const position = children.find((child) => child.name === POSITION_CHILD);
+    if (position) positions.set(file, position.id);
+  }
+  const filePoints = await vfs.getPoints(access, [...positions.values()]);
+
+  const points = new Map<string, Point[]>();
+  for (const link of links) {
+    const position = positions.get(link.parentId);
+    const point = position ? filePoints.get(position) : undefined;
     if (!point) continue;
     const list = points.get(link.target);
     if (list) list.push(point);
