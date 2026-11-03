@@ -67,7 +67,8 @@ export function TrackerSetup({ device }: { device: string }) {
             </Text>
           </Stack>
           {!setup.enabled && (
-            <Button leftSection={<TablerIcon name='broadcast' size={16} />} loading={pending === 'new'} onClick={() => change('--new')}>
+            // Kept at its own width: beside the text it would be squeezed until its label is clipped.
+            <Button leftSection={<TablerIcon name='broadcast' size={16} />} loading={pending === 'new'} onClick={() => change('--new')} style={{ flexShrink: 0 }}>
               Turn on
             </Button>
           )}
