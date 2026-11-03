@@ -237,19 +237,12 @@ export default function MapPage() {
           <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
         </MapView>
 
-        {/* Zoom is by wheel and pinch, so the top-left corner is free: what the map is reading for where it was moved to (a search shows its own in the box), then the live devices. */}
-        <Stack gap='xs' align='flex-start' style={{ position: 'absolute', top: 10, left: 10, zIndex: MAP_CONTROL_Z, maxWidth: 'calc(100% - 84px)' }}>
-          {(loading === 'view' || tracksLoading) && (
-            <Box className='mrx-map-loading' role='status' aria-label='Loading the map' style={{ position: 'static' }}>
-              <Loader size={18} />
-            </Box>
-          )}
-          {live.length > 0 && (
-            <Box className='mrx-map-live' w={240} maw='100%'>
-              <LiveDeviceList live={live} now={now} following={following} onFollow={setFollowing} />
-            </Box>
-          )}
-        </Stack>
+        {/* Zoom is by wheel and pinch, so the top-left corner is free for the live devices. */}
+        {live.length > 0 && (
+          <Box className='mrx-map-live' w={240} maw='calc(100% - 84px)' style={{ position: 'absolute', top: 10, left: 10, zIndex: MAP_CONTROL_Z }}>
+            <LiveDeviceList live={live} now={now} following={following} onFollow={setFollowing} />
+          </Box>
+        )}
 
         {/* The map's own layer switcher is off, so Leaflet leaves the top-right corner free. */}
         <Stack className='mrx-map-corner' gap='xs' style={{ zIndex: MAP_CONTROL_Z }}>
@@ -279,6 +272,16 @@ export default function MapPage() {
                 <TablerIcon name='layout-grid' size={22} />
               </ActionIcon>
             </Tooltip>
+          )}
+          {
+            /* What the map is reading for where it was moved to, under the buttons, where it moves
+              nothing; a search shows its own in the box. Following a device moves the map at every
+              fix, which is not worth a spinner. */
+          }
+          {(loading === 'view' || tracksLoading) && !following && (
+            <Box className='mrx-map-loading' role='status' aria-label='Loading the map' style={{ position: 'static' }}>
+              <Loader size={18} />
+            </Box>
           )}
         </Stack>
 

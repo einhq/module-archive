@@ -130,7 +130,9 @@ const POINT_LIMIT = 5000;
  * from.
  *
  * Debounced, and guarded by a generation — a pan fires `moveend` repeatedly and
- * only the last one is worth reading for.
+ * only the last one is worth reading for. `loading` is for the reads the reader asked for, by moving
+ * the map or switching the layer on; the list arriving again, as live tracking asks it to, redraws
+ * the view without it.
  */
 export function useMapTracks(
   enabled: boolean,
@@ -142,7 +144,7 @@ export function useMapTracks(
   const generationRef = useRef(0);
   const lastQueryRef = useRef<{ bounds: GeoBounds; zoom: number } | null>(null);
 
-  const run = useCallback((bounds: GeoBounds, zoom: number, available: TrackEntry[]) => {
+  const run = useCallback((bounds: GeoBounds, zoom: number, available: TrackEntry[], quiet = false) => {
     if (timerRef.current !== null) clearTimeout(timerRef.current);
 
     timerRef.current = setTimeout(async () => {
@@ -157,7 +159,7 @@ export function useMapTracks(
       }
 
       try {
-        setLoading(true);
+        if (!quiet) setLoading(true);
         const tolerance = toleranceForZoom(zoom);
         const bbox = `${box.north},${box.south},${box.east},${box.west}`;
 
@@ -186,8 +188,11 @@ export function useMapTracks(
   }, [enabled, run, tracks]);
 
   // The layer being switched on, or the track list arriving, has to redraw the
-  // viewport the map is already showing — neither of them moves the map.
+  // viewport the map is already showing — neither of them moves the map. Only the first is the reader's.
+  const wasEnabled = useRef(enabled);
   useEffect(() => {
+    const switched = wasEnabled.current !== enabled;
+    wasEnabled.current = enabled;
     if (!enabled) {
       if (timerRef.current !== null) clearTimeout(timerRef.current);
       generationRef.current++;
@@ -196,7 +201,7 @@ export function useMapTracks(
       return;
     }
     const last = lastQueryRef.current;
-    if (last) run(last.bounds, last.zoom, tracks);
+    if (last) run(last.bounds, last.zoom, tracks, !switched);
   }, [enabled, tracks, run]);
 
   return { tracks, refetchTracks, segments, loading, query };
