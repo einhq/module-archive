@@ -18,6 +18,8 @@ export type AutoAlbumHome = {
   source: 'flag' | 'residence' | 'inbox' | 'previous';
   /** The residence's location, when that is where it came from. */
   location?: string;
+  /** The neighbourhood, else the town, the category's pictures that year were in on most days. */
+  area?: string;
 };
 
 /**

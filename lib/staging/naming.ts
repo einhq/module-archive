@@ -4,7 +4,8 @@
  * - **what**: a folder's label (a seed or a scan run), an occasion (a holiday, or someone's
  *   birthday in the picture), or, at home, the guests seen in most of it; for a group nothing
  *   else names, when in the week it was (`Saturday evening`, `Weekend`);
- * - **where**: a named location, a point of interest, or away from home the city or the country;
+ * - **where**: a named location, a point of interest, away from home the city or the country, or
+ *   near home a neighbourhood other than the one most days are in;
  * - **when**: the dates, at the precision its members' capture times have.
  *
  * Lanes have names of their own (`laneName`). Holidays are a short generic table: Christmas,

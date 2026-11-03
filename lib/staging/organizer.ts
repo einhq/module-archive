@@ -211,7 +211,7 @@ type FileAttrs = {
 export type FileRow = { id: string; path: string; attrs: FileAttrs };
 
 /** What the organizer reads of a geocoded position. */
-type Geocode = { city?: string; country?: string; poi?: string };
+type Geocode = { city?: string; country?: string; poi?: string; suburb?: string };
 
 /** Everything planning and naming read of a scope's media. */
 export type ScopeMedia = {
@@ -319,7 +319,7 @@ export const readMedia = async (vfs: Vfs, access: Access, rows: FileRow[], base:
     };
   });
   const positions = await batched([...new Set(positionOf.values())], (page) => vfs.getNodesByIds<Geocode>(access, page));
-  const geocodes = new Map([...positions].map(([id, node]) => [id, { city: node.attrs.city, country: node.attrs.country, poi: node.attrs.poi }]));
+  const geocodes = new Map([...positions].map(([id, node]) => [id, { city: node.attrs.city, country: node.attrs.country, poi: node.attrs.poi, suburb: node.attrs.suburb }]));
   return { items, folders, pending, idOf, geocodes, positionOf, locationOf };
 };
 
@@ -572,6 +572,35 @@ const centroidOf = (items: PlanItem[]): Geo | undefined => {
   return { lat: located.reduce((sum, item) => sum + item.lat!, 0) / located.length, lng: located.reduce((sum, item) => sum + item.lng!, 0) / located.length };
 };
 
+/** The area an item was in, as its position's reverse geocode names it: the neighbourhood, else the town. */
+const areaOf = (media: ScopeMedia, item: PlanItem): string | undefined => {
+  const position = media.positionOf.get(item.id);
+  const code = position ? media.geocodes.get(position) : undefined;
+  return code?.suburb ?? code?.city;
+};
+
+/** For each year, the area the most days of `items` were taken in, when any of them has one. */
+const usualAreas = (media: ScopeMedia, items: PlanItem[]): Map<string, string> => {
+  const daysByYear = new Map<string, Map<string, Set<string>>>();
+  for (const item of items) {
+    const area = item.precision === 'instant' ? areaOf(media, item) : undefined;
+    if (!area) continue;
+    const day = dayOf(item);
+    const areas = daysByYear.get(day.slice(0, 4)) ?? new Map<string, Set<string>>();
+    daysByYear.set(day.slice(0, 4), areas.set(area, (areas.get(area) ?? new Set()).add(day)));
+  }
+  return new Map([...daysByYear].map(([year, areas]) => [year, [...areas].reduce((best, entry) => entry[1].size > best[1].size ? entry : best)[0]]));
+};
+
+/** `homes` (changed) with the usual area of each of `years` that has a home. */
+const withAreas = (homes: Map<string, AutoAlbumHome>, areas: Map<string, string>, years: Iterable<string>): Map<string, AutoAlbumHome> => {
+  for (const year of years) {
+    const [home, area] = [homes.get(year), areas.get(year)];
+    if (home && area) homes.set(year, { ...home, area });
+  }
+  return homes;
+};
+
 /** What naming and the place rule know of a scope. */
 type Namer = {
   /** The location a run of items was at, as the owner can open it: most of their links, else the nearest known within 500 m. */
@@ -579,6 +608,11 @@ type Namer = {
   /** The point of interest, or the city and the country, most located items were at. */
   geocodeFor: (items: PlanItem[]) => { poi?: string; city?: string; country?: string };
   atPlace: (items: PlanItem[]) => boolean;
+  /**
+   * The area half the located items were in, when it is neither the one their year's pictures
+   * were in on most days nor within a kilometre of home: an outing near home.
+   */
+  areaFor: (items: PlanItem[]) => string | undefined;
   home: (day: string) => AutoAlbumHome | undefined;
 };
 
@@ -642,7 +676,18 @@ const namer = (media: ScopeMedia, owner: OwnerContext, homes: Map<string, AutoAl
     }
     return geocodeFor(items).poi !== undefined;
   };
-  return { locationFor, geocodeFor, atPlace, home };
+  const areaFor: Namer['areaFor'] = (items) => {
+    const where = home(dayOf(items[0]));
+    if (!where?.area) return undefined;
+    const located = items.filter((item) => media.positionOf.has(item.id));
+    const vote = majority(located.flatMap((item) => areaOf(media, item) ?? []));
+    if (!vote || vote.value === where.area) return undefined;
+    const inArea = located.filter((item) => areaOf(media, item) === vote.value);
+    const at = centroidOf(inArea);
+    if (inArea.length < MAJORITY * located.length || !at) return undefined;
+    return haversineMeters(at.lat, at.lng, where.lat, where.lng) >= PLACE_FROM_HOME_M ? vote.value : undefined;
+  };
+  return { locationFor, geocodeFor, atPlace, areaFor, home };
 };
 
 /** Whether someone is a guest: outside the household, and in at most a small share of the library's faces. */
@@ -658,7 +703,7 @@ const nameOf = (group: PlannedGroup, owner: OwnerContext, library: LibraryInputs
   const located = found && names.home(dayOf(group.items[0]))?.location === found.path ? undefined : found;
   const away = group.cluster?.away === true;
   const code = names.geocodeFor(group.items);
-  const where = located?.name ?? code.poi ?? (away ? code.city ?? code.country : undefined);
+  const where = located?.name ?? code.poi ?? (away ? code.city ?? code.country : names.areaFor(group.items));
   let what = group.seed?.label;
   if (!what && group.items.some((item) => item.precision === 'instant')) {
     const days = [...new Set(group.items.filter((item) => item.precision === 'instant').map(dayOf))];
@@ -913,7 +958,8 @@ export const planScope = async (
 ): Promise<{ plan: Plan; homes: Map<string, AutoAlbumHome>; names: Namer; library: LibraryInputs }> => {
   const items = options.items ?? media.items;
   const { years, points } = pointsByYearOf(items);
-  const homes = await homesByYear(vfs, owner.access, { user: owner.user, years, pointsByYear: points, flag: options.flagHome });
+  const found = await homesByYear(vfs, owner.access, { user: owner.user, years, pointsByYear: points, flag: options.flagHome });
+  const homes = withAreas(found, usualAreas(media, items), found.keys());
   const library = await libraryOf(vfs, owner.access, owner, items);
   const { plan, names } = await planWith(vfs, media, owner, { ...options, homes, library });
   return { plan, homes, names, library };
@@ -1875,6 +1921,7 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
       const home = found.get(year) ?? (earlier ? { ...homes.get(earlier)!, source: 'previous' as const } : undefined);
       if (home) homes.set(year, home);
     }
+    withAreas(homes, usualAreas(media, planItems), missing);
   }
   const library = await libraryOf(vfs, access, owner, planItems);
   const { plan, names } = await planWith(vfs, media, owner, {

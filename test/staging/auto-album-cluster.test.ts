@@ -2,7 +2,9 @@
  * auto-album-cluster: how the organizer would group the media under some paths, read only. A run
  * of days away from home is one trip, named after the town most of it was taken in; home is
  * `--home`, else the owner's residence that year, else the densest cell of the year's own points;
- * an album's members can be the scope; nothing is written. Places and people are invented.
+ * an outing near home is named after its neighbourhood, unless it is the one the year's pictures
+ * were in on most days; an album's members can be the scope; nothing is written. Places and
+ * people are invented.
  */
 import { ALBUMS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import type { AutoAlbumClusterReport } from '@archive/staging/api';
@@ -16,6 +18,8 @@ const ALBUMS = '/home/traveller/staging/albums/inbox';
 
 const HOME = { lat: 59.33, lng: 18.06 };
 const AWAY = { lat: 57.7, lng: 11.97 };
+/** A park across the city from home: 2 km away, too near to be away. */
+const PARK = { lat: 59.348, lng: 18.06 };
 
 Deno.test({ name: 'auto-album-cluster', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const { vfs } = await testCtx.setup();
@@ -92,9 +96,28 @@ Deno.test({ name: 'auto-album-cluster', sanitizeResources: false, sanitizeOps: f
       await cmd.shouldSucceed(`person-set-home --from 2027-03 ${PEOPLE_ROOT}/anna-andersson ${LOCATIONS_ROOT}/the-coast`);
       await cmd.shouldSucceed(`ln -s ${PEOPLE_ROOT}/anna-andersson /etc/users/traveller/person`);
       const report = await analyse(FILES);
-      assertEquals(report.home['2027'], { lat: AWAY.lat, lng: AWAY.lng, source: 'residence', location: `${LOCATIONS_ROOT}/the-coast` });
+      assertEquals(report.home['2027'], { lat: AWAY.lat, lng: AWAY.lng, source: 'residence', location: `${LOCATIONS_ROOT}/the-coast`, area: 'Harbourtown' });
       const trips = report.groups.filter((group) => group.kind === 'trip');
       assertEquals(trips.map((group) => [group.members, group.timeStart?.slice(0, 10)]), [[16, '2027-05-01']]);
+    });
+
+    await t.step("an outing near home is named after its neighbourhood; a day in the year's usual one is not", async () => {
+      // Four days at home in June 2026, the Saturday a long one, then a Saturday morning in the park.
+      const geocode = async (tag: string, n: number, suburb: string) => {
+        for (let i = 0; i < n; i++) await cmd.shouldSucceed(`attrs ${FILES}/${tag}-${i}.jpg/position -s suburb=${suburb} -s city=Capital -s country=Farland`);
+      };
+      for (const day of ['2026-06-03', '2026-06-04', '2026-06-05', '2026-06-06']) {
+        const n = day === '2026-06-06' ? 12 : 2;
+        await part(`home-${day}`, `${day}T08:00:00Z`, HOME, n);
+        await geocode(`home-${day}`, n, 'Oldtown');
+      }
+      await part('park-2026-06-13', '2026-06-13T08:00:00Z', PARK, 12);
+      await geocode('park-2026-06-13', 12, 'Parkside');
+      const report = await analyse(`${FILES} --home=${HOME.lat},${HOME.lng}`);
+      assertEquals(report.home['2026'], { ...HOME, source: 'flag', area: 'Oldtown' });
+      const named = (day: string) => report.groups.find((group) => group.kind === 'event' && group.timeStart?.startsWith(day))?.name;
+      assertEquals(named('2026-06-13'), 'Parkside · 13 Jun 2026');
+      assertEquals(named('2026-06-06'), 'Saturday morning · 6 Jun 2026');
     });
 
     await t.step("an album's members can be the scope", async () => {

@@ -173,7 +173,10 @@ A name is `<what> · <where> · <when>`, each part only when known:
   evening from 17), or `Weekend` for a Saturday and Sunday with or without the Friday;
 - **where**: the location most of its members' `location` links name, else the nearest location
   within 500 m — only one the owner can open; else a point of interest shared by half the located
-  members; away, the city half of them were in, else the country;
+  members; away, the city half of them were in, else the country; near home, the area (the
+  neighbourhood, else the town) half of them were in, when it is not the year's usual area (the
+  one the category's pictures that year were in on most days, kept with the year's home) and is
+  at least 1 km from home;
 - **when**: the dates at the precision the members have — `3 Aug 2014`, `3–9 Aug 2014`, `Jun
   1975`, `1975`.
 
