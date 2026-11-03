@@ -632,8 +632,10 @@ waits for rather than by a shared DAG:
    id; it stores no paths. For browsing, each group is also materialized as managed softlinks under
    `<front>/stack/<album-id>/`. A marker on that directory is the ownership boundary: reconciliation
    replaces and removes only marked directories and refuses to overwrite unmanaged content. It
-   builds the new view before publishing the manifest and repairs missing or orphaned managed views
-   after interruption. It finds an album's marked directories by the marker's `mediaStack.albumId`
+   writes only what differs: a group whose directory already links its members is left as it is,
+   and one that gained or lost a member gets or loses just that link, so a crawl landing
+   fingerprints or capture times touches only the stacks it moves. It builds the new view before
+   publishing the manifest and repairs missing or orphaned managed views after interruption. It finds an album's marked directories by the marker's `mediaStack.albumId`
    (the `media_stack_album` index), not by looking under each member. Originals and their paths
    are never changed.
 

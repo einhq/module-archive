@@ -306,6 +306,12 @@ async function removeManagedGroup(cmd: Command, groupPath: string, albumId: stri
   await cmd.sys.vfs.unlink(cmd.access, groupPath, dirname(groupPath), { recursive: true, readlink: true });
 }
 
+/**
+ * Bring one group's managed directory to its members, writing only what differs: a link already
+ * pointing at a member stays, one pointing elsewhere goes, a missing one is added. A refresh that
+ * leaves a group as it was writes no node, so a crawl's member changes touch only the stacks they
+ * move (ein/core#947).
+ */
 async function materializeGroup(
   cmd: Command,
   albumPath: string,
@@ -320,23 +326,41 @@ async function materializeGroup(
     props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o750 },
   });
   const groupPath = `${stackPath}/${albumId}`;
-  await removeManagedGroup(cmd, groupPath, albumId);
-  await cmd.sys.vfs.create(cmd.access, 'directory', stackPath, albumId, {
-    props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o750 },
-    attrs: { mediaStack: { version: MEDIA_STACKS_VERSION, albumId, albumPath } },
-  });
+  const marker = { mediaStack: { version: MEDIA_STACKS_VERSION, albumId, albumPath } };
 
+  const expected = new Set(group.memberIds.flatMap((id) => {
+    const member = id === group.frontId ? undefined : byId.get(id);
+    return member ? [member.path] : [];
+  }));
   const used = new Set<string>();
-  for (const memberId of group.memberIds) {
-    if (memberId === group.frontId) continue;
-    const member = byId.get(memberId);
-    if (!member) continue;
-    const base = basename(member.path);
+  if (await cmd.sys.vfs.exists(cmd.access, groupPath, { follow: false })) {
+    const node = await cmd.sys.vfs.get<StackMarker>(cmd.access, groupPath, { follow: false });
+    if (node.type !== 'directory' || !markerMatches(node.attrs, albumId)) {
+      throw new Error(`${groupPath}: refusing to replace an unmanaged stack directory`);
+    }
+    if (node.attrs.mediaStack?.albumPath !== albumPath) await cmd.sys.vfs.update(cmd.access, groupPath, { attrs: marker, follow: false });
+    for (const entry of await cmd.sys.vfs.children(cmd.access, groupPath)) {
+      const target = entry.node.props.softlink;
+      if (target && expected.delete(target)) {
+        used.add(entry.name);
+        continue;
+      }
+      await cmd.sys.vfs.unlink(cmd.access, `${groupPath}/${entry.name}`, groupPath, { recursive: true, readlink: true });
+    }
+  } else {
+    await cmd.sys.vfs.create(cmd.access, 'directory', stackPath, albumId, {
+      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o750 },
+      attrs: marker,
+    });
+  }
+
+  for (const target of expected) {
+    const base = basename(target);
     let name = base;
     for (let suffix = 2; used.has(name); suffix++) name = `${base}-${suffix}`;
     used.add(name);
     await cmd.sys.vfs.create(cmd.access, 'softlink', groupPath, name, {
-      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: member.path },
+      props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: target },
     });
   }
   return groupPath;

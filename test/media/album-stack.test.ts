@@ -182,10 +182,42 @@ Deno.test({
       assert(first.id !== last.id);
     });
 
+    await t.step('a refresh writes only the links that change, and none for a group that stays', async () => {
+      const growing = await album('growing');
+      const dir = `${ALBUMS_ROOT}/growing`;
+      await photo(`${dir}/g1.jpg`, '2020-03-01T12:00:00Z', A);
+      await photo(`${dir}/g2.jpg`, '2020-03-01T12:00:05Z', A);
+      await cmd.shouldSucceed(`album-stack refresh ${dir}`);
+      const groupPath = `${dir}/g1.jpg/stack/${growing.id}`;
+      const nodeId = async (path: string) => (await vfs.get(ADMIN_ACCESS, path, { follow: false })).id;
+      const groupId = await nodeId(groupPath);
+      const g2Link = await nodeId(`${groupPath}/g2.jpg`);
+
+      // A new burst frame joins: the directory and the link already there stay, one link is added.
+      await photo(`${dir}/g3.jpg`, '2020-03-01T12:00:08Z', A);
+      assertEquals((await client.execJson<{ changed: number }>(`album-stack refresh ${dir}`)).changed, 1);
+      assertEquals(await nodeId(groupPath), groupId);
+      assertEquals(await nodeId(`${groupPath}/g2.jpg`), g2Link);
+      const g3Link = await nodeId(`${groupPath}/g3.jpg`);
+
+      // A photo outside the burst changes the manifest's source but no group: no stack node is written.
+      await photo(`${dir}/later.jpg`, '2020-03-01T13:00:00Z', A);
+      assertEquals((await client.execJson<{ changed: number }>(`album-stack refresh ${dir}`)).changed, 1);
+      assertEquals(await nodeId(groupPath), groupId);
+      assertEquals(await nodeId(`${groupPath}/g2.jpg`), g2Link);
+      assertEquals(await nodeId(`${groupPath}/g3.jpg`), g3Link);
+
+      // A member kept separate loses only its own link.
+      await cmd.shouldSucceed(`album-stack separate ${dir} ${dir}/g3.jpg`);
+      assertEquals(await nodeId(groupPath), groupId);
+      assertEquals(await nodeId(`${groupPath}/g2.jpg`), g2Link);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${groupPath}/g3.jpg`, { follow: false }), false);
+    });
+
     await t.step('--all reuses a paged primary-fingerprint index, and leaves the suggestions out', async () => {
       await vfs.create(ADMIN_ACCESS, 'album', ALBUMS_ROOT, 'suggested', { attrs: { name: 'suggested', origin: 'auto' } });
       const result = await client.execJson<{ scanned: number; groups: number }>('album-stack refresh --all --dry-run');
-      assertEquals(result.scanned, 3);
+      assertEquals(result.scanned, 4);
       assert(result.groups >= 2);
     });
   } finally {
