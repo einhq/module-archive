@@ -164,7 +164,9 @@ export default function DeviceDetailPage() {
             share: device.path,
             edit: () => setEditing(true),
             items: [
-              ...(records ? [{ label: upload.sending ? 'Uploading GPX…' : 'Upload GPX', icon: 'upload', button: true, disabled: upload.sending, onClick: upload.open }] : []),
+              ...(records
+                ? [{ label: upload.sending ? 'Uploading GPX…' : 'Upload GPX', icon: 'upload', button: true, lead: true, disabled: upload.sending, onClick: upload.open }]
+                : []),
               { label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) },
               ...(records ? [{ label: 'Live tracking', icon: 'broadcast', onClick: () => setTracking(true) }] : []),
             ],
