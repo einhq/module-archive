@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.9.55",
+  "version": "0.9.56",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
   "coreApi": "^0.9.5",
