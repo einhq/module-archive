@@ -247,16 +247,18 @@ const HELP_GROUPS: readonly [TriageScope, string][] = [
 
 /**
  * The keys as the `?` overlay lists them, under a heading per scope: each scope's own keys, the
- * keys that share a label in one row (`← → ↑ ↓`). What a scope does not bind falls through to the
- * group's, listed first.
+ * keys that share a label and their modifier in one row (`← → ↑ ↓`, `shift+J ↓`). What a scope does
+ * not bind falls through to the group's, listed first.
  */
 export const TRIAGE_HELP: readonly { group: string; entries: readonly { keys: string; label: string }[] }[] = HELP_GROUPS.map(([scope, group]) => {
-  const rows: { keys: string[]; label: string }[] = [];
+  const rows: { modifier: string; keys: string[]; label: string }[] = [];
   for (const entry of TRIAGE_KEYS) {
     if (entry.scope !== scope) continue;
-    const row = rows.find((each) => each.label === entry.label);
-    if (row) row.keys.push(entry.keys);
-    else rows.push({ keys: [entry.keys], label: entry.label });
+    const at = entry.keys.lastIndexOf('+') + 1;
+    const modifier = entry.keys.slice(0, at), key = entry.keys.slice(at);
+    const row = rows.find((each) => each.label === entry.label && each.modifier === modifier);
+    if (row) row.keys.push(key);
+    else rows.push({ modifier, keys: [key], label: entry.label });
   }
-  return { group, entries: rows.map((row) => ({ keys: row.keys.join(' '), label: row.label })) };
+  return { group, entries: rows.map((row) => ({ keys: row.modifier + row.keys.join(' '), label: row.label })) };
 });

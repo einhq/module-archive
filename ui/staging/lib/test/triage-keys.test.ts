@@ -126,12 +126,17 @@ Deno.test("Enter on a focused button or link, and an arrow on a focused tab, are
 Deno.test('the overlay lists every bound key once, under its scope', () => {
   const scopes: TriageScope[] = ['group', 'tile', 'part', 'selection', 'groups'];
   TRIAGE_HELP.forEach((section, at) => {
-    const listed = section.entries.flatMap((entry) => entry.keys.split(' '));
+    const listed = section.entries.flatMap((entry) => {
+      const at = entry.keys.lastIndexOf('+') + 1;
+      return entry.keys.slice(at).split(' ').map((key) => entry.keys.slice(0, at) + key);
+    });
     assertEquals(listed.length, new Set(listed).size, `a key listed twice under ${section.group}`);
     for (const entry of TRIAGE_KEYS.filter((each) => each.scope === scopes[at])) assert(listed.includes(entry.keys), `${entry.keys} is not listed under ${section.group}`);
   });
   // The arrows share one row.
   assertEquals(TRIAGE_HELP[0].entries.find((entry) => entry.label === 'Step through the pictures')?.keys, '← → ↑ ↓');
+  // Keys with Shift share a row and write it once, so the overlay shows ⇧ + J ↓.
+  assertEquals(TRIAGE_HELP[0].entries.find((entry) => entry.label === 'Select on to the next group')?.keys, 'shift+J ↓');
 });
 
 Deno.test('across groups, the filing keys act on the selection, and Shift with J, K or an arrow selects on to the next group', () => {
