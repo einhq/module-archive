@@ -164,9 +164,15 @@ export default function DeviceDetailPage() {
 
       {
         /* The body pads itself (AppShell's padding is off so the header can bleed); the
-          variable tells the media tab's grid how much to cancel on a phone. */
+          variable tells the media tab's grid how much to cancel on a phone. The track has none. */
       }
-      <Container size='xl' py='md' px='md' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
+      <Container
+        size='xl'
+        py='md'
+        px='md'
+        display={tab === 'track' ? 'none' : undefined}
+        style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}
+      >
         <Stack gap='lg'>
           {error && (
             <Alert icon={<TablerIcon name='alert-circle' size={16} />} color='red'>
@@ -218,18 +224,16 @@ export default function DeviceDetailPage() {
             />
           </Tabs.Panel>
 
-          <Tabs.Panel value='track'>
-            <Stack gap='lg'>
-              <TrackView device={device.id} kind={device.kind} editable={editable} />
-              {editable && <TrackerSetup device={device.id} />}
-            </Stack>
-          </Tabs.Panel>
-
           <Tabs.Panel value='trips'>
             <DeviceTripsTab device={device.path} editable={editable} />
           </Tabs.Panel>
         </Stack>
       </Container>
+
+      {/* The track's map takes the window below the header, edge to edge, outside the body's padding. */}
+      <Tabs.Panel value='track'>
+        <TrackView device={device.id} kind={device.kind} editable={editable} more={editable && <TrackerSetup device={device.id} />} />
+      </Tabs.Panel>
 
       <DeviceEditModal
         opened={editing}

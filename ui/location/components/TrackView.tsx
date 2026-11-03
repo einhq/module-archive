@@ -1,12 +1,12 @@
-import { EmptyState, MapTracks, MapView, PageLoader } from '@ein/ui/components';
-import { Badge, Box, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { EmptyState, FillWindow, MapTracks, MapView, PageLoader, TablerIcon } from '@ein/ui/components';
+import { Badge, Box, Button, Collapse, Container, Group, Paper, ScrollArea, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useTrack } from '../hooks/useTracks.ts';
 import { useLiveTracks } from '../hooks/useLiveTracks.ts';
 import { TrackUpload } from './TrackUpload.tsx';
 import { FollowButton, liveSummary, LiveTrackLayers } from './LiveTracks.tsx';
 import { movingSpeed, trackDistance } from '../lib/track-segments.ts';
 import { formatDistance, formatSpeed, trackProfile } from '@archive/location/track-profile';
-import { useCallback, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { useSourceFiles } from '../../hooks/useSourceFiles.ts';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
 
@@ -25,19 +25,30 @@ function Stat({ label, value }: { label: string; value: string }) {
   return (
     <Box>
       <Text size='xs' c='dimmed' tt='uppercase' fw={500}>{label}</Text>
-      <Text size='lg' fw={500}>{value}</Text>
+      <Text size='md' fw={500}>{value}</Text>
     </Box>
   );
 }
 
+type TrackViewProps = {
+  /** The device's slug. */
+  device: string;
+  /** How it travels, which says the units: knots and nautical miles for a boat, km/h and km otherwise. */
+  kind?: string;
+  /** Offers GPX files to add to the track. */
+  editable: boolean;
+  /** More about recording the track, after the files it was read from: setting up live tracking. */
+  more?: ReactNode;
+};
+
 /**
- * A device's track: its route on a map, what the route adds up to, and the GPX files it was read
- * from. While its last fix is recent, a live card says how fast it is going and how old the fix is,
- * and the map draws where it is now and can follow it. `device` is the device's slug, and its
- * `kind` says the units: knots and nautical miles for a boat, km/h and km otherwise. `editable`
- * offers GPX files to add to it.
+ * A device's track: its route on a map that fills the window, and over the map's foot what the
+ * route adds up to. While its last fix is recent, the panel says how fast it is going and how old
+ * the fix is, and the map draws where it is now and can follow it. The panel's details hold the
+ * track's span, the GPX files it was read from, the upload and `more`. A device with no track yet
+ * gets the upload and `more` on the page instead.
  */
-export function TrackView({ device, kind, editable }: { device: string; kind?: string; editable: boolean }) {
+export function TrackView({ device, kind, editable, more }: TrackViewProps) {
   const { track, segments, truncated, loading, refetch } = useTrack(device);
   const { files, refetch: refetchFiles } = useSourceFiles(track?.path);
   const imported = () => {
@@ -51,6 +62,7 @@ export function TrackView({ device, kind, editable }: { device: string; kind?: s
   const current = live[0];
   const [following, setFollowing] = useState<string | null>(null);
   const stopFollowing = useCallback(() => setFollowing(null), []);
+  const [details, setDetails] = useState(false);
 
   const profile = trackProfile(kind);
   // Summed per segment, so a day boundary or a gap adds no phantom distance.
@@ -64,62 +76,95 @@ export function TrackView({ device, kind, editable }: { device: string; kind?: s
 
   if (!track || track.points === 0) {
     return (
-      <EmptyState title='This device has recorded no track' actions={upload}>
-        {editable ? 'Upload a GPX file it recorded, and its route appears here.' : 'Its route appears here once a GPX file it recorded is uploaded.'}
-      </EmptyState>
+      <Container size='xl' p='md'>
+        <Stack gap='lg'>
+          <EmptyState title='This device has recorded no track' actions={upload}>
+            {editable ? 'Upload a GPX file it recorded, and its route appears here.' : 'Its route appears here once a GPX file it recorded is uploaded.'}
+          </EmptyState>
+          {more}
+        </Stack>
+      </Container>
     );
   }
 
   const days = new Set(segments.map((segment) => segment.label)).size;
 
   return (
-    <Stack gap='lg'>
-      {upload && <Group justify='flex-end'>{upload}</Group>}
-      {current && (
-        <Card radius='md' withBorder>
-          <Group justify='space-between' wrap='nowrap'>
-            <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
-              <Badge color='green' variant='light' leftSection={<Box w={8} h={8} bg='green' style={{ borderRadius: '50%' }} />}>Live</Badge>
-              <Text size='sm' truncate>{liveSummary(current, now)}</Text>
+    <FillWindow>
+      <Box h='100%' pos='relative'>
+        <MapView style={{ height: '100%' }}>
+          <MapTracks tracks={segments} fit />
+          <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
+        </MapView>
+
+        <Paper
+          pos='absolute'
+          bottom={10}
+          left={10}
+          right={10}
+          maw={760}
+          mx='auto'
+          p='sm'
+          radius='md'
+          shadow='md'
+          style={{ zIndex: 1000 }}
+        >
+          <Stack gap='xs'>
+            {current && (
+              <Group justify='space-between' wrap='nowrap'>
+                <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
+                  <Badge color='green' variant='light' leftSection={<Box w={8} h={8} bg='green' style={{ borderRadius: '50%' }} />}>Live</Badge>
+                  <Text size='sm' truncate>{liveSummary(current, now)}</Text>
+                </Group>
+                <FollowButton entry={current} following={following === current.track.path} onFollow={setFollowing} />
+              </Group>
+            )}
+            <Group justify='space-between' align='flex-start' wrap='nowrap' gap='xs'>
+              <SimpleGrid cols={{ base: 3, sm: 5 }} spacing='sm' verticalSpacing={4} style={{ flex: 1 }}>
+                <Stat label='Points' value={track.points.toLocaleString()} />
+                <Stat label='Days' value={String(days || 0)} />
+                <Stat label='Distance' value={distance > 0 ? formatDistance(distance, profile.units) : '—'} />
+                <Stat label='Avg speed' value={speed !== undefined ? formatSpeed(speed, profile.units) : '—'} />
+                <Stat label='Duration' value={duration(track.firstTs, track.lastTs) ?? '—'} />
+              </SimpleGrid>
+              <Button
+                size='compact-sm'
+                variant='subtle'
+                rightSection={<TablerIcon name={details ? 'chevron-down' : 'chevron-up'} size={14} />}
+                onClick={() => setDetails((open) => !open)}
+                style={{ flexShrink: 0 }}
+              >
+                Details
+              </Button>
             </Group>
-            <FollowButton entry={current} following={following === current.track.path} onFollow={setFollowing} />
-          </Group>
-        </Card>
-      )}
-      <Card radius='md' p={0} style={{ overflow: 'hidden' }}>
-        <Box h={480}>
-          <MapView>
-            <MapTracks tracks={segments} fit />
-            <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
-          </MapView>
-        </Box>
-      </Card>
 
-      <SimpleGrid cols={{ base: 2, sm: 5 }}>
-        <Stat label='Points' value={track.points.toLocaleString()} />
-        <Stat label='Days' value={String(days || 0)} />
-        <Stat label='Distance' value={distance > 0 ? formatDistance(distance, profile.units) : '—'} />
-        <Stat label='Average speed' value={speed !== undefined ? formatSpeed(speed, profile.units) : '—'} />
-        <Stat label='Duration' value={duration(track.firstTs, track.lastTs) ?? '—'} />
-      </SimpleGrid>
-
-      {
-        /* Said only when the read was actually thinned — then the distance is a
-        floor rather than the surveyed length, since decimated points cut corners. */
-      }
-      <Text size='xs' c='dimmed'>
-        {track.firstTs?.slice(0, 16).replace('T', ' ')}
-        {track.lastTs && track.lastTs !== track.firstTs ? ` – ${track.lastTs.slice(0, 16).replace('T', ' ')}` : ''}
-        {track.description ? ` · ${track.description}` : ''}
-        {truncated ? ' · drawn from a thinned copy of the track' : ''}
-      </Text>
-
-      {files.length > 0 && (
-        <Stack gap='xs' maw={560}>
-          <Text size='xs' c='dimmed' tt='uppercase' fw={500}>Read from</Text>
-          <SourceFiles files={files} />
-        </Stack>
-      )}
-    </Stack>
+            <Collapse expanded={details}>
+              <ScrollArea.Autosize mah='50dvh' type='auto'>
+                <Stack gap='sm' pt='xs'>
+                  {
+                    /* Said only when the read was actually thinned — then the distance is a
+                    floor rather than the surveyed length, since decimated points cut corners. */
+                  }
+                  <Text size='xs' c='dimmed'>
+                    {track.firstTs?.slice(0, 16).replace('T', ' ')}
+                    {track.lastTs && track.lastTs !== track.firstTs ? ` – ${track.lastTs.slice(0, 16).replace('T', ' ')}` : ''}
+                    {track.description ? ` · ${track.description}` : ''}
+                    {truncated ? ' · drawn from a thinned copy of the track' : ''}
+                  </Text>
+                  {files.length > 0 && (
+                    <Stack gap='xs'>
+                      <Text size='xs' c='dimmed' tt='uppercase' fw={500}>Read from</Text>
+                      <SourceFiles files={files} />
+                    </Stack>
+                  )}
+                  {upload && <Group>{upload}</Group>}
+                  {more}
+                </Stack>
+              </ScrollArea.Autosize>
+            </Collapse>
+          </Stack>
+        </Paper>
+      </Box>
+    </FillWindow>
   );
 }
