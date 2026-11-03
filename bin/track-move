@@ -1,0 +1,83 @@
+#!ts
+/**
+ * track-move — move the fixes of a time range from one device's track to another's.
+ *
+ *   track-move <device> <to-device> [--from <iso>] [--to <iso>]
+ *
+ * For a trip recorded on the wrong device. Each device is a slug or a path, standing for its
+ * track, or a track's path; the device moved to gets a track when it has none yet. The range is
+ * half-open, `[from, to)`; either end left out runs to that end of the track. The fixes keep what
+ * a person said of them (`track-mark`), and both tracks judge again what the move changes. A fix
+ * whose time the other track holds already leaves all the same, and the other keeps its own. The
+ * GPX files the fixes were read from stay where they are.
+ *
+ * Output: how many fixes moved; `{"moved": n, "to": "<track>"}` in JSON mode.
+ */
+import { ensureTrack, openTrack } from '@archive/location/track';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { TrackMove } from '@archive/location/api';
+
+const USAGE = 'track-move: usage: track-move <device> <to-device> [--from <iso>] [--to <iso>]\n';
+
+const trackMove = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from', 'to'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const [source, target] = flags._.map(String);
+  if (!source || !target || flags._.length !== 2) {
+    await cmd.writeError(USAGE);
+    return 1;
+  }
+
+  try {
+    for (const [name, value] of [['from', flags.from], ['to', flags.to]] as const) {
+      if (value !== undefined && Number.isNaN(Date.parse(value))) throw new Error(`invalid --${name} '${value}'`);
+    }
+
+    const from = await openTrack(cmd, source, 'a');
+    let moved: number;
+    let to: string;
+    try {
+      to = await ensureTrack(cmd, target);
+      if (to === from.path) throw new Error(`${from.device} is the device the fixes are on`);
+      const into = await openTrack(cmd, to, 'a');
+      try {
+        moved = await from.handle.movePoints({ from: flags.from, to: flags.to }, into.handle);
+      } finally {
+        await into.handle.close();
+      }
+    } finally {
+      await from.handle.close();
+    }
+
+    if (cmd.json) {
+      await cmd.writeLn(JSON.stringify({ moved, to } satisfies TrackMove));
+    } else {
+      await cmd.writeLn(`Moved ${moved} fix${moved === 1 ? '' : 'es'} to ${to}`);
+    }
+  } catch (error) {
+    await cmd.writeError(`track-move: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  return 0;
+};
+
+trackMove.spec = {
+  name: 'track-move',
+  effect: 'write' as const,
+  description: "Move the fixes of a time range from one device's track to another's, for a trip recorded on the wrong device",
+  args: [
+    { name: 'device', type: 'path' as const, description: "the device (slug or path) the fixes are on, or a track's path" },
+    { name: 'to-device', type: 'path' as const, description: "the device (slug or path) to move them to, or a track's path" },
+  ],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },
+    { name: 'to', type: 'string' as const, description: 'only fixes before this ISO timestamp' },
+  ],
+  examples: ['track-move ruby-iphone the-sailboat --from=2025-07-01T06:00:00Z --to=2025-07-03T18:00:00Z'],
+};
+
+export default trackMove;

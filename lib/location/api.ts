@@ -101,6 +101,9 @@ export type TrackPoint = {
 /** `track-mark`: how many fixes' verdict changed. */
 export type TrackMark = { marked: number };
 
+/** `track-move`: how many fixes left the track, and the track they moved to. */
+export type TrackMove = { moved: number; to: string };
+
 /**
  * `geocode-position <file>/position`: the address its point reverse-geocodes to, as written onto
  * the position node; an empty field was not in the answer. `skipped` when the node holds no point

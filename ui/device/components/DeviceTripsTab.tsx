@@ -7,6 +7,7 @@ import { formatDistance } from '@archive/location/track-profile';
 import { albumRoute } from '../../media/lib/album-path.ts';
 import { useDeviceTrips } from '../hooks/useDeviceTrips.ts';
 import { AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
+import { TripMoveDialog } from './TripMoveDialog.tsx';
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
@@ -92,7 +93,7 @@ function TripAlbum({ trip, editable, busy, onAlbum }: { trip: Trip; editable: bo
 }
 
 function TripCard(
-  { list, trip, first, editable, busy, onEdit, onAlbum }: {
+  { list, trip, first, editable, busy, onEdit, onAlbum, onMove }: {
     list: TripList;
     trip: Trip;
     first: boolean;
@@ -100,8 +101,11 @@ function TripCard(
     busy: boolean;
     onEdit: (name: string, how: 'merge' | 'split') => void;
     onAlbum: OnAlbum;
+    /** Move the trip to the device at `to`; settles when it is done or has failed. */
+    onMove: (trip: Trip, to: string) => Promise<void>;
   },
 ) {
+  const [moving, setMoving] = useState(false);
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
   // The legs' days are the device's, so their times are told on its clock too.
   const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: list.timezone ?? 'UTC' });
@@ -113,18 +117,44 @@ function TripCard(
             <Text fw={600}>{span(trip)}</Text>
             {trip.ongoing && <Badge color='green' variant='light'>Ongoing</Badge>}
           </Group>
-          {editable && !first && (
-            <Button
-              size='compact-xs'
-              variant='subtle'
-              disabled={busy}
-              leftSection={<TablerIcon name='arrows-join' size={14} />}
-              onClick={() => onEdit(trip.id, 'merge')}
-            >
-              Join to the trip before
-            </Button>
+          {editable && (
+            <Group gap='xs'>
+              {!first && (
+                <Button
+                  size='compact-xs'
+                  variant='subtle'
+                  disabled={busy}
+                  leftSection={<TablerIcon name='arrows-join' size={14} />}
+                  onClick={() => onEdit(trip.id, 'merge')}
+                >
+                  Join to the trip before
+                </Button>
+              )}
+              <Button
+                size='compact-xs'
+                variant='subtle'
+                color='gray'
+                disabled={busy}
+                leftSection={<TablerIcon name='arrows-exchange' size={14} />}
+                onClick={() => setMoving(true)}
+              >
+                Move to device…
+              </Button>
+            </Group>
           )}
         </Group>
+        {moving && (
+          <TripMoveDialog
+            device={list.device}
+            subtitle={span(trip)}
+            busy={busy}
+            onClose={() => setMoving(false)}
+            onMove={async (to) => {
+              await onMove(trip, to);
+              setMoving(false);
+            }}
+          />
+        )}
         <Text size='sm' c='dimmed'>
           {trip.days.length} {trip.days.length === 1 ? 'day' : 'days'} · {formatDistance(trip.distanceM, list.units)} · {formatDistance(trip.maxDistanceM, list.units)}{' '}
           out at most
@@ -186,10 +216,10 @@ function TripCard(
  * A device's trips, newest first, as derived from its track: each with its days, distance, where
  * it went, and its album or the albums it may belong to. `device` is the device's path; `editable`
  * offers making a trip an album and taking it off again, joining a trip to the one before it,
- * parting it again, and deriving them all again.
+ * parting it again, moving it to another device, and deriving them all again.
  */
 export function DeviceTripsTab({ device, editable }: { device: string; editable: boolean }) {
-  const { trips, loading, error, edit, derive, makeAlbum } = useDeviceTrips(device);
+  const { trips, loading, error, edit, derive, makeAlbum, move } = useDeviceTrips(device);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
@@ -243,6 +273,7 @@ export function DeviceTripsTab({ device, editable }: { device: string; editable:
                   run(async () => {
                     await makeAlbum(name, album, title);
                   })}
+                onMove={(moved, to) => run(() => move(moved, to))}
               />
             ))}
           </>

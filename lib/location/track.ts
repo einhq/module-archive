@@ -70,11 +70,22 @@ type TrackReadResult = {
   truncated: boolean;
 };
 
+/** A half-open time range `[from, to)`, either end optional. */
+type TrackRange = { from?: string; to?: string };
+
+/** The fixes of a time range a verdict is given to: those within `radius` metres of a point, those a person gave a verdict. */
+export type TrackSelection = TrackRange & {
+  near?: { lat: number; lng: number; radius: number };
+  marked?: TrackVerdict;
+};
+
 /** Structural view of the core TrackHandle (modules avoid core imports). */
 type TrackLikeHandle = {
   appendPoints(points: TrackPoint[]): Promise<number>;
   readPoints(opts?: TrackReadOptions): Promise<TrackReadResult>;
-  markPoints(range: { from?: string; to?: string }, verdict: TrackVerdict | null): Promise<number>;
+  markPoints(selection: TrackSelection, verdict: TrackVerdict | null): Promise<number>;
+  /** Move a time range to the track `to` is open on, for writing. Returns the fixes moved. */
+  movePoints(range: TrackRange, to: TrackLikeHandle): Promise<number>;
   close(): Promise<void>;
 };
 

@@ -9,6 +9,14 @@ type TrackSegment = {
 const EARTH_RADIUS_M = 6371000;
 const toRad = (degrees: number): number => (degrees * Math.PI) / 180;
 
+/** Great-circle distance between two points, in metres. */
+export function metresBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 /**
  * Distance along a run of points, in metres.
  *
@@ -22,12 +30,7 @@ export function trackDistance(segments: TrackSegment[]): number {
 
   for (const segment of segments) {
     for (let i = 1; i < segment.points.length; i++) {
-      const a = segment.points[i - 1];
-      const b = segment.points[i];
-      const dLat = toRad(b.lat - a.lat);
-      const dLng = toRad(b.lng - a.lng);
-      const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-      total += 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+      total += metresBetween(segment.points[i - 1], segment.points[i]);
     }
   }
 

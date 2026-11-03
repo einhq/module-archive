@@ -1,7 +1,7 @@
 /**
  * track-trips, trip-list and trip-edit on a device's track: trips are derived into the device's
- * `.trips`, a later run keeps what is settled and reads on from there, fixes added before that
- * point make it read the whole track, and edits join and part trips. The track is invented.
+ * `.trips`, a later run keeps what is settled and reads on from there, fixes added or rejected
+ * before that point make it read the whole track, and edits join and part trips. The track is invented.
  */
 
 import { DEVICES_ROOT } from '@archive/paths';
@@ -81,6 +81,18 @@ Deno.test({
       await append([fix(4, 13, 16_000)]);
       const derived = await client.execJson<DeviceTrips>('track-trips the-sailboat');
       assert(derived.trips[0].maxDistanceM > 15_000, `first trip reaches ${derived.trips[0].maxDistanceM} m`);
+      assertEquals(derived.stays[1].start, fix(5, 0, 0).ts);
+    });
+
+    await t.step('a fix rejected by hand before the settled point makes it read the whole track too', async () => {
+      // Out to 18 km on the first trip, and then that fix rejected: the settled stay still starts where it did.
+      const far = fix(4, 11.5, 18_000);
+      await append([far]);
+      assert((await client.execJson<DeviceTrips>('track-trips the-sailboat')).trips[0].maxDistanceM > 17_000);
+
+      await cmd.shouldSucceed(`track-mark the-sailboat --from ${far.ts} --to ${new Date(Date.parse(far.ts) + 1).toISOString()} --reject`);
+      const derived = await client.execJson<DeviceTrips>('track-trips the-sailboat');
+      assert(derived.trips[0].maxDistanceM < 17_000, `first trip reaches ${derived.trips[0].maxDistanceM} m`);
       assertEquals(derived.stays[1].start, fix(5, 0, 0).ts);
     });
 

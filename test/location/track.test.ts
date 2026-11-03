@@ -95,7 +95,7 @@ Deno.test({
   const cmd = testCommands(client);
 
   try {
-    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch']) {
+    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right']) {
       await cmd.shouldSucceed(`mknode -p -t device ${DEVICES_ROOT}/${device} --as name=${device}`);
     }
 
@@ -317,6 +317,45 @@ Deno.test({
       await cmd.shouldFailWith('track-mark glitch --reject --from=yesterday', 'invalid --from');
     });
 
+    await t.step('track-mark --near rejects the fixes around a point, and --marked reject --clear brings back only those', async () => {
+      // Steady going a fix a second, about 13 m apart: the first four are within 40 m of the first.
+      const points = Array.from({ length: 25 }, (_, i) => ({ lat: 57.7 + i * 0.0001, lng: 11.97 + i * 0.0001, ts: new Date(Date.UTC(2020, 6, 1, 10, 0, i)).toISOString() }));
+      await cmd.shouldSucceed('track-create cluster');
+      await cmd.shouldSucceed(`track-append cluster --json '${JSON.stringify(points)}'`);
+
+      assertEquals(await client.execJson(`track-mark cluster --near=${points[0].lat},${points[0].lng} --reject`), { marked: 4 });
+      assertEquals(await client.execJson(`track-mark cluster --near=${points[24].lat},${points[24].lng} --within=10 --reject`), { marked: 1 });
+      assertEquals(await client.execJson(`track-mark cluster --from ${points[12].ts} --to ${points[13].ts} --accept`), { marked: 1 });
+      assertEquals((await listed('cluster'))?.points, 20);
+
+      assertEquals(await client.execJson('track-mark cluster --marked=reject --clear'), { marked: 5 });
+      assertEquals((await listed('cluster'))?.points, 25);
+      const kept = await client.execJson<ReadResult>('track-read cluster');
+      assertEquals(kept.segments.flatMap((segment) => segment.points).filter((point) => point.manual).map((point) => point.ts), [points[12].ts]);
+
+      await cmd.shouldFailWith('track-mark cluster --near=57.7 --reject', 'invalid --near');
+      await cmd.shouldFailWith('track-mark cluster --within=40 --reject', '--within needs --near');
+      await cmd.shouldFailWith('track-mark cluster --marked=kept --clear', 'invalid --marked');
+    });
+
+    await t.step('track-move moves a time range to another device, giving it a track', async () => {
+      const points = Array.from({ length: 20 }, (_, i) => ({ lat: 57.7 + i * 0.0001, lng: 11.97 + i * 0.0001, ts: new Date(Date.UTC(2020, 7, 1, 10, 0, i)).toISOString() }));
+      await cmd.shouldSucceed('track-create wrong');
+      await cmd.shouldSucceed(`track-append wrong --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-mark wrong --from ${points[5].ts} --to ${points[6].ts} --reject`);
+
+      const moved = await client.execJson(`track-move wrong right --from ${points[5].ts} --to ${points[15].ts}`);
+      assertEquals(moved, { moved: 10, to: `${DEVICES_ROOT}/right/track` });
+      assertEquals((await listed('wrong'))?.points, 10);
+      assertEquals((await listed('right'))?.points, 9);
+      const rejected = await client.execJson<ReadResult>('track-read right --only-rejected');
+      assertEquals(rejected.segments.flatMap((segment) => segment.points).map((point) => [point.ts, point.manual]), [[points[5].ts, 'reject']]);
+
+      await cmd.shouldFailWith('track-move wrong', 'usage');
+      await cmd.shouldFailWith('track-move wrong wrong', 'the device the fixes are on');
+      await cmd.shouldFailWith('track-move right wrong --to=soon', 'invalid --to');
+    });
+
     await t.step('track-import parses GPX (both attribute orders)', async () => {
       await cmd.shouldSucceed('mkfile /trip.gpx');
       const fh = await ctx.vfs.open(ADMIN_ACCESS, '/trip.gpx', { mode: 'w' });
@@ -456,7 +495,21 @@ Deno.test({
 
     await t.step('track-list names the devices that have a track', async () => {
       const tracks = await client.execJson<{ id: string; path: string; name: string; points: number }[]>('track-list');
-      assertEquals(tracks.map((track) => track.id).sort(), ['backfill', 'glitch', 'hike', 'live', 'logger', 'moored', 'paused', 'south', 'thin', 'trip1']);
+      assertEquals(tracks.map((track) => track.id).sort(), [
+        'backfill',
+        'cluster',
+        'glitch',
+        'hike',
+        'live',
+        'logger',
+        'moored',
+        'paused',
+        'right',
+        'south',
+        'thin',
+        'trip1',
+        'wrong',
+      ]);
       const hike = tracks.find((track) => track.id === 'hike')!;
       assertEquals([hike.path, hike.name, hike.points], [`${DEVICES_ROOT}/hike/track`, 'hike', 3]);
     });

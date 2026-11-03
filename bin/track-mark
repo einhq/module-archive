@@ -2,10 +2,14 @@
 /**
  * track-mark — overrule the track's rules on the fixes of a time range.
  *
- *   track-mark <device> [--from <iso>] [--to <iso>] --reject | --accept | --clear
+ *   track-mark <device> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
+ *              --reject | --accept | --clear
  *
  * `<device>` is a device's slug or path, standing for its track, or a track's path. The range
- * is half-open, `[from, to)`; either end left out runs to that end of the track.
+ * is half-open, `[from, to)`; either end left out runs to that end of the track. `--near` keeps
+ * the fixes within `--within` metres (40 by default) of a point, and `--marked` those a person
+ * rejected or accepted, so `--marked reject --clear` brings back what was rejected by hand and
+ * leaves what was accepted.
  *
  * The track judges its fixes by rules as it stores them, and leaves out the ones they reject
  * (`track-read --rejected` reads them). `--reject` leaves the fixes out whatever the rules say,
@@ -14,17 +18,29 @@
  *
  * Output: how many fixes' verdict changed; `{"marked": n}` in JSON mode.
  */
-import { openTrack, type TrackVerdict } from '@archive/location/track';
+import { openTrack, type TrackSelection, type TrackVerdict } from '@archive/location/track';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackMark } from '@archive/location/api';
 
-const USAGE = 'track-mark: usage: track-mark <device> [--from <iso>] [--to <iso>] --reject | --accept | --clear\n';
+const USAGE = 'track-mark: usage: track-mark <device> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept] --reject | --accept | --clear\n';
+
+/** How far from `--near`, in metres, a fix is kept when `--within` is not given. */
+const DEFAULT_WITHIN_M = 40;
+
+/** The point `--near` names, `lat,lng`. */
+const parseNear = (value: string): { lat: number; lng: number } => {
+  const parts = value.split(',').map((part) => part.trim() === '' ? Number.NaN : Number(part));
+  if (parts.length !== 2 || !parts.every(Number.isFinite) || Math.abs(parts[0]) > 90 || Math.abs(parts[1]) > 180) {
+    throw new Error(`invalid --near '${value}' (expected lat,lng)`);
+  }
+  return { lat: parts[0], lng: parts[1] };
+};
 
 const trackMark = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
-    string: ['from', 'to'],
+    string: ['from', 'to', 'near', 'within', 'marked'],
     boolean: ['reject', 'accept', 'clear'],
     unknown: collectUnknownFlags(unknown),
   });
@@ -46,10 +62,22 @@ const trackMark = async (cmd: Command): CmdReturn => {
       if (value !== undefined && Number.isNaN(Date.parse(value))) throw new Error(`invalid --${name} '${value}'`);
     }
 
+    const selection: TrackSelection = { from: flags.from, to: flags.to };
+    if (flags.within !== undefined && flags.near === undefined) throw new Error('--within needs --near');
+    if (flags.near !== undefined) {
+      const radius = flags.within === undefined ? DEFAULT_WITHIN_M : Number(flags.within);
+      if (!Number.isFinite(radius) || radius <= 0) throw new Error(`invalid --within '${flags.within}' (metres)`);
+      selection.near = { ...parseNear(flags.near), radius };
+    }
+    if (flags.marked !== undefined) {
+      if (flags.marked !== 'reject' && flags.marked !== 'accept') throw new Error(`invalid --marked '${flags.marked}' (reject or accept)`);
+      selection.marked = flags.marked;
+    }
+
     const { handle } = await openTrack(cmd, target, 'a');
     let marked: number;
     try {
-      marked = await handle.markPoints({ from: flags.from, to: flags.to }, verdict);
+      marked = await handle.markPoints(selection, verdict);
     } finally {
       await handle.close();
     }
@@ -78,9 +106,16 @@ trackMark.spec = {
   flags: [
     { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },
     { name: 'to', type: 'string' as const, description: 'only fixes before this ISO timestamp' },
+    { name: 'near', type: 'string' as const, description: 'only fixes near this point, lat,lng (--near=-33.9,18.4 for a negative one)' },
+    { name: 'within', type: 'string' as const, description: `how near --near, in metres (default ${DEFAULT_WITHIN_M})` },
+    { name: 'marked', type: 'string' as const, description: 'only fixes a person gave this verdict: reject or accept' },
     { name: 'reject', type: 'bool' as const, description: 'leave the fixes out, whatever the rules say' },
     { name: 'accept', type: 'bool' as const, description: 'keep the fixes, whatever the rules say' },
     { name: 'clear', type: 'bool' as const, description: 'hand the fixes back to the rules' },
+  ],
+  examples: [
+    'track-mark the-sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --near=57.70,11.97 --reject',
+    'track-mark the-sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --marked=reject --clear',
   ],
 };
 

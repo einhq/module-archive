@@ -4,6 +4,7 @@ import { execCommand } from '@ein/ui/signals';
 import { ActionIcon, Button, Group, Text } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { TrackPoint, TrackRead } from '@archive/location/api';
+import { metresBetween } from '../lib/track-segments.ts';
 
 /** What a track left out is drawn in: a faint red, over a map or a satellite picture. */
 const REJECTED_COLOR = '#e03131';
@@ -13,6 +14,16 @@ const PICK_PX = 12;
 
 /** Fixes read around a click, at most. */
 const PICK_LIMIT = 2000;
+
+/**
+ * Rejecting a drawn fix rejects the fixes within this many metres of it on its day too: a drawn
+ * vertex stands for the fixes the thinned line merged into it, and one of them gone, the next takes
+ * its place.
+ */
+const CLUSTER_M = 40;
+
+/** More fixes than this around a drawn one, and it is rejected alone: a stay, not a glitch. */
+const CLUSTER_MAX = 25;
 
 /** The fixes a track left out, drawn faintly, a run of them to a line, as children of its `MapView`. */
 export function RejectedFixes({ runs }: { runs: TrackPoint[][] }) {
@@ -86,6 +97,46 @@ const spanOf = (fixes: TrackPoint[]): string => {
   return `--from=${fixes[0].ts} --to=${new Date(last + 1).toISOString()}`;
 };
 
+/** The UTC day of a fix, `YYYY-MM-DD`: the day its line is drawn on. */
+const dayOf = (fix: TrackPoint): string => (fix.ts ?? '').slice(0, 10);
+
+/** The half-open time range of a UTC day. */
+const daySpan = (day: string): string => {
+  const start = Date.parse(`${day}T00:00:00.000Z`);
+  return `--from=${new Date(start).toISOString()} --to=${new Date(start + 86_400_000).toISOString()}`;
+};
+
+/**
+ * How many drawn fixes of the track at `path` lie within `CLUSTER_M` of a drawn fix on its day, it
+ * among them: `Infinity` when there are too many to read, null while unknown or for a fix left out.
+ */
+function useCluster(path: string, fix: TrackPoint): number | null {
+  const [count, setCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    setCount(null);
+    if (fix.rejected || !fix.ts) return;
+    let live = true;
+    const dLat = CLUSTER_M / 111_000;
+    const dLng = dLat / Math.max(Math.cos((fix.lat * Math.PI) / 180), 0.01);
+    const bbox = `${fix.lat + dLat},${fix.lat - dLat},${fix.lng + dLng},${fix.lng - dLng}`;
+
+    execCommand<TrackRead>(`track-read ${shq(path)} --bbox=${bbox} --margin=0 ${daySpan(dayOf(fix))} --limit=${PICK_LIMIT}`)
+      .then((read) => {
+        if (!live) return;
+        const near = read.segments.flatMap((segment) => segment.points).filter((point) => metresBetween(point, fix) <= CLUSTER_M);
+        setCount(read.truncated ? Infinity : new Set(near.map((point) => point.ts)).size);
+      })
+      .catch(() => live && setCount(null));
+
+    return () => {
+      live = false;
+    };
+  }, [path, fix]);
+
+  return count;
+}
+
 /** What the track made of a fix, and who said so. */
 function verdictOf(fix: TrackPoint): string {
   if (fix.rejected === 'manual') return 'left out by hand';
@@ -109,22 +160,29 @@ type FixPanelProps = {
 
 /**
  * The fix picked on a track's map: when it was recorded and what the track made of it, and, for
- * whoever may change the track, the verdict to give it by hand. A drawn fix can be rejected; a
- * rejected one accepted, with the rest of the run of rejected fixes it is in; and a verdict given
- * by hand undone, which hands the fixes back to the rules (`track-mark`).
+ * whoever may change the track, the verdict to give it by hand (`track-mark`). A drawn fix can be
+ * rejected, with the fixes within 40 m of it that day unless there are over 25 of them; a rejected
+ * one accepted, with the rest of the run of rejected fixes it is in; and a verdict given by hand
+ * undone, which hands the fixes back to the rules — for a rejected fix, its run, or every fix
+ * rejected by hand that day.
  */
 export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPanelProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const cluster = useCluster(path, fix);
 
   const run = (fix.rejected && runs.find((points) => points.some((point) => point.ts === fix.ts))) || [fix];
   const others = run.length - 1;
+  // The fixes rejected by hand with it: in its run, and on its day.
+  const inRun = run.filter((point) => point.rejected === 'manual').length;
+  const onDay = fix.rejected === 'manual' ? runs.flat().filter((point) => point.rejected === 'manual' && dayOf(point) === dayOf(fix)).length : 0;
+  const swept = cluster !== null && cluster > 1 && cluster <= CLUSTER_MAX ? cluster : 1;
 
-  const mark = async (verdict: 'reject' | 'accept' | 'clear', fixes: TrackPoint[]) => {
-    setBusy(verdict);
+  const mark = async (busyWith: string, args: string) => {
+    setBusy(busyWith);
     setError(null);
     try {
-      await execCommand(`track-mark ${shq(path)} ${spanOf(fixes)} --${verdict}`);
+      await execCommand(`track-mark ${shq(path)} ${args}`);
       onMarked();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -133,6 +191,8 @@ export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPa
     }
   };
 
+  const reject = () => mark('reject', swept > 1 ? `${daySpan(dayOf(fix))} --near=${fix.lat},${fix.lng} --within=${CLUSTER_M} --reject` : `${spanOf([fix])} --reject`);
+
   const when = fix.ts ? new Date(fix.ts).toLocaleString() : '';
 
   return (
@@ -140,18 +200,19 @@ export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPa
       <Text size='sm' style={{ minWidth: 0 }}>
         {when} · {verdictOf(fix)}
         {fix.rejected && others > 0 && `, with ${others} fix${others === 1 ? '' : 'es'} beside it`}
+        {!fix.rejected && swept > 1 && `, with ${swept - 1} fix${swept === 2 ? '' : 'es'} within ${CLUSTER_M} m that day`}
         {error && <Text span c='red' size='sm'>{` · ${error}`}</Text>}
       </Text>
       <Group gap='xs' wrap='nowrap'>
         {editable && (fix.rejected
           ? (
-            <Button size='xs' variant='light' loading={busy === 'accept'} disabled={busy !== null} onClick={() => mark('accept', run)}>
+            <Button size='xs' variant='light' loading={busy === 'accept'} disabled={busy !== null} onClick={() => mark('accept', `${spanOf(run)} --accept`)}>
               {others > 0 ? `Accept all ${run.length}` : 'Accept'}
             </Button>
           )
           : (
-            <Button size='xs' variant='light' color='red' loading={busy === 'reject'} disabled={busy !== null} onClick={() => mark('reject', [fix])}>
-              Reject
+            <Button size='xs' variant='light' color='red' loading={busy === 'reject'} disabled={busy !== null} onClick={reject}>
+              {swept > 1 ? `Reject all ${swept}` : 'Reject'}
             </Button>
           ))}
         {editable && fix.manual && (
@@ -160,9 +221,20 @@ export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPa
             variant='default'
             loading={busy === 'clear'}
             disabled={busy !== null}
-            onClick={() => mark('clear', fix.rejected ? run : [fix])}
+            onClick={() => mark('clear', `${spanOf(fix.rejected ? run : [fix])} --clear`)}
           >
             Undo
+          </Button>
+        )}
+        {editable && onDay > inRun && (
+          <Button
+            size='xs'
+            variant='default'
+            loading={busy === 'day'}
+            disabled={busy !== null}
+            onClick={() => mark('day', `${daySpan(dayOf(fix))} --marked=reject --clear`)}
+          >
+            Undo all {onDay} that day
           </Button>
         )}
         <ActionIcon variant='subtle' color='gray' aria-label='Close' onClick={onClose}>

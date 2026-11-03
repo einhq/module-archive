@@ -5,7 +5,7 @@
  * says of itself: the thresholds of its kind, its timezone, its homes and the edits in its attr
  * `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
- * derived with has changed, or when the track has more fixes before that point than it had.
+ * derived with has changed, or when the track has more or fewer fixes before that point than it had.
  * A stay derived again from the same first fix keeps the location `track-places` gave it.
  * Whenever `.trips` is written, the albums made of the device's trips are written anew from it
  * (`@archive/media/trip-album`).
@@ -178,11 +178,13 @@ export const deriveDeviceTrips = async (cmd: Command, target: string, opts: { fu
     } else {
       fixes = await readFixes(handle, settled, Date.parse(summary.lastTs));
       seg = segmentTrips(fixes, settings);
-      // What is settled holds while the track has no more fixes before the settled point than it
-      // had, and the stay there, when it was a stay, still starts there: a fix added at its start
-      // can make it begin later.
+      // What is settled holds while the track has as many fixes before the settled point as it
+      // had — none added, rejected or moved away — and the stay there, when it was a stay, still
+      // starts there: a fix added at its start can make it begin later. Fixes appended since the
+      // summary was read are not counted against it.
       const stay = before!.stays.find((entry) => Date.parse(entry.start) === settled);
-      const holds = summary.points - fixes.length <= (before!.settledPoints ?? 0) &&
+      const summed = fixes.filter((fix) => fix.ms <= Date.parse(summary.lastTs!)).length;
+      const holds = summary.points - summed === (before!.settledPoints ?? 0) &&
         (!stay || (seg.stays[0]?.start === stay.start && seg.stays[0].kind === stay.kind));
       if (holds) previous = before;
       else await readAll();

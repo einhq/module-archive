@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNodeEvents } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
-import type { TripList } from '@archive/location/api';
+import type { Trip, TripList } from '@archive/location/api';
 import type { TripAlbumAnswer } from '@archive/media/api';
 
 /** The child `track-trips` keeps a device's trips in. */
@@ -18,11 +18,12 @@ type UseDeviceTrips = {
   /** Derive them again from the whole track. */
   derive: () => Promise<void>;
   /**
-   * Make the trip a new album (`new`) or the album at a path, or take it off its album (`detach`);
-   * answers the album.
+   * Make the trip an album: a new one (named `name`, or after the trip), one that is there by its
+   * path, or none (`detach`); answers the album.
    */
-  /** Make the trip an album: a new one (named `name`, or after the trip), one that is there by its path, or none (`detach`). */
   makeAlbum: (trip: string, album: 'new' | 'detach' | string, name?: string) => Promise<string>;
+  /** Move the trip's fixes, first to last, to the device at `to`, and find the trips of both again. */
+  move: (trip: Trip, to: string) => Promise<void>;
 };
 
 /** A device's trips as `trip-list` gives them, read again whenever its `.trips` is written. */
@@ -73,5 +74,13 @@ export function useDeviceTrips(devicePath: string): UseDeviceTrips {
     return answer.album;
   }, [devicePath, refetch]);
 
-  return { trips, loading, error, refetch, edit, derive, makeAlbum };
+  const move = useCallback(async (trip: Trip, to: string) => {
+    const end = new Date(Date.parse(trip.end) + 1).toISOString();
+    await execCommand(`track-move ${shq(devicePath)} ${shq(to)} --from=${trip.start} --to=${end}`);
+    await execCommand(`track-trips ${shq(devicePath)}`);
+    await execCommand(`track-trips ${shq(to)}`);
+    refetch();
+  }, [devicePath, refetch]);
+
+  return { trips, loading, error, refetch, edit, derive, makeAlbum, move };
 }
