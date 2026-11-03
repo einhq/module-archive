@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Button, Card, Code, Container, Grid, Stack, Tabs, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Container, Grid, Stack, Tabs, Text } from '@mantine/core';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
 import { TimelineFeed } from '../../components/TimelineFeed.tsx';
@@ -9,39 +9,28 @@ import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, subjectArg } from '@ein/ui/lib';
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { DeviceEditModal } from '../components/DeviceEditModal.tsx';
-import { DeviceOwnersTab } from '../components/DeviceOwnersTab.tsx';
-import { DeviceHomesCard } from '../components/DeviceHomesCard.tsx';
-import { DEVICE_KIND_LABELS, isDeviceKind } from '@archive/location/track-profile';
+import { DeviceInfo } from '../components/DeviceInfo.tsx';
 import { DeviceTripsTab } from '../components/DeviceTripsTab.tsx';
 import { TrackView } from '../../location/components/TrackView.tsx';
+import { useHasTrack } from '../../location/hooks/useTracks.ts';
 import { TrackerSetup } from '../components/TrackerSetup.tsx';
 import { useDevice } from '../hooks/useDevice.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { CurrentPeopleCard, CurrentPeopleLine } from '../../components/CurrentPeople.tsx';
+import { CurrentPeopleLine } from '../../components/CurrentPeople.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
-import { UserText } from '../../components/UserText.tsx';
 import { yearSpan } from '../../lib/year-span.ts';
 
-const TABS = ['info', 'timeline', 'media', 'track', 'trips', 'owners'] as const;
+const TABS = ['info', 'media', 'track', 'trips'] as const;
 type DeviceTab = typeof TABS[number];
 
 const isTab = (value: string | null): value is DeviceTab => value !== null && (TABS as readonly string[]).includes(value);
 
+/** The tabs only a device that travels has. */
+const TRAVEL_TABS: readonly DeviceTab[] = ['track', 'trips'];
+
 /** The feed here does not page, so the sentinels have nothing to observe. */
 const noSentinel = () => {};
-
-/** A recorded setting. Absent rather than blank when there is nothing to show. */
-/** One labelled fact; `written` for text a person wrote, shown as Markdown. */
-function InfoRow({ label, value, written = false }: { label: string; value?: string; written?: boolean }) {
-  if (!value) return null;
-  return (
-    <div>
-      <Text size='xs' c='dimmed'>{label}</Text>
-      {written ? <UserText text={value} size='sm' /> : <Text size='sm' style={{ whiteSpace: 'pre-line' }}>{value}</Text>}
-    </div>
-  );
-}
 
 /** The device's photographic header runs edge to edge. */
 export const handle = { fullBleed: true };
@@ -52,9 +41,16 @@ export default function DeviceDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { device, owners, loading, save, addOwner, removeOwner, relink } = useDevice(id);
   const access = useAccessIds();
+  const hasTrack = useHasTrack(id);
 
-  // Settings are what a device page is mostly for, so it opens on them.
-  const tab: DeviceTab = isTab(searchParams.get('tab')) ? searchParams.get('tab') as DeviceTab : 'info';
+  // A device travels once it is said how (`kind`) or it has recorded a track; only then do a
+  // track and trips have anything to show.
+  const travels = Boolean(device?.kind) || hasTrack === true;
+
+  // What is known about the device, its history beside it, is what the page opens on; the other
+  // tabs are linkable. A travel tab asked of a device that does not travel opens Info.
+  const asked = searchParams.get('tab');
+  const tab: DeviceTab = isTab(asked) && (travels || !TRAVEL_TABS.includes(asked)) ? asked : 'info';
   const setTab = (value: string | null) => setSearchParams(value && value !== 'info' ? { tab: value } : {}, { replace: true });
 
   const [editing, setEditing] = useState(false);
@@ -64,7 +60,6 @@ export default function DeviceDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Computed before the early returns: hooks cannot be skipped.
-  const editable = device ? canWrite(device.ownership, access) : false;
   const facetFilters = useMemo(() => ({ subjects: device ? [subjectArg('device', device.path)] : undefined }), [device?.path]);
   const { facets } = useSubjectFacets(facetFilters, Boolean(device));
   const { groups, loading: feedLoading, refetch: refetchFeed } = useSubjectTimeline('device-timeline', device?.path ?? null);
@@ -87,6 +82,8 @@ export default function DeviceDetailPage() {
       </Container>
     );
   }
+
+  const editable = canWrite(device.ownership, access);
 
   const runRelink = async () => {
     try {
@@ -129,11 +126,9 @@ export default function DeviceDetailPage() {
         tabs={
           <Tabs.List>
             <Tabs.Tab value='info' leftSection={<TablerIcon name='info-circle' size={16} />}>Info</Tabs.Tab>
-            <Tabs.Tab value='timeline' leftSection={<TablerIcon name='calendar-event' size={16} />}>Timeline</Tabs.Tab>
             <Tabs.Tab value='media' leftSection={<TablerIcon name='photo' size={16} />}>Media</Tabs.Tab>
-            <Tabs.Tab value='track' leftSection={<TablerIcon name='route' size={16} />}>Track</Tabs.Tab>
-            <Tabs.Tab value='trips' leftSection={<TablerIcon name='map-route' size={16} />}>Trips</Tabs.Tab>
-            <Tabs.Tab value='owners' leftSection={<TablerIcon name='users' size={16} />}>Owners</Tabs.Tab>
+            {travels && <Tabs.Tab value='track' leftSection={<TablerIcon name='route' size={16} />}>Track</Tabs.Tab>}
+            {travels && <Tabs.Tab value='trips' leftSection={<TablerIcon name='map-route' size={16} />}>Trips</Tabs.Tab>}
           </Tabs.List>
         }
         path={device.path}
@@ -185,92 +180,39 @@ export default function DeviceDetailPage() {
           )}
 
           <Tabs.Panel value='info'>
-            <Grid>
-              <Grid.Col span={{ base: 12, md: 7 }}>
-                <Stack gap='md'>
-                  <Card radius='md'>
-                    <Title order={3} size='h4' mb='sm'>
-                      Settings
-                    </Title>
-
-                    <Stack gap='xs'>
-                      <InfoRow label='Make' value={device.make} />
-                      <InfoRow label='Model' value={device.model} />
-                      <InfoRow label='Serial number' value={device.serial} />
-                      <InfoRow label='Timezone' value={device.timezone} />
-                      <InfoRow label='Travels as' value={isDeviceKind(device.kind) ? DEVICE_KIND_LABELS[device.kind] : undefined} />
-                      {device.digitizer && (
-                        <div>
-                          <Text size='xs' c='dimmed'>Capture dates</Text>
-                          <Badge size='sm' variant='light' color='yellow'>Scanner dates suppressed</Badge>
-                        </div>
-                      )}
-                      {device.quicktimeUtc && (
-                        <div>
-                          <Text size='xs' c='dimmed'>Video times</Text>
-                          <Badge size='sm' variant='light' color='gray'>UTC</Badge>
-                        </div>
-                      )}
-                      <InfoRow label='Description' value={device.description} written />
-                      {!device.make && !device.model && !device.serial && !device.timezone && !device.kind && !device.digitizer && !device.quicktimeUtc &&
-                        !device.description && <Text size='sm' c='dimmed'>Nothing recorded beyond the name.</Text>}
-                      {!matchable && (
-                        <Text size='xs' c='yellow'>
-                          No serial and no make/model — nothing is matched to this device automatically; <Code>device-link --device</Code> links files to it by hand.
-                        </Text>
-                      )}
-                    </Stack>
-                  </Card>
-
-                  {editable && matchable && (
-                    <Card radius='md'>
-                      <Title order={3} size='h4' mb={4}>
-                        Link existing media
-                      </Title>
-                      <Text size='xs' c='dimmed' mb='sm'>
-                        Files are linked to their device when it is registered and when they are indexed. A make, model or serial number changed afterwards leaves the files it
-                        now matches unclaimed; this finds them by fingerprint and attaches them.
-                      </Text>
-                      <Button size='xs' variant='light' fullWidth leftSection={<TablerIcon name='link' size={14} />} loading={busy} onClick={runRelink}>
-                        Link existing media
-                      </Button>
-                    </Card>
-                  )}
-                </Stack>
+            {/* What is known about the device comes first on a phone, above the timeline that can run long. */}
+            <Grid gap='lg'>
+              <Grid.Col span={{ base: 12, md: 7 }} order={{ base: 2, md: 1 }}>
+                <TimelineFeed
+                  groups={groups}
+                  loading={feedLoading}
+                  hasMore={false}
+                  hasNewer={false}
+                  sentinelRef={noSentinel}
+                  topSentinelRef={noSentinel}
+                  emptyMessage={`Nothing recorded for ${device.name} yet. Owners with dates, and albums with photos it took, appear on its timeline.`}
+                />
               </Grid.Col>
-
-              <Grid.Col span={{ base: 12, md: 5 }}>
-                <Stack gap='md'>
-                  <CurrentPeopleCard
-                    title='Current owners'
-                    people={owners}
-                    emptyText={owners.length > 0 ? 'Nobody owns it now, as far as the archive knows.' : 'Nobody is recorded as owning this.'}
-                    onShowAll={() => setTab('owners')}
-                    showAllLabel='All owners'
-                  />
-                  <DeviceHomesCard device={device.path} editable={editable} />
-                </Stack>
+              <Grid.Col span={{ base: 12, md: 5 }} order={{ base: 1, md: 2 }}>
+                <DeviceInfo
+                  device={device}
+                  owners={owners}
+                  editable={editable}
+                  travels={travels}
+                  setOwner={setOwner}
+                  removeOwner={dropOwner}
+                  onRelink={runRelink}
+                  relinking={busy}
+                />
               </Grid.Col>
             </Grid>
-          </Tabs.Panel>
-
-          <Tabs.Panel value='timeline'>
-            <TimelineFeed
-              groups={groups}
-              loading={feedLoading}
-              hasMore={false}
-              hasNewer={false}
-              sentinelRef={noSentinel}
-              topSentinelRef={noSentinel}
-              emptyMessage={`Nothing recorded for ${device.name} yet. Owners with dates, and albums with photos it took, appear on its timeline.`}
-            />
           </Tabs.Panel>
 
           <Tabs.Panel value='media'>
             <MediaTimeline
               device={device.path}
               emptyMessage={matchable
-                ? 'Nothing is linked to this device yet: no file carries its make and model or serial number. If they changed since it was registered, use “Link existing media”.'
+                ? 'Nothing is linked to this device yet: no file carries its make and model or serial number. If they changed since it was registered, use “Link existing media” on its Info tab.'
                 : 'Nothing is linked to this device yet, and nothing can be: give it a serial number, or both a make and a model.'}
               selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
             />
@@ -285,10 +227,6 @@ export default function DeviceDetailPage() {
 
           <Tabs.Panel value='trips'>
             <DeviceTripsTab device={device.path} editable={editable} />
-          </Tabs.Panel>
-
-          <Tabs.Panel value='owners'>
-            <DeviceOwnersTab device={device} owners={owners} editable={editable} setOwner={setOwner} removeOwner={dropOwner} />
           </Tabs.Panel>
         </Stack>
       </Container>

@@ -1,14 +1,15 @@
 import { PEOPLE_ROOT } from '@archive/paths';
-import { ActionIcon, Alert, Anchor, Badge, Button, Card, Group, Paper, Stack, Text, TextInput } from '@mantine/core';
+import { ActionIcon, Alert, Anchor, Badge, Button, Group, Paper, Stack, Text, TextInput } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { DeviceDetail, DeviceOwner } from '../hooks/useDevice.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { TablerIcon } from '@ein/ui/components';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
+import { InfoSection } from '../../components/InfoSection.tsx';
 import { spanLine } from '../../lib/residence-span.ts';
 
-type DeviceOwnersTabProps = {
+type DeviceOwnersProps = {
   device: DeviceDetail;
   owners: DeviceOwner[];
   /** The server still authorizes the command; this just keeps controls out of read-only views. */
@@ -27,11 +28,11 @@ const order = (a: DeviceOwner, b: DeviceOwner): number => {
 };
 
 /**
- * Who has owned a device, and when — laid out and edited like a person's Homes
- * tab and a location's Residents, so a dated tie to a person reads the same on
- * every page that has one.
+ * Who has owned a device, and when, as a section of its Info tab — laid out and edited like a
+ * person's Homes tab and a location's Residents, so a dated tie to a person reads the same on every
+ * page that has one.
  */
-export function DeviceOwnersTab({ device, owners, editable, setOwner, removeOwner }: DeviceOwnersTabProps) {
+export function DeviceOwners({ device, owners, editable, setOwner, removeOwner }: DeviceOwnersProps) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pick, setPick] = useState<string | null>(null);
   const [from, setFrom] = useState('');
@@ -92,12 +93,14 @@ export function DeviceOwnersTab({ device, owners, editable, setOwner, removeOwne
   };
 
   return (
-    <Stack gap='md' maw={760}>
-      <Group justify='space-between'>
-        <Text c='dimmed' size='sm'>Who has owned {device.name}, and when.</Text>
-        {editable && <Button size='compact-sm' variant='light' leftSection={<TablerIcon name='plus' size={14} />} onClick={() => open({ kind: 'add' })}>Add owner</Button>}
-      </Group>
-
+    <InfoSection
+      title='Owners'
+      action={editable && (
+        <Button size='compact-sm' variant='light' leftSection={<TablerIcon name='plus' size={14} />} onClick={() => open({ kind: 'add' })}>
+          Add owner
+        </Button>
+      )}
+    >
       {editor && (
         <Paper withBorder p='md' radius='md'>
           <Stack gap='md'>
@@ -120,52 +123,50 @@ export function DeviceOwnersTab({ device, owners, editable, setOwner, removeOwne
 
       {!editor && error && <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />} variant='light'>{error}</Alert>}
 
-      <Card withBorder={editable} radius='md'>
-        {rows.length === 0 ? <Text c='dimmed' size='sm'>Nobody is recorded as owning this.</Text> : (
-          <Stack gap='xs'>
-            {rows.map((owner) => {
-              const past = Boolean(owner.to);
-              return (
-                <Stack key={owner.id} gap='xs'>
-                  <Group gap='xs' wrap='nowrap' justify='space-between'>
-                    <Group gap='xs' wrap='nowrap' style={{ minWidth: 0 }}>
-                      <TablerIcon name='user' size={16} color='gray' style={{ flexShrink: 0, opacity: past ? 0.5 : 1 }} />
-                      <Anchor component={Link} to={`/people/${encodeURIComponent(owner.id)}`} size='sm' c={past ? 'dimmed' : undefined} lineClamp={1}>
-                        {owner.name}
-                      </Anchor>
-                    </Group>
-                    <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
-                      <Text size='xs' c='dimmed'>{spanLine(owner)}</Text>
-                      {!past && owner.from && <Badge size='xs' variant='light'>current</Badge>}
-                      {editable && (
-                        <>
-                          <ActionIcon variant='subtle' size='sm' aria-label={`Edit ${owner.name}`} onClick={() => open({ kind: 'edit', owner })}>
-                            <TablerIcon name='pencil' size={14} />
-                          </ActionIcon>
-                          <ActionIcon variant='subtle' size='sm' color='red' aria-label={`Remove ${owner.name}`} onClick={() => setRemoving(owner)}>
-                            <TablerIcon name='trash' size={14} />
-                          </ActionIcon>
-                        </>
-                      )}
-                    </Group>
+      {rows.length === 0 ? <Text c='dimmed' size='sm'>Nobody is recorded as owning this.</Text> : (
+        <Stack gap='xs'>
+          {rows.map((owner) => {
+            const past = Boolean(owner.to);
+            return (
+              <Stack key={owner.id} gap='xs'>
+                <Group gap='xs' wrap='nowrap' justify='space-between'>
+                  <Group gap='xs' wrap='nowrap' style={{ minWidth: 0 }}>
+                    <TablerIcon name='user' size={16} color='gray' style={{ flexShrink: 0, opacity: past ? 0.5 : 1 }} />
+                    <Anchor component={Link} to={`/people/${encodeURIComponent(owner.id)}`} size='sm' c={past ? 'dimmed' : undefined} lineClamp={1}>
+                      {owner.name}
+                    </Anchor>
                   </Group>
-                  {removing?.id === owner.id && (
-                    <Paper withBorder p='sm' bg='var(--mantine-color-red-light)'>
-                      <Group justify='space-between' wrap='wrap'>
-                        <Text size='sm'>Remove {owner.name} as an owner of {device.name}?</Text>
-                        <Group gap='xs'>
-                          <Button size='compact-xs' variant='subtle' onClick={() => setRemoving(null)} disabled={busy}>Cancel</Button>
-                          <Button size='compact-xs' color='red' onClick={remove} loading={busy}>Remove</Button>
-                        </Group>
+                  <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
+                    <Text size='xs' c='dimmed'>{spanLine(owner)}</Text>
+                    {!past && owner.from && <Badge size='xs' variant='light'>current</Badge>}
+                    {editable && (
+                      <>
+                        <ActionIcon variant='subtle' size='sm' aria-label={`Edit ${owner.name}`} onClick={() => open({ kind: 'edit', owner })}>
+                          <TablerIcon name='pencil' size={14} />
+                        </ActionIcon>
+                        <ActionIcon variant='subtle' size='sm' color='red' aria-label={`Remove ${owner.name}`} onClick={() => setRemoving(owner)}>
+                          <TablerIcon name='trash' size={14} />
+                        </ActionIcon>
+                      </>
+                    )}
+                  </Group>
+                </Group>
+                {removing?.id === owner.id && (
+                  <Paper withBorder p='sm' bg='var(--mantine-color-red-light)'>
+                    <Group justify='space-between' wrap='wrap'>
+                      <Text size='sm'>Remove {owner.name} as an owner of {device.name}?</Text>
+                      <Group gap='xs'>
+                        <Button size='compact-xs' variant='subtle' onClick={() => setRemoving(null)} disabled={busy}>Cancel</Button>
+                        <Button size='compact-xs' color='red' onClick={remove} loading={busy}>Remove</Button>
                       </Group>
-                    </Paper>
-                  )}
-                </Stack>
-              );
-            })}
-          </Stack>
-        )}
-      </Card>
-    </Stack>
+                    </Group>
+                  </Paper>
+                )}
+              </Stack>
+            );
+          })}
+        </Stack>
+      )}
+    </InfoSection>
   );
 }

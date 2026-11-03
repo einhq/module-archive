@@ -34,6 +34,12 @@ function useTracks(): { tracks: TrackEntry[]; loading: boolean; error: Error | n
   return { tracks, loading, error, refetch: fetchTracks };
 }
 
+/** Whether the device `id` (its slug) has recorded a track; undefined while that is asked. */
+export function useHasTrack(id: string | undefined): boolean | undefined {
+  const { tracks, loading } = useTracks();
+  return loading ? undefined : tracks.some((track) => track.id === id && track.points > 0);
+}
+
 /**
  * A track read, as one colored line per day, labelled by `label`. Every read here is
  * `--still`: a device lying still is drawn as one point where it lay, not as its GPS drift.
