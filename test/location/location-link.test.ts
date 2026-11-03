@@ -111,6 +111,29 @@ Deno.test({
       assertEquals(stats.skipped, 1);
       assertEquals((await client.execJson<{ softlink: string }>(`props -L ${ALBUMS_ROOT}/trip/files/inside.jpg/location`)).softlink, `${LOCATIONS_ROOT}/square`);
     });
+
+    await t.step('the full sweep links to the nearest covering shape, and follows the shapes', async () => {
+      // outside.jpg sits at 10,10 unlinked; two circles cover it, the plaza's center nearer.
+      await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/plaza`);
+      await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/plaza/position --lat=10.001 --lng=10 --radius=1000`);
+      await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/field`);
+      await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/field/position --lat=10.01 --lng=10 --radius=2000`);
+      const linkOf = async () => (await client.execJson<{ softlink: string }>(`props -L ${ALBUMS_ROOT}/trip/files/outside.jpg/location`)).softlink;
+
+      const first = await client.execJson<LinkStats & { unlinked: number }>('location-link-media');
+      assertEquals(first.linked, 1);
+      assertEquals(await linkOf(), `${LOCATIONS_ROOT}/plaza`);
+
+      await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/plaza/position --lat=20 --lng=20 --radius=1000`);
+      const relinked = await client.execJson<LinkStats & { unlinked: number }>('location-link-media');
+      assertEquals(relinked.linked, 1);
+      assertEquals(await linkOf(), `${LOCATIONS_ROOT}/field`);
+
+      await cmd.shouldSucceed(`position-set ${LOCATIONS_ROOT}/field/position --lat=20 --lng=21 --radius=1000`);
+      const gone = await client.execJson<LinkStats & { unlinked: number }>('location-link-media');
+      assertEquals(gone.unlinked, 1);
+      assertEquals((await client.exec(`props -L ${ALBUMS_ROOT}/trip/files/outside.jpg/location`)).success, false);
+    });
   } finally {
     client.close();
     await testCtx.teardown();
