@@ -72,7 +72,8 @@ Deno.test({
   const paths = (hits: Hit[]) => hits.map((hit) => hit.path);
 
   try {
-    for (const service of ['archive-bridge', 'album-metadata']) await cmd.shouldSucceed(`service stop ${service}`);
+    // label-models' sweep would train segla whenever it ran, under load after the labels are added.
+    for (const service of ['archive-bridge', 'album-metadata', 'label-models']) await cmd.shouldSucceed(`service stop ${service}`);
 
     const sailing = await album('sailing');
     const sailed = await Promise.all(Array.from({ length: 6 }, (_, i) => photo(sailing, `s${i}.jpg`, boat())));
