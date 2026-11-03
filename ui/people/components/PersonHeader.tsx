@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import type { PersonContact, PersonInfo } from '../hooks/usePeople.ts';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { qualifiedYear } from '@archive/people/date-qualifier';
+import { yearSpan } from '../../lib/year-span.ts';
 
 /** Just the year — a header is about a life, not about a Tuesday — as sure as it is: `~1890`, `before 1900`. */
 const year = (date: string | undefined, qualifier: string | undefined): string | undefined => qualifiedYear(date, qualifier) || undefined;
@@ -126,7 +127,7 @@ export function PersonHeader({ person, media, actions, tabs }: PersonHeaderProps
                 <TablerIcon name='photo' size={15} color='var(--mantine-color-dimmed)' />
                 <Text size='sm' c='dimmed'>
                   {media.total.toLocaleString()} photos
-                  {media.range ? ` · ${media.range.min}–${media.range.max}` : ''}
+                  {media.range ? ` · ${yearSpan(media.range)}` : ''}
                 </Text>
               </Group>
             )}

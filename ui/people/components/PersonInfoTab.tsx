@@ -9,6 +9,7 @@ import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
 import { qualifiedDate } from '@archive/people/date-qualifier';
+import { yearSpan } from '../../lib/year-span.ts';
 
 type PersonInfoTabProps = {
   person: PersonInfo;
@@ -51,7 +52,7 @@ export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
         {media && media.total > 0 && (
           <InfoFact label='Photos'>
             {media.total.toLocaleString()}
-            {media.range ? ` · ${media.range.min}–${media.range.max}` : ''}
+            {media.range ? ` · ${yearSpan(media.range)}` : ''}
           </InfoFact>
         )}
       </InfoSection>

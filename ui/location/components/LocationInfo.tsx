@@ -5,6 +5,7 @@ import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import type { LocationDetail, ResidentEntry } from '../hooks/useLocationDetail.ts';
 import { LocationResidents } from './LocationResidents.tsx';
+import { yearSpan } from '../../lib/year-span.ts';
 
 type LocationInfoProps = {
   location: LocationDetail;
@@ -96,7 +97,7 @@ export function LocationInfo({ location, residents, editable, media, onShowMap, 
           <InfoFact label='Photos'>
             {media.total.toLocaleString()}
             {media.truncated ? '+' : ''}
-            {media.range ? ` · ${media.range.min}–${media.range.max}` : ''}
+            {media.range ? ` · ${yearSpan(media.range)}` : ''}
           </InfoFact>
         )}
       </InfoSection>

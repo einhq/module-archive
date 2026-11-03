@@ -21,6 +21,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CurrentPeopleCard, CurrentPeopleLine } from '../../components/CurrentPeople.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { yearSpan } from '../../lib/year-span.ts';
 
 const TABS = ['info', 'timeline', 'media', 'track', 'trips', 'owners'] as const;
 type DeviceTab = typeof TABS[number];
@@ -150,7 +151,7 @@ export default function DeviceDetailPage() {
                 }
                 {facets.total.toLocaleString()}
                 {facets.truncated ? '+' : ''} file{facets.total === 1 ? '' : 's'}
-                {facets.range ? ` · ${facets.range.min}–${facets.range.max}` : ''}
+                {facets.range ? ` · ${yearSpan(facets.range)}` : ''}
               </Text>
             )}
             <NodeLabels path={device.path} mt={4} />
