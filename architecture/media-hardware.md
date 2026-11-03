@@ -72,11 +72,11 @@ A step's exit code says whose failure it was (`src/lib/step-exit.ts`;
 core's `docs/architecture/data-flow.md` has the details). The bins that call EMS map its answer with
 `stepExitCode`.
 
-| Exit          | Meaning                                                       | What happens                                                                                                                                                                                           |
-| ------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 75            | EMS cannot do it now: busy, loading, restarting, unreachable  | Nothing fails, and no attempt is spent. A pooled job waits 30 s, doubling to 10 min, and its kind rests as long after five refusals in a row; a step the engine runs itself waits 5 min (`notBefore`). |
-| 65            | the input cannot be processed: undecodable bytes, a text file | The step fails at once with `cause: input`, and is never run again.                                                                                                                                    |
-| anything else | the step's own failure                                        | An attempt is spent; once all are spent, the instance fails.                                                                                                                                           |
+| Exit          | Meaning                                                       | What happens                                                                                                                                                                                                                            |
+| ------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 75            | EMS cannot do it now: busy, loading, restarting, unreachable  | Nothing fails, and no attempt is spent. A pooled job waits 30 s, doubling to 10 min, and its kind rests as long after five jobs are refused in a row, each for the first time; a step the engine runs itself waits 5 min (`notBefore`). |
+| 65            | the input cannot be processed: undecodable bytes, a text file | The step fails at once with `cause: input`, and is never run again.                                                                                                                                                                     |
+| anything else | the step's own failure                                        | An attempt is spent; once all are spent, the instance fails.                                                                                                                                                                            |
 
 A planned EiN restart hands every claimed job back with its attempt returned. Only a crash spends
 one, so a step that kills its worker every time does run out.
