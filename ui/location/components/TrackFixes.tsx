@@ -196,14 +196,14 @@ export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPa
   const when = fix.ts ? new Date(fix.ts).toLocaleString() : '';
 
   return (
-    <Group justify='space-between' wrap='nowrap' gap='xs'>
-      <Text size='sm' style={{ minWidth: 0 }}>
+    <Group justify='space-between' gap='xs'>
+      <Text size='sm' style={{ minWidth: 0, flex: '1 1 16rem' }}>
         {when} · {verdictOf(fix)}
         {fix.rejected && others > 0 && `, with ${others} fix${others === 1 ? '' : 'es'} beside it`}
         {!fix.rejected && swept > 1 && `, with ${swept - 1} fix${swept === 2 ? '' : 'es'} within ${CLUSTER_M} m that day`}
         {error && <Text span c='red' size='sm'>{` · ${error}`}</Text>}
       </Text>
-      <Group gap='xs' wrap='nowrap'>
+      <Group gap='xs' wrap='nowrap' ml='auto'>
         {editable && (fix.rejected
           ? (
             <Button size='xs' variant='light' loading={busy === 'accept'} disabled={busy !== null} onClick={() => mark('accept', `${spanOf(run)} --accept`)}>
