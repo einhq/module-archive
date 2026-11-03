@@ -1,14 +1,9 @@
-import { type GeoBounds, MapMarkers, MapTracks, MapView } from '@ein/ui/components';
-import { Box, Center, Loader, Paper, Text } from '@mantine/core';
-import { execCommand, openMediaAt } from '@ein/ui/signals';
-import { shq } from '@ein/ui/lib';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { MapClusterMedia } from '../../components/MapClusterMedia.tsx';
-import { type MapCluster, useMapMedia } from '../../hooks/useMapMedia.ts';
+import { MapTracks } from '@ein/ui/components';
+import { Paper, Text } from '@mantine/core';
+import { useMemo } from 'react';
+import { MediaMap } from '../../components/MediaMap.tsx';
 import { useSpanTracks } from '../../location/hooks/useTracks.ts';
 import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
-import { cellFor, clusterMarkers } from '../../lib/map-clusters.ts';
-import { hitToMediaItem, type MediaHit } from '../../lib/map-hits.ts';
 import type { MapFilters } from '../../lib/map-params.ts';
 
 type AlbumMapProps = {
@@ -19,128 +14,41 @@ type AlbumMapProps = {
   to?: string;
 };
 
-/**
- * The cell size the extent the map opens on is read in: about a kilometre, close enough to where
- * each photo was taken to fit the map to, and a few hundred cells for even a long trip.
- */
-const EXTENT_CELL = 0.01;
-
-/** The least an extent spans, in degrees: an album taken on one spot opens on its street, not on one roof. */
-const EXTENT_MIN = 0.005;
-
-/** The box everything drawn fits in; undefined when nothing has a position. */
-function extentOf(points: { lat: number; lng: number }[]): GeoBounds | undefined {
-  if (points.length === 0) return undefined;
-  const bounds = { north: -90, south: 90, east: -180, west: 180 };
-  for (const { lat, lng } of points) {
-    bounds.north = Math.max(bounds.north, lat);
-    bounds.south = Math.min(bounds.south, lat);
-    bounds.east = Math.max(bounds.east, lng);
-    bounds.west = Math.min(bounds.west, lng);
-  }
-  const pad = (span: number) => Math.max(0, (EXTENT_MIN - span) / 2);
-  const lat = pad(bounds.north - bounds.south);
-  const lng = pad(bounds.east - bounds.west);
-  return { north: bounds.north + lat, south: bounds.south - lat, east: bounds.east + lng, west: bounds.west - lng };
-}
-
-/** Where the album's positioned media are, as cells of `EXTENT_CELL`; null while it is asked. */
-function useAlbumPoints(path: string): { lat: number; lng: number }[] | null {
-  const [points, setPoints] = useState<{ lat: number; lng: number }[] | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    setPoints(null);
-    execCommand<{ clusters?: MapCluster[] }>(`find-within --north=90 --south=-90 --east=180 --west=-180 --cell=${EXTENT_CELL} --under ${shq(path)}`)
-      .then((answer) => !cancelled && setPoints((answer.clusters ?? []).map(({ lat, lng }) => ({ lat, lng }))))
-      .catch(() => !cancelled && setPoints([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [path]);
-  return points;
-}
-
 /** `names` as a sentence's list: "A", "A and B", "A, B and C". */
 const listed = (names: string[]): string => names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 /**
  * An album's media on a map, and the routes its devices (`album-device-list`) recorded while they
- * were taken.
- *
- * The media are clustered by the server as on the map page (`find-within --under`), a cell of one
- * drawn as its picture and a pile as its count, which opens the pictures behind it. The map opens
- * fitted to the media and the routes together, and fills the box it is given.
+ * were taken. The map opens fitted to the media and the routes together.
  */
 export function AlbumMap({ path, from, to }: AlbumMapProps) {
   const filters = useMemo((): MapFilters => ({ under: path }), [path]);
-  const { clusters, loading, query } = useMapMedia({}, filters);
   const { list: deviceList, loading: devicesLoading } = useAlbumDevices(path);
   const devices = useMemo(() => devicesLoading ? null : (deviceList?.devices ?? []).map((device) => device.path), [deviceList, devicesLoading]);
   const { segments, loading: tracksLoading } = useSpanTracks(from, to, devices);
-  const points = useAlbumPoints(path);
-  const [zoom, setZoom] = useState(12);
-  const [open, setOpen] = useState<{ cluster: MapCluster; bounds: GeoBounds } | null>(null);
-
-  const extent = useMemo(
-    () => points && extentOf([...points, ...segments.flatMap((segment) => segment.points)]),
-    [points, segments],
-  );
-
-  const onMoveEnd = useCallback((bounds: GeoBounds, z: number) => {
-    setZoom(z);
-    query(bounds, cellFor(z));
-  }, [query]);
-
-  // The arrow keys in the lightbox walk every picture drawn as a picture, not just the one clicked.
-  const singles = useMemo(() => clusters.flatMap((cluster) => cluster.hit ? [cluster.hit] : []), [clusters]);
-  const openHit = useCallback((hit: MediaHit) => {
-    openMediaAt(Math.max(singles.findIndex((candidate) => candidate.id === hit.id), 0), singles.map(hitToMediaItem));
-  }, [singles]);
-
-  const markers = useMemo(
-    () => clusterMarkers(clusters, zoom, openHit, (cluster, bounds) => setOpen({ cluster, bounds })),
-    [clusters, zoom, openHit],
-  );
-
-  // Fitted once, to the media and the routes together, so both are waited for.
-  if (points === null || tracksLoading) {
-    return (
-      <Center h='100%'>
-        <Loader size='sm' />
-      </Center>
-    );
-  }
+  const around = useMemo(() => tracksLoading ? null : segments.flatMap((segment) => segment.points), [segments, tracksLoading]);
 
   const names = (deviceList?.devices ?? []).map((device) => device.name);
-  if (!extent) {
-    return (
-      <Text c='dimmed' ta='center' p='xl'>
-        {names.length === 0
-          ? 'Nothing in this album has a position, and it has no devices whose routes to show.'
-          : `Nothing in this album has a position, and ${listed(names)} recorded no route while it was taken.`}
-      </Text>
-    );
-  }
-
   return (
-    <Box h='100%' pos='relative'>
-      <MapView bounds={extent} onMoveEnd={onMoveEnd} style={{ height: '100%' }}>
-        <MapTracks tracks={segments} />
-        <MapMarkers markers={markers} />
-      </MapView>
-      {loading && (
-        <Box pos='absolute' top={10} left={10} style={{ zIndex: 1000 }} role='status' aria-label='Loading the map'>
-          <Loader size={18} />
-        </Box>
-      )}
-      {points.length === 0 && (
-        <Paper pos='absolute' bottom={10} left={10} maw='calc(100% - 20px)' px='sm' py={6} radius='md' shadow='sm' style={{ zIndex: 1000 }}>
-          <Text size='sm' c='dimmed'>
-            Nothing in this album has a position; the map shows the routes its devices recorded while it was taken.
-          </Text>
-        </Paper>
-      )}
-      <MapClusterMedia open={open} filters={filters} onClose={() => setOpen(null)} />
-    </Box>
+    <MediaMap
+      filters={filters}
+      around={around}
+      layers={<MapTracks tracks={segments} />}
+      note={(placed) =>
+        !placed && (
+          <Paper px='sm' py={6} radius='md' shadow='sm'>
+            <Text size='sm' c='dimmed'>
+              Nothing in this album has a position; the map shows the routes its devices recorded while it was taken.
+            </Text>
+          </Paper>
+        )}
+      empty={
+        <Text c='dimmed' ta='center' p='xl'>
+          {names.length === 0
+            ? 'Nothing in this album has a position, and it has no devices whose routes to show.'
+            : `Nothing in this album has a position, and ${listed(names)} recorded no route while it was taken.`}
+        </Text>
+      }
+    />
   );
 }

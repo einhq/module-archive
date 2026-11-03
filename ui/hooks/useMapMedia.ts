@@ -39,7 +39,8 @@ type MapLoad = 'view' | 'search';
 /** Inclusive year bounds; either half may be absent. */
 export type YearRange = { fromYear?: number; toYear?: number };
 
-const filterFlags = (filters: MapFilters | undefined): string =>
+/** The `find-within` flags that narrow what is drawn to `filters`. */
+export const filterFlags = (filters: MapFilters | undefined): string =>
   !filters ? '' : [
     filters.query ? ` --q ${shq(filters.query)}` : '',
     filters.person ? ` --person ${shq(filters.person)}` : '',
