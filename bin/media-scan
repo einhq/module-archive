@@ -14,7 +14,7 @@
  *
  * Bounded by default: --limit caps facts per run and --max-active refuses to add
  * work while the engine still has a backlog. 0 lifts either cap, for a caller that
- * runs it only when nothing waits, as media-heal does.
+ * holds back every fact whose work waits (`--if-idle`), as media-heal does.
  *
  * **Run this by hand, not on a timer.** The facts it publishes are predicates
  * ("this file has no exif yet"), not events, so re-evaluating them re-publishes
@@ -37,11 +37,12 @@
 
 import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
+import type { PipelineSummary } from '@ein/api';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
-import { deriveForFile, deriveGaps, deriveTextGap, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
+import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { stampLanes } from '@archive/staging/facts';
 import {
   faceGeneration as faceGenerationOf,
@@ -116,25 +117,45 @@ const segmentsBelow = (root: string, cursor: string | undefined): string[] | und
   return segments.length > 0 ? segments : undefined;
 };
 
-/** The pipelines this command's facts start: the media ones, and documents' text. */
-const isMediaPipeline = (kind: string): boolean => kind.startsWith('media-') || kind === 'document-index';
+/** The kinds with a ready job in the pool at `path`; none when there is no pool yet (a fresh boot). */
+const readyKinds = async (cmd: Command, path: string): Promise<Set<string>> => {
+  if (!await cmd.sys.vfs.exists(cmd.access, path)) return new Set();
+  const stat = await cmd.sys.vfs.stat(cmd.access, path) as { byKind?: Record<string, { ready?: number }> };
+  return new Set(Object.entries(stat.byKind ?? {}).filter(([, counts]) => (counts.ready ?? 0) > 0).map(([kind]) => kind));
+};
 
 /**
- * Whether media work waits: a ready job in the media pool, or a ready trigger for a pipeline this
- * command's facts start. A scan then would announce again what is already on its way (the 8.1x
- * above). Another pipeline's trigger does not count: a live tracker keeps a debounced
- * `track-trips` job ready for as long as it sends, which would hold a scan off for good.
+ * The fact types whose work waits, each mapped to whether it does: a type waits when a pipeline it
+ * starts has a ready trigger, or a ready job in the media pool of a kind one of its steps runs. A
+ * scan then would announce again what is already on its way (the 8.1x above), so `--if-idle` holds
+ * those facts back. Counted per pipeline, not per pool: a backlog of one kind of work does not
+ * hold off gaps that feed another, and a live tracker's debounced `track-trips` job, ready for as
+ * long as it sends, holds off nothing here. Types no pipeline starts are left out.
+ *
+ * Undefined when the definitions cannot be read, which the caller takes as everything waiting.
  */
-const mediaWorkWaits = async (cmd: Command): Promise<boolean> => {
-  const pools = cmd.env.POOLS_PATH || POOLS_PATH;
-  const readyIn = async (path: string, counted: (kind: string) => boolean): Promise<boolean> => {
-    // No pool yet (a fresh boot) holds nothing.
-    if (!await cmd.sys.vfs.exists(cmd.access, path)) return false;
-    const stat = await cmd.sys.vfs.stat(cmd.access, path) as { byKind?: Record<string, { ready?: number }> };
-    return Object.entries(stat.byKind ?? {}).some(([kind, counts]) => counted(kind) && (counts.ready ?? 0) > 0);
-  };
+const factsWaiting = async (cmd: Command): Promise<Map<string, boolean> | undefined> => {
+  const listed = await cmd.execute('JSON_OUTPUT=1 pipeline list');
+  let pipelines: PipelineSummary[];
+  try {
+    pipelines = JSON.parse(listed.stdout);
+  } catch {
+    await cmd.writeError(`media-scan: could not read the pipeline definitions: ${listed.stderr.trim() || listed.stdout.trim()}\n`);
+    return undefined;
+  }
 
-  return await readyIn(join(pools, 'media'), () => true) || await readyIn(join(pools, 'triggers'), isMediaPipeline);
+  const pools = cmd.env.POOLS_PATH || POOLS_PATH;
+  const triggers = await readyKinds(cmd, join(pools, 'triggers'));
+  const media = await readyKinds(cmd, join(pools, 'media'));
+  const waiting = new Map<string, boolean>();
+  for (const pipeline of pipelines) {
+    const busy = triggers.has(pipeline.name) || Object.values(pipeline.stepKinds ?? {}).some((kind) => media.has(kind));
+    for (const type of pipeline.triggers.flatMap((trigger) => trigger.on ?? [])) {
+      waiting.set(type, (waiting.get(type) ?? false) || busy);
+    }
+  }
+
+  return waiting;
 };
 
 const mediaScan = async (cmd: Command): CmdReturn => {
@@ -155,8 +176,9 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   // Emit only these fact types: one backfill at a time, so a cheap one is not held up behind an
   // expensive one announced beside it at the same priority.
   const only = typeof flags.only === 'string' && flags.only ? new Set(flags.only.split(',').map((type) => type.trim()).filter(Boolean)) : undefined;
-  // 0 lifts either cap, as it does `--scan-limit`'s: media-heal runs a scan only when no work
-  // waits, so nothing it announces is already on its way, and it announces every gap at once.
+  // 0 lifts either cap, as it does `--scan-limit`'s: media-heal scans with `--if-idle`, which holds
+  // back every fact whose work waits, so nothing it announces is already on its way, and it
+  // announces every gap at once.
   const limit = numFlag(flags.limit, 1000) || Infinity;
   const maxActive = numFlag(flags['max-active'], 500) || Infinity;
   const maxDepth = numFlag(flags.depth, 12);
@@ -174,9 +196,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   const stored = await readCursor(cmd, root);
   const resumeAt = flags.restart ? undefined : segmentsBelow(root, stored);
 
-  if (flags['if-idle'] && await mediaWorkWaits(cmd)) {
+  // Under `--if-idle`, the fact types held back because their work waits. When every type the scan
+  // could announce is held, nothing is walked at all.
+  const waiting = flags['if-idle'] ? await factsWaiting(cmd) : undefined;
+  const announceable = only ? [...only] : Object.values(MEDIA_EVENTS);
+  if (flags['if-idle'] && (!waiting || announceable.every((type) => waiting.get(type) !== false))) {
     // As under a spent budget below: nothing examined, the cursor where the last run left it.
-    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], waiting: true });
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], held: [], waiting: true });
     else await cmd.writeLn('media-scan: media work is waiting, nothing started');
     return 0;
   }
@@ -222,7 +248,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   if (budget <= 0) {
     // The pass is reported as incomplete with its cursor untouched: nothing was examined, so
     // whatever the last run stored is still where the next one has to pick up.
-    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [] });
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], held: [] });
     else await cmd.writeLn('media-scan: backlog full, nothing started');
     return 0;
   }
@@ -341,6 +367,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   let scanned = 0;
   let emitted = 0;
   const emittedPaths: string[] = [];
+  /** The fact types a gap was found for and held back, because their work waits. */
+  const held = new Set<string>();
   /** Node ids already descended into, so a cycle cannot make the walk diverge. */
   const visited = new Set<string>();
   /** The last file examined, and whether a budget cut the walk short there. */
@@ -433,7 +461,12 @@ const mediaScan = async (cmd: Command): CmdReturn => {
           ...await deriveForFile(childPath, fileCtx, Date.now(), snapshot),
           ...(gaps && hasChildren ? await deriveGaps(childPath, fileCtx, Date.now(), snapshot) : []),
           ...(gaps ? deriveTextGap(childPath, snapshot, Date.now()) : []),
-        ].filter((fact) => !only || only.has(fact.type)),
+        ].filter((fact) => {
+          if (only && !only.has(fact.type)) return false;
+          if (!waiting?.get(fact.type)) return true;
+          held.add(fact.type);
+          return false;
+        }),
         ctx,
         Date.now(),
       );
@@ -472,10 +505,11 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   if (!dry && cursor !== (stored ?? null)) await writeCursor(cmd, root, cursor);
 
   if (cmd.json) {
-    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, paths: emittedPaths });
+    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, paths: emittedPaths, held: [...held] });
   } else {
     const pass = stopped ? `, paused at ${cursor} (run again to continue)` : ', pass complete';
     await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${pass}${dry ? ' (dry run)' : ''}`);
+    if (held.size > 0) await cmd.writeLn(`Held back while their work waits: ${[...held].join(', ')}`);
     if (verbose) {
       for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);
     }
@@ -501,7 +535,7 @@ mediaScan.spec = {
     {
       name: 'if-idle',
       type: 'bool' as const,
-      description: 'Scan only when no media work waits: nothing ready in the media pool, and no ready trigger for a media pipeline',
+      description: 'Hold back the facts whose pipelines have work ready, in the trigger pool or the media pool, and name them; scan nothing when all wait',
     },
     {
       name: 'only',

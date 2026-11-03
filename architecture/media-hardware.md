@@ -92,10 +92,12 @@ one, so a step that kills its worker every time does run out.
   count as a heal.
 - **`media-heal`** (an archive service) closes gaps nothing announced: a file that never got its
   fingerprint, transcript, voices, picture vectors or extracted text, or whose transcript or vectors are from a
-  superseded model or setting. It runs `media-scan` only when the media and trigger pools have nothing ready.
-  A gap seen then is a real gap, not work on its way, and is announced once. It resumes where its
-  last slice stopped, and rests six hours after a complete pass (`CFG_MEDIA_HEAL_INTERVAL`,
-  `CFG_MEDIA_HEAL_REST`). This is also how a change of model or setting reaches the whole archive:
+  superseded model or setting. It runs `media-scan --if-idle`, which holds back each gap a pipeline
+  with work ready would take (a ready trigger, or a ready media job of one of its kinds) and names
+  the fact types it held: a gap announced is a real gap, not work on its way, and a backlog of one
+  kind holds off only its own gaps. A pass over the whole archive is followed by one over the types
+  it held, once their work drains, and it rests six hours after a pass that finds and holds nothing
+  (`CFG_MEDIA_HEAL_INTERVAL`, `CFG_MEDIA_HEAL_REST`). This is also how a change of model or setting reaches the whole archive:
   a new transcript signature transcribes every recording again, as the engine has time
   (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).
 

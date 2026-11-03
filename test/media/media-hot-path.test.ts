@@ -55,7 +55,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
         assertEquals(before.budget, 1, 'empty pool must not block a scan');
         await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'media-ingest', params: {} });
         const blocked = await client.execJson<Record<string, unknown>>(`${env}media-scan ${ALBUMS_ROOT} --restart --max-active 1`);
-        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, paths: [] });
+        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, paths: [], held: [] });
         assertEquals((await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanCursor, cursor);
       });
     }
@@ -73,22 +73,56 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       assertEquals(all.budget, null);
     });
 
-    await t.step("--if-idle waits for media work only, not another pipeline's trigger", async () => {
+    await t.step('--if-idle holds back only the facts whose pipelines have work ready', async () => {
       const root = '/idle-pools';
       const env = `POOLS_PATH=${root} `;
       await client.exec(`mkdir -p ${root}`);
-      assertEquals((await client.exec(`mknode -t pool ${root}/triggers`)).success, true);
-      const scan = () => client.execJson<{ scanned: number; waiting?: boolean }>(`${env}media-scan ${ALBUMS_ROOT} -n --restart --if-idle --max-active 0`);
+      for (const pool of ['triggers', 'media']) assertEquals((await client.exec(`mknode -t pool ${root}/${pool}`)).success, true);
+      const write = async (file: string, body: string) => {
+        await client.exec(`mkfile ${file}`);
+        const handle = await vfs.open(ADMIN_ACCESS, file, { mode: 'w' });
+        try {
+          await handle.write(new TextEncoder().encode(body));
+        } finally {
+          await handle.close();
+        }
+      };
+      // An unindexed picture, which a scan announces as discovered.
+      const album = `${ALBUMS_ROOT}/idle`;
+      await client.exec(`mkdir -p ${album}`);
+      await write(`${album}/q.jpg`, 'not really a jpeg');
+      await vfs.update(ADMIN_ACCESS, `${album}/q.jpg`, { attrs: { mimetype: 'image/jpeg' } });
+      // The pipelines the facts below start: discovery's, the voices' on another media kind, and
+      // the fingerprint's, which nothing below keeps busy.
+      await client.exec('mkdir -p /tmp/defs');
+      for (const name of ['media-ingest', 'media-voiceprint', 'media-fingerprint']) {
+        await write(`/tmp/defs/${name}.yaml`, await Deno.readTextFile(new URL(`../../pipelines/${name}.yaml`, import.meta.url)));
+        assertEquals((await client.exec(`pipeline define /tmp/defs/${name}.yaml`)).success, true, `define ${name}`);
+      }
+      type Scan = { scanned: number; emitted: number; held: string[]; waiting?: boolean };
+      const scan = (only = '') => client.execJson<Scan>(`${env}media-scan ${album} -n --restart --if-idle --max-active 0 --limit 0${only}`);
 
-      // A live tracker's debounced trip run, ready for as long as it sends.
+      const idle = await scan();
+      assertEquals([idle.waiting, idle.held], [undefined, []]);
+      assertEquals(idle.emitted > 0, true, `emitted ${idle.emitted}`);
+
+      // A live tracker's debounced trip run, ready for as long as it sends, and a backlog of
+      // another media kind: neither is the work an unindexed file's discovery starts.
       await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'track-trips', params: {} });
+      await vfs.poolAdd(ADMIN_ACCESS, `${root}/media`, { kind: 'diarize', params: {} });
       const past = await scan();
-      assertEquals(past.waiting, undefined);
-      assertEquals(past.scanned > 0, true, `scanned ${past.scanned}`);
+      assertEquals([past.waiting, past.held, past.emitted], [undefined, [], idle.emitted]);
 
-      await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'media-faces-stale', params: {} });
+      // Discovery's own work waiting holds its facts back and names them; the scan still walks.
+      await vfs.poolAdd(ADMIN_ACCESS, `${root}/media`, { kind: 'ingest', params: {} });
       const held = await scan();
-      assertEquals([held.waiting, held.scanned], [true, 0]);
+      assertEquals(held.waiting, undefined);
+      assertEquals(held.held, ['media.file.discovered']);
+      assertEquals(held.scanned, idle.scanned);
+
+      // Nothing is walked when every type it may announce waits.
+      const only = await scan(' --only media.file.discovered');
+      assertEquals([only.waiting, only.scanned], [true, 0]);
     });
   } finally {
     client.close();
