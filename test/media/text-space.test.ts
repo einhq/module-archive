@@ -2,8 +2,8 @@
  * The text space against a stub EMS: `media-reembed` embeds the stored text (extracted text,
  * transcripts) from the text nodes alone, a second run finds nothing to do, and search reads it —
  * the query embedded as a query, the hits climbed back to their files, a transcript hit with its
- * moment and, said in so many words, confident, and a text's words found by a phrase as well as
- * by meaning. A hand-written description is embedded when it is set, found, kept in step when edited
+ * moment and, said in so many words or as a sentence most of whose words it says, confident, and a
+ * text's words found by a phrase as well as by meaning. A hand-written description is embedded when it is set, found, kept in step when edited
  * and removed when cleared. A long document is embedded in parts, so what it says past its opening
  * is found. Given paths, `media-reembed` does the same for those files alone.
  */
@@ -177,6 +177,22 @@ Deno.test({
       await write('/tmp/photo-only.json', JSON.stringify([(await vfs.get(ADMIN_ACCESS, photo)).id]));
       const within = await client.execJson<{ results: Hit[] }>(`${env} search-media sjön --within /tmp/photo-only.json`);
       assertEquals(within.results.filter((result) => result.channel === 'transcript'), []);
+    });
+
+    await t.step('a sentence most of whose words a recording says is the recording meant', async () => {
+      const transcriptHit = async (query: string) => (await search('search-media', query)).results.find((result) => result.path === clip && result.channel === 'transcript');
+
+      // "fiske" and "sjön" are two of its four words, said in the minute its meaning matched.
+      const recalled = await transcriptHit('när pappa ville fiske i sjön');
+      assert(recalled, 'not found');
+      assertEquals([recalled.atSeconds, recalled.confident], [70, true]);
+      assert(recalled.score <= 1, String(recalled.score));
+
+      // The same meaning with one of its three words said is not; nor is a query of two words.
+      const fishing = await transcriptHit('fiske med pappa och mormor');
+      assert(fishing, 'not found');
+      assertEquals(fishing.confident, undefined);
+      assertEquals((await transcriptHit('fiske sjön'))?.confident, undefined);
     });
 
     await t.step('what is written is found by its words, which its vector does not say', async () => {

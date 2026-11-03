@@ -144,6 +144,29 @@ const SAID_WORDS = 1.2;
 const SAID_INSIDE = 1.1;
 
 /**
+ * When a transcript's similarity is the recording meant (`confident`), which the similarity alone
+ * cannot say: a description of a picture meets some minute of speech as closely as a paraphrase of
+ * what was said meets its own (ein/core#918). The words do. A query that is a sentence, with at
+ * least `SPOKEN_MIN_WORDS` words of `SPOKEN_WORD_LETTERS` letters or more, is about what was said
+ * when at least `SPOKEN_SHARE` of those words are said in one of the transcript channel's
+ * `SPOKEN_TOP` best recordings, in the minutes of it that matched. A word is compared by its first
+ * `SPOKEN_STEM` letters, so that "plockade" meets "plocka".
+ */
+const SPOKEN_MIN_WORDS = 3;
+const SPOKEN_WORD_LETTERS = 4;
+const SPOKEN_SHARE = 0.5;
+const SPOKEN_TOP = 3;
+const SPOKEN_STEM = 5;
+
+/** The words of `text` that `SPOKEN_SHARE` counts, as compared. */
+const spokenWords = (text: string): Set<string> =>
+  new Set(
+    (text.normalize('NFC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+      .filter((word) => word.length >= SPOKEN_WORD_LETTERS)
+      .map((word) => word.slice(0, SPOKEN_STEM)),
+  );
+
+/**
  * The shortest query matched as a phrase: a trigram index serves three characters and more, and a
  * shorter query is inside nearly every minute of speech and every page.
  */
@@ -483,9 +506,7 @@ const searchMedia = async (cmd: Command): CmdReturn => {
   // EMS drops the embed rather than run it for nobody.
   let namesFull = false;
   let saidFull = false;
-  // The text space's similarity from which a transcript hit is the recording meant, and the one
-  // from which a hand-written description counts.
-  let confidentAt = Infinity;
+  // The text space's similarity from which a hand-written description counts.
   let strictAt = Infinity;
   const none: Ranked = { matches: [], paths: new Map(), full: false };
   const [named, said, content, pictures] = like ? [new Map<string, { score: number; id: string }>(), [] as WordsHit[], none, like] : await Promise.all([
@@ -509,7 +530,6 @@ const searchMedia = async (cmd: Command): CmdReturn => {
       let embedded: Awaited<ReturnType<typeof embedQuery>>;
       try {
         embedded = await embedQuery(cmd, query);
-        confidentAt = embedded.confident;
         strictAt = embedded.strict;
         await trace('query embedded');
       } catch (error) {
@@ -588,6 +608,8 @@ const searchMedia = async (cmd: Command): CmdReturn => {
     if (depth > 0 && !climbing.has(filePath)) climbing.set(filePath, { at: from, left: depth });
   };
 
+  // The minutes of speech that matched, by recording, for `SPOKEN_SHARE`.
+  const minutes = new Map<string, string[]>();
   for (const match of matches) {
     for (const embPath of idToPaths.get(match.id) ?? []) {
       // A transcript chunk, which is the only embedding that knows *when* inside the file
@@ -596,8 +618,8 @@ const searchMedia = async (cmd: Command): CmdReturn => {
       // is exactly what the batched resolveIdPaths above exists to avoid.
       const chunk = resolveChunkPath(embPath);
       if (chunk) {
-        // Only what was said is judged confident: the other text channels were not measured.
-        note(channels.transcript, chunk.path, match.similarity, chunk.atSeconds, match.similarity >= confidentAt);
+        note(channels.transcript, chunk.path, match.similarity, chunk.atSeconds);
+        minutes.set(chunk.path, [...minutes.get(chunk.path) ?? [], match.id]);
         continue;
       }
 
@@ -617,6 +639,18 @@ const searchMedia = async (cmd: Command): CmdReturn => {
         }
         continue;
       }
+    }
+  }
+
+  // A sentence most of whose words are said in one of the best recordings is the recording meant.
+  // Only what was said is judged so: the other text channels were not measured.
+  const asked = spokenWords(query);
+  if (asked.size >= SPOKEN_MIN_WORDS) {
+    const best = [...channels.transcript].sort((a, b) => b[1].score - a[1].score || a[0].localeCompare(b[0])).slice(0, SPOKEN_TOP);
+    const texts = await cmd.sys.vfs.getNodesByIds(cmd.access, best.flatMap(([path]) => minutes.get(path) ?? []));
+    for (const [path, hit] of best) {
+      const said = new Set((minutes.get(path) ?? []).flatMap((id) => [...spokenWords(String(texts.get(id)?.attrs.text ?? ''))]));
+      if ([...asked].filter((word) => said.has(word)).length >= asked.size * SPOKEN_SHARE) hit.confident = true;
     }
   }
 
