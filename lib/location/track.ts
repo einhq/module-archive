@@ -28,9 +28,14 @@ export type TrackPoint = {
   alt?: number;
   speed?: number;
   course?: number;
-  /** The rule that rejected the fix, on a read asking for rejected fixes. */
+  /** Why the fix is left out (a rule's name, or `manual`), on a read asking for rejected fixes. */
   rejected?: string;
+  /** What a person said of the fix, which overrules the rules. */
+  manual?: TrackVerdict;
 };
+
+/** A person's verdict on a fix: `reject` leaves it out whatever the rules say, `accept` keeps it. */
+export type TrackVerdict = 'reject' | 'accept';
 
 /** Bounding box of a track. */
 type TrackBounds = {
@@ -55,8 +60,8 @@ export type TrackReadOptions = {
   limit?: number;
   /** Drop spikes and collapse each stay into two points: metres, ms and m/s. */
   still?: { radius?: number; minMs?: number; stillSpeed?: number; maxSpeed?: number };
-  /** Read the fixes the track's rules rejected too, marked `rejected`. */
-  rejected?: boolean;
+  /** Read the rejected fixes too, marked `rejected`; `only` reads them alone, a run of them to a segment. */
+  rejected?: boolean | 'only';
 };
 
 type TrackReadResult = {
@@ -69,6 +74,7 @@ type TrackReadResult = {
 type TrackLikeHandle = {
   appendPoints(points: TrackPoint[]): Promise<number>;
   readPoints(opts?: TrackReadOptions): Promise<TrackReadResult>;
+  markPoints(range: { from?: string; to?: string }, verdict: TrackVerdict | null): Promise<number>;
   close(): Promise<void>;
 };
 

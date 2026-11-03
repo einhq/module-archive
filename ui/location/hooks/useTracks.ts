@@ -3,7 +3,7 @@ import type { GeoBounds, MapTrackSpec } from '@ein/ui/components';
 import { shq } from '@ein/ui/lib';
 import { dayColor } from '../lib/track-colors.ts';
 import { execCommand } from '@ein/ui/signals';
-import type { TrackEntry, TrackRead } from '@archive/location/api';
+import type { TrackEntry, TrackPoint, TrackRead } from '@archive/location/api';
 
 /**
  * Every device's track with its summary (`track-list`), which the track
@@ -57,12 +57,23 @@ const toSpecs = (path: string, read: TrackRead, label: (day: string) => string):
  *
  * The cap goes to the server, which simplifies and cuts the line there — a
  * dense day is never shipped whole just to be thrown away in the browser.
+ * `reread` reads the track and its summary again, as after its fixes were marked.
  */
 export function useTrack(
   id: string | undefined,
   maxPoints = 4000,
-): { track: TrackEntry | undefined; segments: MapTrackSpec[]; truncated: boolean; loading: boolean; error: Error | null; refetch: () => void } {
+): {
+  track: TrackEntry | undefined;
+  segments: MapTrackSpec[];
+  truncated: boolean;
+  loading: boolean;
+  error: Error | null;
+  refetch: () => void;
+  reread: () => void;
+  revision: number;
+} {
   const { tracks, loading: listLoading, error: listError, refetch } = useTracks();
+  const [revision, setRevision] = useState(0);
   const [segments, setSegments] = useState<MapTrackSpec[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -102,9 +113,41 @@ export function useTrack(
     return () => {
       cancelled = true;
     };
-  }, [path, points, maxPoints, listLoading]);
+  }, [path, points, maxPoints, listLoading, revision]);
 
-  return { track, segments, truncated, loading: loading || listLoading, error: error ?? listError, refetch };
+  const reread = useCallback(() => {
+    setRevision((n) => n + 1);
+    refetch();
+  }, [refetch]);
+
+  return { track, segments, truncated, loading: loading || listLoading, error: error ?? listError, refetch, reread, revision };
+}
+
+/** Rejected fixes read per track, at most; past it a run is thinned. */
+const REJECTED_LIMIT = 5000;
+
+/**
+ * The fixes of the track at `path` that are left out, a run of them to an array: those its rules
+ * rejected and those a person did. Read again when `revision` moves.
+ */
+export function useRejectedRuns(path: string | undefined, revision: number): TrackPoint[][] {
+  const [runs, setRuns] = useState<TrackPoint[][]>([]);
+
+  useEffect(() => {
+    if (!path) {
+      setRuns([]);
+      return;
+    }
+    let cancelled = false;
+    execCommand<TrackRead>(`track-read ${shq(path)} --only-rejected --limit=${REJECTED_LIMIT}`)
+      .then((read) => !cancelled && setRuns(read.segments.map((segment) => segment.points)))
+      .catch(() => !cancelled && setRuns([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [path, revision]);
+
+  return runs;
 }
 
 /** Two boxes that share no area at all. A track outside the view is never read. */

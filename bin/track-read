@@ -2,7 +2,7 @@
 /**
  * track-read — read a track as drawable segments.
  *
- *   track-read <device> [--from <iso>] [--to <iso>] [--limit <n>] [--still [--max-speed=<m/s>]] [--rejected]
+ *   track-read <device> [--from <iso>] [--to <iso>] [--limit <n>] [--still [--max-speed=<m/s>]] [--rejected | --only-rejected]
  *   track-read <device> --bbox=57.8,57.6,12.1,11.8 --tolerance 0.0002 --still
  *
  * `<device>` is a device's slug or path, standing for its track, or a track's path.
@@ -21,9 +21,12 @@
  * What counts as still and as a spike follows the device's kind (`trackProfile`);
  * `--max-speed` overrides the speed above which a jump is a spike.
  *
- * The track is read without the fixes its rules rejected as it stored them: a
- * run it leapt out to faster than anything on the ground and came back from.
- * `--rejected` reads them too, each marked `rejected` where the read keeps detail.
+ * The track is read without the fixes its rules rejected as it stored them — a
+ * run it leapt out to faster than anything on the ground and came back from —
+ * and without those a person rejected (`track-mark`). `--rejected` reads them
+ * too, each marked `rejected` where the read keeps detail, with the rule's name
+ * or `manual`; `--only-rejected` reads them alone, each run of them a segment of
+ * its own. A fix a person gave a verdict on carries it as `manual`.
  */
 import { openTrack, parseBounds, type TrackReadOptions } from '@archive/location/track';
 import { trackProfile } from '@archive/location/track-profile';
@@ -35,7 +38,7 @@ const trackRead = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
     string: ['from', 'to', 'limit', 'tolerance', 'bbox', 'margin', 'max-speed'],
-    boolean: ['still', 'rejected'],
+    boolean: ['still', 'rejected', 'only-rejected'],
     unknown: collectUnknownFlags(unknown),
   });
 
@@ -45,7 +48,7 @@ const trackRead = async (cmd: Command): CmdReturn => {
 
   if (!target) {
     await cmd.writeError(
-      'track-read: usage: track-read <device> [--bbox <n,s,e,w>] [--from <iso>] [--to <iso>] [--tolerance <deg>] [--limit <n>] [--still [--max-speed <m/s>]] [--rejected]\n',
+      'track-read: usage: track-read <device> [--bbox <n,s,e,w>] [--from <iso>] [--to <iso>] [--tolerance <deg>] [--limit <n>] [--still [--max-speed <m/s>]] [--rejected | --only-rejected]\n',
     );
     return 1;
   }
@@ -67,7 +70,7 @@ const trackRead = async (cmd: Command): CmdReturn => {
       tolerance: numeric('tolerance'),
       margin: numeric('margin'),
       bounds: flags.bbox !== undefined ? parseBounds(flags.bbox) : undefined,
-      rejected: flags.rejected || undefined,
+      rejected: flags['only-rejected'] ? 'only' : flags.rejected || undefined,
     };
 
     if (flags['max-speed'] !== undefined && !flags.still) throw new Error('--max-speed needs --still');
@@ -117,7 +120,8 @@ trackRead.spec = {
     { name: 'limit', type: 'string' as const, description: 'max points to return' },
     { name: 'still', type: 'bool' as const, description: "drop GPS spikes and draw each stay as two points, by the device's kind" },
     { name: 'max-speed', type: 'string' as const, description: "with --still, a jump faster than this (m/s) is a spike (default by the device's kind)" },
-    { name: 'rejected', type: 'bool' as const, description: "read the fixes the track's rules rejected too, each marked 'rejected'" },
+    { name: 'rejected', type: 'bool' as const, description: "read the fixes the track's rules or a person rejected too, each marked 'rejected'" },
+    { name: 'only-rejected', type: 'bool' as const, description: 'read the rejected fixes alone, each run of them a segment' },
   ],
 };
 

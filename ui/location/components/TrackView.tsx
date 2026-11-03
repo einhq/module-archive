@@ -1,8 +1,10 @@
 import { EmptyState, FillWindow, MapTracks, MapView, PageLoader } from '@ein/ui/components';
 import { Badge, Box, Container, Group, SimpleGrid, Stack, Text } from '@mantine/core';
-import { useTrack } from '../hooks/useTracks.ts';
+import { useRejectedRuns, useTrack } from '../hooks/useTracks.ts';
 import { useLiveTracks } from '../hooks/useLiveTracks.ts';
 import { FollowButton, liveSummary, LiveTrackLayers } from './LiveTracks.tsx';
+import { FixPanel, FixPicker, RejectedFixes } from './TrackFixes.tsx';
+import type { TrackPoint } from '@archive/location/api';
 import { movingSpeed, trackDistance } from '../lib/track-segments.ts';
 import { formatDistance, formatSpeed, trackProfile } from '@archive/location/track-profile';
 import { type ReactNode, useCallback, useMemo, useState } from 'react';
@@ -34,15 +36,25 @@ type TrackViewProps = {
   kind?: string;
   /** What a device with no track yet offers to start one: uploading GPX files, live tracking. */
   emptyActions?: ReactNode;
+  /** Whether the reader may change the track, which rejecting and accepting its fixes needs. */
+  editable?: boolean;
 };
 
 /**
  * A device's track: its route on a map that fills the window, and over the map's foot what the
  * route adds up to. While its last fix is recent, the panel says how fast it is going and how old
- * the fix is, and the map draws where it is now and can follow it.
+ * the fix is, and the map draws where it is now and can follow it. The fixes the track left out
+ * are drawn faintly; a click picks the fix nearest it, and the panel says what the track made of
+ * it and offers to overrule that.
  */
-export function TrackView({ device, kind, emptyActions }: TrackViewProps) {
-  const { track, segments, loading, refetch } = useTrack(device);
+export function TrackView({ device, kind, emptyActions, editable = false }: TrackViewProps) {
+  const { track, segments, loading, refetch, reread, revision } = useTrack(device);
+  const rejected = useRejectedRuns(track?.path, revision);
+  const [picked, setPicked] = useState<TrackPoint | null>(null);
+  const marked = useCallback(() => {
+    setPicked(null);
+    reread();
+  }, [reread]);
 
   const listed = useMemo(() => track ? [track] : [], [track]);
   const { live, now } = useLiveTracks(listed, refetch);
@@ -71,12 +83,15 @@ export function TrackView({ device, kind, emptyActions }: TrackViewProps) {
   }
 
   const days = new Set(segments.map((segment) => segment.label)).size;
+  const left = rejected.reduce((sum, run) => sum + run.length, 0);
 
   return (
     <FillWindow>
       <Box h='100%' pos='relative'>
         <MapView style={{ height: '100%' }}>
           <MapTracks tracks={segments} fit />
+          <RejectedFixes runs={rejected} />
+          <FixPicker path={track.path} fix={picked} onPick={setPicked} />
           <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
         </MapView>
 
@@ -91,6 +106,13 @@ export function TrackView({ device, kind, emptyActions }: TrackViewProps) {
                 <FollowButton entry={current} following={following === current.track.path} onFollow={setFollowing} />
               </Group>
             )}
+            {picked
+              ? <FixPanel path={track.path} fix={picked} runs={rejected} editable={editable} onMarked={marked} onClose={() => setPicked(null)} />
+              : left > 0 && (
+                <Text size='xs' c='dimmed'>
+                  {left.toLocaleString()} fix{left === 1 ? '' : 'es'} left out, drawn faint red. Click near a fix to see what the track made of it.
+                </Text>
+              )}
             <SimpleGrid cols={{ base: 3, sm: 5 }} spacing='sm' verticalSpacing={4}>
               <Stat label='Points' value={track.points.toLocaleString()} />
               <Stat label='Days' value={String(days || 0)} />

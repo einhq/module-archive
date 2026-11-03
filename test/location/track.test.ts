@@ -17,7 +17,7 @@ import type { SourceFile } from '@archive/sources/api';
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
 
-type Point = { lat: number; lng: number; ts: string; alt?: number };
+type Point = { lat: number; lng: number; ts: string; alt?: number; rejected?: string; manual?: string };
 type ReadResult = {
   segments: Array<{ day: string; points: Point[] }>;
   points: number;
@@ -95,7 +95,7 @@ Deno.test({
   const cmd = testCommands(client);
 
   try {
-    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike']) {
+    for (const device of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch']) {
       await cmd.shouldSucceed(`mknode -p -t device ${DEVICES_ROOT}/${device} --as name=${device}`);
     }
 
@@ -283,6 +283,40 @@ Deno.test({
       assertEquals(capped.truncated, true);
     });
 
+    await t.step('track-mark rejects and accepts fixes by hand, overruling the rules, and --clear hands them back', async () => {
+      // Steady going a fix a second, five fixes two degrees north, and back on course.
+      const points = Array.from({ length: 25 }, (_, i) => ({
+        lat: 57.7 + i * 0.0001 + (i >= 10 && i < 15 ? 2 : 0),
+        lng: 11.97 + i * 0.0001,
+        ts: new Date(Date.UTC(2020, 6, 1, 10, 0, i)).toISOString(),
+      }));
+      await cmd.shouldSucceed('track-create glitch');
+      await cmd.shouldSucceed(`track-append glitch --json '${JSON.stringify(points)}'`);
+      assertEquals((await listed('glitch'))?.points, 20);
+
+      const away = await client.execJson<ReadResult>('track-read glitch --only-rejected');
+      assertEquals(away.segments.map((segment) => segment.points.length), [5]);
+      assertEquals(away.segments[0].points.every((point) => point.rejected === 'excursion'), true);
+
+      const run = `--from ${points[10].ts} --to ${points[15].ts}`;
+      assertEquals(await client.execJson(`track-mark glitch ${run} --accept`), { marked: 5 });
+      assertEquals((await listed('glitch'))?.points, 25);
+      assertEquals((await client.execJson<ReadResult>('track-read glitch --only-rejected')).points, 0);
+
+      // One fix of the steady going, rejected by hand.
+      assertEquals(await client.execJson(`track-mark glitch --from ${points[3].ts} --to ${points[4].ts} --reject`), { marked: 1 });
+      const rejected = await client.execJson<ReadResult>('track-read glitch --only-rejected');
+      assertEquals(rejected.segments[0].points.map((point) => [point.ts, point.rejected, point.manual]), [[points[3].ts, 'manual', 'reject']]);
+      assertEquals((await listed('glitch'))?.points, 24);
+
+      assertEquals(await client.execJson('track-mark glitch --clear'), { marked: 6 });
+      assertEquals((await listed('glitch'))?.points, 20);
+
+      await cmd.shouldFailWith('track-mark glitch', 'usage');
+      await cmd.shouldFailWith('track-mark glitch --reject --accept', 'usage');
+      await cmd.shouldFailWith('track-mark glitch --reject --from=yesterday', 'invalid --from');
+    });
+
     await t.step('track-import parses GPX (both attribute orders)', async () => {
       await cmd.shouldSucceed('mkfile /trip.gpx');
       const fh = await ctx.vfs.open(ADMIN_ACCESS, '/trip.gpx', { mode: 'w' });
@@ -422,7 +456,7 @@ Deno.test({
 
     await t.step('track-list names the devices that have a track', async () => {
       const tracks = await client.execJson<{ id: string; path: string; name: string; points: number }[]>('track-list');
-      assertEquals(tracks.map((track) => track.id).sort(), ['backfill', 'hike', 'live', 'logger', 'moored', 'paused', 'south', 'thin', 'trip1']);
+      assertEquals(tracks.map((track) => track.id).sort(), ['backfill', 'glitch', 'hike', 'live', 'logger', 'moored', 'paused', 'south', 'thin', 'trip1']);
       const hike = tracks.find((track) => track.id === 'hike')!;
       assertEquals([hike.path, hike.name, hike.points], [`${DEVICES_ROOT}/hike/track`, 'hike', 3]);
     });

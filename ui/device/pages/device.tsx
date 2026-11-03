@@ -249,6 +249,7 @@ export default function DeviceDetailPage() {
           key={trackRead}
           device={device.id}
           kind={device.kind}
+          editable={editable}
           emptyActions={records && (
             <Group gap='xs' justify='center'>
               <Button variant='light' leftSection={<TablerIcon name='upload' size={16} />} loading={upload.sending} onClick={upload.open}>Upload GPX</Button>

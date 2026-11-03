@@ -92,9 +92,14 @@ export type TrackPoint = {
   ts?: string;
   /** Metres per second, as the device reported it. Only on a read that was not simplified. */
   speed?: number;
-  /** The rule that rejected the fix, on a `--rejected` read that was not simplified. */
+  /** Why the fix is left out, a rule's name or `manual`, on a `--rejected` read that was not simplified. */
   rejected?: string;
+  /** What a person said of the fix (`track-mark`), on a read that was not simplified. */
+  manual?: 'reject' | 'accept';
 };
+
+/** `track-mark`: how many fixes' verdict changed. */
+export type TrackMark = { marked: number };
 
 /**
  * `geocode-position <file>/position`: the address its point reverse-geocodes to, as written onto
