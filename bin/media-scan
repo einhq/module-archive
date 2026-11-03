@@ -116,11 +116,32 @@ const segmentsBelow = (root: string, cursor: string | undefined): string[] | und
   return segments.length > 0 ? segments : undefined;
 };
 
+/** The pipelines this command's facts start: the media ones, and documents' text. */
+const isMediaPipeline = (kind: string): boolean => kind.startsWith('media-') || kind === 'document-index';
+
+/**
+ * Whether media work waits: a ready job in the media pool, or a ready trigger for a pipeline this
+ * command's facts start. A scan then would announce again what is already on its way (the 8.1x
+ * above). Another pipeline's trigger does not count: a live tracker keeps a debounced
+ * `track-trips` job ready for as long as it sends, which would hold a scan off for good.
+ */
+const mediaWorkWaits = async (cmd: Command): Promise<boolean> => {
+  const pools = cmd.env.POOLS_PATH || POOLS_PATH;
+  const readyIn = async (path: string, counted: (kind: string) => boolean): Promise<boolean> => {
+    // No pool yet (a fresh boot) holds nothing.
+    if (!await cmd.sys.vfs.exists(cmd.access, path)) return false;
+    const stat = await cmd.sys.vfs.stat(cmd.access, path) as { byKind?: Record<string, { ready?: number }> };
+    return Object.entries(stat.byKind ?? {}).some(([kind, counts]) => counted(kind) && (counts.ready ?? 0) > 0);
+  };
+
+  return await readyIn(join(pools, 'media'), () => true) || await readyIn(join(pools, 'triggers'), isMediaPipeline);
+};
+
 const mediaScan = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
     string: ['limit', 'max-active', 'depth', 'scan-limit', 'only'],
-    boolean: ['dry-run', 'verbose', 'no-gaps', 'restart'],
+    boolean: ['dry-run', 'verbose', 'no-gaps', 'restart', 'if-idle'],
     alias: { n: 'dry-run', v: 'verbose' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -152,6 +173,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   // the previous one left behind.
   const stored = await readCursor(cmd, root);
   const resumeAt = flags.restart ? undefined : segmentsBelow(root, stored);
+
+  if (flags['if-idle'] && await mediaWorkWaits(cmd)) {
+    // As under a spent budget below: nothing examined, the cursor where the last run left it.
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], waiting: true });
+    else await cmd.writeLn('media-scan: media work is waiting, nothing started');
+    return 0;
+  }
 
   // Backlog gate: the whole point of a reconciler is to top the pipeline up, not
   // to bury it. Counting the entry-point pipeline is enough — everything else
@@ -470,6 +498,11 @@ mediaScan.spec = {
     { name: 'scan-limit', type: 'number' as const, description: 'Maximum files examined per run; 0 walks the whole subtree (default 20000)' },
     { name: 'restart', type: 'bool' as const, description: 'Ignore the stored resume point and start the pass at the top' },
     { name: 'no-gaps', type: 'bool' as const, description: 'Only discover unindexed files; skip half-indexed ones' },
+    {
+      name: 'if-idle',
+      type: 'bool' as const,
+      description: 'Scan only when no media work waits: nothing ready in the media pool, and no ready trigger for a media pipeline',
+    },
     {
       name: 'only',
       type: 'string' as const,

@@ -72,6 +72,24 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       // No cap is no number; JSON writes the unbounded budget as null.
       assertEquals(all.budget, null);
     });
+
+    await t.step("--if-idle waits for media work only, not another pipeline's trigger", async () => {
+      const root = '/idle-pools';
+      const env = `POOLS_PATH=${root} `;
+      await client.exec(`mkdir -p ${root}`);
+      assertEquals((await client.exec(`mknode -t pool ${root}/triggers`)).success, true);
+      const scan = () => client.execJson<{ scanned: number; waiting?: boolean }>(`${env}media-scan ${ALBUMS_ROOT} -n --restart --if-idle --max-active 0`);
+
+      // A live tracker's debounced trip run, ready for as long as it sends.
+      await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'track-trips', params: {} });
+      const past = await scan();
+      assertEquals(past.waiting, undefined);
+      assertEquals(past.scanned > 0, true, `scanned ${past.scanned}`);
+
+      await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'media-faces-stale', params: {} });
+      const held = await scan();
+      assertEquals([held.waiting, held.scanned], [true, 0]);
+    });
   } finally {
     client.close();
     await testCtx.teardown();
