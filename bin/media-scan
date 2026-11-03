@@ -12,8 +12,9 @@
  * is what retires import-pipeline-kick, which walked the importer's files.json
  * and had its own idea of what counted as unindexed.
  *
- * Bounded by design: --limit caps facts per run and --max-active refuses to add
- * work while the engine still has a backlog.
+ * Bounded by default: --limit caps facts per run and --max-active refuses to add
+ * work while the engine still has a backlog. 0 lifts either cap, for a caller that
+ * runs it only when nothing waits, as media-heal does.
  *
  * **Run this by hand, not on a timer.** The facts it publishes are predicates
  * ("this file has no exif yet"), not events, so re-evaluating them re-publishes
@@ -133,8 +134,10 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   // Emit only these fact types: one backfill at a time, so a cheap one is not held up behind an
   // expensive one announced beside it at the same priority.
   const only = typeof flags.only === 'string' && flags.only ? new Set(flags.only.split(',').map((type) => type.trim()).filter(Boolean)) : undefined;
-  const limit = numFlag(flags.limit, 1000);
-  const maxActive = numFlag(flags['max-active'], 500);
+  // 0 lifts either cap, as it does `--scan-limit`'s: media-heal runs a scan only when no work
+  // waits, so nothing it announces is already on its way, and it announces every gap at once.
+  const limit = numFlag(flags.limit, 1000) || Infinity;
+  const maxActive = numFlag(flags['max-active'], 500) || Infinity;
   const maxDepth = numFlag(flags.depth, 12);
   // Files *examined*, where `--limit` caps files announced. The two are separate budgets because
   // they bound different costs: a corpus with nothing left to do spends no event budget at all,
@@ -461,8 +464,8 @@ mediaScan.spec = {
     { name: 'root', type: 'path' as const, description: `Subtree to scan (default ${ALBUMS_ROOT})` },
   ],
   flags: [
-    { name: 'limit', type: 'number' as const, description: 'Maximum events to emit per run (default 1000)' },
-    { name: 'max-active', type: 'number' as const, description: 'Cap running media-ingest instances plus queued triggers (default 500)' },
+    { name: 'limit', type: 'number' as const, description: 'Maximum events to emit per run; 0 emits every gap found (default 1000)' },
+    { name: 'max-active', type: 'number' as const, description: 'Cap running media-ingest instances plus queued triggers; 0 adds no cap (default 500)' },
     { name: 'depth', type: 'number' as const, description: 'Maximum directory depth (default 12)' },
     { name: 'scan-limit', type: 'number' as const, description: 'Maximum files examined per run; 0 walks the whole subtree (default 20000)' },
     { name: 'restart', type: 'bool' as const, description: 'Ignore the stored resume point and start the pass at the top' },

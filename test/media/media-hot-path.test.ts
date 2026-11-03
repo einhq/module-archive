@@ -59,6 +59,19 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
         assertEquals((await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanCursor, cursor);
       });
     }
+
+    await t.step('0 lifts the caps: a scan walks the whole tree past ready triggers', async () => {
+      // The ready trigger the steps above left would stop a capped scan before it started.
+      const capped = await client.execJson<{ scanned: number }>(`media-scan ${ALBUMS_ROOT} -n --restart --max-active 1`);
+      assertEquals(capped.scanned, 0);
+      const all = await client.execJson<{ scanned: number; budget: number | null; complete: boolean }>(
+        `media-scan ${ALBUMS_ROOT} -n --restart --scan-limit 0 --limit 0 --max-active 0`,
+      );
+      assertEquals(all.complete, true);
+      assertEquals(all.scanned > 0, true, `scanned ${all.scanned}`);
+      // No cap is no number; JSON writes the unbounded budget as null.
+      assertEquals(all.budget, null);
+    });
   } finally {
     client.close();
     await testCtx.teardown();

@@ -6,9 +6,11 @@
 # the engine is behind announces again what is already on its way: a 15-minute timer once put
 # 975,781 announcements on the trigger queue for 119,765 files. So this scans only when nothing
 # is waiting — no ready job in the media pool or the trigger pool — when a gap it finds is a real
-# gap and not lag. A scan examines a slice of the archive and resumes where it stopped; once a
-# pass reaches the end, the next starts after a rest, since a caught-up archive gains new gaps
-# only from new files and model changes (ein/core#515).
+# gap and not lag. Under that gate nothing a scan announces is already on its way, so one scan
+# walks the whole archive and announces every gap it finds: the work waits in the pools, where
+# `health` and the dashboard count it, rather than in slices nothing shows (ein/core#944). A pass
+# that finds nothing starts a rest, since a caught-up archive gains new gaps only from new files
+# and model changes (ein/core#515).
 #
 # Failed pipeline work is not this service's: `pipeline heal` (run by pipeline-pruner) reruns it.
 pools="${POOLS_PATH:-/var/pools}"
@@ -24,9 +26,12 @@ while true; do
   media=$(ready "$pools/media")
   triggers=$(ready "$pools/triggers")
   if [ "$media" = 0 ] && [ "$triggers" = 0 ]; then
-    result=$(JSON_OUTPUT=1 media-scan --limit 2000 --max-active 2000)
-    echo "media-heal: $result"
-    if [ "$(echo "$result" | jq -r '.complete')" = true ]; then
+    result=$(JSON_OUTPUT=1 media-scan --scan-limit 0 --limit 0 --max-active 0)
+    complete=$(echo "$result" | jq -r '.complete')
+    emitted=$(echo "$result" | jq -r '.emitted')
+    # Not the announced paths, which run to one per file the scan found.
+    echo "media-heal: scanned $(echo "$result" | jq -r '.scanned'), announced $emitted, complete $complete"
+    if [ "$complete" = true ] && [ "$emitted" = 0 ]; then
       sleep "$rest"
       continue
     fi

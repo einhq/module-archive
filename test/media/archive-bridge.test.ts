@@ -7,7 +7,7 @@
  * media-scan re-derives the same facts for a file the bridge never saw.
  */
 
-import { PIPELINE_DEFINITIONS_PATH, PIPELINE_INSTANCES_PATH, QUEUES_PATH } from '@ein/paths';
+import { PIPELINE_DEFINITIONS_PATH, PIPELINE_INSTANCES_PATH, POOLS_PATH, QUEUES_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import { MEDIA_EVENTS } from '@archive/media/event-rules';
 import { assertEquals, assertStringIncludes } from '@std/assert';
@@ -474,8 +474,12 @@ Deno.test({
     // A reconciler with no brake floods the trigger queue: with no active slots left, the
     // budget is spent before the first file.
     await t.step('the backlog gate actually stops the walk', async () => {
+      if (!await vfs.exists(ADMIN_ACCESS, `${POOLS_PATH}/triggers`)) {
+        assertEquals((await client.exec(`mknode -t pool ${POOLS_PATH}/triggers`)).success, true);
+      }
+      await vfs.poolAdd(ADMIN_ACCESS, `${POOLS_PATH}/triggers`, { kind: 'media-ingest', params: {} });
       const result = await client.execJson<{ scanned: number; emitted: number; budget: number }>(
-        `media-scan ${ALBUMS_ROOT} --max-active 0`,
+        `media-scan ${ALBUMS_ROOT} --max-active 1`,
       );
 
       assertEquals(result.budget, 0);
