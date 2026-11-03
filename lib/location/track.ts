@@ -28,6 +28,8 @@ export type TrackPoint = {
   alt?: number;
   speed?: number;
   course?: number;
+  /** The rule that rejected the fix, on a read asking for rejected fixes. */
+  rejected?: string;
 };
 
 /** Bounding box of a track. */
@@ -53,6 +55,8 @@ export type TrackReadOptions = {
   limit?: number;
   /** Drop spikes and collapse each stay into two points: metres, ms and m/s. */
   still?: { radius?: number; minMs?: number; stillSpeed?: number; maxSpeed?: number };
+  /** Read the fixes the track's rules rejected too, marked `rejected`. */
+  rejected?: boolean;
 };
 
 type TrackReadResult = {
@@ -215,7 +219,18 @@ const unescapeXml = (text: string): string => text.replace(/&(amp|lt|gt|quot|apo
 const texts = (xml: string, tag: string): string[] =>
   [...xml.matchAll(new RegExp(`<${tag}>\\s*(?:<!\\[CDATA\\[)?([^<\\]]*?)(?:\\]\\]>)?\\s*</${tag}>`, 'g'))].map((m) => unescapeXml(m[1].trim())).filter(Boolean);
 
-/** Read a GPX document: its `<trkpt>` fixes (lat/lon in either order, optional `<ele>` and `<time>`), creator, own name, description and time, and names. */
+/** A number in the first `<tag>` (with or without a namespace prefix) of a point's body, if any. */
+const pointNumber = (body: string, tag: string): number | undefined => {
+  const text = body.match(new RegExp(`<(?:\\w+:)?${tag}>([^<]+)</(?:\\w+:)?${tag}>`))?.[1];
+  const value = text === undefined ? NaN : Number(text);
+  return Number.isFinite(value) ? value : undefined;
+};
+
+/**
+ * Read a GPX document: its `<trkpt>` fixes (lat/lon in either order, optional `<ele>`, `<time>`,
+ * and speed in m/s and course in degrees from GPX 1.0 or Garmin's TrackPointExtension), creator, own
+ * name, description and time, and names.
+ */
 export function parseGpx(xml: string): Gpx {
   const points: TrackPoint[] = [];
 
@@ -231,6 +246,11 @@ export function parseGpx(xml: string): Gpx {
 
     const ele = body.match(/<ele>([^<]+)<\/ele>/);
     if (ele && Number.isFinite(Number(ele[1]))) point.alt = Number(ele[1]);
+
+    const speed = pointNumber(body, 'speed');
+    if (speed !== undefined) point.speed = speed;
+    const course = pointNumber(body, 'course');
+    if (course !== undefined) point.course = course;
 
     const time = body.match(/<time>([^<]+)<\/time>/);
     if (time) {

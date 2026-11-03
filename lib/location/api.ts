@@ -92,6 +92,8 @@ export type TrackPoint = {
   ts?: string;
   /** Metres per second, as the device reported it. Only on a read that was not simplified. */
   speed?: number;
+  /** The rule that rejected the fix, on a `--rejected` read that was not simplified. */
+  rejected?: string;
 };
 
 /**
