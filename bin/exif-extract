@@ -171,7 +171,8 @@ const exifExtract = async (cmd: Command): CmdReturn => {
   const fps = getNum(raw, 'FrameRate') ?? getNum(raw, 'VideoFrameRate');
   const iso = getNum(raw, 'ISO');
   const exposure = get(raw, 'ExposureTime');
-  const frames = getNum(raw, 'FrameCount') ?? getNum(raw, 'LtcChangeTableLtcChangeFrameCount');
+  // An OpenDML AVI's `FrameCount` is its first RIFF segment's; `TotalFrameCount` is the file's.
+  const frames = getNum(raw, 'TotalFrameCount') ?? getNum(raw, 'FrameCount') ?? getNum(raw, 'LtcChangeTableLtcChangeFrameCount');
   const exifDuration = getNum(raw, 'Duration');
 
   // Geolocation
@@ -227,10 +228,10 @@ const exifExtract = async (cmd: Command): CmdReturn => {
   const sarFromDump = isVideo ? sarFromExifRaw(raw, width, height) : undefined;
   const unmeasuredRaster = isVideo && sarFromDump === undefined && width !== undefined && height !== undefined ? { width, height } : undefined;
 
-  // exiftool remains authoritative when it has a valid duration. Audio already needs ffprobe
-  // for normalized stream facts; video only pays for a probe when the dump left a question
-  // open — an absent or invalid duration (notably MPEG-1/2 program streams), or the pixel
-  // shape above.
+  // A video's duration is ffprobe's container duration, which `media.probe` measured already;
+  // exiftool's is short on DV in an AVI and on MPEG program streams. Its other stream facts are
+  // read only when the dump left a question open — an absent or invalid duration (notably
+  // MPEG-1/2 program streams), or the pixel shape above.
   const media = resolveMediaFacts(streamProbeOf(probed), mimetype, exifDuration, unmeasuredRaster);
   const duration = media.duration;
 

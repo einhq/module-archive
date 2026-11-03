@@ -1153,10 +1153,13 @@ reading an attr per hit would put a node read back on the search path. The timec
 (WebVTT in and out, chunking, chunk-path resolution) are pure and tested in
 [modules/archive/lib/media/transcript.ts](../lib/media/transcript.ts). Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `devicePath`) are still promoted
 onto the file node's attrs by `exif-extract`; the raw exiftool output stays on `metadata/exif` so it
-doesn't bloat every file-node read. Exiftool is the primary duration source, but some containers
-(notably MPEG-1/2 program streams) expose no duration there. `@archive/media/media-probe` falls back to
-ffprobe only when a video's duration is missing or invalid; audio folds the same fallback into the
-ffprobe call it already makes for normalized stream facts. The `metadata/exif` child's existence doubles as the pipeline's
+doesn't bloat every file-node read. A video's duration is ffprobe's container duration from the
+same `media.probe`, and exiftool's only when ffprobe has none: exiftool reads a DV AVI's length from
+its first RIFF segment and estimates an MPEG program stream's from the bitrate, and was short by
+ten hours over fry's 50 such videos where ffprobe was short on none (`@archive/media/media-probe`).
+Audio keeps exiftool's duration and falls back to ffprobe's, which it already reads for normalized
+stream facts. An OpenDML AVI's `fileinfo.frames` is exiftool's `TotalFrameCount`, not the first
+segment's `FrameCount`. The `metadata/exif` child's existence doubles as the pipeline's
 cheap "already indexed" marker (`skipIf`), and `exif-extract` skips on it too unless given `-f` —
 which `media-reindex` passes, that pipeline existing precisely for the case where exif is there and
 stale. Because `vfs.update` merges, a re-extract writes **every derived attr, null when absent** —

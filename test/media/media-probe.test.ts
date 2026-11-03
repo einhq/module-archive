@@ -10,9 +10,17 @@ const video = (stream: Record<string, unknown>, format: Record<string, unknown> 
   ffprobe: { format, streams: [{ codec_type: 'video', ...stream }, { codec_type: 'audio', codec_name: 'aac', channels: 2, sample_rate: '48000' }] },
 });
 
-Deno.test('video keeps a valid exiftool duration without consulting the probe', () => {
+Deno.test("video takes ffprobe's container duration over exiftool's", () => {
+  // A DV AVI past its first RIFF segment: exiftool counts that segment's frames, ffprobe the file's.
+  assertEquals(resolveMediaFacts(video({ codec_name: 'dvvideo' }, { duration: '2164.760000' }), 'video/x-msvideo', 566.12), { duration: 2164.76 });
+  // An MPEG program stream: exiftool estimates from the bitrate, ffprobe reads the last timestamp.
+  assertEquals(resolveMediaFacts(video({ codec_name: 'mpeg2video' }, { duration: '2437.992000' }), 'video/mpeg', 1997.12), { duration: 2437.992 });
+});
+
+Deno.test('video keeps a valid exiftool duration when the probe has none', () => {
   assertEquals(resolveMediaFacts(undefined, 'video/mp4', 12.5), { duration: 12.5 });
   assertEquals(resolveMediaFacts({ refusal: 'moov atom not found' }, 'video/mp4', 12.5), { duration: 12.5 });
+  assertEquals(resolveMediaFacts(video({ codec_name: 'h264' }, { duration: 'N/A' }), 'video/mp4', 12.5), { duration: 12.5 });
 });
 
 Deno.test('video falls back to a validated ffprobe format duration, and takes the codec with it', () => {
@@ -30,11 +38,11 @@ Deno.test('a video whose dump could not name the pixel shape is measured for it'
   // The `.MTS` case: exiftool reports the coded 1440x1080 and no ratio at all, so the picture's
   // shape exists nowhere but in the stream. `sar` comes back reduced against the raster the node
   // stores — 4:3 here, because those are the same raster.
-  const probe = video({ codec_name: 'h264', width: 1440, height: 1080, sample_aspect_ratio: '4:3' }, { duration: '9.5' });
+  const probe = video({ codec_name: 'h264', width: 1440, height: 1080, sample_aspect_ratio: '4:3' }, { duration: '9.6' });
   const facts = resolveMediaFacts(probe, 'video/m2ts', 9.5, { width: 1440, height: 1080 });
   assertAlmostEquals(facts.sar!, 4 / 3, 1e-6);
-  // exiftool had a duration, so it stays the one that counts even though the probe was read.
-  assertEquals(facts.duration, 9.5);
+  // The container's duration, as for any video the probe measured.
+  assertEquals(facts.duration, 9.6);
 });
 
 Deno.test('a probe against the display frame stores no ratio, because it is already applied', () => {

@@ -112,12 +112,19 @@ function factsOf(probe: StreamProbe, audioStream: boolean, raster?: Partial<Dims
 }
 
 /**
- * Resolve normalized media facts with exiftool as the primary source.
+ * Resolve normalized media facts from exiftool's dump and EMS's stream probe.
  *
  * `probe` is what EMS's `media.probe` measured about the streams — it runs ffprobe for every
  * video and audio file, so the dump is already in hand and this costs no spawn. Audio always
- * takes its stream facts from it. Video takes from it only what the exiftool dump left open,
- * and there are two such questions:
+ * takes its stream facts from it.
+ *
+ * A video's duration is the probe's container duration whenever it has one, and exiftool's only
+ * when it does not. exiftool reads a DV AVI's length from its first RIFF segment and estimates an
+ * MPEG program stream's from the bitrate, both short of the decoded length by up to three
+ * quarters (ein/core#948); ffprobe follows the OpenDML index and reads the program stream's last
+ * timestamp. Over fry's 1,906 videos ffprobe's figure was never short of the decoded length.
+ *
+ * The rest of a video's stream facts are taken only where the dump left a question open:
  *
  *   - **no valid duration** — the MPEG program-stream path, and any future container with the
  *     same incomplete metadata, without a mimetype allow-list; and
@@ -147,18 +154,18 @@ export function resolveMediaFacts(
     return { ...probed, duration: duration ?? probed.duration };
   }
 
-  if (mimetype.startsWith('video/') && (duration === undefined || unmeasuredRaster !== undefined)) {
-    const probed = factsOf(measured, false, unmeasuredRaster);
-    if (duration === undefined) return probed;
-    // A probe consulted only for the shape must not throw away a duration exiftool did measure —
-    // that one stays authoritative, exactly as it is when the probe is never consulted — and must
-    // not mark the file undecodable either. The mark stops four pipelines from ever touching a
-    // file again, and this consultation exists for a layout hint: if the probe refused, the
-    // answer is "no ratio", not "nothing can read this". A file whose duration ffprobe *was*
-    // needed for is still marked, which is where the mark came from and the only place it is a
-    // measurement.
-    const { undecodable: _refusal, ...facts } = probed;
-    return { ...facts, duration };
+  if (mimetype.startsWith('video/')) {
+    if (duration === undefined) return factsOf(measured, false, unmeasuredRaster);
+    const containerDuration = positive(probe?.ffprobe?.format?.duration);
+    if (unmeasuredRaster === undefined) return { duration: containerDuration ?? duration };
+    // A probe consulted only for the shape must not throw away the duration exiftool did measure
+    // when it has none of its own, and must not mark the file undecodable either. The mark stops
+    // four pipelines from ever touching a file again, and this consultation exists for a layout
+    // hint: if the probe refused, the answer is "no ratio", not "nothing can read this". A file
+    // whose duration ffprobe *was* needed for is still marked, which is where the mark came from
+    // and the only place it is a measurement.
+    const { undecodable: _refusal, ...facts } = factsOf(measured, false, unmeasuredRaster);
+    return { ...facts, duration: containerDuration ?? duration };
   }
 
   return duration === undefined ? {} : { duration };
