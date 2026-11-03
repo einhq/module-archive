@@ -1,5 +1,6 @@
 import { MapMarkers, type MapMarkerSpec, MapTracks, type MapTrackSpec, TablerIcon, useMap } from '@ein/ui/components';
-import { ActionIcon, Box, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Anchor, Box, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { Link } from 'react-router-dom';
 import { useEffect, useMemo, useRef } from 'react';
 import type { LiveTrack } from '../hooks/useLiveTracks.ts';
 import { formatAge, speedOf } from '../lib/live.ts';
@@ -93,7 +94,7 @@ export function FollowButton({ entry, following, onFollow }: { entry: LiveTrack;
   );
 }
 
-/** One row per live device: its color, its name, its speed and the age of its fix, and a Follow toggle. */
+/** One row per live device: its color, its name linking to its track, its speed and the age of its fix, and a Follow toggle. */
 export function LiveDeviceList({ live, now, following, onFollow }: {
   live: LiveTrack[];
   now: number;
@@ -106,7 +107,9 @@ export function LiveDeviceList({ live, now, following, onFollow }: {
         <Group key={entry.track.path} gap='xs' wrap='nowrap'>
           <Box w={10} h={10} style={{ borderRadius: '50%', background: liveColor(entry), flex: 'none' }} />
           <Box style={{ flex: 1, minWidth: 0 }}>
-            <Text size='sm' fw={500} truncate>{entry.track.name}</Text>
+            <Anchor component={Link} to={`/devices/${encodeURIComponent(entry.track.id)}?tab=track`} size='sm' fw={500} truncate display='block'>
+              {entry.track.name}
+            </Anchor>
             <Text size='xs' c='dimmed' truncate>{liveSummary(entry, now)}</Text>
           </Box>
           <FollowButton entry={entry} following={entry.track.path === following} onFollow={onFollow} />
