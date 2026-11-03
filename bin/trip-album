@@ -8,10 +8,10 @@
  *
  * `<device>` is a device's slug or path, or its track's path; `<trip>` is a trip's id from
  * `trip-list`, or its first day. `--new` makes an album for it under the albums root, named after
- * where it got farthest when that place has a name, else after the device, and its days. `--album`
- * makes an album that is there the trip's. Either writes the trip as the album's attr `trip`, puts
- * the device on the album's list (`album-device-add`) and writes the album's span, which the trip
- * widens. Whenever the device's trips are written, the album's trip is written anew from them, so
+ * where it got farthest when that place has a name, else after the device; the trip's days are the
+ * album's span, not its name. `--album` makes an album that is there the trip's. Either writes the
+ * trip as the album's attr `trip`, puts the device on the album's list (`album-device-add`) and
+ * writes the album's span, which the trip widens. Whenever the device's trips are written, the album's trip is written anew from them, so
  * it grows while the trip is ongoing and gets the locations of its stays. A trip is one album's, and
  * an album holds one trip. `--detach` takes the trip off its album and leaves the device on the list.
  */
@@ -34,12 +34,11 @@ const nameOf = async (cmd: Command, path: string): Promise<string | undefined> =
   return typeof name === 'string' && name.trim() ? name.trim() : undefined;
 };
 
-/** The name a new album of the trip gets: where it got farthest, or the device, and its days. */
+/** The name a new album of the trip gets: where it got farthest, or the device. */
 const defaultName = async (cmd: Command, trips: DeviceTrips, trip: Trip, deviceName: string): Promise<string> => {
   const stay = trip.destination.stay === undefined ? undefined : trips.stays[trip.destination.stay];
   const place = stay?.location && stay.kind !== 'home' ? await nameOf(cmd, stay.location) : undefined;
-  const last = trip.days[trip.days.length - 1];
-  return `${place ?? deviceName} ${trip.day === last ? trip.day : `${trip.day} – ${last}`}`;
+  return place ?? deviceName;
 };
 
 /** A path under the albums root no node has yet: `name`, else `name (2)`, `name (3)`, … */
@@ -117,7 +116,7 @@ tripAlbum.spec = {
   ],
   flags: [
     { name: 'new', type: 'bool' as const, description: 'make a new album of the trip' },
-    { name: 'name', type: 'string' as const, description: "the new album's name; by default where the trip got farthest, or the device, and its days" },
+    { name: 'name', type: 'string' as const, description: "the new album's name; by default where the trip got farthest, or the device" },
     { name: 'album', type: 'path' as const, description: 'make this album the album of the trip' },
     { name: 'detach', type: 'bool' as const, description: 'take the trip off its album' },
   ],

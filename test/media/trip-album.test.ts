@@ -61,9 +61,9 @@ Deno.test({
     let first = '';
     await t.step('--new makes an album of the trip, which lists the device and spans the trip', async () => {
       first = (await client.execJson<TripAlbumAnswer>('trip-album the-sailboat 2025-06-05 --new')).album;
-      assertEquals(first, `${ALBUMS_ROOT}/Sailboat 2025-06-05`);
+      assertEquals(first, `${ALBUMS_ROOT}/Sailboat`);
       const album = await attrs(first);
-      assertEquals(album.name, 'Sailboat 2025-06-05');
+      assertEquals(album.name, 'Sailboat');
       const trip = derived.trips[0];
       assertEquals(album.trip?.device, BOAT);
       assertEquals(album.trip?.day, '2025-06-05');

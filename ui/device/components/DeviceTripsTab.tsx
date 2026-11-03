@@ -1,5 +1,6 @@
 import { Accordion, Alert, Anchor, Badge, Button, Card, Group, Stack, Table, Text } from '@mantine/core';
 import { EmptyState, PageLoader, TablerIcon } from '@ein/ui/components';
+import { openDialog } from '@ein/ui/signals';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import type { Trip, TripList, TripPlace } from '@archive/location/api';
@@ -36,15 +37,27 @@ function PlaceLabel({ list, place }: { list: TripList; place: Pick<TripPlace, 's
 /** The day, of the trip's legs, a trip joined to it by a merge began on. */
 const joinedDay = (trip: Trip, start: string): string | undefined => trip.legs.find((leg) => leg.start <= start && start <= leg.end)?.day;
 
-/** What a trip's album is to be: a new one (named `name`, or after the trip), one that is there by its path, or none. */
+/** What a trip's album is to be: a new one named `name`, one that is there by its path, or none. */
 type OnAlbum = (trip: string, album: 'new' | 'detach' | string, name?: string) => void;
 
 /**
- * The album the trip was made, or, until it is one, the albums it may belong to. Whoever may change
- * the device gets **New album**, named after the trip, and **Put in an album…**, which picks any album
- * they may change, the ones its pictures are in first, or names a new one; anyone else gets the list.
+ * `/albums/new` for an album of the trip, starting with the name of the farthest place it stayed
+ * at when that has one; the dates are the album's span, not its name.
  */
-function TripAlbum({ trip, editable, busy, onAlbum }: { trip: Trip; editable: boolean; busy: boolean; onAlbum: OnAlbum }) {
+const newAlbumRoute = (list: TripList, trip: Trip): string => {
+  const stay = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
+  const params = new URLSearchParams({ device: list.device, trip: trip.id, of: span(trip) });
+  if (stay?.name && stay.kind !== 'home') params.set('name', stay.name);
+  return `/albums/new?${params}`;
+};
+
+/**
+ * The album the trip was made, or, until it is one, the albums it may belong to. Whoever may change
+ * the device gets **New album**, which asks for the album's name in the Create Album dialog, and
+ * **Put in an album…**, which picks any album they may change, the ones its pictures are in first,
+ * or names a new one; anyone else gets the list.
+ */
+function TripAlbum({ list, trip, editable, busy, onAlbum }: { list: TripList; trip: Trip; editable: boolean; busy: boolean; onAlbum: OnAlbum }) {
   const [picking, setPicking] = useState(false);
   if (trip.album) {
     return (
@@ -62,8 +75,14 @@ function TripAlbum({ trip, editable, busy, onAlbum }: { trip: Trip; editable: bo
   if (editable) {
     return (
       <Group gap='xs'>
-        <Button size='compact-xs' variant='light' disabled={busy} leftSection={<TablerIcon name='photo-plus' size={14} />} onClick={() => onAlbum(trip.id, 'new')}>
-          New album
+        <Button
+          size='compact-xs'
+          variant='light'
+          disabled={busy}
+          leftSection={<TablerIcon name='photo-plus' size={14} />}
+          onClick={() => openDialog(newAlbumRoute(list, trip))}
+        >
+          New album…
         </Button>
         <Button size='compact-xs' variant='subtle' disabled={busy} leftSection={<TablerIcon name='library-plus' size={14} />} onClick={() => setPicking(true)}>
           Put in an album…
@@ -167,7 +186,7 @@ function TripCard(
             </>
           )}
         </Text>
-        <TripAlbum trip={trip} editable={editable} busy={busy} onAlbum={onAlbum} />
+        <TripAlbum list={list} trip={trip} editable={editable} busy={busy} onAlbum={onAlbum} />
         {editable && trip.joined?.map((start) => {
           const day = joinedDay(trip, start);
           return day && (
