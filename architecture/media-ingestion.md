@@ -33,29 +33,29 @@ waits for rather than by a shared DAG:
    their own guards and run overrides, so a stale-transcript fact can bypass the
    ordinary "transcript already exists" guard without defining another pipeline:
 
-   | pipeline               | fact                                                                            | resource                                                                                           |
-   | ---------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-   | `media-ingest`         | `file.discovered`                                                               | pool `ingest` (1 cpu, priority 100)                                                                |
-   | `media-reindex`        | `file.content-changed`                                                          | pool `ingest` (1 cpu, priority 100)                                                                |
-   | `media-device`         | `metadata.extracted` (has device info)                                          | inline                                                                                             |
-   | `media-geocode`        | `position.available`                                                            | inline                                                                                             |
-   | `media-stills`         | `metadata.extracted`, not `undecodable`                                         | pool `stills` (1 cpu, priority 60)                                                                 |
-   | `media-transcode`      | `metadata.extracted` (video/audio) or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
-   | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                         | pool `fingerprint` (1 cpu, priority 30)                                                            |
-   | `media-faces`          | `metadata.extracted` (image)                                                    | pool `faces` (1 model slot, priority 100)                                                          |
-   | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                           |
-   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                  | pool `faces` (1 model slot; priority 20/10)                                                        |
-   | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                |
-   | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                      |
-   | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                              |
-   | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`     | pool `transcribe` (1 model slot; priority 50/10)                                                   |
-   | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                    | pool `diarize` (1 model slot; priority 30)                                                         |
-   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                             |
-   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                     | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`) |
-   | `media-duplicates`     | `duplicates.stale`                                                              | pool `dedupe` (1 cpu, priority 20)                                                                 |
-   | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)       | pool `retime` (1 cpu, priority 20)                                                                 |
-   | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed) | pool `sidecars` (1 cpu, priority 30, exclusive)                                                    |
-   | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for) | pool `organize` (1 cpu, priority 15, reserved)                                                     |
+   | pipeline               | fact                                                                            | resource                                                                                                                             |
+   | ---------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+   | `media-ingest`         | `file.discovered`                                                               | pool `ingest` (1 cpu, priority 100)                                                                                                  |
+   | `media-reindex`        | `file.content-changed`                                                          | pool `ingest` (1 cpu, priority 100)                                                                                                  |
+   | `media-device`         | `metadata.extracted` (has device info)                                          | inline                                                                                                                               |
+   | `media-geocode`        | `position.available`                                                            | inline                                                                                                                               |
+   | `media-stills`         | `metadata.extracted`, not `undecodable`                                         | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
+   | `media-transcode`      | `metadata.extracted` (video/audio) or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
+   | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                         | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
+   | `media-faces`          | `metadata.extracted` (image)                                                    | pool `faces` (1 model slot, priority 100)                                                                                            |
+   | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                                                             |
+   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                  | pool `faces` (1 model slot; priority 20/10)                                                                                          |
+   | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                                                  |
+   | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                                                        |
+   | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                                                                |
+   | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`     | pool `transcribe` (1 model slot; priority 50/10)                                                                                     |
+   | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                    | pool `diarize` (1 model slot; priority 30)                                                                                           |
+   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
+   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                     | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
+   | `media-duplicates`     | `duplicates.stale`                                                              | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
+   | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)       | pool `retime` (1 cpu, priority 20)                                                                                                   |
+   | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed) | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
+   | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for) | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
    **Sidecars.** A Google Photos Takeout JSON or an XMP file beside a picture is paired with it by
    `media-sidecars` ([sidecars.ts](../lib/media/sidecars.ts)): moved under it
@@ -140,11 +140,11 @@ waits for rather than by a shared DAG:
    Only two consumers use the `cover` crop now — the 48px map marker and the album cover
    card — so `512x512` (`grid`) exists as the _contain_ rendition the justified media grid draws
    a tile from, and video gets it too so a video poster is the clip's own shape rather than a
-   square. `--only still|transcode|storyboard` splits by the cost of the work, not by media type:
-   `media-stills` runs `still`, every AVIF picture of every type (photo sizes and face crops,
-   poster frames, waveforms), and `media-transcode` runs `transcode`, the ffmpeg renditions of
-   video (the `preview` hover clip included) and audio, so a failed encode never takes the poster
-   frame with it, and then `storyboard` (below); `--size a,b`
+   square. `--only still|transcode|preview|storyboard` splits by the cost of the work, not by
+   media type: `media-stills` runs `still`, every AVIF picture of every type (photo sizes and face
+   crops, poster frames, waveforms), then `preview`, a video's hover clip (below);
+   `media-transcode` runs `transcode`, the full ffmpeg renditions of video and audio, so a failed
+   encode never takes the poster frame with it, and then `storyboard` (below); `--size a,b`
    narrows a run to named sizes, which is what makes adding a size a ~1-hour backfill rather than a
    re-encode of the whole ladder; `--prune` deletes renditions that are no longer targets, which
    is how a format change cleans up after itself. Every still-image size of one file is one
@@ -175,10 +175,12 @@ waits for rather than by a shared DAG:
    touch screen when it scrolls into view. Both are one `video.transcode` call each — the hover
    clip with `clip: {start, duration}` (an input-side seek, so the decode starts at a keyframe
    near the offset instead of at zero) and `audio: null`, neither of which touches the filter
-   graph, so EMS's CPU and CUDA chains stay in lockstep. The clip starts at 00:00:01, exactly
-   where the poster frame was taken, so swapping the still for the clip shows the same frame
-   twice rather than a jump cut. Its class is `transcode`, not `preview`: the class names the
-   cost, and a 20-second re-encode belongs on the media pool beside the full rendition. A source
+   graph, so EMS's CPU and CUDA chains stay in lockstep. The clip starts exactly where the poster
+   frame was taken, at 00:00:01 or at `posterAt`, so swapping the still for the clip shows the
+   same frame twice rather than a jump cut. That second is known only once the poster frame is
+   made, so the clip is a class of its own, `preview`: a step of `media-stills` after `still`, on
+   the `transcode` kind beside the full rendition, since a 20-second re-encode costs like one.
+   `media-transcode` makes it again only when forced, as when a video is turned. A source
    under 2s gets no clip at all — the poster already is the whole video — which is read off the
    file node's promoted `duration`. The sound rendition's `bitrate`/`sample-rate` in `sizes.yaml`
    are **ceilings**, not targets — `audio.transcode` caps them at the source's own and stays
@@ -201,7 +203,7 @@ waits for rather than by a shared DAG:
    target table, and the table is what a `regenerate` sweep walks: `find-broken-renditions`
    could _find_ an interrupted crop and nothing could rebuild it, so on a multi-week crawl
    every interrupted write was permanent (14 of them in production, and the UI shows its placeholder
-   for those faces indefinitely). It is now the `face` target of the `preview` class, so
+   for those faces indefinitely). It is now the `face` target of the `still` class, so
    `regenerate --size face` is the repair pass and `-f` re-cuts. Rebuilding needs no detection —
    the box is stored on the region and a crop is reproducible from it forever — and both
    authors of `regions/` are covered, `face-*` and `manual-*` alike. A video region's crop is
@@ -1376,11 +1378,11 @@ every reader consults the plain `angle` while `angleManual` is only the sentinel
 `exif-extract` overwriting it), **remaps every face box and landmark through the raw frame**
 (`boxDisplayToRaw` at the old orientation, `boxRawToDisplay` at the new one — the pixels do not
 move, only the frame describing them) and carries each face's pose across (`remapPose`: a
-quarter turn turns roll with it, a mirror flips yaw and roll; pitch never changes), regenerates the preview renditions inline — the face
-crops among them, since a crop is a `preview`-class target and comes out sideways once the
+quarter turn turns roll with it, a mirror flips yaw and roll; pitch never changes), regenerates the still renditions inline — the face
+crops among them, since a crop is a `still`-class target and comes out sideways once the
 frame changes. A video's re-encode is not its to start: the `angleManual`/`mirror` write is
 what the bridge reads as `media.file.turned` (an indexed video only), and `media-transcode`
-re-encodes on it with `-f`, as the administrator, whoever turned the file — the old rendition
+re-encodes it and its hover clip on it with `-f`, as the administrator, whoever turned the file — the old rendition
 stays playable, turned the old way, until the new one lands.
 
 The legacy importer is the one place `angle` is _computed_ rather than read. The legacy archive let ffmpeg

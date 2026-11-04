@@ -202,9 +202,9 @@ export const isTextIndexedMimetype = (mimetype: string): boolean =>
   ].includes(mimetype);
 
 /**
- * What `media-transcode` leaves behind, per media type: the extension of a transcoded
- * rendition and how many of them that type gets. Video gets the 1080p rendition the lightbox
- * plays and the muted hover clip a grid tile plays; audio gets the one normalised track.
+ * The transcoded renditions each media type gets: their extension and how many. Video gets the
+ * 1080p rendition the lightbox plays (`media-transcode`) and the muted hover clip a grid tile
+ * plays (`media-stills`, after the poster frame); audio gets the one normalised track.
  *
  * Counted by extension rather than looked up by name because the names are the target boxes
  * out of `config/sizes.yaml` (`1920x1080.mp4`, `480x480.mp4`, `128k-44100.m4a`), so changing a
@@ -413,7 +413,7 @@ const expectedTranscodes = (file: NodeSnapshot): { ext: string; count: number } 
 };
 
 /**
- * True when a video or audio file is short of the renditions `media-transcode` writes.
+ * True when a video or audio file is short of its transcoded renditions (`TRANSCODE_RENDITIONS`).
  *
  * They land under `thumbnails/` alongside the poster frames, so the derivatives term cannot see
  * them: a video that got its still frames and no transcode has a `thumbnails/` directory and

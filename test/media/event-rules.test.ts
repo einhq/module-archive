@@ -677,8 +677,8 @@ const rendition = (id: string): NodeSnapshot => ({ id, type: 'file', attrs: { so
 
 /**
  * Complete for a video: its transcript, the poster frame `media-stills` writes, and both renditions
- * `media-transcode` writes beside it — the 1080p one the lightbox plays and the muted hover
- * clip a tile plays. They share `thumbnails/` with the poster frames, which is exactly why the
+ * beside it — the 1080p one `media-transcode` writes for the lightbox and the muted hover clip
+ * `media-stills` writes for a tile. They share `thumbnails/` with the poster frames, which is exactly why the
  * derivatives term cannot stand in for a transcode term.
  *
  * No `facesAt`: a video indexed before its faces were looked for has none, so an image's marker

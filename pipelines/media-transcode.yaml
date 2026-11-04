@@ -1,7 +1,8 @@
 name: media-transcode
-description: Re-encode video and audio to web-playable renditions — a video's 1080p and hover clip, its storyboard and its chapters, an audio file's normalised track
+description: Re-encode video and audio to web-playable renditions — a video's 1080p, its storyboard and its chapters, an audio file's normalised track
 
-# The still pictures of the same files are media-stills'. The transcode is
+# The still pictures of the same files are media-stills', and so is a new video's
+# hover clip, which starts at the poster frame and so waits for it. The transcode is
 # minutes of ffmpeg per file, and the heaviest thing on the box — it asks for two
 # CPU slots, so a transcode and a face assignment cannot both run on a two-slot
 # worker. The storyboard and the chapters are made from the 1080p rendition, so
@@ -36,12 +37,24 @@ triggers:
 steps:
   transcode:
     command: generate-derivatives $NODE_PATH --only transcode $FORCE
-    description: 1080p video + its hover-preview clip / normalised audio rendition
+    description: 1080p video / normalised audio rendition
     pool: media
     kind: transcode
     priority: 10
     requires:
       cpu: 2
+  preview:
+    # Only when forced: a new video's hover clip is media-stills', made after its poster frame.
+    command: generate-derivatives $NODE_PATH --only preview $FORCE
+    description: The video's muted hover clip, encoded again
+    condition: |
+      [ -n "$FORCE" ] || exit 1
+      case "${EVENT_MIMETYPE:-video/}" in video/*) ;; *) exit 1;; esac
+    pool: media
+    kind: transcode
+    priority: 10
+    requires:
+      cpu: 1
   storyboard:
     command: generate-derivatives $NODE_PATH --only storyboard $FORCE
     description: The video's frames tiled into one sheet, for the player's timeline

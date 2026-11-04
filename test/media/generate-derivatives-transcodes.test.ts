@@ -3,10 +3,13 @@
  * staged, EMS writes the bytes, the size is checked and the temp is swapped in — and a
  * refusal is recorded on the file node with EMS's budget signature, then cleared the moment
  * the rendition is made. The encoding itself is EMS's; this is about what lands on the nodes.
+ * And the pipelines' order: a new video's hover clip is made after its poster frame, whose second
+ * it starts at.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
+import { parse as parseYaml } from '@std/yaml';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/event-rules';
 import { startStubEms, type StubAnswer } from '@ems/testing';
@@ -15,6 +18,10 @@ const fileRoot = await Deno.makeTempDir({ prefix: 'ein-transcodes-' });
 const testCtx = createTestContext({ modules: ['archive'], fileRoot });
 
 type Report = { created: string[]; pruned: string[]; failed: number };
+
+type PipelineSteps = { steps: Record<string, { command: string; dependsOn?: string[]; condition?: string }> };
+const pipelineSteps = async (name: string): Promise<PipelineSteps['steps']> =>
+  (parseYaml(await Deno.readTextFile(new URL(`../../pipelines/${name}.yaml`, import.meta.url))) as PipelineSteps).steps;
 
 Deno.test({
   name: 'generate-derivatives makes the transcodes through EMS',
@@ -63,9 +70,12 @@ Deno.test({
         return { result: { path: '', width: 480, height: 360, duration: 20, bytes: 9, video_codec: 'av1', audio_codec: null }, producer: 'ffmpeg/9/libsvtav1' };
       };
 
-      const report = await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only transcode`);
-      assertEquals(report.failed, 0);
-      assertEquals(report.created, [`${video}/thumbnails/480x480.mp4`]);
+      const transcode = await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only transcode`);
+      assertEquals(transcode.failed, 0);
+      assertEquals(transcode.created, []);
+      const clip = await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only preview`);
+      assertEquals(clip.failed, 0);
+      assertEquals(clip.created, [`${video}/thumbnails/480x480.mp4`]);
 
       // What EMS was asked: the node's orientation and codec travel as facts, the hover clip is
       // clipped and muted, the full rendition carries its audio.
@@ -156,7 +166,7 @@ Deno.test({
         await written(body, 'mp4-bytes');
         return { result: { path: '', width: 480, height: 360, duration: 20, bytes: 9, video_codec: 'av1', audio_codec: null }, producer: 'ffmpeg/9/libsvtav1' };
       };
-      await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only transcode`);
+      await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only preview`);
       const preview = asked.find((b) => (b.video as { box: { width: number } }).box.width === 480)!;
       assertEquals(preview.clip, { start: 60, duration: 20 });
 
@@ -164,6 +174,18 @@ Deno.test({
       answer = stills(1);
       await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only still -f`);
       assertEquals((await vfs.get(ADMIN_ACCESS, video)).attrs.posterAt, undefined);
+    });
+
+    await t.step('a new video gets its hover clip after its poster frame, and media-transcode only when forced', async () => {
+      const stills = await pipelineSteps('media-stills');
+      assertEquals(stills.preview.command, 'generate-derivatives $NODE_PATH --only preview');
+      assertEquals(stills.preview.dependsOn, ['stills']);
+
+      const transcode = await pipelineSteps('media-transcode');
+      const holds = (force: string, mimetype: string) => client.exec(`(\nexport FORCE=${force}\nexport EVENT_MIMETYPE=${mimetype}\n${transcode.preview.condition}\n)`);
+      assertEquals((await holds("''", 'video/mp4')).success, false);
+      assertEquals((await holds('-f', 'video/mp4')).success, true);
+      assertEquals((await holds('-f', 'audio/mpeg')).success, false);
     });
   } finally {
     await stub.close();

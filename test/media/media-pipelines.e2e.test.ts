@@ -464,7 +464,7 @@ containerTest('media pipeline fan-out E2E', async (t) => {
       for (const name of ['IMG_0800.png', 'IMG_0801.png', 'IMG_0802.png']) assertEquals((await findingOf(paths[name]))?.kind, undefined, `${name} is a shot of its own`);
     });
 
-    await t.step('video: poster from media-stills, transcode and storyboard from media-transcode', async () => {
+    await t.step('video: poster and hover clip from media-stills, transcode and storyboard from media-transcode', async () => {
       await waitForIndexing(`${ALBUMS_ROOT}/e2e/clip.mp4`);
 
       // Both posters: the square one for cover cards, the contain one for the grid.
@@ -496,12 +496,15 @@ containerTest('media pipeline fan-out E2E', async (t) => {
       const [w, h] = await dimensionsOf(`${ALBUMS_ROOT}/e2e/clip.mp4/thumbnails/1920x1080.mp4`);
       assertEquals([w, h], [320, 240], `transcode was scaled: ${w}x${h}`);
 
-      // And the hover clip beside it: the long fixture is the one over the two-second floor.
+      // And the hover clip beside it, made by media-stills after the poster frames: the long
+      // fixture is the one over the two-second floor.
       const longId = await nodeIdOf(`${ALBUMS_ROOT}/e2e/long.mp4`);
       const longStart = Date.now();
-      while (!TERMINAL.includes(await instanceStatus('media-transcode', longId) ?? '')) {
-        if (Date.now() - longStart > 300_000) throw new Error('timed out waiting for media-transcode');
-        await new Promise((r) => setTimeout(r, 1000));
+      for (const pipeline of ['media-stills', 'media-transcode']) {
+        while (!TERMINAL.includes(await instanceStatus(pipeline, longId) ?? '')) {
+          if (Date.now() - longStart > 300_000) throw new Error(`timed out waiting for ${pipeline}`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
       const preview = await client.execJson<{ mimetype: string; size: number }>(
         `attrs ${ALBUMS_ROOT}/e2e/long.mp4/thumbnails/480x480.mp4`,

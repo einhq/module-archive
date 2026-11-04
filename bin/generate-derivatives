@@ -47,14 +47,17 @@ const isSizeTarget = (target: Target): target is SizeTarget => target.kind === '
  * The class is the cost of the work, not the media type. `still` writes AVIF
  * pictures for every type — a photo's ladder and face crops, a video's poster
  * frames, an audio file's waveform — and is run by `media-stills`. `transcode`
- * re-encodes a whole video or audio stream (the video's hover clip included) and
- * can run for minutes; `media-transcode` runs it. They are separate pipelines so a
- * failed transcode does not take the poster frame down with it, and so the
- * expensive class can be serialised on its own resource queue. `storyboard` decodes
- * a video's whole rendition, so it is run after the transcode, in `media-transcode`;
- * not `still`, which turning a video re-makes inline (`file-set-orientation`).
+ * re-encodes a whole video or audio stream and can run for minutes; `media-transcode`
+ * runs it. They are separate pipelines so a failed transcode does not take the poster
+ * frame down with it, and so the expensive class can be serialised on its own resource
+ * queue. `preview`, a video's hover clip, is a re-encode too, but it starts where the
+ * poster frame was taken (`posterAt`), so `media-stills` runs it after the poster
+ * frames; `media-transcode` makes it again only when forced, as on a turn.
+ * `storyboard` decodes a video's whole rendition, so it is run after the transcode, in
+ * `media-transcode`; not `still`, which turning a video re-makes inline
+ * (`file-set-orientation`).
  *
- * Adding or dropping a `transcode` entry means updating `TRANSCODE_RENDITIONS` in
+ * Adding or dropping a `transcode` or `preview` entry means updating `TRANSCODE_RENDITIONS` in
  * `@archive/media/event-rules` to match: that is how `media-scan` knows a video is missing a rendition,
  * and it counts them by extension because it cannot see this table.
  */
@@ -76,14 +79,14 @@ const TARGETS: Record<string, Target[]> = {
   // 2x display picks 800 for any landscape tile — without them that candidate 404s and
   // the tile falls through its whole chain to a placeholder icon.
   //
-  // `preview` is the hover clip, a 20-second re-encode: class `transcode`, next to the
-  // full rendition.
+  // `preview` is the hover clip, a 20-second re-encode that starts at the poster frame:
+  // class `preview`, made once the poster frames are.
   video: [
     { size: 'thumb', ext: 'avif', kind: 'image', class: 'still' },
     { size: 'grid', ext: 'avif', kind: 'image', class: 'still' },
     { size: 'small', ext: 'avif', kind: 'image', class: 'still' },
     { size: 'medium', ext: 'avif', kind: 'image', class: 'still' },
-    { size: 'preview', ext: 'mp4', kind: 'video', class: 'transcode' },
+    { size: 'preview', ext: 'mp4', kind: 'video', class: 'preview' },
     { size: '1080p', ext: 'mp4', kind: 'video', class: 'transcode' },
     { size: 'storyboard', kind: 'storyboard', class: 'storyboard' },
     // Each face cut from the frame its region was seen at, one frame read per crop.
@@ -102,7 +105,7 @@ const TARGETS: Record<string, Target[]> = {
   ],
 };
 
-type DerivativeClass = 'still' | 'transcode' | 'storyboard';
+type DerivativeClass = 'still' | 'transcode' | 'preview' | 'storyboard';
 
 /**
  * A transcode EMS *refuses* on its CPU-decode budget, as distinct from one it fails at, is
@@ -113,7 +116,7 @@ type DerivativeClass = 'still' | 'transcode' | 'storyboard';
  * close — see TRANSCODE_REFUSED_ATTR.
  */
 
-const DERIVATIVE_CLASSES: DerivativeClass[] = ['still', 'transcode', 'storyboard'];
+const DERIVATIVE_CLASSES: DerivativeClass[] = ['still', 'transcode', 'preview', 'storyboard'];
 
 /**
  * Below this, a video gets no storyboard: the grid's hover clip shows it whole, and a timeline
