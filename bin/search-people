@@ -6,10 +6,11 @@ import { nameScore } from '@archive/media/name-quality';
 import { nameHasWholeWords, namesHaveWords, nameWords } from '@archive/people/name-match';
 
 /**
- * A name typed as whole words of the person's, "Anna Andersson" for "Anna B Andersson": as sure as a
- * prefix that ends a word (`nameScore`), so `search` takes it as the person meant (ein/core#524).
+ * A name typed as whole words of the person's, "Anna Andersson" for "Anna B Andersson": the person
+ * meant (ein/core#524), above a name the words only start (`nameScore`'s 0.8), so the person leads
+ * the albums called "Anna Andersson i Paris" rather than tying with them (ein/core#975).
  */
-const WHOLE_WORDS = 0.8;
+const WHOLE_WORDS = 0.85;
 
 const searchPeople = async (cmd: Command): CmdReturn => {
   // `search` asks every provider what it can answer before fanning out, so a
