@@ -3,7 +3,7 @@
   "version": "0.9.58",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
-  "coreApi": "^0.9.5",
+  "coreApi": "^0.10.0",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -29,7 +29,7 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.6.0"
+    "ems": "^0.7.0"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
