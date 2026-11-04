@@ -1,0 +1,5 @@
+{
+  "description": "Worker for the media pipelines' other steps — thumbnails, renditions, fingerprints and EMS's encodes it waits on, face matching, duplicates, staging",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

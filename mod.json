@@ -177,11 +177,11 @@
         "scope": "system",
         "type": "number",
         "default": "2",
-        "label": "CPU budget for media work",
-        "description": "How much CPU-bound media work runs at once. Each job declares what it costs, so one video transcode can exclude a face assignment on a small box.",
+        "label": "Media worker budget",
+        "description": "How much media work the media-worker service runs at once: thumbnails, renditions, fingerprints, face matching, duplicates and staging. Each job declares what it costs, so one video transcode can exclude a face assignment on a small box.",
         "group": "Processing",
         "restarts": [
-          "cpu"
+          "media-worker"
         ]
       },
       {
@@ -189,11 +189,11 @@
         "scope": "system",
         "type": "number",
         "default": "4",
-        "label": "CPU worker slots",
-        "description": "Upper bound on concurrent CPU media jobs. The budget above is the real limit; this only caps how many can be in flight.",
+        "label": "Media worker jobs in flight",
+        "description": "Upper bound on the media worker's concurrent jobs. The budget above is the real limit; this only caps how many can be in flight.",
         "group": "Processing",
         "restarts": [
-          "cpu"
+          "media-worker"
         ]
       },
       {
@@ -201,11 +201,11 @@
         "scope": "system",
         "type": "number",
         "default": "1",
-        "label": "CPU slots for downstream media",
-        "description": "Soft reservation for non-ingest CPU work. Ingest borrows unused slots, but ready downstream jobs get them first so a continuous ingest backlog cannot starve the rest of the pipeline.",
+        "label": "Media worker slots for downstream work",
+        "description": "Soft reservation in the media worker's budget for work after ingest. Ingest borrows unused slots, but ready downstream jobs get them first so a continuous ingest backlog cannot starve the rest of the pipeline.",
         "group": "Processing",
         "restarts": [
-          "cpu"
+          "media-worker"
         ]
       },
       {

@@ -60,7 +60,7 @@ Deno.test({ name: 'a Takeout zip is expanded, paired and dated by its sidecars',
 
   try {
     // Only the work this test is about is claimed: the boot's own media worker would index too.
-    await cmd.shouldSucceed('service stop cpu && service stop staging-organizer');
+    await cmd.shouldSucceed('service stop media-worker && service stop staging-organizer');
     await cmd.shouldSucceed('mkdir -p /opt/takeout-worker && mkfile /opt/takeout-worker/start.sh && chmod 755 /opt/takeout-worker/start.sh');
     await writeFile(
       '/opt/takeout-worker/start.sh',

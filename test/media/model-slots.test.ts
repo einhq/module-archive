@@ -40,8 +40,8 @@ Deno.test('model-bound steps take one slot each, and every kind they name is one
   assertEquals(invocation.includes('gpu'), false);
 });
 
-Deno.test('every kind a CPU-bound step queues under is one the CPU worker offers', async () => {
-  const worker = await Deno.readTextFile(new URL('services/cpu/start.sh', moduleRoot));
+Deno.test('every kind a CPU-bound step queues under is one the media worker offers', async () => {
+  const worker = await Deno.readTextFile(new URL('services/media-worker/start.sh', moduleRoot));
   const named: string[] = [];
   for await (const entry of Deno.readDir(new URL('pipelines/', moduleRoot))) {
     if (!entry.name.endsWith('.yaml')) continue;
@@ -50,7 +50,7 @@ Deno.test('every kind a CPU-bound step queues under is one the CPU worker offers
       if (step.requires?.cpu === undefined) continue;
       named.push(step.kind);
       // Whole names: `face` is not offered by `--kind face-assign`.
-      assertEquals(new RegExp(`--kind ${step.kind}\\s`).test(worker), true, `${entry.name}: ${name} queues under ${step.kind}, which no CPU worker offers`);
+      assertEquals(new RegExp(`--kind ${step.kind}\\s`).test(worker), true, `${entry.name}: ${name} queues under ${step.kind}, which the media worker does not offer`);
     }
   }
   assertEquals(named.includes('stills') && named.includes('transcode'), true);

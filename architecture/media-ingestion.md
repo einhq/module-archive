@@ -96,14 +96,13 @@ waits for rather than by a shared DAG:
    in place of a player that cannot work. `-f` overrides both commands; re-indexing with
    `exif-extract -f` is what takes the mark off.
 
-   Pooled work is the work that needs one coherent host budget: the model-bound steps (slow
-   calls into EMS), metadata ingestion, derivative rendering, fingerprinting, `assign-faces` (a
-   kNN over every known face — it used to run inside `detect-faces`, holding a model slot for
-   work that never calls EMS), and transcoding (minutes of ffmpeg). All of it sits in one
-   `/pools/media`, and the two workers differ only
-   in what they offer: the `models` service offers `models` slots and takes
-   `faces`/`embed-picture`/`embed-text`/`transcribe`/`diarize`, the `cpu` service offers `cpu` slots and
-   takes `ingest`/`stills`/`fingerprint` plus `face-assign`/`speaker-assign`/`dedupe`/`retime`/`transcode`.
+   Pooled work is the work a crawl must not start all at once: the model requests (slow calls
+   into EMS), metadata ingestion, the stills, fingerprints and transcodes EMS makes while the step
+   waits, `assign-faces` (a kNN over every known face, kept out of `detect-faces` so it holds no
+   model slot), and staging's own steps. All of it sits in one `/pools/media`, and the two
+   workers differ only in what they offer: the `models` service offers `models` slots and takes
+   `faces`/`embed-picture`/`embed-text`/`transcribe`/`diarize`, the `media-worker` service offers `cpu` slots and
+   takes `unzip`/`ingest`/`stills`/`fingerprint` plus `face-assign`/`speaker-assign`/`dedupe`/`retime`/`organize`/`sidecars`/`transcode`.
    A `kind` no worker declares does not run slowly — it never runs at all, so the two
    lists have to be kept in step (`modules/archive/services/*/start.sh`).
    `assign-faces` also declares `exclusive: person-mint`, so two faces of the same
