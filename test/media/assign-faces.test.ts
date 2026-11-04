@@ -4,6 +4,7 @@
  */
 
 import { PEOPLE_ROOT } from '@archive/paths';
+import { assignFacesForFile } from '@archive/media/face-assign';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext } from '@ein/testing';
@@ -237,6 +238,40 @@ Deno.test({
       await client.exec('echo x > /img/plain.jpg');
       const res = await client.execJson<Summary>('assign-faces /img/plain.jpg');
       assertEquals(res.faces, 0);
+    });
+
+    /** The VFS as a redo of the file's faces sees it: `before` runs ahead of the call it names. */
+    const racing = (method: 'open' | 'update', path: string, before: () => Promise<unknown>): typeof vfs =>
+      new Proxy(vfs, {
+        get: (target, prop) => {
+          const value = Reflect.get(target, prop, target);
+          if (typeof value !== 'function') return value;
+          if (prop !== method) return value.bind(target);
+          return async (access: unknown, at: string, ...rest: unknown[]) => {
+            if (at === path) await before();
+            return value.call(target, access, at, ...rest);
+          };
+        },
+      });
+    const removeRegion = (path: string) => vfs.unlink(ADMIN_ACCESS, path, path.slice(0, path.lastIndexOf('/')), { recursive: true });
+
+    await t.step('a face a redo removes while the file is read is skipped, the others decided', async () => {
+      await makeImage('/img/redo.jpg');
+      const kept = await addFace('/img/redo.jpg', 'face-0', ANNA.map((v) => -v), { confidence: 0.95 });
+      const gone = await addFace('/img/redo.jpg', 'face-1', BOB.map((v) => -v), { confidence: 0.9 });
+
+      const results = await assignFacesForFile(racing('open', `${gone}/embedding`, () => removeRegion(gone)), ADMIN_ACCESS, '/img/redo.jpg');
+      assertEquals(results.map((r) => [r.facePath, r.reason]), [[kept, 'created']]);
+    });
+
+    await t.step('a face that goes before its new person is written leaves no person behind', async () => {
+      await makeImage('/img/redo-mint.jpg');
+      const gone = await addFace('/img/redo-mint.jpg', 'face-0', BOB.map((v) => -v));
+      const before = (await unknownPeople()).length;
+
+      const results = await assignFacesForFile(racing('update', gone, () => removeRegion(gone)), ADMIN_ACCESS, '/img/redo-mint.jpg');
+      assertEquals(results, []);
+      assertEquals((await unknownPeople()).length, before);
     });
 
     await t.step('person-detach --rematch places a face again, never back on the person it left', async () => {

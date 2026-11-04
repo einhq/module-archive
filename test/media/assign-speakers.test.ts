@@ -7,6 +7,7 @@
  * are never the same person automatically (the diarizer already said they differ).
  */
 
+import { assignSpeakersForFile } from '@archive/media/speaker-assign';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
@@ -419,6 +420,40 @@ Deno.test({
       assertEquals(res.attached, 1);
       assertEquals((await unknownPeople()).length, before);
       assertEquals((await attrsOf(path)).personId, undefined);
+    });
+
+    /** The VFS as a redo of the recording's voices sees it: `before` runs ahead of the call it names. */
+    const racing = (method: 'open' | 'update', path: string, before: () => Promise<unknown>): typeof vfs =>
+      new Proxy(vfs, {
+        get: (target, prop) => {
+          const value = Reflect.get(target, prop, target);
+          if (typeof value !== 'function') return value;
+          if (prop !== method) return value.bind(target);
+          return async (access: unknown, at: string, ...rest: unknown[]) => {
+            if (at === path) await before();
+            return value.call(target, access, at, ...rest);
+          };
+        },
+      });
+    const removeVoice = (path: string) => vfs.unlink(ADMIN_ACCESS, path, path.slice(0, path.lastIndexOf('/')));
+
+    await t.step('a voice a redo removes while the recording is read is skipped, the others decided', async () => {
+      await makeRecording('/rec/redo.mp4');
+      const kept = await addSpeaker('/rec/redo.mp4', 's0', ANNA.map((v) => -v), { talkSeconds: 60 });
+      const gone = await addSpeaker('/rec/redo.mp4', 's1', EDVIN.map((v) => -v));
+
+      const results = await assignSpeakersForFile(racing('open', gone, () => removeVoice(gone)), ADMIN_ACCESS, '/rec/redo.mp4');
+      assertEquals(results.map((r) => [r.speakerPath, r.reason]), [[kept, 'created']]);
+    });
+
+    await t.step('a voice that goes before its new person is written leaves no person behind', async () => {
+      await makeRecording('/rec/redo-mint.mp4');
+      const gone = await addSpeaker('/rec/redo-mint.mp4', 's0', EDVIN.map((v) => -v));
+      const before = (await unknownPeople()).length;
+
+      const results = await assignSpeakersForFile(racing('update', gone, () => removeVoice(gone)), ADMIN_ACCESS, '/rec/redo-mint.mp4');
+      assertEquals(results, []);
+      assertEquals((await unknownPeople()).length, before);
     });
   } finally {
     await client.close();

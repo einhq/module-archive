@@ -40,7 +40,7 @@
  * voice is. A person the voice leaves, unnamed and left holding nothing, is deleted.
  */
 
-import type { Command } from '@ein/client';
+import { type Command, NodeNotFoundError } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
 import { createUnnamedPerson, releasePerson, voicesOf } from '@archive/people/person';
@@ -147,6 +147,14 @@ const readVector = async (vfs: Vfs, access: Access, path: string): Promise<Uint8
     await handle.close();
   }
 };
+
+/**
+ * Whether a voice being decided is no longer the one read: a redo of the recording's voices
+ * (`voiceprint-file`) replaced them. The redo announces its own, so a voice that went is skipped
+ * as one that was never there (ein/core#987).
+ */
+const vanished = async (vfs: Vfs, access: Access, speakerPath: string, speakerId: string, error: unknown): Promise<boolean> =>
+  error instanceof NodeNotFoundError && await vfs.get(access, speakerPath).then((speaker) => speaker.id !== speakerId, () => true);
 
 const unitVector = (values: number[]): number[] => {
   const norm = Math.hypot(...values);
@@ -331,20 +339,32 @@ export const assignSpeakersForFile = async (
       if (opts.dryRun) return { speakerPath, speakerId, personId: null, created: true, confidence: 0, reason: 'created' };
 
       const person = await createUnnamedPerson(vfs, access, { createdBy: 'assign-speakers', origin: 'voice' });
-      await vfs.update(access, speakerPath, {
-        attrs: { personId: person.id, personSource: 'auto', personConfidence: null, personAssignedAt: nowIso(), asdAssisted: null },
-      });
+      try {
+        await vfs.update(access, speakerPath, {
+          attrs: { personId: person.id, personSource: 'auto', personConfidence: null, personAssignedAt: nowIso(), asdAssisted: null },
+        });
+      } catch (error) {
+        // The voice went before it was given the person: the person minted for it holds nothing.
+        await releasePerson(vfs, access, person.id, new Set([speakerId]));
+        throw error;
+      }
       taken.add(person.id);
       return { speakerPath, speakerId, personId: person.id, created: true, confidence: 0, reason: 'created' };
     };
 
-    const result = await withLock(async (): Promise<SpeakerAssignResult> => {
-      const outcome = await decide();
-      if (!held || opts.dryRun) return outcome;
-      if (outcome.personId === null && afresh) await vfs.update(access, speakerPath, { attrs: UNDECIDED });
-      if ((outcome.personId ?? (afresh ? null : held)) !== held) await releasePerson(vfs, access, held, new Set([speakerId]));
-      return outcome;
-    });
+    let result: SpeakerAssignResult;
+    try {
+      result = await withLock(async (): Promise<SpeakerAssignResult> => {
+        const outcome = await decide();
+        if (!held || opts.dryRun) return outcome;
+        if (outcome.personId === null && afresh) await vfs.update(access, speakerPath, { attrs: UNDECIDED });
+        if ((outcome.personId ?? (afresh ? null : held)) !== held) await releasePerson(vfs, access, held, new Set([speakerId]));
+        return outcome;
+      });
+    } catch (error) {
+      if (await vanished(vfs, access, speakerPath, speakerId, error)) continue;
+      throw error;
+    }
     // Left undecided by a re-decision that is not afresh, the voice keeps the person it held.
     if (held && result.personId === null && !result.created && !afresh) taken.add(held);
 

@@ -19,11 +19,11 @@
  * embedding id, since that is what the search returns.
  */
 
-import type { Command } from '@ein/client';
+import { type Command, NodeNotFoundError } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
 import { type Dims, displayDims, toPixels } from '@archive/media/orientation';
-import { createUnnamedPerson } from '@archive/people/person';
+import { createUnnamedPerson, releasePerson } from '@archive/people/person';
 import { FACE_EMBEDDING_TYPE, faceEmbeddingPathOf, faceEmbeddingsOfRegions, type RegionAttrs, regionsOfEmbeddings, regionsPathOf } from '@archive/media/regions';
 
 type Vfs = Command['sys']['vfs'];
@@ -128,6 +128,16 @@ const readVector = async (vfs: Vfs, access: Access, path: string): Promise<Uint8
 };
 
 /**
+ * Whether a face being decided is no longer the one read: a redo of the file's faces
+ * (`detect-faces -f`) removed its region, kept the region as a tag, or gave it a new embedding.
+ * The redo announces what it writes — a new embedding is a new `media.face.detected` — so a face
+ * that went is skipped as one that was never there (ein/core#987).
+ */
+const vanished = async (vfs: Vfs, access: Access, facePath: string, embeddingId: string, error: unknown): Promise<boolean> =>
+  error instanceof NodeNotFoundError &&
+  await vfs.get(access, faceEmbeddingPathOf(facePath)).then((embedding) => embedding.id !== embeddingId, () => true);
+
+/**
  * Whether two of a video's faces are on screen at once. Only then are they surely two people:
  * one person seen at two moments the detector could not join is two faces of the same video.
  */
@@ -224,7 +234,7 @@ export const assignFacesForFile = async (
       continue;
     }
 
-    const result = await withLock(async (): Promise<AssignResult> => {
+    const decide = async (): Promise<AssignResult> => {
       const takenPersonIds = takenFor(child);
       const vector = await readVector(vfs, access, faceEmbeddingPathOf(facePath));
       if (!vector) {
@@ -291,19 +301,30 @@ export const assignFacesForFile = async (
       }
 
       const person = await createUnnamedPerson(vfs, access, { createdBy: 'assign-faces', representativeFaceId: faceId });
-      await vfs.update(access, facePath, {
-        attrs: {
-          personId: person.id,
-          personSource: 'auto',
-          personConfidence: null,
-          personAssignedAt: nowIso(),
-        },
-      });
+      try {
+        await vfs.update(access, facePath, {
+          attrs: {
+            personId: person.id,
+            personSource: 'auto',
+            personConfidence: null,
+            personAssignedAt: nowIso(),
+          },
+        });
+      } catch (error) {
+        // The face went before it was given the person: the person minted for it holds nothing.
+        await releasePerson(vfs, access, person.id, new Set([faceId]));
+        throw error;
+      }
       personOf.set(faceId, person.id);
       return { facePath, faceId, personId: person.id, created: true, confidence: 0, reason: 'created' };
-    });
+    };
 
-    results.push(result);
+    try {
+      results.push(await withLock(decide));
+    } catch (error) {
+      if (await vanished(vfs, access, facePath, embeddingId, error)) continue;
+      throw error;
+    }
   }
 
   return results;
