@@ -1915,12 +1915,8 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
   const { years, points } = pointsByYearOf(planItems);
   const missing = [...new Set(years)].filter((year) => !homes.has(year)).sort();
   if (missing.length > 0) {
-    const found = await homesByYear(vfs, owner.access, { user: owner.user, years: missing, pointsByYear: points });
-    for (const year of missing) {
-      const earlier = [...homes.keys()].filter((known) => known < year).sort().pop();
-      const home = found.get(year) ?? (earlier ? { ...homes.get(earlier)!, source: 'previous' as const } : undefined);
-      if (home) homes.set(year, home);
-    }
+    const found = await homesByYear(vfs, owner.access, { user: owner.user, years: missing, pointsByYear: points, known: homes });
+    for (const [year, home] of found) homes.set(year, home);
     withAreas(homes, usualAreas(media, planItems), missing);
   }
   const library = await libraryOf(vfs, access, owner, planItems);
