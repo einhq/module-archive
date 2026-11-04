@@ -95,8 +95,11 @@ one, so a step that kills its worker every time does run out.
   superseded model or setting. It runs `media-scan --if-idle`, which holds back each gap a pipeline
   with work ready would take (a ready trigger, or a ready media job of one of its kinds) and names
   the fact types it held: a gap announced is a real gap, not work on its way, and a backlog of one
-  kind holds off only its own gaps. A pass over the whole archive is followed by one over the types
-  it held, once their work drains, and it rests six hours after a pass that finds and holds nothing
+  kind holds off only its own gaps. A pass over the whole archive runs as one run of 5000 files
+  after another, each storing where it stopped and what the pass has announced and held so far on
+  the scanned root, so a restart of EiN loses at most one run; the runs of a pass hold back the
+  types that waited when it began. A pass is followed by one over the types it held, once their
+  work drains, and it rests six hours after a pass that finds and holds nothing
   (`CFG_MEDIA_HEAL_INTERVAL`, `CFG_MEDIA_HEAL_REST`). This is also how a change of model or setting reaches the whole archive:
   a new transcript signature transcribes every recording again, as the engine has time
   (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).

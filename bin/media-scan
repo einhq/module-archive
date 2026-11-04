@@ -27,12 +27,13 @@
  * or a pipeline change.
  *
  * A pass is **resumable**. Each run examines at most `--scan-limit` files and stores where it
- * stopped on the root node (`mediaScanCursor`); the next run carries on from there and clears the
- * cursor once it reaches the end of the subtree. Without that, every run started at the top: a
- * run that spent its event budget in the first thousand files re-announced those same thousand on
- * the next one — the 8.1x redundancy above — and a fully indexed corpus paid a read per file, every
- * run, to discover nothing at all. Repeated runs now cover the library instead of repeating its
- * first slice, which is what makes a sweep of 126k files converge.
+ * stopped on the root node (`mediaScanPass`); the next run carries on from there and clears it
+ * once it reaches the end of the subtree. Repeated runs cover the library instead of repeating its
+ * first slice — a run that spent its event budget in the first thousand files would otherwise
+ * announce those same thousand again — and a pass outlives a restart of EiN between its runs. The
+ * stored pass also counts what its runs announced and held back, so the run that finishes it
+ * reports the whole pass (`pass`), and under `--if-idle` it keeps the fact types that waited when
+ * it began, which every later run of the pass holds back in their place (ein/core#976).
  */
 
 import { POOLS_PATH } from '@ein/paths';
@@ -56,13 +57,31 @@ import {
 const encoder = new TextEncoder();
 
 /**
- * Where an unfinished pass left off, kept on the node that was scanned.
+ * An unfinished pass, kept on the node that was scanned.
  *
  * On the root rather than in a state directory of its own so it is per-subtree without any
  * encoding of the path into a name, and so it disappears with the root it describes — a staging
  * area that is deleted leaves nothing behind to go stale.
  */
-const CURSOR_ATTR = 'mediaScanCursor';
+const PASS_ATTR = 'mediaScanPass';
+
+/** What `PASS_ATTR` holds. */
+type Pass = {
+  /** The last file examined; the next run resumes past it. */
+  cursor: string;
+  /** Facts announced by the pass's runs so far. */
+  emitted: number;
+  /** Fact types the pass's runs held back so far. */
+  held: string[];
+  /**
+   * Under `--if-idle`, the fact types whose work waited when the pass began. Its later runs hold
+   * back these rather than what waits by then, which is mostly what the pass's own earlier runs
+   * announced: asked afresh, a pass would hold back every kind of gap it had found in its first run.
+   */
+  busy?: string[];
+};
+
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
 
 /**
  * A numeric flag, falling back to its default when it is absent or not a number.
@@ -77,28 +96,34 @@ const numFlag = (value: unknown, fallback: number): number => {
   return value === undefined || !Number.isFinite(parsed) ? fallback : parsed;
 };
 
-/** The stored resume point for `root`, or undefined when there is none. */
-const readCursor = async (cmd: Command, root: string): Promise<string | undefined> => {
+/** The unfinished pass stored on `root`, or undefined when there is none. */
+const readPass = async (cmd: Command, root: string): Promise<Pass | undefined> => {
   try {
     const node = await cmd.sys.vfs.get(cmd.access, root);
-    const cursor = (node.attrs as Record<string, unknown>)[CURSOR_ATTR];
+    const pass = (node.attrs as Record<string, unknown>)[PASS_ATTR] as Partial<Pass> | undefined;
 
-    return typeof cursor === 'string' && cursor ? cursor : undefined;
+    if (!pass || typeof pass.cursor !== 'string' || !pass.cursor) return undefined;
+
+    return {
+      cursor: pass.cursor,
+      emitted: typeof pass.emitted === 'number' ? pass.emitted : 0,
+      held: isStrings(pass.held) ? pass.held : [],
+      ...(isStrings(pass.busy) ? { busy: pass.busy } : {}),
+    };
   } catch {
     return undefined;
   }
 };
 
 /**
- * Store where the pass stopped, or clear it when the pass finished.
+ * Store the pass where it stopped, or clear it when it finished.
  *
  * Not being able to write it does not fail the scan: the walk has already happened and its
- * events are out. All that is lost is the resume point, and a run that starts at the top is what
- * every run did before this existed.
+ * events are out. All that is lost is the resume point, and the next run starts at the top.
  */
-const writeCursor = async (cmd: Command, root: string, cursor: string | null): Promise<void> => {
+const writePass = async (cmd: Command, root: string, pass: Pass | null): Promise<void> => {
   try {
-    await cmd.sys.vfs.update(cmd.access, root, { attrs: { [CURSOR_ATTR]: cursor } });
+    await cmd.sys.vfs.update(cmd.access, root, { attrs: { [PASS_ATTR]: pass } });
   } catch (error) {
     await cmd.writeError(`media-scan: could not store the resume point on ${root}: ${error instanceof Error ? error.message : String(error)}\n`);
   }
@@ -193,18 +218,28 @@ const mediaScan = async (cmd: Command): CmdReturn => {
 
   // Read even under --restart, so a restarted pass that runs to the end still clears whatever
   // the previous one left behind.
-  const stored = await readCursor(cmd, root);
-  const resumeAt = flags.restart ? undefined : segmentsBelow(root, stored);
+  const stored = await readPass(cmd, root);
+  /** The pass this run continues; undefined when it starts one. */
+  const resumed = flags.restart ? undefined : stored;
+  const resumeAt = segmentsBelow(root, resumed?.cursor);
+  /** The stored pass as a run that examines nothing reports it. */
+  const untouched = { cursor: stored?.cursor ?? null, pass: { emitted: stored?.emitted ?? 0, held: stored?.held ?? [] } };
 
-  // Under `--if-idle`, the fact types held back because their work waits. When every type the scan
-  // could announce is held, nothing is walked at all.
-  const waiting = flags['if-idle'] ? await factsWaiting(cmd) : undefined;
-  const announceable = only ? [...only] : Object.values(MEDIA_EVENTS);
-  if (flags['if-idle'] && (!waiting || announceable.every((type) => waiting.get(type) !== false))) {
-    // As under a spent budget below: nothing examined, the cursor where the last run left it.
-    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], held: [], waiting: true });
-    else await cmd.writeLn('media-scan: media work is waiting, nothing started');
-    return 0;
+  // Under `--if-idle`, the fact types held back because their work waits: those of the pass this
+  // run continues, or asked now when it starts one. A pass is not started when every type the scan
+  // could announce is held.
+  let waiting: Map<string, boolean> | undefined;
+  if (flags['if-idle'] && resumed?.busy) {
+    waiting = new Map(resumed.busy.map((type) => [type, true]));
+  } else if (flags['if-idle']) {
+    waiting = await factsWaiting(cmd);
+    const announceable = only ? [...only] : Object.values(MEDIA_EVENTS);
+    if (!waiting || announceable.every((type) => waiting!.get(type) !== false)) {
+      // As under a spent budget below: nothing examined, the pass where the last run left it.
+      if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, ...untouched, paths: [], held: [], waiting: true });
+      else await cmd.writeLn('media-scan: media work is waiting, nothing started');
+      return 0;
+    }
   }
 
   // Backlog gate: the whole point of a reconciler is to top the pipeline up, not
@@ -248,7 +283,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   if (budget <= 0) {
     // The pass is reported as incomplete with its cursor untouched: nothing was examined, so
     // whatever the last run stored is still where the next one has to pick up.
-    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, cursor: stored ?? null, paths: [], held: [] });
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, ...untouched, paths: [], held: [] });
     else await cmd.writeLn('media-scan: backlog full, nothing started');
     return 0;
   }
@@ -499,16 +534,24 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   }
 
   const cursor = stopped ? lastPath ?? null : null;
+  // The pass so far, this run included.
+  const pass = { emitted: (resumed?.emitted ?? 0) + emitted, held: [...new Set([...resumed?.held ?? [], ...held])] };
 
-  // Only when it moves. A completed pass over a root that never had a cursor must not write to
-  // the root at all, or every run would bump its modtime to say nothing changed.
-  if (!dry && cursor !== (stored ?? null)) await writeCursor(cmd, root, cursor);
+  // A completed pass over a root that never had one stored must not write to the root at all, or
+  // every run would bump its modtime to say nothing changed.
+  if (!dry && cursor) {
+    const busy = waiting ? [...waiting].filter(([, waits]) => waits).map(([type]) => type) : undefined;
+    await writePass(cmd, root, { cursor, ...pass, ...(busy ? { busy } : {}) });
+  } else if (!dry && stored) {
+    await writePass(cmd, root, null);
+  }
 
   if (cmd.json) {
-    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, paths: emittedPaths, held: [...held] });
+    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...held] });
   } else {
-    const pass = stopped ? `, paused at ${cursor} (run again to continue)` : ', pass complete';
-    await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${pass}${dry ? ' (dry run)' : ''}`);
+    const resumedNote = resumed ? ` (${pass.emitted} over the whole pass)` : '';
+    const progress = stopped ? `, paused at ${cursor} (run again to continue)` : `, pass complete${resumedNote}`;
+    await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${progress}${dry ? ' (dry run)' : ''}`);
     if (held.size > 0) await cmd.writeLn(`Held back while their work waits: ${[...held].join(', ')}`);
     if (verbose) {
       for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);

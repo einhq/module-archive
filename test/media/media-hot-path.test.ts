@@ -49,14 +49,15 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
           assertEquals((await client.exec(`mknode -t pool ${root}/triggers`)).success, true);
         }
         const cursor = `${ALBUMS_ROOT}/hot/p.jpg`;
-        await vfs.update(ADMIN_ACCESS, ALBUMS_ROOT, { attrs: { mediaScanCursor: cursor } });
+        const pass = { cursor, emitted: 3, held: ['media.file.discovered'] };
+        await vfs.update(ADMIN_ACCESS, ALBUMS_ROOT, { attrs: { mediaScanPass: pass } });
         const env = root === POOLS_PATH ? '' : `POOLS_PATH=${root} `;
         const before = await client.execJson<{ budget: number }>(`${env}media-scan ${ALBUMS_ROOT} -n --max-active 1`);
         assertEquals(before.budget, 1, 'empty pool must not block a scan');
         await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'media-ingest', params: {} });
         const blocked = await client.execJson<Record<string, unknown>>(`${env}media-scan ${ALBUMS_ROOT} --restart --max-active 1`);
-        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, paths: [], held: [] });
-        assertEquals((await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanCursor, cursor);
+        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, pass: { emitted: 3, held: pass.held }, paths: [], held: [] });
+        assertEquals((await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanPass, pass);
       });
     }
 
@@ -123,6 +124,44 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       // Nothing is walked when every type it may announce waits.
       const only = await scan(' --only media.file.discovered');
       assertEquals([only.waiting, only.scanned], [true, 0]);
+    });
+
+    await t.step('a pass in runs holds back what waited when it began and counts the whole pass', async () => {
+      const root = '/slice-pools';
+      // Where the runs below write what they announce; nothing here reads it.
+      if (!await vfs.exists(ADMIN_ACCESS, '/dev/events')) assertEquals((await client.exec('mkdir -p /dev && mkfile /dev/events')).success, true);
+      await client.exec(`mkdir -p ${root}`);
+      for (const pool of ['triggers', 'media']) assertEquals((await client.exec(`mknode -t pool ${root}/${pool}`)).success, true);
+      const album = `${ALBUMS_ROOT}/slices`;
+      await client.exec(`mkdir -p ${album}`);
+      for (const name of ['a.jpg', 'b.jpg', 'c.jpg']) {
+        assertEquals((await client.exec(`echo 'not really a jpeg' > ${album}/${name}`)).success, true);
+        await vfs.update(ADMIN_ACCESS, `${album}/${name}`, { attrs: { mimetype: 'image/jpeg' } });
+      }
+      type Scan = { scanned: number; emitted: number; complete: boolean; cursor: string | null; held: string[]; pass: { emitted: number; held: string[] } };
+      const scan = () => client.execJson<Scan>(`POOLS_PATH=${root} media-scan ${album} --if-idle --scan-limit 1 --max-active 0 --limit 0`);
+
+      const first = await scan();
+      assertEquals([first.scanned, first.complete, first.held], [1, false, []]);
+      assertEquals(first.emitted > 0, true, `emitted ${first.emitted}`);
+      assertEquals(((await vfs.get(ADMIN_ACCESS, album)).attrs.mediaScanPass as { cursor: string }).cursor, first.cursor);
+
+      // Discovery's work now waits, much as what the first run announced would: the pass goes on
+      // announcing it, since it did not wait when the pass began.
+      await vfs.poolAdd(ADMIN_ACCESS, `${root}/media`, { kind: 'ingest', params: {} });
+      const runs = [first];
+      while (!runs.at(-1)!.complete && runs.length < 5) runs.push(await scan());
+      const last = runs.at(-1)!;
+      assertEquals(last.complete, true);
+      assertEquals(runs.reduce((sum, run) => sum + run.scanned, 0), 3);
+      assertEquals(runs.every((run) => run.held.length === 0), true, JSON.stringify(runs));
+      assertEquals(runs[1].emitted > 0, true, `emitted ${runs[1].emitted}`);
+      assertEquals(last.pass, { emitted: runs.reduce((sum, run) => sum + run.emitted, 0), held: [] });
+      assertEquals((await vfs.get(ADMIN_ACCESS, album)).attrs.mediaScanPass, undefined);
+
+      // A new pass asks again.
+      const next = await scan();
+      assertEquals(next.held, ['media.file.discovered']);
     });
   } finally {
     client.close();
