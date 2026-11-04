@@ -918,8 +918,10 @@ a hand-written one.
 the transcode, asks EMS where the 1080p rendition cuts from one shot to the next (`video.shots`:
 TransNetV2 over every frame at 48×27, and its rules — a peak over 0.6, leader as a gap, a lasting
 change of colour, cuts under a second apart merged, no shot under three seconds — measured on the
-archive's own film transfers and phone clips, wow `notes/lessons-media.md`). The rendition, not the
-original: its clock is the player's and it is upright. The node is a db-tier `file` holding one
+archive's own film transfers and phone clips, wow `notes/lessons-media.md`). A video whose EXIF
+names its camera is one take with no leader: a cut there must score 0.85, and a blank stretch in it
+is a dark scene, not leader. The rendition, not the original: its clock is the player's and it is
+upright. The node is a db-tier `file` holding one
 WebVTT cue per chapter, with the cuts on it (`boundaries`: `{t, score, kind}`, `kind: leader` at the
 end of black or white leader), `detectedBy`, `detectedWith` (the rules) and `detectedAt`, which marks
 it done. A cut's `t` is the new shot's first frame. A video with no cut gets the node with no

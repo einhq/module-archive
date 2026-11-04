@@ -119,7 +119,7 @@ Deno.test({
       assertEquals((await run('-f')).skipped, 'ems-lacks-op');
     });
 
-    await t.step("a camera's take is held to a higher score; a film is left to EMS's default", async () => {
+    await t.step("a camera's take is held to a higher score and has no leader; a film is left to EMS's defaults", async () => {
       answer = found;
       const clip = `${ALBUMS_ROOT}/t/MVI_0001.MP4`;
       await client.exec(`mkfile ${clip} && mkdir -p ${clip}/thumbnails && printf mp4-bytes > ${clip}/thumbnails/1920x1080.mp4`);
@@ -129,7 +129,7 @@ Deno.test({
       const before = asked.length;
       await client.execJson<DetectChaptersAnswer>(`${env} JSON_OUTPUT=1 detect-chapters ${clip}`);
       await run('-f');
-      assertEquals(asked.slice(before).map((body) => body.threshold), [0.85, undefined]);
+      assertEquals(asked.slice(before).map((body) => [body.threshold, body.leader]), [[0.85, false], [undefined, undefined]]);
     });
 
     await t.step('anything but a video is passed over', async () => {

@@ -29,7 +29,7 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.7.0"
+    "ems": "^0.7.1"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",

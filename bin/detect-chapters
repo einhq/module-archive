@@ -5,7 +5,8 @@
  * EMS finds them (`video.shots`: TransNetV2 over every frame, and its rules) in the rendition the
  * player plays, which is upright and on the player's own clock, so this runs after the transcode
  * and waits for one. A video whose EXIF names its camera is one take, so a cut there must score
- * higher (`CAMERA_THRESHOLD`). The result is `metadata/chapters` (`@archive/media/chapters`): the
+ * higher (`CAMERA_THRESHOLD`), and it has no leader: a dark stretch in it is a scene, not the end of
+ * one (ein/core#754). The result is `metadata/chapters` (`@archive/media/chapters`): the
  * chapters as WebVTT, and on the node the cuts with their scores, what found them and with which
  * rules.
  *
@@ -118,8 +119,8 @@ const detectChapters = async (cmd: Command): CmdReturn => {
   let shots;
   try {
     const camera = await fromCamera(cmd, inputPath);
-    if (verbose) await cmd.writeLn(`Looking for cuts in ${renditionPath}${camera ? ` (a camera's take: threshold ${CAMERA_THRESHOLD})` : ''}...`);
-    shots = await videoShots(cmd, renditionPath, camera ? { threshold: CAMERA_THRESHOLD } : {});
+    if (verbose) await cmd.writeLn(`Looking for cuts in ${renditionPath}${camera ? ` (a camera's take: threshold ${CAMERA_THRESHOLD}, no leader)` : ''}...`);
+    shots = await videoShots(cmd, renditionPath, camera ? { threshold: CAMERA_THRESHOLD, leader: false } : {});
   } catch (error) {
     // An EMS from before the op has no route for it; the chapters wait for one that has.
     if (error instanceof EmsError && error.code === 'http_404') {
