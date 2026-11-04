@@ -34,6 +34,7 @@ Deno.test({
     ops: {
       'video.transcode': (body) => answer('video.transcode', body),
       'audio.transcode': (body) => answer('audio.transcode', body),
+      'video.poster': (body) => answer('video.poster', body),
     },
     capabilities: { encode: { video_encoder: 'libsvtav1', cpu_budget: '4000/170/64' } },
   });
@@ -135,6 +136,34 @@ Deno.test({
       assertEquals(report.created, [`${audio}/thumbnails/128k-44100.m4a`]);
       assertEquals(askedBody?.audio, { bitrate: '128k', sample_rate: 44100 });
       assertEquals((askedBody?.output as { format: string }).format, 'm4a');
+    });
+
+    await t.step('a poster taken past a blank frame is noted, and the hover clip starts there', async () => {
+      const video = await makeVideo('dark.mov', 600);
+      const stills = (t: number) => async (op: string, body: Record<string, unknown>): Promise<StubAnswer> => {
+        assertEquals([op, body.skip_blank], ['video.poster', true]);
+        const targets = body.targets as { output: { path: string } }[];
+        for (const target of targets) await Deno.writeTextFile(target.output.path, 'avif-bytes');
+        return { result: { frame: { width: 720, height: 576 }, targets: targets.map(() => ({ path: '', width: 1, height: 1, bytes: 10 })), t } };
+      };
+      answer = stills(60);
+      assertEquals((await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only still`)).failed, 0);
+      assertEquals((await vfs.get(ADMIN_ACCESS, video)).attrs.posterAt, 60);
+
+      const asked: Record<string, unknown>[] = [];
+      answer = async (_op, body) => {
+        asked.push(body);
+        await written(body, 'mp4-bytes');
+        return { result: { path: '', width: 480, height: 360, duration: 20, bytes: 9, video_codec: 'av1', audio_codec: null }, producer: 'ffmpeg/9/libsvtav1' };
+      };
+      await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only transcode`);
+      const preview = asked.find((b) => (b.video as { box: { width: number } }).box.width === 480)!;
+      assertEquals(preview.clip, { start: 60, duration: 20 });
+
+      // A poster where it was asked for again clears the note.
+      answer = stills(1);
+      await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${video} --only still -f`);
+      assertEquals((await vfs.get(ADMIN_ACCESS, video)).attrs.posterAt, undefined);
     });
   } finally {
     await stub.close();

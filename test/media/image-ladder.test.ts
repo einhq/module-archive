@@ -77,7 +77,7 @@ Deno.test('image ladder asks EMS once per source and dispatches by media type', 
       { outputPath: '/albums/a/photo.jpg/thumbnails/800x800.avif', width: 800, height: 800, mode: 'contain', quality: 60 },
     ];
     const made = await generateImageLadder(cmd, { path: '/albums/a/photo.jpg', id: 'p', mimetype: 'image/jpeg', angle: 90, mirror: true }, targets);
-    assertEquals(made, targets.map((t) => t.outputPath));
+    assertEquals(made, { written: targets.map((t) => t.outputPath) });
     assertEquals(published.length, 2);
     assertEquals(published[0].endsWith('-> 320x320.avif'), true);
 
@@ -95,14 +95,15 @@ Deno.test('image ladder asks EMS once per source and dispatches by media type', 
     // The temps are gone once the finals are in place.
     assertEquals([...nodes.keys()].filter((k) => k.includes('.tmpimage-')), []);
 
-    await generateImageLadder(
+    const video = await generateImageLadder(
       cmd,
       { path: '/albums/a/clip.mp4', id: 'v', mimetype: 'video/mp4', angle: 270, mirror: false },
       [{ outputPath: '/albums/a/clip.mp4/thumbnails/512x512.avif', width: 512, height: 512, mode: 'contain' }],
     );
     const clip = stub.requests[1];
     assertEquals(clip.op, 'video.poster');
-    assertEquals(clip.body.at, undefined);
+    assertEquals([clip.body.at, clip.body.skip_blank], [undefined, true]);
+    assertEquals(video.posterAt, 0);
     assertEquals((clip.body.file as { angle: number }).angle, 270);
 
     await generateImageLadder(

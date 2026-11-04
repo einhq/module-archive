@@ -121,6 +121,13 @@ const DERIVATIVE_CLASSES: DerivativeClass[] = ['still', 'transcode', 'storyboard
  */
 const MIN_STORYBOARD_SECONDS = 4;
 
+/**
+ * File-node attr: the second a video's poster frame was taken at, when EMS passed over a blank
+ * frame at the second asked for (ein/core#399). The hover clip starts there too. Absent for a
+ * poster where it was asked for.
+ */
+const POSTER_AT_ATTR = 'posterAt';
+
 /** What the storyboard is made of and the rendition it is made from, or undefined when sizes.yaml does not say. */
 const storyboardSpecOf = (sizes: SizesConfig): (StoryboardSpec & { from: string }) | undefined => {
   const def = sizes.storyboard;
@@ -365,15 +372,21 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
   if (ladderTargets.length > 0) {
     try {
       if (verbose) await cmd.writeLn(`Generating ${ladderTargets.length} image size(s) from one decode...`);
-      created.push(
-        ...await generateImageLadder(cmd, {
-          path: inputPath,
-          id: nodeInfo.id,
-          mimetype,
-          angle: fileAttrs.angle,
-          mirror: fileAttrs.mirror,
-        }, ladderTargets),
-      );
+      const ladder = await generateImageLadder(cmd, {
+        path: inputPath,
+        id: nodeInfo.id,
+        mimetype,
+        angle: fileAttrs.angle,
+        mirror: fileAttrs.mirror,
+      }, ladderTargets);
+      created.push(...ladder.written);
+      if (ladder.posterAt !== undefined) {
+        // EMS asks for the frame a second in; a later one means that frame was blank.
+        const posterAt = ladder.posterAt > 1 ? ladder.posterAt : null;
+        if (posterAt !== (fileAttrs[POSTER_AT_ATTR] ?? null)) {
+          await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: { [POSTER_AT_ATTR]: posterAt } });
+        }
+      }
     } catch (error) {
       await cmd.writeError(`generate-derivatives: image ladder: ${error instanceof Error ? error.message : String(error)}\n`);
       failed += ladderTargets.length;
@@ -494,7 +507,9 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
       if (videoDef.seconds !== undefined) {
         const duration = Number(fileAttrs.duration);
         const known = Number.isFinite(duration) && duration > 0;
-        let start = videoDef.start ?? 0;
+        // Where the poster frame is, when the frame at the configured start was blank.
+        const posterAt = Number(fileAttrs[POSTER_AT_ATTR]);
+        let start = Math.max(videoDef.start ?? 0, Number.isFinite(posterAt) ? posterAt : 0);
 
         // Nothing to preview: the poster frame already is the whole video. `MIN_PREVIEW_SECONDS`
         // in `@archive/media/event-rules` is this same threshold — without it `media-scan` would report

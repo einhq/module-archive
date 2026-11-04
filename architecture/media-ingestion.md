@@ -123,7 +123,10 @@ waits for rather than by a shared DAG:
    **child file nodes** under a `thumbnails/` directory of the media node, named by size class.
    Images are **AVIF** (`320x320` cover thumb, plus `512x512`/`800x800`/`1600x1600`/`2560x2560`
    `contain` sizes), video is **AV1** in MP4 (`1920x1080.mp4` with AAC, and a silent
-   `480x480.mp4` hover clip) with the image sizes up to `1600x1600` as poster frames, audio is AAC
+   `480x480.mp4` hover clip) with the image sizes up to `1600x1600` as poster frames — the frame a
+   second in, unless it is blank (black, white or a tape's blue screen): then EMS's `skip_blank`
+   takes the first of the frames at a tenth, a quarter and half of the picture that is not,
+   `posterAt` on the file says which second, and the hover clip starts there too — audio is AAC
    in MP4 (`128k-44100.m4a`) plus a rendered waveform in the image sizes. The `<width>x<height>` name is the target **box**: a `contain`
    rendition is usually shorter, and never upscaled past the source (`fit: contain` in EMS's
    `image.renditions`, `min(iw,W)` in `video.transcode`). Only the `cover` thumb enlarges, because

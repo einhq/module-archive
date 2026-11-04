@@ -72,6 +72,9 @@ export const renditionTarget = (target: ImageLadderTarget, output: string): Rend
   };
 };
 
+/** The outputs a ladder published, and for a video the second its poster frame was taken at. */
+type ImageLadder = { written: string[]; posterAt?: number };
+
 /**
  * Build a still-image ladder from one decode, stage all files, validate them, then publish.
  * Existing final renditions remain untouched if conversion or validation fails.
@@ -80,8 +83,8 @@ export const generateImageLadder = async (
   cmd: Command,
   source: ImageLadderSource,
   targets: ReadonlyArray<ImageLadderTarget>,
-): Promise<string[]> => {
-  if (targets.length === 0) return [];
+): Promise<ImageLadder> => {
+  if (targets.length === 0) return { written: [] };
   const destDir = dirname(targets[0].outputPath);
   const staged: StagedTarget[] = [];
   await sweepStaleTemps(cmd, destDir, TEMP_PREFIX);
@@ -100,10 +103,11 @@ export const generateImageLadder = async (
     const mirror = normalizeMirror(source.mirror);
     const common = { mimetype: source.mimetype, targets: wanted };
 
+    let posterAt: number | undefined;
     if (source.mimetype.startsWith('video/')) {
       // EMS takes it a second in, past the black leader most cameras record, or the first frame
-      // when the picture is shorter than that.
-      await poster(cmd, source.path, { ...common, angle, mirror });
+      // when the picture is shorter than that; a blank frame there gives way to a later one.
+      posterAt = (await poster(cmd, source.path, { ...common, angle, mirror, skipBlank: true })).t;
     } else if (source.mimetype.startsWith('audio/')) {
       await waveform(cmd, source.path, { ...common, style: WAVEFORM_STYLE });
     } else {
@@ -120,7 +124,7 @@ export const generateImageLadder = async (
       const finalName = target.outputPath.slice(destDir.length + 1);
       await cmd.sys.vfs.rename(cmd.access, destDir, target.tempName, destDir, finalName, { failIfExists: true });
     }
-    return targets.map((target) => target.outputPath);
+    return { written: targets.map((target) => target.outputPath), ...(posterAt !== undefined ? { posterAt } : {}) };
   } finally {
     for (const target of staged) await removeNode(cmd, target.tempPath, destDir);
   }
