@@ -5,6 +5,7 @@ description: Link a file to the device that produced it
 # re-running exiftool over them.
 trigger:
   on: media.metadata.extracted
+  wants: archive
   match:
     # Any device information at all, not the serial alone: most phones write no
     # serial, and matching on it left every one of them unlinked.

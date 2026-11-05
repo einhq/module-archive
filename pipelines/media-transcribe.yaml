@@ -12,12 +12,14 @@ vars:
 # Below faces (100), so face detection drains first.
 triggers:
   - on: media.metadata.extracted
+    wants: transcripts
     match:
       mimetype: 'audio/*'
     skipIfExists: $NODE_PATH/metadata/transcript
     skipIfAttr: undecodable
 
   - on: media.metadata.extracted
+    wants: transcripts
     match:
       mimetype: 'video/*'
     skipIfExists: $NODE_PATH/metadata/transcript
@@ -27,6 +29,7 @@ triggers:
   # left without `transcribedAt`. The fact is the guard, so there is no skipIfExists; the backfill
   # priority keeps it behind newly imported media.
   - on: media.transcript.stale
+    wants: transcripts
     skipIfAttr: undecodable
     vars:
       FORCE: -f

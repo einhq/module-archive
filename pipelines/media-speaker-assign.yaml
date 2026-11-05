@@ -20,7 +20,9 @@ description: Decide which person each voice of a recording is
 # racing a voice-mint. Both write under /people/unknown, so they serialise against each other.
 triggers:
   - on: media.speakers.detected
+    wants: archive
   - on: media.speakers.face-changed
+    wants: archive
 
 steps:
   assign:

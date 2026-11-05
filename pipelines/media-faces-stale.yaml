@@ -11,12 +11,14 @@ description: Find a file's faces again when other face models found them, keepin
 
 triggers:
   - on: media.faces.stale
+    wants: archive
     match:
       mimetype: image/*
     skipIfAttr: undecodable
     priority: 20
 
   - on: media.faces.stale
+    wants: archive
     match:
       mimetype: video/*
     skipIfAttr: undecodable

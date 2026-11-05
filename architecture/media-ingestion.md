@@ -57,6 +57,18 @@ waits for rather than by a shared DAG:
    | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed) | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
    | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for) | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
+   **Families.** Every pipeline here that acts on a file wherever it lies names the family of work
+   it does with `wants` (core's "Which processing a folder wants"): `renditions` (`media-stills`,
+   `media-transcode`), `picture-vectors` (`media-embed-picture`), `text` (`media-ocr`,
+   `document-index`), `transcripts` (`media-transcribe`; `media-embed-text` is either), and
+   `archive` for everything that gives a file its people, places, device and copies (faces, voices,
+   fingerprints, device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
+   since every family needs the file read, and nor do the pipelines that act only on the archive's
+   own trees (albums, staging, tracks, locations). A folder whose `processing` attr names some
+   families gets only those: one that wants `[renditions]` has its pictures read and rendered, and
+   no faces, text, vectors or fingerprints. `test/media/processing-families.test.ts` holds every
+   pipeline to a family, or to the reason it needs none.
+
    **Sidecars.** A Google Photos Takeout JSON or an XMP file beside a picture is paired with it by
    `media-sidecars` ([sidecars.ts](../lib/media/sidecars.ts)): moved under it
    as `<file>/sidecar`, a file carrying `sourceId` (the picture's id, so it is a derived file no

@@ -11,6 +11,7 @@ description: Tie a video's voices to the faces seen speaking them, once its face
 # Only on the write that finished detection, so a later attr write to the video asks nothing.
 trigger:
   on: media.faces.completed
+  wants: archive
   match:
     mimetype: video/*
     speakersAt: '?*'

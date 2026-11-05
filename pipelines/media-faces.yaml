@@ -14,6 +14,7 @@ description: Detect faces in an image and crop each one
 # reads to decide whether a file's people signal is complete.
 trigger:
   on: media.metadata.extracted
+  wants: archive
   match:
     mimetype: image/*
   skipIfAttr: facesAt

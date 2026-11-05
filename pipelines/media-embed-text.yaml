@@ -11,6 +11,7 @@ description: Embed a file's stored texts with the current text embedder
 
 triggers:
   - on: media.text-embedding.stale
+    wants: [text, transcripts]
     priority: 20
 
 steps:

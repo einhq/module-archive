@@ -17,6 +17,7 @@ vars:
 
 triggers:
   - on: media.metadata.extracted
+    wants: renditions
     match:
       mimetype: [video/*, audio/*]
     # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
@@ -28,6 +29,7 @@ triggers:
   # A video turned or flipped by hand: its renditions show the old orientation. Forced, so the
   # old rendition stays playable (turned the old way) until the new one replaces it.
   - on: media.file.turned
+    wants: renditions
     match:
       mimetype: 'video/*'
     skipIfAttr: undecodable

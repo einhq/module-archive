@@ -9,6 +9,7 @@ triggers:
   - &trigger
     event: updated
     nodeType: file
+    wants: text
     # Paths never read, skipped before any shell runs: a write under one costs no filter
     # evaluation however many there are. `*` is one name, `**` crosses `/`.
     unless: &unread
@@ -54,6 +55,7 @@ triggers:
   - <<: *trigger
     event: moved
   - on: media.text.missing
+    wants: text
     # The documents of the filter above; a picture's gap is media-ocr's.
     match:
       mimetype:

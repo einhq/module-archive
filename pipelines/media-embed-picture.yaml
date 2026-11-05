@@ -15,12 +15,14 @@ vars:
 
 triggers:
   - on: media.metadata.extracted
+    wants: picture-vectors
     match:
       mimetype: 'image/*'
     skipIfExists: $NODE_PATH/metadata/picture
     skipIfAttr: undecodable
 
   - on: media.metadata.extracted
+    wants: picture-vectors
     match:
       mimetype: 'video/*'
     skipIfExists: $NODE_PATH/metadata/picture
@@ -31,6 +33,7 @@ triggers:
   # an archive re-embed behind newly imported media, and ahead of the transcript and OCR backfills
   # (10): a picture vector is ~0.5 s and makes a file findable.
   - on: media.picture.stale
+    wants: picture-vectors
     skipIfAttr: undecodable
     vars:
       FORCE: -f

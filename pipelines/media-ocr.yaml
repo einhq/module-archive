@@ -18,6 +18,7 @@ vars:
 
 triggers:
   - on: media.metadata.extracted
+    wants: text
     match:
       mimetype: 'image/*'
     # The same paths as document-index's `unless`; see there for why each is left out.
@@ -34,12 +35,14 @@ triggers:
 
   - event: moved
     nodeType: file
+    wants: text
     match:
       mimetype: 'image/*'
     unless: *unread
     skipIfAttr: textIndexedAt
 
   - on: media.text.missing
+    wants: text
     match:
       mimetype: 'image/*'
     unless: *unread
@@ -48,6 +51,7 @@ triggers:
   # A person set or cleared the language of a read picture's text (`file-set-text-language`): read
   # again in it, ahead of the backlog, as someone is looking at it.
   - on: media.text.language-set
+    wants: text
     unless: *unread
     vars:
       FORCE: -f
@@ -58,6 +62,7 @@ triggers:
   # skipIfAttr. Behind new media and the picture vectors (20): a reading makes a file findable by
   # its words only when it has some.
   - on: media.ocr.stale
+    wants: text
     unless: *unread
     vars:
       FORCE: -f

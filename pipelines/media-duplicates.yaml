@@ -8,6 +8,7 @@ description: Decide again the duplicate findings of a staged file, or of the sta
 # `compute-fingerprint`, so neither needs a fact.
 trigger:
   on: media.duplicates.stale
+  wants: archive
 
 steps:
   record:

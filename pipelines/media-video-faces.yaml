@@ -7,6 +7,7 @@ description: Find the faces a video shows, when each is on screen, and crop each
 # every face of an hour of home video.
 trigger:
   on: media.metadata.extracted
+  wants: archive
   match:
     mimetype: video/*
   skipIfAttr: facesAt

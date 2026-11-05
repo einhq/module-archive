@@ -13,9 +13,11 @@ description: Find the voices of a recording — who speaks when — with one voi
 # trigger does not have to encode it.
 triggers:
   - on: media.transcript.generated
+    wants: archive
     skipIfAttr: speakersAt
 
   - on: media.speakers.missing
+    wants: archive
     skipIfAttr: speakersAt
 
 steps:

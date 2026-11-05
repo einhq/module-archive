@@ -3,6 +3,7 @@ description: Compute the fingerprints duplicate detection and photo stacks compa
 
 trigger:
   on: media.metadata.extracted
+  wants: archive
   # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
   # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
   # three attempts of the same permanent answer only make a corrupt original look like a

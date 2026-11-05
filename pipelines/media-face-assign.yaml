@@ -14,6 +14,7 @@ description: Attach a detected face to a person
 # prevented that before, and only by accident.
 trigger:
   on: media.face.detected
+  wants: archive
   skipIfAttr: personId
 
 steps:
