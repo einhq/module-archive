@@ -1,5 +1,5 @@
 {
-  "description": "Turns VFS mutations into the media and location domain facts pipelines trigger on",
+  "description": "Turns VFS mutations into the archive's facts — a file dated and placed, a face found, staging, albums and locations changed — that pipelines trigger on",
   "restartPolicy": "on-failure",
   "workClass": "background"
 }

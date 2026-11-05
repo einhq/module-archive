@@ -39,11 +39,12 @@
  * reads what changed from the audit trail itself; the fact only says which category. A category's
  * id is read once a minute.
  *
- * **Lanes.** Every fact the bridge announces about something in a category whose `lane` is `bulk`
- * carries `lane: 'bulk'` (`stampLanes`), so the work it starts runs below everything of the normal
- * lane. The lane is decided per fact by its subject's category, so a file moved out of a bulk
- * category has its later facts in the lane of the one it is in now. The organizer's fact names the
- * category itself, which is in no lane: its runs never wait behind a bulk category's work.
+ * **Lanes.** A category whose `lane` is `bulk` says so on its folder too (`LANE_ATTR`), and every
+ * fact the bridges announce about something in it carries `lane: 'bulk'` (`withLanes`,
+ * `@media/file-rules`), so the work it starts runs below everything of the normal lane. The lane is
+ * decided per fact by the folders above its subject, so a file moved out of a bulk category has its
+ * later facts in the lane of the one it is in now. The organizer's fact names the category itself,
+ * which lies in no lane: its runs never wait behind a bulk category's work.
  */
 
 import type { DomainEvent } from '@ein/client';
@@ -318,18 +319,4 @@ async function otherFacts(event: VfsEventInput, ctx: RuleContext, now: number): 
   }
 
   return [];
-}
-
-/**
- * `facts` with `lane: 'bulk'` on each whose subject lies in a category of the bulk lane, read
- * through `ctx` and kept a minute; the others as they are.
- */
-export async function stampLanes(facts: Omit<DomainEvent, 'id'>[], ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
-  const stamped: Omit<DomainEvent, 'id'>[] = [];
-  for (const fact of facts) {
-    const place = stagedPlace(fact.subject);
-    const settings = place && await settingsOf(ctx, place.user, place.category, now);
-    stamped.push(settings?.lane === 'bulk' ? { ...fact, lane: 'bulk' } : fact);
-  }
-  return stamped;
 }

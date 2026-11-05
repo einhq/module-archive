@@ -15,36 +15,36 @@ waits for rather than by a shared DAG:
    `application/rdf+xml`, so a Takeout or XMP sidecar is metadata and never a document to index
    (core's `src/lib/media/raw.ts`). The `update` emits a VFS event on
    `system.vfs.file.updated`.
-2. **Derive the fact.** `archive-bridge` sees it, checks the rules (media mimetype, has bytes, not a
-   derivative, not in `/tmp` or a trash, no `metadata/exif` yet) and publishes
-   `media.file.discovered` to `/dev/events`. Nothing under `/tmp` is ever a fact: a picture put there
-   to search with is not the archive's, and indexed, its vectors would answer every search. Nothing
-   in a trash is discovered or indexed again either: it waits there to be restored or purged.
-   Metadata extraction is one `media.probe` call to EMS (`@archive/media/exif-service`), which runs
-   exiftool there — a stay-open pool, numeric ungrouped JSON — and ffprobe for every video and
-   recording, and hands both dumps back under `raw`. `exif-extract` keeps its interpretation
-   (`types/exif.ts`, `exif-date.ts`, `video-codec.ts`, the orientation rules) over the exiftool
-   dump exactly as before — exiftool's `MIMEType` replaces the sniffed one, a RAW name again
-   deciding over a plain TIFF — and `resolveMediaFacts` reads the stream facts off the ffprobe dump
-   rather than spawning a probe. The file-node and metadata existence checks are direct VFS
-   reads; source SHA-256 measurement and content-change detection retain their previous
-   semantics.
-3. **Fan out.** Each pipeline binds one or more facts. Alternative triggers keep
+2. **Read the file.** The media module reads it, and its `architecture/reading.md` says how: its
+   `media-bridge` sees the write, checks the rules (media mimetype, has bytes, not a rendition, not
+   in `/tmp` or a trash, no `metadata/exif` yet, no hold on it) and publishes
+   `media.file.discovered`; `media-ingest` runs `exif-extract`, which first runs each module's hold
+   command — the archive's, `staging-hold`, decides a staged file's duplicate finding and holds an
+   exact copy unread — then reads the metadata (one `media.probe` to EMS) and writes the dump under
+   `metadata/exif` and the file's own facts on it, and the bridge announces the filled exif node as
+   `media.metadata.extracted`. Nothing under `/tmp` is ever read, nor anything in a trash.
+3. **Interpret it.** The archive's only pipeline on that fact, `media-interpret` (`wants:
+   archive`), runs `exif-interpret`: the capture time resolved from the clocks, the device, a
+   paired sidecar and the name (a staged file by its category's time rules, stamped on it), and
+   the `position` node from the GPS fix or the sidecar, unless a person set one. Its last write,
+   `interpretedAt`, is what `archive-bridge` announces as `media.metadata.interpreted`, with the
+   device key and whether there is a GPS fix, and the album fact of every album holding the file.
+   Thumbnails do not wait for it: the media module's pipelines start on the reading.
+4. **Fan out.** Each pipeline binds one or more facts. Alternative triggers keep
    their own guards and run overrides, so a stale-transcript fact can bypass the
    ordinary "transcript already exists" guard without defining another pipeline:
 
    | pipeline               | fact                                                                                                   | resource                                                                                                                             |
    | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-   | `media-ingest`         | `file.discovered`                                                                                      | pool `ingest` (1 cpu, priority 100)                                                                                                  |
-   | `media-reindex`        | `file.content-changed`                                                                                 | pool `ingest` (1 cpu, priority 100)                                                                                                  |
-   | `media-device`         | `metadata.extracted` (has device info)                                                                 | inline                                                                                                                               |
+   | `media-interpret`      | `metadata.extracted`                                                                                   | pool `interpret` (1 cpu, priority 100)                                                                                               |
+   | `media-device`         | `metadata.interpreted` (has device info)                                                               | inline                                                                                                                               |
    | `media-geocode`        | `position.available`                                                                                   | inline                                                                                                                               |
    | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
    | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
    | `media-device-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
-   | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                                                | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
-   | `media-faces`          | `metadata.extracted` (image)                                                                           | pool `faces` (1 model slot, priority 100)                                                                                            |
-   | `media-video-faces`    | `metadata.extracted` (video)                                                                           | pool `faces` (1 model slot, priority 50)                                                                                             |
+   | `media-fingerprint`    | `metadata.interpreted`, not `undecodable`                                                              | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
+   | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
+   | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
    | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
    | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                                                  | pool `embed-picture` (1 model slot; priority 50/10)                                                                                  |
    | `media-embed-text`     | `text-embedding.stale`                                                                                 | pool `embed-text` (1 model slot; priority 20)                                                                                        |
@@ -134,7 +134,7 @@ waits for rather than by a shared DAG:
    ranking changes without touching a cover somebody set. Faces moved by hand — naming, merging, splitting — pass no
    pipeline, so the `people` module's `person-covers` service runs `person-cover --all` hourly
    as the reconciler.
-4. **Derivatives.** The media module makes a file's renditions, and its `architecture/renditions.md`
+5. **Derivatives.** The media module makes a file's renditions, and its `architecture/renditions.md`
    says how: `media-stills` and `media-transcode` start on `media.metadata.extracted`, which this
    bridge announces until the media module reads files itself, and the marker they write is
    announced as `media.renditions.made`, on which `media-device-cover` offers a video's poster
@@ -162,7 +162,7 @@ waits for rather than by a shared DAG:
    fraction and nothing else, and EMS cuts it out of whatever raster it decodes, so neither family
    needs a declared frame any more (docs/api.md §3.3 and §4.2 in the ems repo; what EiN owes
    is the node's `angle`/`mirror` and its mimetype).
-5. **Serve/browse.** The UI lists a media directory via `ls -l`; when a `thumbnails/` child is present
+6. **Serve/browse.** The UI lists a media directory via `ls -l`; when a `thumbnails/` child is present
    it requests `/file/<path>/thumbnails/512x512.avif` (grid tile) and a `srcset` of the photo renditions
    (lightbox, so the browser picks per viewport), falling back to the original when `thumbnails/`
    is absent (not yet indexed). A tile that 404s falls back first to the **same** rendition with the
@@ -191,7 +191,7 @@ waits for rather than by a shared DAG:
    own. Leaving unmounts the `<video>`, which is the whole reset: the still underneath is the same
    frame the clip started on. `prefers-reduced-motion` disables it, and a clip that 404s is
    remembered so a not-yet-backfilled video is asked for once and never again.
-6. **Search.** `embed-picture`, `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads) populate the embedding registry.
+7. **Search.** `embed-picture`, `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads) populate the embedding registry.
 
    **Text indexing.** `document-index` runs `index-document` on a file's VFS `updated` and on its
    `moved`, one trigger body shared by both: PDF, plain text, Word and OpenDocument text. JSON and

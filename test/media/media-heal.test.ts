@@ -42,8 +42,8 @@ Deno.test({ name: 'media-heal announces a pass when one is due', sanitizeResourc
     await client.exec(`mkdir -p ${ALBUMS_ROOT} && mkdir -p ${pools} && mkdir -p /tmp/defs`);
     for (const pool of ['triggers', 'media']) assertEquals((await client.exec(`mknode -t pool ${pools}/${pool}`)).success, true);
     // Discovery's pipeline, so a scan has a type whose work may or may not wait.
-    await write('/tmp/defs/media-ingest.yaml', await Deno.readTextFile(new URL('../../pipelines/media-ingest.yaml', import.meta.url)));
-    assertEquals((await client.exec('pipeline define /tmp/defs/media-ingest.yaml')).success, true);
+    // Discovery's pipeline is the media module's, mounted beside the archive.
+    assertEquals((await client.exec('pipeline define /usr/modules/media/pipelines/media-ingest.yaml')).success, true);
     await announced();
 
     await t.step('a first pass is due over every type, in the bulk lane', async () => {

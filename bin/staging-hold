@@ -1,0 +1,72 @@
+#!ts
+/**
+ * staging-hold — the archive's say before the media module reads a file (its hold command,
+ * `/etc/media-read.d/archive/hold`, which `exif-extract` runs).
+ *
+ * A staged media original is checked against its byte twins (`checkArrival`): an exact copy of a
+ * file its owner can read is recorded `deferred`, with its original, and held unread (`hold`,
+ * `@media/file-rules`), so nothing downstream ever starts for it; the hold is for these bytes in
+ * this inbox, and staging takes it off with `deferred` when the copy stops being one. Any other
+ * staged file's finding is recorded, and a finding left on a file no longer staged is taken off.
+ * With `-f` the file is read anyway, so it is recorded and not held.
+ */
+
+import { resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { DuplicateFinding, StagingHoldAnswer } from '@archive/media/api';
+import { checkArrival, DUPLICATE_ATTR, findingOf, holdOfFinding, sameFinding, undeferred } from '@archive/staging/duplicates';
+import { HOLD_ATTR } from '@media/file-rules';
+
+const stagingHold = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['force'], alias: { f: 'force' }, unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const path = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  if (!path) {
+    await cmd.writeError('staging-hold: missing file path\n');
+    return 1;
+  }
+  const node = await cmd.sys.vfs.get(cmd.access, path).catch(() => undefined);
+  if (node?.type !== 'file') {
+    await cmd.writeError(`staging-hold: ${path}: not a file\n`);
+    return 1;
+  }
+
+  const attrs = node.attrs as Record<string, unknown>;
+  const stored = findingOf(attrs);
+  let held: DuplicateFinding | undefined;
+  await checkArrival(cmd, path, { id: node.id, path, attrs }, async (decided) => {
+    if (decided === undefined) return;
+    if (decided === null) {
+      await cmd.sys.vfs.update(cmd.access, path, { attrs: { [DUPLICATE_ATTR]: null, [HOLD_ATTR]: null } });
+      return;
+    }
+    // An exact copy is held unless the reading is forced; anything else is recorded as read.
+    const finding = decided.kind !== undefined && !flags.force ? { ...decided, deferred: true as const } : undeferred(decided);
+    const hold = holdOfFinding(path, finding);
+    if (hold) held = finding;
+    if (!sameFinding(stored, finding) || JSON.stringify(attrs[HOLD_ATTR] ?? null) !== JSON.stringify(hold)) {
+      await cmd.sys.vfs.update(cmd.access, path, { attrs: { [DUPLICATE_ATTR]: finding, [HOLD_ATTR]: hold } });
+    }
+  });
+
+  const answer: StagingHoldAnswer = held ? { held: true, of: held.of! } : { held: false };
+  if (cmd.json) await cmd.writeJSON(answer);
+  else if (held) await cmd.writeLn(`Held: ${path} is an exact copy of ${held.of}`);
+  return 0;
+};
+
+stagingHold.spec = {
+  name: 'staging-hold',
+  effect: 'write' as const,
+  description:
+    "Decide a file's duplicate finding before the media module reads it: a staged exact copy of a file its owner can read is held unread (deferred) unless forced, another staged file's finding is recorded, and one left on a file no longer staged is taken off",
+  args: [{ name: 'file', type: 'path' as const, description: 'VFS path to the file about to be read' }],
+  flags: [{ name: 'f', type: 'bool' as const, description: 'The reading is forced: record the finding, and hold nothing' }],
+  examples: ['staging-hold /home/helen/staging/files/Inbox/IMG_0007.jpg'],
+  returns: 'whether the file is held, and the original it is a copy of.',
+};
+
+export default stagingHold;

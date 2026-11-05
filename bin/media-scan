@@ -53,8 +53,8 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
-import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
-import { stampLanes } from '@archive/staging/facts';
+import { deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
+import { deriveForFile, withLanes } from '@media/file-rules';
 import { LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
 import { allWait, factsWaiting } from '@media/waiting';
 import { generations } from '@ems/client';
@@ -442,8 +442,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // gap is the exception: it reads only the file's own attrs, and a document never indexed
       // has no children.
       const hasChildren = child.childCount > 0;
-      // In the lane the bridge would give them: a scan over a bulk category stays in the bulk lane.
-      const facts = await stampLanes(
+      // In the lane the bridges would give them: a scan over a bulk category stays in the bulk lane.
+      const facts = await withLanes(
         [
           ...await deriveForFile(childPath, fileCtx, Date.now(), snapshot),
           ...(gaps && hasChildren ? await deriveGaps(childPath, fileCtx, Date.now(), snapshot) : []),

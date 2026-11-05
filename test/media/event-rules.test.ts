@@ -6,7 +6,6 @@
  * cheap enough to exercise exhaustively.
  */
 
-import { DOCS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { deriveEvents, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '../../lib/media/event-rules.ts';
@@ -46,87 +45,12 @@ const IMG = `${ALBUMS_ROOT}/x/a.jpg`;
 const VID = `${ALBUMS_ROOT}/x/a.mp4`;
 const SND = `${ALBUMS_ROOT}/x/a.wav`;
 
-Deno.test('rule: a media file with bytes and no exif is discovered', async () => {
-  const ctx = tree({ [IMG]: file('f1') });
-
-  const facts = await deriveEvents(event('file', IMG), ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.fileDiscovered);
-  assertEquals(facts[0].subject, IMG);
-  assertEquals(facts[0].nodeId, 'f1');
-  assertEquals(facts[0].data?.mimetype, 'image/jpeg');
-});
-
-Deno.test('rule: nothing in a trash is discovered or indexed again', async () => {
-  const trashed = '/home/anna/.trash/01J/01K/a.jpg';
-  const ctx = tree({ [trashed]: file('f1') });
-
-  assertEquals(await deriveEvents(event('file', trashed, 'updated'), ctx, 100), []);
-  assertEquals(await deriveEvents(event('file', trashed), ctx, 100), []);
-});
-
-Deno.test('rule: a deferred exact copy is not discovered while it is one', async () => {
-  const staged = '/home/anna/staging/files/inbox/upload/IMG_0002.jpg';
-  const deferred = { inbox: 'anna', sha256: 'abc', at: 'then', kind: 'exact', where: 'inbox', of: 'f0', deferred: true };
-  const discovered = async (path: string, attrs: Record<string, unknown>) =>
-    (await deriveEvents(event('file', path, 'updated'), tree({ [path]: file('f1', attrs) }), 100)).map((fact) => fact.type);
-
-  assertEquals(await discovered(staged, { duplicate: deferred }), []);
-  // Other bytes than the copy's: discovered, and decided again when it is read.
-  assertEquals(await discovered(staged, { duplicate: deferred, sha256: 'def' }), [MEDIA_EVENTS.fileDiscovered]);
-  // No longer staged, its finding not cleared yet: discovered where it lies.
-  assertEquals(await discovered(`${ALBUMS_ROOT}/x/IMG_0002.jpg`, { duplicate: deferred }), [MEDIA_EVENTS.fileDiscovered]);
-  // Undeferred: a copy indexed, or the original it became.
-  const { deferred: _deferred, ...undeferred } = deferred;
-  assertEquals(await discovered(staged, { duplicate: undeferred }), [MEDIA_EVENTS.fileDiscovered]);
-  assertEquals(await discovered(staged, { duplicate: { inbox: 'anna', sha256: 'abc', at: 'then' } }), [MEDIA_EVENTS.fileDiscovered]);
-});
-
-Deno.test('rule: an indexed copy whose bytes changed is reindexed, deferred or not', async () => {
-  const staged = '/home/anna/staging/files/inbox/upload/IMG_0002.jpg';
-  const ctx = tree({
-    [staged]: file('f1', { sha256: 'def', duplicate: { inbox: 'anna', sha256: 'def', at: 'then', kind: 'exact', where: 'inbox', of: 'f0', deferred: true } }),
-    [`${staged}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: { indexedAt: 'now', sourceSha256: 'abc' } },
-  });
-
-  assertEquals((await deriveEvents(event('file', staged, 'updated'), ctx, 100)).map((fact) => fact.type), [MEDIA_EVENTS.fileContentChanged]);
-});
-
-Deno.test('rule: a derivative is never discovered', async () => {
-  // Thumbnails, transcodes and face crops all carry sourceId. Without this the
-  // pipelines would recurse on their own output.
-  const ctx = tree({ [IMG]: file('f1', { sourceId: 'f0' }) });
-
-  assertEquals(await deriveEvents(event('file', IMG), ctx, 100), []);
-});
-
-Deno.test('rule: a non-media file is ignored', async () => {
-  const ctx = tree({ [`${DOCS_PATH}/a.pdf`]: file('f1', { mimetype: 'application/pdf' }) });
-
-  assertEquals(await deriveEvents(event('file', `${DOCS_PATH}/a.pdf`), ctx, 100), []);
-});
-
-Deno.test('rule: a picture in /tmp is never discovered, nor anything else there', async () => {
-  // Put there to search with (`search --like`): indexed, its vectors would answer every search.
+Deno.test('rule: nothing in /tmp is a fact', async () => {
+  // Put there to search with (`search --like`): its vectors would answer every search.
   const scratch = '/tmp/like-print.jpg';
   const ctx = tree({ [scratch]: file('f1') });
 
-  assertEquals(await deriveEvents(event('file', scratch), ctx, 100), []);
   assertEquals(await deriveEvents(event('embedding', `${scratch}/metadata/picture/embedding`), ctx, 100), []);
-});
-
-Deno.test('rule: a picture outside the archive and the homes, such as a module installed, is never discovered', async () => {
-  const paths = ['/var/lib/modules/charts/tiles/12/2183/1240.png', '/usr/modules/charts/icon.png', '/etc/ui/logo.png'];
-  const ctx = tree(Object.fromEntries(paths.map((path, i) => [path, file(`f${i}`)])));
-
-  for (const path of paths) assertEquals(await deriveEvents(event('file', path), ctx, 100), []);
-});
-
-Deno.test('rule: a file node with no bytes yet is ignored', async () => {
-  const ctx = tree({ [IMG]: file('f1', { size: 0 }) });
-
-  assertEquals(await deriveEvents(event('file', IMG), ctx, 100), []);
 });
 
 Deno.test('rule: an already-indexed file is silent', async () => {
@@ -162,84 +86,49 @@ Deno.test('rule: a multi-face detection completion carries the final count', asy
   assertEquals(facts[0].data?.faceCount, 3);
 });
 
-Deno.test('rule: an indexed file whose bytes changed reports content-changed', async () => {
+Deno.test('rule: a file whose bytes changed says nothing of its old faces while it is read again', async () => {
   const ctx = tree({
-    [IMG]: file('f1', { sha256: 'def' }),
+    [IMG]: file('f1', { sha256: 'def', facesAt: 'then', faceCount: 2 }),
     [`${IMG}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: { indexedAt: 'now', sourceSha256: 'abc' } },
   });
 
-  const facts = await deriveEvents(event('file', IMG, 'updated'), ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.fileContentChanged);
-  assertEquals(facts[0].data?.previousSha256, 'abc');
+  assertEquals(await deriveEvents(event('file', IMG, 'updated'), ctx, 100), []);
 });
 
-Deno.test('rule: an exif node under a text file extracts nothing', async () => {
-  // An album's description: a text node, once given an exif child, that no media step can render.
-  const text = `${ALBUMS_ROOT}/x/metadata/description`;
+Deno.test("rule: the archive's reading of a file's metadata is a fact, on the write that finished it", async () => {
   const ctx = tree({
-    [text]: file('f2', { mimetype: 'text/plain' }),
-    [`${text}/metadata/exif`]: { id: 'e2', type: 'exif', attrs: { indexedAt: 'now' } },
-  });
-
-  assertEquals(await deriveEvents(event('exif', `${text}/metadata/exif`, 'updated'), ctx, 100), []);
-});
-
-Deno.test('rule: a populated exif node extracts metadata', async () => {
-  const ctx = tree({
-    [IMG]: file('f1', { width: 4032, height: 3024, takenAt: '2020-01-01T00:00:00Z' }),
+    [IMG]: file('f1', { width: 4032, height: 3024, takenAt: '2020-01-01T00:00:00Z', interpretedAt: 'now' }),
     [`${IMG}/metadata/exif`]: {
       id: 'e1',
       type: 'exif',
-      attrs: {
-        indexedAt: 'now',
-        deviceSerialNumber: 'SER1',
-        where: { gps: { lat: 1, lon: 2 } },
-        fileinfo: { duration: 12 },
-      },
+      attrs: { indexedAt: 'now', deviceSerialNumber: 'SER1', where: { gps: { lat: 1, lon: 2 } } },
     },
   });
+  const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', IMG, 'updated'), changedAttrs });
 
-  const facts = await deriveEvents(event('exif', `${IMG}/metadata/exif`, 'updated'), ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.metadataExtracted);
-  // Subject is the file, so $NODE_PATH is what the steps operate on
-  assertEquals(facts[0].subject, IMG);
-  assertEquals(facts[0].data?.hasGps, true);
-  assertEquals(facts[0].data?.deviceSerial, 'SER1');
-  assertEquals(facts[0].data?.deviceKey, 'SER1');
-  assertEquals(facts[0].data?.width, 4032);
-  assertEquals(facts[0].data?.duration, 12);
+  const facts = (await deriveEvents(updated(['takenAt', 'interpretedAt']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted);
+  // Subject is the file, so $NODE_PATH is what the steps operate on.
+  assertEquals(facts.map((f) => [f.subject, f.data]), [[IMG, {
+    mimetype: 'image/jpeg',
+    interpretedAt: 'now',
+    takenAt: '2020-01-01T00:00:00Z',
+    hasGps: true,
+    deviceSerial: 'SER1',
+    deviceKey: 'SER1',
+  }]]);
+  assertEquals((await deriveEvents(updated(['description']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted), []);
 });
 
 Deno.test('rule: a camera with no serial still carries a device key', async () => {
   // What `media-device` triggers on: a serial, or make and model for a phone that writes no serial.
   const ctx = tree({
-    [IMG]: file('f1', { takenAt: '2020-01-01T00:00:00Z' }),
-    [`${IMG}/metadata/exif`]: {
-      id: 'e1',
-      type: 'exif',
-      attrs: { indexedAt: 'now', deviceinfo: { make: 'Apple', model: 'iPhone 12' } },
-    },
+    [IMG]: file('f1', { takenAt: '2020-01-01T00:00:00Z', interpretedAt: 'now' }),
+    [`${IMG}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: { indexedAt: 'now', deviceinfo: { make: 'Apple', model: 'iPhone 12' } } },
   });
 
-  const facts = await deriveEvents(event('exif', `${IMG}/metadata/exif`, 'updated'), ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].data?.deviceSerial, '');
-  assertEquals(facts[0].data?.deviceKey, 'iPhone 12');
-});
-
-Deno.test('rule: an exif node created empty is not yet a fact', async () => {
-  // ensure() creates it, a following update fills it — only the filled state counts
-  const ctx = tree({
-    [IMG]: file('f1'),
-    [`${IMG}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: {} },
-  });
-
-  assertEquals(await deriveEvents(event('exif', `${IMG}/metadata/exif`), ctx, 100), []);
+  const facts = (await deriveEvents({ ...event('file', IMG, 'updated'), changedAttrs: ['interpretedAt'] }, ctx, 100))
+    .filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted);
+  assertEquals(facts.map((f) => [f.data?.deviceSerial, f.data?.deviceKey]), [['', 'iPhone 12']]);
 });
 
 Deno.test('rule: a position node reports availability without reading coordinates', async () => {
@@ -309,19 +198,6 @@ Deno.test('rule: the voices of a recording are one fact, when speakersAt is writ
   assertEquals(later.filter((f) => f.type === MEDIA_EVENTS.speakersDetected).length, 0);
 });
 
-Deno.test("rule: a file's renditions are made on the write that marked them, and only then", async () => {
-  // `generate-derivatives` writes the marker once the set is complete; every later attr write to
-  // the file says nothing of its renditions.
-  const ctx = tree(indexedVideo({ renditionsFor: '0123456789abcdef', renditionsAt: '2026-11-05T22:00:00Z' }));
-  const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', VID, 'updated'), changedAttrs });
-
-  const facts = (await deriveEvents(updated(['renditionsFor', 'renditionsAt']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.renditionsMade);
-  assertEquals(facts.map((f) => [f.subject, f.data]), [[VID, { mimetype: 'video/mp4', renditionsAt: '2026-11-05T22:00:00Z', renditionsFor: '0123456789abcdef' }]]);
-
-  const later = await deriveEvents(updated(['description']), ctx, 100);
-  assertEquals(later.filter((f) => f.type === MEDIA_EVENTS.renditionsMade).length, 0);
-});
-
 Deno.test("rule: a video's faces complete on the write that finished detection, saying whether its voices are there", async () => {
   const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', VID, 'updated'), changedAttrs });
   const completed = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.facesCompleted);
@@ -371,31 +247,6 @@ Deno.test("rule: a face of a video with voices changing person is a fact about t
   // A photo's face has no voices to decide.
   const photo = indexed();
   assertEquals(changed(await deriveEvents(updated(['personId'], `${IMG}/regions/face-0`), tree(photo), 100)), []);
-});
-
-Deno.test('rule: an indexed video turned or flipped by hand is turned; any other write is not', async () => {
-  const updated = (changedAttrs: string[], path = VID): VfsEventInput => ({ ...event('file', path, 'updated'), changedAttrs });
-  const turned = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.fileTurned);
-  const ctx = tree(indexedVideo({ angle: 90, angleManual: 90, mirror: true }));
-
-  const facts = turned(await deriveEvents(updated(['angle', 'angleManual']), ctx, 100));
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].subject, VID);
-  assertEquals(facts[0].data, { mimetype: 'video/mp4', angle: 90, mirror: true });
-  assertEquals(turned(await deriveEvents(updated(['mirror']), ctx, 100)).length, 1);
-
-  // The angle `exif-extract` derives on every index is not a turn, nor is any other write.
-  assertEquals(turned(await deriveEvents(updated(['angle']), ctx, 100)), []);
-  assertEquals(turned(await deriveEvents(updated(['speakersAt']), ctx, 100)), []);
-  assertEquals(turned(await deriveEvents(event('file', VID, 'updated'), ctx, 100)), []);
-
-  // Not yet indexed: the transcode the index queues reads the new orientation itself.
-  const unindexed = tree({ [VID]: file('f1', { mimetype: 'video/mp4', angleManual: 90 }) });
-  assertEquals(turned(await deriveEvents(updated(['angleManual']), unindexed, 100)), []);
-
-  // A turned photo has no rendition to re-encode.
-  const photo = tree(indexed({ angleManual: 90 }));
-  assertEquals(turned(await deriveEvents(updated(['angleManual'], IMG), photo, 100)), []);
 });
 
 Deno.test('rule: a read picture whose text language is set by hand is announced; any other write is not', async () => {
@@ -509,31 +360,6 @@ Deno.test('rule: node types with no media meaning are ignored', async () => {
   assertEquals(await deriveEvents(event('tty', '/dev/tty1'), ctx, 100), []);
 });
 
-Deno.test('rule: a deleted event without the attrs it had produces nothing', async () => {
-  const ctx = tree({});
-
-  assertEquals(await deriveEvents(event('file', IMG, 'deleted'), ctx, 100), []);
-});
-
-const deleted = (path: string, attrs: Record<string, unknown>): VfsEventInput => ({ ...event('file', path, 'deleted'), attrs });
-
-Deno.test('rule: a removed media file is a fact, read from the attrs it had', async () => {
-  // The tree is empty: the node is gone, and the rule must not need it.
-  const facts = await deriveEvents(deleted(IMG, file('n1').attrs), tree({}), 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.fileRemoved);
-  assertEquals(facts[0].subject, IMG);
-  assertEquals(facts[0].nodeId, 'n1');
-  assertEquals(facts[0].data, { mimetype: 'image/jpeg', size: 1024, sha256: 'abc' });
-});
-
-Deno.test('rule: a removed derivative, non-media or empty file is no fact', async () => {
-  for (const attrs of [{ sourceId: 'f0' }, { mimetype: 'application/pdf' }, { size: 0 }]) {
-    assertEquals(await deriveEvents(deleted(IMG, file('n1', attrs).attrs), tree({}), 100), []);
-  }
-});
-
 // --- Album membership: the one fact whose subject is an aggregate.
 
 const ALBUM = `${ALBUMS_ROOT}/x`;
@@ -580,8 +406,8 @@ Deno.test('album: a file created or moved into files/ reports the album from the
 
   const created = await deriveEvents(event('file', path, 'created'), ctx, 100);
   assertEquals(albumFacts(created), [[IMPORTED, 'al2', 'member-attached']]);
-  // The file's own discovery still rides the same event.
-  assertEquals(created.some((f) => f.type === MEDIA_EVENTS.fileDiscovered), true);
+  // The file's own discovery is the media module's bridge's, from the same event.
+  assertEquals(created.some((f) => f.type === MEDIA_EVENTS.fileDiscovered), false);
 
   const moved = await deriveEvents(event('file', path, 'moved'), ctx, 100);
   assertEquals(albumFacts(moved), [[IMPORTED, 'al2', 'member-attached']]);
@@ -593,14 +419,14 @@ Deno.test("album: a file created directly in an album is the album key's job, no
   assertEquals(albumFacts(await deriveEvents(event('file', IMG, 'created'), ctx, 100)), []);
 });
 
-Deno.test('album: extracted metadata and a computed fingerprint announce every album holding the member', async () => {
+Deno.test("album: the archive's reading of the metadata and a computed fingerprint announce every album holding the member", async () => {
   const linked = `${ALBUMS_ROOT}/picked/a.jpg`;
   const ctx = tree({
     [ALBUM]: albumNode('al1'),
     [`${ALBUMS_ROOT}/picked`]: albumNode('al3'),
     [IMPORTED]: albumNode('al2'),
     [`${IMPORTED}/files`]: dirNode('d2'),
-    [IMG]: file('f1', { takenAt: '2020-01-01T00:00:00' }),
+    [IMG]: file('f1', { takenAt: '2020-01-01T00:00:00', interpretedAt: 't' }),
     [`${IMG}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: { indexedAt: 't' } },
     [`${IMG}/metadata/sscd-image`]: { id: 'p1', type: 'embedding', attrs: { embeddingType: 'sscd-image', label: 'primary' } },
   }, {
@@ -608,9 +434,9 @@ Deno.test('album: extracted metadata and a computed fingerprint announce every a
     containersOf: () => Promise.resolve([ALBUM, `${IMPORTED}/files`, parentOf(linked)]),
   });
 
-  const exif = await deriveEvents(event('exif', `${IMG}/metadata/exif`, 'updated'), ctx, 100);
-  assertEquals(exif[0].type, MEDIA_EVENTS.metadataExtracted);
-  assertEquals(albumFacts(exif), [[ALBUM, 'al1', 'member-indexed'], [IMPORTED, 'al2', 'member-indexed'], [`${ALBUMS_ROOT}/picked`, 'al3', 'member-indexed']]);
+  const read = await deriveEvents({ ...event('file', IMG, 'updated'), changedAttrs: ['interpretedAt'] }, ctx, 100);
+  assertEquals(read[0].type, MEDIA_EVENTS.metadataInterpreted);
+  assertEquals(albumFacts(read), [[ALBUM, 'al1', 'member-indexed'], [IMPORTED, 'al2', 'member-indexed'], [`${ALBUMS_ROOT}/picked`, 'al3', 'member-indexed']]);
 
   const printed = await deriveEvents(event('embedding', `${IMG}/metadata/sscd-image`), ctx, 100);
   assertEquals(printed[0].type, MEDIA_EVENTS.fingerprintComputed);
@@ -659,11 +485,11 @@ const exifNode = (): NodeSnapshot => ({
 
 /**
  * What "indexing finished with this file" looks like: one marker per pipeline hanging off
- * `media.metadata.extracted`. Written out here rather than assembled per test, because the gap
+ * `media.metadata.extracted` and `media.metadata.interpreted`. Written out here rather than assembled per test, because the gap
  * rule is exactly the complement of it and a term missing from both sides would pass silently.
  */
 const indexed = (attrs: Record<string, unknown> = {}, path = IMG): Record<string, NodeSnapshot> => ({
-  [path]: file('f1', { facesAt: '2026-08-23T00:00:00Z', ...attrs }),
+  [path]: file('f1', { facesAt: '2026-08-23T00:00:00Z', interpretedAt: '2026-08-23T00:00:00Z', ...attrs }),
   [`${path}/metadata/exif`]: exifNode(),
   [`${path}/metadata/sscd-image`]: { id: 'p1', type: 'embedding', attrs: { embeddingType: 'sscd-image' } },
 });
@@ -713,13 +539,22 @@ Deno.test('gap: exif but no face detection re-opens the fan-out', async () => {
   // and `skipIfAttr: facesAt` cannot help a pipeline nothing announces. Without a term here the
   // file is complete as far as the reconciler is concerned, forever.
   const nodes = indexed();
-  nodes[IMG] = file('f1', { mimetype: 'image/x-fujifilm-raf' });
+  nodes[IMG] = file('f1', { mimetype: 'image/x-fujifilm-raf', interpretedAt: 'then' });
   const ctx = tree(nodes);
 
   const facts = await deriveGaps(IMG, ctx, 100);
 
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
   assertEquals(facts[0].data?.mimetype, 'image/x-fujifilm-raf');
+});
+
+Deno.test('gap: a file read and never interpreted re-opens the media fan-out, which interprets it', async () => {
+  const nodes = indexed();
+  delete nodes[IMG].attrs.interpretedAt;
+
+  const facts = await deriveGaps(IMG, tree(nodes), 100);
+
+  assertEquals(facts.map((f) => [f.type, f.subject, f.source]), [[MEDIA_EVENTS.metadataExtracted, IMG, 'archive-bridge']]);
 });
 
 Deno.test('gap: a video without a face marker is not a gap', async () => {
@@ -734,7 +569,7 @@ Deno.test('gap: a fully indexed recording needs nothing', async () => {
 Deno.test('gap: a recording fingerprinted with no print to show is complete', async () => {
   const unprinted = indexedAudio();
   delete unprinted[`${SND}/metadata/sscd-image`];
-  assertEquals((await deriveGaps(SND, tree(unprinted), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals((await deriveGaps(SND, tree(unprinted), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
 
   const tooShort = indexedAudio({ fingerprintedAt: '2026-10-11T10:00:00Z' });
   delete tooShort[`${SND}/metadata/sscd-image`];
@@ -765,7 +600,7 @@ Deno.test('gap: exif but no fingerprint re-opens the fan-out', async () => {
 
   const facts = await deriveGaps(IMG, ctx, 100);
 
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
 });
 
 Deno.test('gap: a picture marked fingerprinted without a print of its own is not done', async () => {
@@ -774,7 +609,7 @@ Deno.test('gap: a picture marked fingerprinted without a print of its own is not
   delete nodes[`${IMG}/metadata/sscd-image`];
   nodes[`${IMG}/metadata/other-print`] = { id: 'o1', type: 'embedding', attrs: { embeddingType: 'other-print' } };
 
-  assertEquals((await deriveGaps(IMG, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals((await deriveGaps(IMG, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
 });
 
 Deno.test('gap: an ungeocoded position is its own gap', async () => {

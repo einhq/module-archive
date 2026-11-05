@@ -1,5 +1,5 @@
 /**
- * A staged file is dated by its category's time rules as it is indexed (`exif-extract`): a scan in
+ * A staged file is dated by its category's time rules as its metadata is read and interpreted (`exif-interpret`): a scan in
  * a `scans` category takes no date from the `DateTimeOriginal` its scanner wrote on the scan day,
  * nor from when its bytes were written, and is stamped `digitized`; a phone picture whose tags
  * hold no date is dated by its name; a camera category's names are not dates.
@@ -42,7 +42,7 @@ Deno.test({ name: 'staged files are dated by their category as they are indexed'
   const index = async (path: string, record: Record<string, unknown>) => {
     dump = record;
     await cmd.shouldSucceed(`mkdir -p ${path.slice(0, path.lastIndexOf('/'))} && echo 'an invented picture of ${path}' > ${path}`);
-    await cmd.shouldSucceed(`attrs -s mimetype=image/jpeg ${path} && ${env} exif-extract ${path}`);
+    await cmd.shouldSucceed(`attrs -s mimetype=image/jpeg ${path} && ${env} exif-extract ${path} && exif-interpret ${path}`);
     return await attrsOf(path);
   };
 
@@ -79,7 +79,9 @@ Deno.test({ name: 'staged files are dated by their category as they are indexed'
       const filed = await attrsOf('/archive/albums/prints/files/IMG_20190601_123456.jpg');
       assertEquals([filed.takenAtSource, filed.whenName], ['name', '2019-06-01T12:34:56']);
       // Indexed again there, by bytes with no date in their tags.
-      await cmd.shouldSucceed(`${env} exif-extract -f /archive/albums/prints/files/IMG_20190601_123456.jpg`);
+      await cmd.shouldSucceed(
+        `${env} exif-extract -f /archive/albums/prints/files/IMG_20190601_123456.jpg && exif-interpret /archive/albums/prints/files/IMG_20190601_123456.jpg`,
+      );
       const again = await attrsOf('/archive/albums/prints/files/IMG_20190601_123456.jpg');
       assertEquals([again.takenAt, again.takenAtSource], ['2019-06-01T12:34:56', 'name']);
     });

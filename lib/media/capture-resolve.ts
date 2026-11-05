@@ -73,7 +73,7 @@ export type CaptureDateParts = {
  * Appended at extraction time, it would also leak `+00:00` into an attr every range query
  * compares as bytes.
  */
-export const partsToWallClock = (parts: CaptureDateParts): string =>
+const partsToWallClock = (parts: CaptureDateParts): string =>
   `${parts.year}-${parts.month}-${parts.day}` +
   `T${parts.hour}:${parts.minute}:${parts.second ?? '00'}`;
 

@@ -5,7 +5,7 @@
 #
 # Some run on EiN's own data:
 unzip                    # a zip in a staging category expanded                (priority 100)
-ingest                   # a file's metadata (EMS reads it) and its hash       (priority 100)
+interpret reserve        # what a file's metadata means: its time and place    (priority 100)
 face-assign reserve      # a kNN over every known face embedding               (priority 40)
 speaker-assign reserve   # the same for a recording's voices                   (priority 40)
 dedupe reserve           # a staged file's duplicate findings                  (priority 20)

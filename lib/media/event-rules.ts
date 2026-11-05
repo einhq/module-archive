@@ -17,41 +17,55 @@
 import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
-import { RENDITIONS_AT_ATTR, RENDITIONS_FOR_ATTR } from '@media/rendition-marker';
 import { RENDITION_FACTS } from '@media/facts';
+import {
+  deriveForExif as extractedFacts,
+  deriveForFile as fileFacts,
+  FILE_FACTS,
+  type FileRuleContext,
+  isIndexableMedia,
+  isMediaPath,
+  type NodeSnapshot,
+  type VfsEventInput,
+} from '@media/file-rules';
 import type { DomainEvent } from '@ein/client';
-import { DEV_PATH, ETC_PATH, isTrashPath, TEMP_PATH, USR_PATH, VAR_PATH } from '@ein/paths';
-import { deferredCopy } from '@archive/staging/deferral';
+import { isTrashPath } from '@ein/paths';
 import { authoredHash, textEmbeddingType } from '@ems/text-embedding';
+
+// The media module's, which the archive's rules and the staging rules read as their own.
+export { isIndexableMedia };
+export type { NodeSnapshot, VfsEventInput };
+
+/**
+ * File-node attr: when `exif-interpret` last read what the file's metadata means in the archive —
+ * its capture time and place — written last, which this bridge announces as
+ * `media.metadata.interpreted`.
+ */
+export const INTERPRETED_AT_ATTR = 'interpretedAt';
 
 const MEDIA_EVENT_SOURCE = 'archive-bridge';
 
 /** Facts the bridge produces. */
 export const MEDIA_EVENTS = {
-  /** A media file with bytes and no EXIF yet — the entry point to indexing. */
-  fileDiscovered: 'media.file.discovered',
-  /** An already-indexed file whose bytes changed; everything derived is stale. */
-  fileContentChanged: 'media.file.content-changed',
-  /**
-   * A media file is gone: its last name was unlinked. Read off the attrs the deleted event
-   * carries, since the node no longer exists to be read, so `data` is what the file was.
-   */
-  fileRemoved: 'media.file.removed',
-  /**
-   * An indexed video was turned or flipped by hand (`angleManual` or `mirror` changed). Its
-   * transcoded renditions are encoded at the old orientation and have to be re-encoded.
-   */
-  fileTurned: 'media.file.turned',
+  // The facts of a media file itself, which the media module's bridge announces (`@media/file-rules`).
+  fileDiscovered: FILE_FACTS.discovered,
+  fileContentChanged: FILE_FACTS.contentChanged,
+  fileRemoved: FILE_FACTS.removed,
+  fileTurned: FILE_FACTS.turned,
   /**
    * A person set or cleared the language of a read picture's text (`ocrLanguageManual`,
    * `file-set-text-language`). The picture is read again in it: the language picks the transcriber
    * for its handwriting.
    */
   textLanguageSet: 'media.text.language-set',
-  /** `<file>/metadata/exif` is populated. Unlocks most of the pipeline fan-out. */
-  metadataExtracted: 'media.metadata.extracted',
-  /** A file's renditions are all there under the rendition table in force (`@media/facts`). */
-  renditionsMade: RENDITION_FACTS.made,
+  metadataExtracted: FILE_FACTS.metadataExtracted,
+  /**
+   * What a file's metadata means in the archive is read: `exif-interpret` wrote its capture time
+   * and place and, last, `interpretedAt`. Only on the write that changed it. Starts the archive's
+   * analysis: faces, fingerprints, the device link.
+   */
+  metadataInterpreted: 'media.metadata.interpreted',
+  renditionsMade: FILE_FACTS.renditionsMade,
   /** A file's renditions are missing or stale; the media module's `renditions-scan` announces it. */
   renditionsStale: RENDITION_FACTS.stale,
   /** `<file>/position` exists. Subject is the position node. */
@@ -150,10 +164,6 @@ export const MEDIA_EVENTS = {
 export const MEDIA_BRIDGE_ROUTING_KEYS = [
   'system.vfs.file.created',
   'system.vfs.file.updated',
-  // No busier than `file.created`: every file deleted was once created.
-  'system.vfs.file.deleted',
-  'system.vfs.exif.created',
-  'system.vfs.exif.updated',
   'system.vfs.position.created',
   'system.vfs.embedding.created',
   // A face's person changing: about one write per face. Any other write to a region is dropped on
@@ -182,14 +192,6 @@ export const MEDIA_BRIDGE_ROUTING_KEYS = [
 const FILES_DIR_NAME = 'files';
 /** Attrs whose change moves a member's location in an album's span and stacks. */
 const CAPTURE_TIME_ATTRS = ['takenAt', 'takenAtUtc'];
-/**
- * Attrs only a hand-set orientation writes (`file-set-orientation`, the legacy import). Not the
- * plain `angle`: `exif-extract` writes that on every index, and the rendition the index queues
- * is encoded at it already.
- */
-const MANUAL_ORIENTATION_ATTRS = ['angleManual', 'mirror'];
-
-const MEDIA_MIMETYPE = /^(image|video|audio)\//;
 /** Only images get a face-detection marker, so only images can be missing one. */
 const IMAGE_MIMETYPE = /^image\//;
 /** What `embed-picture` takes: a photo, or a video's keyframes. */
@@ -207,18 +209,8 @@ export const isTextIndexedMimetype = (mimetype: string): boolean =>
     'application/vnd.oasis.opendocument.text',
   ].includes(mimetype);
 
-export type NodeSnapshot = {
-  id: string;
-  type: string;
-  attrs: Record<string, unknown>;
-  /** Last modification time, epoch ms. */
-  modtime?: number;
-};
-
 /** Everything a rule needs from the VFS, so the rules stay testable in isolation. */
-export type RuleContext = {
-  getNode(path: string): Promise<NodeSnapshot | undefined>;
-  exists(path: string): Promise<boolean>;
+export type RuleContext = FileRuleContext & {
   /** Child names of a directory, empty when it does not exist. Reconciler only. */
   childNames?(path: string): Promise<string[]>;
   /**
@@ -283,101 +275,11 @@ export type RuleContext = {
   textGeneration?: string;
 };
 
-/** The slim VFS event as published on `system.vfs.<nodeType>.<eventType>`. */
-export type VfsEventInput = {
-  type: string;
-  path: string;
-  nodeId: string;
-  nodeType: string;
-  timestamp: number;
-  /** Attr names an `updated` event changed. Absent on other event types and on older publishers. */
-  changedAttrs?: string[];
-  /** The node's attrs as they were, on a `deleted` event only. */
-  attrs?: Record<string, unknown>;
-  /** Where the node was before, on a `moved` event only. */
-  fromPath?: string;
-  /** Who made the write. */
-  uid?: number;
-  /** The audit record the write left, when the trail kept one. */
-  auditId?: string;
-};
-
 const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
 const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value ? value : undefined);
 const num = (value: unknown): number | undefined => (typeof value === 'number' ? value : undefined);
-
-/**
- * True if `node` is a file the media pipelines should index at all. Exported so a count of
- * "still indexing" can leave out what will never be indexed — a text file, an empty file.
- */
-export const isIndexableMedia = (node: NodeSnapshot): boolean => {
-  if (node.type !== 'file') return false;
-  // Derivatives (thumbnails, transcodes, face crops) carry the id of what they
-  // were made from. Indexing them would make the pipelines recurse on their own
-  // output — this one check replaces a `skipIf` in every media pipeline.
-  if (node.attrs.sourceId) return false;
-  if (!MEDIA_MIMETYPE.test(str(node.attrs.mimetype) ?? '')) return false;
-  // No bytes yet: the node exists but the upload has not landed.
-  return (num(node.attrs.size) ?? 0) > 0;
-};
-
-/**
- * Facts derivable from a file node, independent of which event revealed it.
- *
- * `node` lets a caller that already holds the snapshot skip the re-read — the
- * reconciler walks with `children()`, which returns every child in full, so
- * re-fetching each one is pure overhead.
- */
-export async function deriveForFile(
-  filePath: string,
-  ctx: RuleContext,
-  now: number,
-  node?: NodeSnapshot,
-): Promise<Omit<DomainEvent, 'id'>[]> {
-  // Nothing in a trash is indexed: a trashed file waits there to be restored or purged.
-  if (isTrashPath(filePath)) return [];
-
-  const file = node ?? await ctx.getNode(filePath);
-
-  if (!file || !isIndexableMedia(file)) return [];
-
-  const exif = await ctx.getNode(`${filePath}/metadata/exif`);
-  const base = {
-    subject: filePath,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-  };
-  const data = {
-    mimetype: str(file.attrs.mimetype) ?? '',
-    size: num(file.attrs.size) ?? 0,
-    sha256: str(file.attrs.sha256) ?? '',
-  };
-
-  if (!exif) {
-    // A staged exact copy is not indexed while it is one: its original stands in for it.
-    if (deferredCopy(filePath, file.attrs)) return [];
-    return [{ ...base, type: MEDIA_EVENTS.fileDiscovered, data }];
-  }
-
-  // Already indexed. The only thing left to say about it is whether the bytes
-  // moved out from under that index — compared by content hash rather than
-  // timestamps, because the pipeline's own writes bump the file's modtime.
-  const indexedSha = str(exif.attrs.sourceSha256);
-  const currentSha = str(file.attrs.sha256);
-
-  if (indexedSha && currentSha && indexedSha !== currentSha) {
-    return [{
-      ...base,
-      type: MEDIA_EVENTS.fileContentChanged,
-      data: { ...data, previousSha256: indexedSha },
-    }];
-  }
-
-  return [];
-}
 
 /**
  * The fact `voiceprint-file` announces by writing `speakersAt` on the file, which it does last.
@@ -393,43 +295,6 @@ function deriveSpeakersDetected(event: VfsEventInput, file: NodeSnapshot, now: n
     time: now,
     source: MEDIA_EVENT_SOURCE,
     data: { mimetype: str(file.attrs.mimetype) ?? '', speakersAt, speakerCount: num(file.attrs.speakerCount) ?? 0 },
-  }];
-}
-
-/**
- * The fact `generate-derivatives` announces by writing `renditionsAt` on the file, which it does
- * once the file's renditions are all there. Only on the write that changed it.
- */
-function deriveRenditionsMade(event: VfsEventInput, file: NodeSnapshot, now: number): Omit<DomainEvent, 'id'>[] {
-  const renditionsAt = str(file.attrs[RENDITIONS_AT_ATTR]);
-  if (!renditionsAt || event.type !== 'updated' || !(event.changedAttrs ?? []).includes(RENDITIONS_AT_ATTR)) return [];
-  return [{
-    type: MEDIA_EVENTS.renditionsMade,
-    subject: event.path,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: { mimetype: str(file.attrs.mimetype) ?? '', renditionsAt, renditionsFor: str(file.attrs[RENDITIONS_FOR_ATTR]) ?? '' },
-  }];
-}
-
-/**
- * The fact a hand-set turn of an indexed video reveals. Only on the write that changed the
- * orientation, and only once the file is indexed: before that, the transcode the index queues
- * reads the new orientation anyway.
- */
-async function deriveFileTurned(event: VfsEventInput, file: NodeSnapshot, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
-  if (event.type !== 'updated' || !(event.changedAttrs ?? []).some((name) => MANUAL_ORIENTATION_ATTRS.includes(name))) return [];
-  const mimetype = str(file.attrs.mimetype) ?? '';
-  if (!isIndexableMedia(file) || !mimetype.startsWith('video/')) return [];
-  if (!await ctx.exists(`${event.path}/metadata/exif`)) return [];
-  return [{
-    type: MEDIA_EVENTS.fileTurned,
-    subject: event.path,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: { mimetype, angle: num(file.attrs.angle) ?? 0, mirror: file.attrs.mirror === true },
   }];
 }
 
@@ -595,9 +460,12 @@ export async function deriveGaps(
 
   const events: Omit<DomainEvent, 'id'>[] = [];
 
-  // One re-emit re-opens the whole fan-out and each pipeline's own `skipIf` drops the stages
-  // already done, so this predicate wants a term per pipeline hanging off the fact. A stage it
-  // does not ask about is a stage nothing ever re-announces — and a guard like
+  // A re-emit re-opens a whole fan-out and each pipeline's own `skipIf` drops the stages already
+  // done, so this predicate wants a term per pipeline hanging off the fact: the media module's
+  // `media.metadata.extracted` for a file whose metadata the archive never read (then interpreting
+  // it starts the rest) or that lacks a transcript, and the archive's `media.metadata.interpreted`
+  // for its own analysis, a fingerprint or faces. A stage it does not ask about is a stage nothing
+  // ever re-announces — and a guard like
   // `skipIfAttr: facesAt` cannot rescue a pipeline nobody announces, it only skips one that is.
   // That is a one-way door: an image with a fingerprint but no `facesAt` reads as complete to the
   // fingerprint term alone (ein/core#140).
@@ -618,10 +486,13 @@ export async function deriveGaps(
   // without ever closing the gap.
   const undecodable = Boolean(str(file.attrs.undecodable));
   const isImage = IMAGE_MIMETYPE.test(str(file.attrs.mimetype) ?? '');
-  const incomplete = missingFingerprint || missingFaces || (!isImage && missingTranscript);
+  const interpreted = str(file.attrs[INTERPRETED_AT_ATTR]) !== undefined;
 
-  if (!undecodable && incomplete) {
-    events.push(...await deriveForExif(`${filePath}/metadata/exif`, ctx, now));
+  if (!undecodable && (!interpreted || (!isImage && missingTranscript))) {
+    events.push(...(await extractedFacts(`${filePath}/metadata/exif`, ctx, now)).map((fact) => ({ ...fact, source: MEDIA_EVENT_SOURCE })));
+  } else if (!undecodable && (missingFingerprint || missingFaces)) {
+    const fact = await interpretedFact(filePath, file, ctx, now);
+    if (fact) events.push(fact);
   }
 
   // A transcript an interrupted run left without `transcribedAt`, or one decoded with other
@@ -775,59 +646,6 @@ export function deriveTextGap(filePath: string, file: NodeSnapshot, now: number)
 async function deriveForDirectoryMove(dirPath: string, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
   if (!ctx.unreadFilesWithin) return [];
   return (await ctx.unreadFilesWithin(dirPath)).flatMap(({ path, node }) => deriveTextGap(path, node, now));
-}
-
-/**
- * Facts derivable from a populated exif node.
- *
- * The fact is keyed on the *exif* node but its payload — and every consumer downstream —
- * reads the **file** node's promoted attrs (mimetype, width/height, angle, takenAt). So
- * `exif-extract` must write those before it fills the exif node, and says so at that line.
- * The other order is a real race: derivatives and face boxes then land in the raw frame
- * because `angle` had not arrived yet.
- */
-async function deriveForExif(
-  exifPath: string,
-  ctx: RuleContext,
-  now: number,
-): Promise<Omit<DomainEvent, 'id'>[]> {
-  const exif = await ctx.getNode(exifPath);
-
-  // The node is created empty and filled by a following update; only the filled
-  // state is a fact.
-  if (!exif || !exif.attrs.indexedAt) return [];
-
-  const filePath = parentOf(parentOf(exifPath));
-  const file = await ctx.getNode(filePath);
-
-  // The same test discovery applies: a text node can carry an exif child from an earlier life
-  // (album descriptions on fry, 2026-10-10), and every consumer of this fact renders media.
-  if (!file || !isIndexableMedia(file)) return [];
-
-  const where = exif.attrs.where as { gps?: Record<string, unknown> } | undefined;
-  const fileinfo = exif.attrs.fileinfo as Record<string, unknown> | undefined;
-  const deviceinfo = exif.attrs.deviceinfo as { make?: string; model?: string } | undefined;
-  const deviceSerial = str(exif.attrs.deviceSerialNumber) ?? '';
-
-  return [{
-    type: MEDIA_EVENTS.metadataExtracted,
-    subject: filePath,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: {
-      mimetype: str(file.attrs.mimetype) ?? '',
-      width: num(file.attrs.width) ?? null,
-      height: num(file.attrs.height) ?? null,
-      takenAt: str(file.attrs.takenAt) ?? null,
-      hasGps: Boolean(where?.gps),
-      deviceSerial,
-      // Whether there is *anything* to match a device on: a serial, or make and
-      // model, since most phones write no serial.
-      deviceKey: deviceSerial || str(deviceinfo?.model) || str(deviceinfo?.make) || '',
-      duration: num(fileinfo?.duration) ?? null,
-    },
-  }];
 }
 
 /** Facts derivable from an embedding node — faces, fingerprints, descriptions. */
@@ -1104,48 +922,53 @@ async function deriveForMemberChange(
 }
 
 /**
- * The removal of a file the pipelines indexed. Decided on the attrs the event carries, the only
- * record left of the node; a payload without them derives nothing.
+ * The fact `exif-interpret` announces by writing `interpretedAt` on the file, which it does last,
+ * with the archive's reading of its metadata in `data`; and, since that is where a member's capture
+ * time comes from, the album fact of every album holding it. Only on the write that changed it.
  */
-function deriveForRemoval(event: VfsEventInput, now: number): Omit<DomainEvent, 'id'>[] {
-  if (!event.attrs) return [];
+async function deriveInterpreted(event: VfsEventInput, file: NodeSnapshot, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
+  if (event.type !== 'updated' || !(event.changedAttrs ?? []).includes(INTERPRETED_AT_ATTR)) return [];
+  const fact = await interpretedFact(event.path, file, ctx, now);
+  return fact ? [fact, ...await deriveForMemberChange(event.path, file, 'member-indexed', ctx, now)] : [];
+}
 
-  const file: NodeSnapshot = { id: event.nodeId, type: event.nodeType, attrs: event.attrs };
-  if (!isIndexableMedia(file)) return [];
-
-  return [{
-    type: MEDIA_EVENTS.fileRemoved,
-    subject: event.path,
-    nodeId: event.nodeId,
+/** `media.metadata.interpreted` for a file whose metadata the archive has read: when, where, the device. */
+async function interpretedFact(filePath: string, file: NodeSnapshot, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'> | undefined> {
+  const interpretedAt = str(file.attrs[INTERPRETED_AT_ATTR]);
+  if (!interpretedAt || !isIndexableMedia(file)) return undefined;
+  const exif = await ctx.getNode(`${filePath}/metadata/exif`);
+  const where = exif?.attrs.where as { gps?: Record<string, unknown> } | undefined;
+  const deviceinfo = exif?.attrs.deviceinfo as { make?: string; model?: string } | undefined;
+  const deviceSerial = str(exif?.attrs.deviceSerialNumber) ?? '';
+  return {
+    type: MEDIA_EVENTS.metadataInterpreted,
+    subject: filePath,
+    nodeId: file.id,
     time: now,
     source: MEDIA_EVENT_SOURCE,
     data: {
       mimetype: str(file.attrs.mimetype) ?? '',
-      size: num(file.attrs.size) ?? 0,
-      ...(str(file.attrs.sha256) ? { sha256: str(file.attrs.sha256) } : {}),
+      interpretedAt,
+      takenAt: str(file.attrs.takenAt) ?? null,
+      hasGps: Boolean(where?.gps),
+      deviceSerial,
+      // Whether there is *anything* to match a device on: a serial, or make and model, since most
+      // phones write no serial.
+      deviceKey: deviceSerial || str(deviceinfo?.model) || str(deviceinfo?.make) || '',
     },
-  }];
+  };
 }
 
 /**
  * Map one VFS mutation to the facts it reveals. Returns an empty array for the
  * overwhelming majority of events — that is the point.
  */
-/**
- * The regions that are never the archive's: configuration, machine state, code and its payload
- * (a module's own pictures, written file by file as it is installed), endpoints, and scratch — a
- * picture put in /tmp to search with, indexed, would answer every search through its vectors.
- */
-const NOT_ARCHIVE = [ETC_PATH, VAR_PATH, USR_PATH, DEV_PATH, TEMP_PATH];
-
-const isArchivePath = (path: string): boolean => !NOT_ARCHIVE.some((region) => path === region || path.startsWith(`${region}/`));
-
 export async function deriveEvents(
   event: VfsEventInput,
   ctx: RuleContext,
   now: number = Date.now(),
 ): Promise<Omit<DomainEvent, 'id'>[]> {
-  if (!isArchivePath(event.path)) return [];
+  if (!isMediaPath(event.path)) return [];
 
   // Membership events name the container, whatever its type, so they are sorted
   // by event before the node type below gets to say anything.
@@ -1156,7 +979,6 @@ export async function deriveEvents(
 
   switch (event.nodeType) {
     case 'file': {
-      if (event.type === 'deleted') return deriveForRemoval(event, now);
       if (nameOf(event.path) === 'transcript' && nameOf(parentOf(event.path)) === 'metadata') return await deriveForTranscript(event, ctx, now);
       if (nameOf(event.path) === 'chromaprint' && nameOf(parentOf(event.path)) === 'metadata') {
         return await withMemberFingerprinted(await deriveForChromaprint(event, ctx, now), ctx, now);
@@ -1168,13 +990,10 @@ export async function deriveEvents(
 
       const arrival = event.type === 'created' ? await deriveForFilesDirArrival(event.path, 'member-attached', ctx, now) : [];
       const file = await ctx.getNode(event.path);
-      const primary = await deriveForFile(event.path, ctx, now, file);
-      // Discovery and content change supersede the old face marker: nothing
-      // downstream acts on the prior source while media-reindex is still
-      // clearing/rebuilding derivatives.
-      if (primary.length > 0) return [...arrival, ...primary];
-
       if (!file) return arrival;
+      // A file the media module announces to be read — new, or new bytes — says nothing yet of its
+      // old faces or voices: nothing downstream acts on the prior source while it is read again.
+      if ((await fileFacts(event.path, ctx, now, file)).length > 0) return arrival;
 
       // A capture time that moved under an indexed member — a retime, or a
       // re-resolve — moves the member inside every album holding it. Decided on
@@ -1187,21 +1006,11 @@ export async function deriveEvents(
       return [
         ...arrival,
         ...deriveFacesCompleted(event, file, now),
+        ...await deriveInterpreted(event, file, ctx, now),
         ...deriveSpeakersDetected(event, file, now),
-        ...deriveRenditionsMade(event, file, now),
-        ...await deriveFileTurned(event, file, ctx, now),
         ...deriveTextLanguageSet(event, file, now),
         ...retimed,
       ];
-    }
-    case 'exif': {
-      const facts = await deriveForExif(event.path, ctx, now);
-      // Metadata is where a member's capture time comes from, and an attachment
-      // fires long before it: the album fact rides on the same event.
-      if (facts.length === 0) return facts;
-      const filePath = parentOf(parentOf(event.path));
-      const file = await ctx.getNode(filePath);
-      return file ? [...facts, ...await deriveForMemberChange(filePath, file, 'member-indexed', ctx, now)] : facts;
     }
     case 'embedding':
       return await withMemberFingerprinted(await deriveForEmbedding(event.path, ctx, now), ctx, now);

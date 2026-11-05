@@ -13,7 +13,7 @@ description: Detect faces in an image and crop each one
 # someone else wrote never did — and it is the marker the staging organizer
 # reads to decide whether a file's people signal is complete.
 trigger:
-  on: media.metadata.extracted
+  on: media.metadata.interpreted
   wants: archive
   match:
     mimetype: image/*

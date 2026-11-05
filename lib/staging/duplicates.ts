@@ -52,6 +52,7 @@ import { chromaprintsOf, nearCandidates, nearFilesOf, ownPrints, type PrintKind,
 import { nodesAt } from '@archive/staging/nodes-at';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
 import type { AttrRef, Command, NodeProps } from '@ein/client';
+import { type FileHold, HOLD_ATTR } from '@media/file-rules';
 import { accessOfUser, EVENTS_NODE_PATH, NOT_DERIVED, wallClockOf } from '@ein/client';
 import { HOMES_PATH, isTrashPath } from '@ein/paths';
 import { ulid } from '@std/ulid';
@@ -90,6 +91,17 @@ export const inboxOf = (path: string | undefined): string | undefined => {
   if (path === undefined) return undefined;
   const parsed = parseStagedPath(path);
   return parsed?.area === 'files' && parsed.category !== undefined ? parsed.user : undefined;
+};
+
+/**
+ * The media module's hold (`@media/file-rules`) a finding puts on the file at `path`: a deferred
+ * copy is not read while it has these bytes in its inbox's files. Null for any other finding, which
+ * takes a hold off; staging writes it beside every finding it writes.
+ */
+export const holdOfFinding = (path: string, finding: DuplicateFinding | null | undefined): FileHold | null => {
+  const user = inboxOf(path);
+  if (!finding?.deferred || user === undefined) return null;
+  return { by: 'archive', reason: `an exact copy of ${finding.of} in staging`, sha256: finding.sha256, within: stagingRoots(user).filesPath };
 };
 
 /** The finding in `attrs`, or undefined when there is none. */
@@ -320,7 +332,9 @@ const decide = async (cmd: Command, decisions: Decision[]): Promise<Map<string, 
           : { inbox: user, sha256, at, kind: 'exact', where: original.where, of: original.id, ...(isDeferred(twin.attrs) ? { deferred: true as const } : {}) };
         if (twin.id !== original.id) recorded.handedOver.push(...peerIds(current));
         if (twin.id === hold) recorded.held = desired;
-        else if (!sameFinding(findingOf(twin.attrs), desired)) changes.push({ ref: twin.path, attrs: { [DUPLICATE_ATTR]: desired }, sha256 });
+        else if (!sameFinding(findingOf(twin.attrs), desired)) {
+          changes.push({ ref: twin.path, attrs: { [DUPLICATE_ATTR]: desired, [HOLD_ATTR]: holdOfFinding(twin.path, desired) }, sha256 });
+        }
       }
     }
   }
@@ -378,7 +392,7 @@ export const forgetStaged = async (cmd: Command, moved: MovedFile[]): Promise<vo
   const nodes = await vfs.getNodesByIds(cmd.access, moved.map((move) => move.id));
   const clear = moved.filter((move) => nodes.get(move.id)?.attrs[DUPLICATE_ATTR] !== undefined).map((move) => move.to);
   if (clear.length > 0) {
-    const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
+    const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null, [HOLD_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
     if (refused) throw refused.reason;
   }
 
@@ -519,7 +533,7 @@ export const recordPaths = async (cmd: Command, paths: string[]): Promise<Duplic
   }
 
   if (clear.length > 0) {
-    const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
+    const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null, [HOLD_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
     if (refused) throw refused.reason;
     answer.recorded += clear.length;
   }
@@ -733,7 +747,7 @@ export const repairInbox = async (cmd: Command, user: string): Promise<InboxRepa
     }
 
     if (clear.length > 0) {
-      const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
+      const refused = (await vfs.updateMany(cmd.access, clear, { attrs: { [DUPLICATE_ATTR]: null, [HOLD_ATTR]: null } })).find((outcome) => outcome.status === 'rejected');
       if (refused) throw refused.reason;
       repair.cleared += clear.length;
     }
@@ -888,7 +902,7 @@ const nearOne = async (cmd: Command, id: string, extra: string[]): Promise<NearO
     const fingerprinted = (now.attrs as Record<string, unknown>).fingerprintedAt;
     const checked = !printed || typeof fingerprinted !== 'string' || fingerprinted <= current.at;
     if (sameFinding(current, desired) && checked) return { joined, left };
-    await vfs.update(cmd.access, path, { attrs: { [DUPLICATE_ATTR]: desired } });
+    await vfs.update(cmd.access, path, { attrs: { [DUPLICATE_ATTR]: desired, [HOLD_ATTR]: holdOfFinding(path, desired) } });
     return { written: { id, path }, joined, left };
   });
 };

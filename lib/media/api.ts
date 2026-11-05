@@ -609,14 +609,16 @@ export type MergeDuplicatesResult = {
   dryRun: boolean;
 };
 
-/**
- * `exif-extract <file>`: when the metadata was read, and what was learned of the picture (`angle`
- * and `sar` only when not upright and square); or, for a staged exact copy left unindexed, that it
- * was deferred and the id of its original.
- */
-export type ExifExtractAnswer =
-  | { indexedAt: string; width?: number; height?: number; sar?: number; angle?: number; undecodable?: string }
-  | { deferred: true; of: string };
+/** What `staging-hold` decided of a file about to be read: held as an exact copy of `of`, or not. */
+export type StagingHoldAnswer = { held: true; of: string } | { held: false };
+
+/** What `exif-interpret` made of a file's metadata: its capture time, and where, when it says. */
+export type ExifInterpretAnswer = {
+  interpretedAt: string;
+  takenAt: string | null;
+  takenAtSource: string | null;
+  position: { lat: number; lng: number } | null;
+};
 
 /**
  * What a staged file's duplicate finding says it is: a byte copy of another file (`exact`), or

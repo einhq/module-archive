@@ -1,6 +1,6 @@
 /**
  * `exif-extract -f` against an existing index — media-reindex after the bytes changed, or a
- * repair pass — must describe the *new* bytes and nothing else. `vfs.update` merges, so every
+ * repair pass — and the `exif-interpret` after it must describe the *new* bytes and nothing else. `vfs.update` merges, so every
  * attr the command derives has to be written as null when the new dump lacks it, or the previous
  * bytes' answer survives (ein/core#75). The manual
  * overrides (`angleManual`, `positionManual`) are the one thing a re-extract must *not* touch.
@@ -100,7 +100,7 @@ Deno.test({
     await t.step('the first index writes every fact and the position child', async () => {
       const file = `${dir}/full.jpg`;
       await cmd.shouldSucceed(`mkfile ${file}`);
-      await cmd.shouldSucceed(`${env} exif-extract ${file}`);
+      await cmd.shouldSucceed(`${env} exif-extract ${file} && exif-interpret ${file}`);
 
       const attrs = await attrsOf(file);
       assertEquals([attrs.width, attrs.height, attrs.angle], [400, 200, 270]);
@@ -116,7 +116,7 @@ Deno.test({
       assertEquals(attrs.indexedAt, exif.indexedAt);
 
       dump = BARE_DUMP;
-      await cmd.shouldSucceed(`${env} exif-extract -f ${file}`);
+      await cmd.shouldSucceed(`${env} exif-extract -f ${file} && exif-interpret ${file}`);
 
       const after = await attrsOf(file);
       assertEquals([after.width, after.height], [300, 300]);
@@ -178,12 +178,12 @@ Deno.test({
       };
 
       dump = FULL_DUMP;
-      await cmd.shouldSucceed(`${env} exif-extract ${file}`);
+      await cmd.shouldSucceed(`${env} exif-extract ${file} && exif-interpret ${file}`);
       assertEquals(await readPosition(), { lat: 47.6, lng: -122.3 }, 'a GPS fix must not overwrite the manual position');
       assertEquals((await exifOf(file)).where, { gps: { longitude: 11.97, latitude: 57.7, altitude: 12 } });
 
       dump = BARE_DUMP;
-      await cmd.shouldSucceed(`${env} exif-extract -f ${file}`);
+      await cmd.shouldSucceed(`${env} exif-extract -f ${file} && exif-interpret ${file}`);
       assertEquals(await hasLocation(file), true, 'no fix in the new bytes must not remove the manual position');
       assertEquals(await readPosition(), { lat: 47.6, lng: -122.3 });
     });

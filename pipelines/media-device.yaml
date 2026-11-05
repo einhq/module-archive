@@ -4,7 +4,7 @@ description: Link a file to the device that produced it
 # Re-runnable on its own: registering a camera later re-links its photos without
 # re-running exiftool over them.
 trigger:
-  on: media.metadata.extracted
+  on: media.metadata.interpreted
   wants: archive
   match:
     # Any device information at all, not the serial alone: most phones write no

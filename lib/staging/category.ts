@@ -18,6 +18,7 @@ import {
   stagingRoots,
 } from '@archive/staging/paths';
 import { resolve } from '@std/path';
+import { LANE_ATTR } from '@media/file-rules';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
@@ -260,7 +261,10 @@ export const editCategory = async (cmd: Command, user: string, name: string, edi
     if (edit.lane !== undefined) settings.lane = edit.lane as StagingLane;
     if (edit.sidecars !== undefined) settings.sidecars = edit.sidecars as StagingSidecars;
     await vfs.ensure(access, 'directory', roots.albumsPath, name, { props });
-    await vfs.create(access, 'directory', roots.filesPath, name, { props, attrs: { [CATEGORY_ATTR]: settings } });
+    await vfs.create(access, 'directory', roots.filesPath, name, {
+      props,
+      attrs: { [CATEGORY_ATTR]: settings, ...(settings.lane === 'bulk' ? { [LANE_ATTR]: 'bulk' } : {}) },
+    });
     created = true;
   }
 
@@ -289,7 +293,10 @@ export const editCategory = async (cmd: Command, user: string, name: string, edi
   }
 
   const differ = SETTING_FIELDS.filter((field) => !sameValue(current[field], next[field]));
-  if (differ.length > 0) await vfs.update(access, path, { attrs: { [CATEGORY_ATTR]: next } });
+  // The lane is also the folder's, `LANE_ATTR`, which the media module reads for the facts of the
+  // files in it; written whenever it is out of step with the settings, so any edit brings it in.
+  const lane = next.lane === 'bulk' ? 'bulk' : null;
+  if (differ.length > 0 || (attrs[LANE_ATTR] ?? null) !== lane) await vfs.update(access, path, { attrs: { [CATEGORY_ATTR]: next, [LANE_ATTR]: lane } });
   const changed = created ? [] : differ;
   return {
     created,

@@ -1,0 +1,148 @@
+#!ts
+/**
+ * exif-interpret — what a file's metadata means in the archive: when it was taken, and where.
+ *
+ * The media module's `exif-extract` reads a file and keeps what its metadata says under
+ * `<file>/metadata/exif`: the camera's clock readings (`when`), its GPS fix (`where`), the device.
+ * This turns that into the archive's answers, written on the file:
+ *
+ * - its capture time, `takenAt`, `takenAtUtc` and `takenAtSource` — a *resolution*
+ *   (`@archive/media/capture-resolve`) of everything the archive knows: the file's own manual time
+ *   first, then a paired sidecar's, the GPS fix, the camera clock and the name, each turned into a
+ *   wall clock and an instant, with the device's clock settings from the registry;
+ * - a staged file's stamps from its category's time rules (`digitized`, `whenName`): a scan's
+ *   clocks are the scan's, and a name may spell the date;
+ * - its `position` child, from the GPS fix or else the sidecar's place where that is believed,
+ *   unless a person set it (`positionManual`).
+ *
+ * `interpretedAt` is written last, and the archive's bridge announces that write as
+ * `media.metadata.interpreted`, which starts the archive's analysis: faces, fingerprints, the
+ * device link.
+ */
+
+import { basename, resolve } from '@std/path';
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
+import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { clockForFile, offsetAt } from '@archive/device/device-zone';
+import { reportUnwritable } from '@media/writable';
+import type { ExifInterpretAnswer } from '@archive/media/api';
+import { inboxOf } from '@archive/staging/duplicates';
+import { categoryTimeRules, timeStamps } from '@archive/staging/category';
+import { readSidecar, sidecarPoint, sidecarTime, writePosition } from '@archive/media/paired-sidecar';
+import { INTERPRETED_AT_ATTR } from '@archive/media/event-rules';
+
+const exifInterpret = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['verbose'], alias: { v: 'verbose' }, unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputPath = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '';
+  const verbose = Boolean(flags.verbose);
+  if (!inputPath) {
+    await cmd.writeError('exif-interpret: missing input path\n');
+    return 1;
+  }
+
+  let node;
+  try {
+    node = await cmd.sys.vfs.get(cmd.access, inputPath);
+  } catch (error) {
+    await cmd.writeError(`exif-interpret: ${inputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (node.type !== 'file') {
+    await cmd.writeError(`exif-interpret: ${inputPath}: not a file node (is ${node.type})\n`);
+    return 1;
+  }
+  if (await reportUnwritable(cmd, inputPath, node)) return 1;
+
+  const exif = await cmd.sys.vfs.get(cmd.access, `${inputPath}/metadata/exif`).catch(() => undefined);
+  if (!exif?.attrs.indexedAt) {
+    await cmd.writeError(`exif-interpret: ${inputPath}: its metadata is not read yet (exif-extract)\n`);
+    return 1;
+  }
+  const attrs = node.attrs as Record<string, unknown>;
+  const exifAttrs = exif.attrs as Record<string, unknown>;
+  const when = whenFromExifAttrs(exifAttrs);
+  const gps = (exifAttrs.where as { gps?: { latitude?: number; longitude?: number } } | null | undefined)?.gps;
+
+  const fileAttrs: Record<string, unknown> = {};
+  // The device's clock settings come from the registry, which is why this reads the node's
+  // `devicePath` rather than a match not made yet: on a first reading there is no link and the
+  // offset is unknown, and `device-link` resolves again the moment there is one.
+  const devicePath = typeof attrs.devicePath === 'string' ? attrs.devicePath : undefined;
+  const deviceClock = await clockForFile(cmd, devicePath);
+  // A staged file is dated by its category's time rules, stamped on it in this same write. Anywhere
+  // else the stamps it already carries stand, so a file filed from staging keeps them.
+  const staged = inboxOf(inputPath) !== undefined;
+  const rules = staged ? await categoryTimeRules(cmd.sys.vfs, cmd.access, inputPath) : undefined;
+  const stamps = rules ? timeStamps(rules, basename(inputPath)) : undefined;
+  if (stamps) Object.assign(fileAttrs, stamps);
+  const sidecar = await readSidecar(cmd.sys.vfs, cmd.access, inputPath);
+  const sidecarTimes = sidecarTime(sidecar);
+  const resolved = resolveTime({
+    manual: typeof attrs.whenManual === 'string' ? attrs.whenManual : undefined,
+    gps: when?.gps,
+    device: when?.device,
+    digitizer: deviceClock.digitizer,
+    quicktimeUtc: deviceClock.quicktimeUtc,
+    deviceOffsetAt: (wallClock) => offsetAt(deviceClock, wallClock, SYSTEM_TIME_ZONE),
+    archiveZone: SYSTEM_TIME_ZONE,
+    ...stampedSources(stamps ?? attrs),
+    ...(sidecarTimes ? { sidecar: sidecarTimes } : {}),
+  });
+  // Written even when nothing resolves: nulls clear the attrs, so interpreting again a file whose
+  // date was once believed wrongly is what repairs it.
+  Object.assign(fileAttrs, timeAttrs(resolved));
+  if (verbose) await cmd.writeLn(resolved ? `Capture time ${resolved.takenAt} (${resolved.takenAtSource}) = ${resolved.takenAtUtc}` : 'No capture time');
+
+  // The `position` child follows the GPS fix, else the paired sidecar's place where it is believed
+  // (`sidecarPoint`: not a digitized copy's Google location, unless a person set it), and is removed
+  // when neither gives one — the map and proximity search read the child, so it must not outlive the
+  // fix. A digitized copy's GPS fix is where it was scanned. A person's position (`positionManual`)
+  // outranks anything in the bytes, and is left as it is.
+  const positionPath = `${inputPath}/position`;
+  const digitized = (stamps ? stamps.digitized : attrs.digitized) === true;
+  const point = gps?.latitude !== undefined && gps.longitude !== undefined && !digitized ? { lat: gps.latitude, lng: gps.longitude } : sidecarPoint(sidecar, digitized);
+  if (attrs.positionManual !== undefined) {
+    if (verbose) await cmd.writeLn('Location is a manual override, leaving it');
+  } else if (point) {
+    await writePosition(cmd.sys.vfs, cmd.access, inputPath, point);
+    if (verbose) await cmd.writeLn('Wrote the position node');
+  } else if (await cmd.sys.vfs.exists(cmd.access, positionPath)) {
+    if (verbose) await cmd.writeLn('No place in the metadata or a sidecar, removing the position node');
+    await cmd.sys.vfs.unlink(cmd.access, positionPath, inputPath, { recursive: true });
+  }
+
+  const interpretedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+  fileAttrs[INTERPRETED_AT_ATTR] = interpretedAt;
+  await cmd.sys.vfs.update(cmd.access, inputPath, { attrs: fileAttrs });
+
+  const answer: ExifInterpretAnswer = {
+    interpretedAt,
+    takenAt: resolved?.takenAt ?? null,
+    takenAtSource: resolved?.takenAtSource ?? null,
+    position: point ? { lat: point.lat, lng: point.lng } : null,
+  };
+  if (cmd.json) await cmd.writeJSON(answer);
+  else await cmd.writeLn(`Interpreted ${inputPath}: ${answer.takenAt ? `taken ${answer.takenAt} (${answer.takenAtSource})` : 'no capture time'}${point ? ', placed' : ''}`);
+  return 0;
+};
+
+exifInterpret.spec = {
+  name: 'exif-interpret',
+  effect: 'write' as const,
+  description:
+    "Read what a file's metadata means in the archive: its capture time, resolved from its clocks, its device, a paired sidecar and its name (a staged file by its category's time rules), and its position node from the GPS fix or the sidecar",
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to a file whose metadata is read (exif-extract)' },
+  ],
+  flags: [
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+  examples: ['exif-interpret /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg'],
+  returns: 'the capture time it resolved and where, and its position; the attrs and the position node are written on the file.',
+};
+
+export default exifInterpret;

@@ -397,10 +397,10 @@ Deno.test({
       assertEquals(seen.length <= 1, true, `linked.jpg emitted ${seen.length} times: ${JSON.stringify(result.paths)}`);
     });
 
-    await t.step('service stop archive-bridge stops the live feeder', async () => {
-      // The remote disk guard relies on this being a real, stoppable service.
-      // Stop the bridge, then create a file it will never see.
-      await client.exec('service stop archive-bridge');
+    await t.step('service stop stops the live feeders', async () => {
+      // The remote disk guard relies on these being real, stoppable services. Stop the bridges —
+      // discovery is the media module's — then create a file neither will see.
+      await client.exec('service stop media-bridge && service stop archive-bridge');
       await makeMedia(`${ALBUMS_ROOT}/t/missed.jpg`);
 
       const nodeId = await nodeIdOf(`${ALBUMS_ROOT}/t/missed.jpg`);

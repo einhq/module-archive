@@ -29,7 +29,7 @@
  * 800k renditions.
  *
  * **A third shape, reported and never repaired: the SOURCE is unreadable.** A file whose own
- * container ffprobe refused carries `undecodable` (see `@archive/media/media-probe`), and no rendition
+ * container ffprobe refused carries `undecodable` (see `@media/probe`), and no rendition
  * can ever be made from it — regenerating is not the answer, and there is nothing here to
  * clear. Listed at the end because this is the tool somebody reaches for when renditions are
  * missing, and "the original is truncated" is the one answer that does not belong in the

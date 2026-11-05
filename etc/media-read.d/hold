@@ -1,0 +1,3 @@
+# The archive's say before the media module reads a file: a staged exact copy of a file its owner
+# can read is held unread (bin/staging-hold).
+staging-hold

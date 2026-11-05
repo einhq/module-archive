@@ -22,11 +22,13 @@ import type {
 import type { StagingDiscardResult, StagingMoveResult, StagingPromoteResult, StagingStatus } from '@archive/staging/api';
 import { type ArchiveRuleContext, deriveArchiveEvents } from '@archive/event-rules';
 import { MEDIA_EVENTS } from '@archive/media/event-rules';
+import { deriveFileEvents } from '@media/file-rules';
 import { assert, assertEquals } from '@std/assert';
 import type { NodeEvent } from '@ein/client';
 import type { SearchResponse } from '@ein/api';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
+import type { ExifExtractAnswer } from '@media/api';
 import { makeGroup } from './decisions-fixture.ts';
 
 const fileRoot = await Deno.makeTempDir({ prefix: 'ein-staged-duplicates-' });
@@ -167,7 +169,8 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
       const sha256 = (await vfs.get(ADMIN_ACCESS, original)).attrs.sha256 as string;
       assert(typeof sha256 === 'string' && sha256.length === 64, 'the write path hashes the bytes');
 
-      // The original's marker rides on the update the extraction makes anyway.
+      // The original's marker is written by the archive's hold before the media module reads the
+      // file, and the reading writes the file once more.
       const updates: string[] = [];
       const subscription = await vfs.subscribe!(() => ADMIN_ACCESS, (event: NodeEvent) => {
         if (event.type === 'updated' && event.path === original) updates.push(event.path);
@@ -178,7 +181,7 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
       } finally {
         await subscription.unsubscribe();
       }
-      assertEquals(updates.length, 1);
+      assertEquals(updates.length, 2);
       assertEquals(timeless(await finding(original)), { inbox: 'admin', sha256 });
 
       assertEquals((await extract(copy)).success, true);
@@ -186,10 +189,11 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
       assertEquals(timeless(await finding(original)), { inbox: 'admin', sha256 });
     });
 
-    /** The facts the bridge derives from an update of the file at `path`. */
-    const factsOfUpdate = async (path: string): Promise<string[]> =>
-      (await deriveArchiveEvents({ type: 'updated', path, nodeId: await idOf(path), nodeType: 'file', timestamp: 1, changedAttrs: ['duplicate'] }, ruleContext, 1))
-        .map((fact) => fact.type);
+    /** The facts the bridges derive from an update of the file at `path`: the media module's and the archive's. */
+    const factsOfUpdate = async (path: string): Promise<string[]> => {
+      const event = { type: 'updated', path, nodeId: await idOf(path), nodeType: 'file', timestamp: 1, changedAttrs: ['duplicate', 'hold'] };
+      return [...await deriveFileEvents(event, ruleContext, 1), ...await deriveArchiveEvents(event, ruleContext, 1)].map((fact) => fact.type);
+    };
     const indexed = async (path: string) => await vfs.exists(ADMIN_ACCESS, `${path}/metadata/exif`);
     /** Two byte twins arrived in `dir` and read, as `[original, copy]`. */
     const arrived = async (dir: string, text: string): Promise<[string, string]> => {
@@ -227,8 +231,8 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
         if (event.type === 'updated' && event.path === copy) updates.push(event.path);
       });
       try {
-        const again = await admin.execJson<{ deferred: boolean; of: string }>(`CFG_EMS_URL=${stub.url} exif-extract ${copy}`);
-        assertEquals(again, { deferred: true, of: await idOf(original) });
+        const again = await admin.execJson<ExifExtractAnswer>(`CFG_EMS_URL=${stub.url} exif-extract ${copy}`);
+        assertEquals(again, { held: `an exact copy of ${await idOf(original)} in staging`, by: 'archive' });
         await new Promise((resolve) => setTimeout(resolve, 20));
       } finally {
         await subscription.unsubscribe();

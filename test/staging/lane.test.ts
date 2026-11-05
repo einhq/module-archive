@@ -1,7 +1,8 @@
 /**
- * Lanes: a category's `lane` setting, its kinds' presets and `staging category --lane`; and the
- * bridge's stamping, which puts every fact about a file of a bulk category in the bulk lane and
- * leaves every other fact in the normal one, decided per fact by the category its subject is in now.
+ * Lanes: a category's `lane` setting, its kinds' presets and `staging category --lane`, which the
+ * category's folder says too (`lane`); and the bridges' stamping by that folder (`withLanes`), which
+ * puts every fact about a file of a bulk category in the bulk lane and leaves every other fact in
+ * the normal one, decided per fact by the category its subject is in now.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { StagingCategoryAnswer } from '@archive/staging/api';
@@ -30,15 +31,27 @@ const TAKEOUT = `${FILES}/takeout`;
 const INBOX = `${FILES}/inbox`;
 const SHA = 'e'.repeat(64);
 
-/** A category directory as the bridge reads it, with the lane and time rules given. */
+/** A category directory as the bridge reads it, with the lane and time rules given; a bulk one's folder says so. */
 const category = (id: string, lane: string | undefined, time: { digitized: boolean; filenameDates: boolean }): NodeSnapshot => ({
   id,
   type: 'directory',
-  attrs: { stagingCategory: { kind: 'generic', label: id, ...(lane ? { lane } : {}), time } },
+  attrs: { stagingCategory: { kind: 'generic', label: id, ...(lane ? { lane } : {}), time }, ...(lane === 'bulk' ? { lane } : {}) },
 });
 
-/** A photo with a checksum and no metadata yet: what the bridge announces as discovered. */
-const photo = (id: string, attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id, type: 'file', attrs: { mimetype: 'image/jpeg', size: 10, sha256: SHA, ...attrs } });
+/** A photo whose metadata is read and interpreted: what the bridge announces as `media.metadata.interpreted`. */
+const photo = (id: string, attrs: Record<string, unknown> = {}): NodeSnapshot => ({
+  id,
+  type: 'file',
+  attrs: { mimetype: 'image/jpeg', size: 10, sha256: SHA, interpretedAt: 'now', ...attrs },
+});
+
+/** The nodes of read photos: each and its metadata. */
+const read = (photos: Record<string, NodeSnapshot>): Record<string, NodeSnapshot> =>
+  Object.fromEntries(
+    Object.entries(photos).flatMap((
+      [path, node],
+    ) => [[path, node], [`${path}/metadata/exif`, { id: `e-${node.id}`, type: 'exif', attrs: { indexedAt: 'now', sourceSha256: SHA } }]]),
+  );
 
 /** Anna's `takeout` (bulk, own clocks) and `inbox` (normal, names are dates), and the folders in them. */
 const tree: Record<string, NodeSnapshot> = {
@@ -54,16 +67,16 @@ const context = (nodes: Record<string, NodeSnapshot>) => {
   const ctx: ArchiveRuleContext = {
     getNode: (path) => {
       if (path === TAKEOUT || path === INBOX) categoryReads.push(path);
-      return Promise.resolve({ ...tree, ...nodes }[path]);
+      return Promise.resolve({ ...tree, ...read(nodes) }[path]);
     },
-    exists: (path) => Promise.resolve(path in tree || path in nodes),
+    exists: (path) => Promise.resolve(path in tree || path in read(nodes)),
     getLink: () => Promise.resolve(undefined),
     hasPoint: () => Promise.resolve(false),
   };
   return { ctx, categoryReads };
 };
 
-const updated = (path: string, id: string): VfsEventInput => ({ type: 'updated', path, nodeId: id, nodeType: 'file', timestamp: 1, changedAttrs: ['sha256'] });
+const updated = (path: string, id: string): VfsEventInput => ({ type: 'updated', path, nodeId: id, nodeType: 'file', timestamp: 1, changedAttrs: ['interpretedAt'] });
 
 /** Each fact's type, subject and lane. */
 const lanes = (facts: { type: string; subject: string; lane?: string }[]) => facts.map((fact) => [fact.type, fact.subject, fact.lane ?? 'normal']);
@@ -73,14 +86,14 @@ Deno.test('a fact about a file of a bulk category is in the bulk lane, one about
   const inboxFile = `${INBOX}/upload-2026-10-01/IMG_0002.jpg`;
   const { ctx } = context({ [bulkFile]: photo('f1'), [inboxFile]: photo('f2') });
 
-  assertEquals(lanes(await deriveArchiveEvents(updated(bulkFile, 'f1'), ctx, 1)), [[MEDIA_EVENTS.fileDiscovered, bulkFile, 'bulk']]);
-  assertEquals(lanes(await deriveArchiveEvents(updated(inboxFile, 'f2'), ctx, 1)), [[MEDIA_EVENTS.fileDiscovered, inboxFile, 'normal']]);
+  assertEquals(lanes(await deriveArchiveEvents(updated(bulkFile, 'f1'), ctx, 1)), [[MEDIA_EVENTS.metadataInterpreted, bulkFile, 'bulk']]);
+  assertEquals(lanes(await deriveArchiveEvents(updated(inboxFile, 'f2'), ctx, 1)), [[MEDIA_EVENTS.metadataInterpreted, inboxFile, 'normal']]);
 });
 
 Deno.test('a fact outside every category reads no category and stays in the normal lane', async () => {
   const library = `${ALBUMS_ROOT}/lake/files/IMG_0003.jpg`;
   const { ctx, categoryReads } = context({ [library]: photo('f3') });
-  assertEquals(lanes(await deriveArchiveEvents(updated(library, 'f3'), ctx, 1)), [[MEDIA_EVENTS.fileDiscovered, library, 'normal']]);
+  assertEquals(lanes(await deriveArchiveEvents(updated(library, 'f3'), ctx, 1)), [[MEDIA_EVENTS.metadataInterpreted, library, 'normal']]);
   assertEquals(categoryReads, []);
 });
 
@@ -93,8 +106,8 @@ Deno.test("a category's lane is read once a minute, so a change reaches the brid
 
   tree[TAKEOUT] = category('c-takeout', 'normal', { digitized: false, filenameDates: false });
   try {
-    assertEquals(lanes(await deriveArchiveEvents(updated(file, 'f4'), ctx, 59_000)), [[MEDIA_EVENTS.fileDiscovered, file, 'bulk']]);
-    assertEquals(lanes(await deriveArchiveEvents(updated(file, 'f4'), ctx, 61_001)), [[MEDIA_EVENTS.fileDiscovered, file, 'normal']]);
+    assertEquals(lanes(await deriveArchiveEvents(updated(file, 'f4'), ctx, 59_000)), [[MEDIA_EVENTS.metadataInterpreted, file, 'bulk']]);
+    assertEquals(lanes(await deriveArchiveEvents(updated(file, 'f4'), ctx, 61_001)), [[MEDIA_EVENTS.metadataInterpreted, file, 'normal']]);
     assertEquals(categoryReads, [TAKEOUT, TAKEOUT]);
   } finally {
     tree[TAKEOUT] = category('c-takeout', 'bulk', { digitized: false, filenameDates: false });
@@ -116,7 +129,7 @@ Deno.test('a file moved between lanes has its facts in the lane of the category 
   const into = context({ [inTakeout]: photo('f5', { whenName: '2019-06-01T12:34:56' }) });
   const intoFacts = (await deriveArchiveEvents(moved(inTakeout, inInbox), into.ctx, 1)).filter((fact) => fact.type === STAGING_EVENTS.retimeRequested);
   assertEquals(lanes(intoFacts), [[STAGING_EVENTS.retimeRequested, `${TAKEOUT}/part-1`, 'bulk']]);
-  assertEquals(lanes(await deriveArchiveEvents(updated(inTakeout, 'f5'), into.ctx, 1)), [[MEDIA_EVENTS.fileDiscovered, inTakeout, 'bulk']]);
+  assertEquals(lanes(await deriveArchiveEvents(updated(inTakeout, 'f5'), into.ctx, 1)), [[MEDIA_EVENTS.metadataInterpreted, inTakeout, 'bulk']]);
 });
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -130,6 +143,8 @@ Deno.test({ name: 'staging category --lane', sanitizeResources: false, sanitizeO
 
     await t.step("a new category takes its kind's lane, or the one asked for", async () => {
       assertEquals((await client.execJson<StagingCategoryAnswer>('staging category takeout --create --kind google-photos')).category?.settings.lane, 'bulk');
+      // The folder says it too, for the media module's facts about the files in it.
+      assertEquals((await client.execJson<{ lane?: string }>('attrs /home/admin/staging/files/takeout')).lane, 'bulk');
       assertEquals((await client.execJson<StagingCategoryAnswer>('staging category phone --create --kind phone --lane bulk')).category?.settings.lane, 'bulk');
       assertEquals((await client.execJson<StagingCategoryAnswer>('staging category inbox')).category?.settings.lane, 'normal');
     });
@@ -137,6 +152,7 @@ Deno.test({ name: 'staging category --lane', sanitizeResources: false, sanitizeO
     await t.step('the lane changes, is named among what changed, and an unknown one is refused', async () => {
       let answer = await client.execJson<StagingCategoryAnswer>('staging category takeout --lane normal');
       assertEquals([answer.changed, answer.category?.settings.lane, answer.retime], [['lane'], 'normal', null]);
+      assertEquals((await client.execJson<{ lane?: string }>('attrs /home/admin/staging/files/takeout')).lane, undefined);
       answer = await client.execJson<StagingCategoryAnswer>('staging category takeout --lane normal');
       assertEquals(answer.changed, []);
       await cmd.shouldFailWith('staging category takeout --lane fast', "unknown lane 'fast'");

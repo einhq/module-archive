@@ -70,12 +70,15 @@ const photo = (duplicate?: Record<string, unknown>, extra: Record<string, unknow
   attrs: { mimetype: 'image/jpeg', size: 10, sha256: SHA, ...(duplicate ? { duplicate } : {}), ...extra },
 });
 
-/** A category directory: what the staging rules read a category's time rules off. */
-const CATEGORY_DIR = /^\/home\/[^/]+\/staging\/files\/[^/]+$/;
+/**
+ * A category directory, what the staging rules read a category's time rules off, or a folder above
+ * one, which the lanes are read off with it.
+ */
+const CATEGORY_DIR = /^\/(home(\/[^/]+(\/staging(\/files(\/[^/]+)?)?)?)?)?$/;
 
 /**
  * The subjects of the facts of `type` an event announces when `nodes` are what the bridge reads;
- * `reads` counts its reads of anything but a category.
+ * `reads` counts its reads of anything but a category or a folder above one.
  */
 const announced = async (type: string, input: Partial<VfsEventInput>, nodes: Record<string, NodeSnapshot> = {}) => {
   let reads = 0;
@@ -208,7 +211,7 @@ Deno.test('staging rules: a retime fact names the category, and the file a folde
 const TAKEOUT_DIR = `${ANNA}/takeout/upload-2026-10-18`;
 const CHAT_DIR = `${ANNA}/whatsapp/upload-2026-10-18`;
 const sidecarTree: Record<string, NodeSnapshot> = {
-  [`${ANNA}/takeout`]: { id: 'c-takeout', type: 'directory', attrs: { stagingCategory: { kind: 'google-photos' } } },
+  [`${ANNA}/takeout`]: { id: 'c-takeout', type: 'directory', attrs: { stagingCategory: { kind: 'google-photos' }, lane: 'bulk' } },
   [`${ANNA}/whatsapp`]: { id: 'c-chat', type: 'directory', attrs: { stagingCategory: { kind: 'messaging' } } },
   [TAKEOUT_DIR]: { id: 'd-takeout', type: 'directory', attrs: {} },
   [CHAT_DIR]: { id: 'd-chat', type: 'directory', attrs: {} },

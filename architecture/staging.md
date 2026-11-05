@@ -36,10 +36,10 @@ category (`decided`). `staging check` reports what
 breaks the layout's rules, a group's link outside its category or to nothing among them.
 `staging category <name>` reads a category, and with `--create`, `--kind`, `--label`,
 `--destination`, `--no-destination`, `--strategy`, `--significance`, `--lane` or `--remove` changes it.
-The bridge puts every fact about a file of a category whose `lane` is `bulk` in the bulk lane
-(`stampLanes`, [`lib/staging/facts.ts`](../lib/staging/facts.ts)), reading the
-category's settings at most once a minute, so the work on it runs below everything else
-(Lanes (core's `docs/architecture.md`)).
+A category whose `lane` is `bulk` sets `lane` on its folder too, and the bridges put every fact
+about a file under a folder of the bulk lane in the bulk lane (`withLanes`, the media module's
+`@media/file-rules`), reading each folder at most once a minute, so the work on it runs below
+everything else (Lanes (core's `docs/architecture.md`)).
 
 The organizer (`staging organize`, [`lib/staging/organizer.ts`](../lib/staging/organizer.ts))
 keeps every indexed staged medium of a category in exactly one group: an event, a trip, a seed

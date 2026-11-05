@@ -10,7 +10,8 @@
 import type { DomainEvent } from '@ein/client';
 import { deriveEvents, MEDIA_BRIDGE_ROUTING_KEYS, type RuleContext, type VfsEventInput } from '@archive/media/event-rules';
 import { deriveLocationEvents, LOCATION_BRIDGE_ROUTING_KEYS, type LocationRuleContext } from '@archive/location/event-rules';
-import { deriveStagingFacts, STAGING_BRIDGE_ROUTING_KEYS, stampLanes } from '@archive/staging/facts';
+import { deriveStagingFacts, STAGING_BRIDGE_ROUTING_KEYS } from '@archive/staging/facts';
+import { withLanes } from '@media/file-rules';
 
 export type { VfsEventInput };
 
@@ -27,11 +28,11 @@ const LOCATION_KEYS = new Set(LOCATION_BRIDGE_ROUTING_KEYS);
 /**
  * The facts a VFS event announces, from every rule set that binds its routing key, each naming the
  * write it was derived from so the pipelines it starts can record that write as their cause, and
- * each about a file of a bulk category in the bulk lane (`stampLanes`).
+ * each about a file in a folder of the bulk lane in the bulk lane (`withLanes`).
  */
 export async function deriveArchiveEvents(event: VfsEventInput, ctx: ArchiveRuleContext, now: number = Date.now()): Promise<Omit<DomainEvent, 'id'>[]> {
   const key = `system.vfs.${event.nodeType}.${event.type}`;
-  const facts = await stampLanes(
+  const facts = await withLanes(
     [
       ...STAGING_KEYS.has(key) ? await deriveStagingFacts(event, ctx, now) : [],
       ...MEDIA_KEYS.has(key) ? await deriveEvents(event, ctx, now) : [],

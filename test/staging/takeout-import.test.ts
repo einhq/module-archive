@@ -10,7 +10,8 @@
  * finds no date in the bytes; the sidecar pipeline waits half a second rather than thirty.
  */
 import { POOLS_PATH } from '@ein/paths';
-import type { ExifExtractAnswer, MediaSidecarsAnswer } from '@archive/media/api';
+import type { MediaSidecarsAnswer } from '@archive/media/api';
+import type { ExifExtractAnswer } from '@media/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
@@ -98,11 +99,12 @@ Deno.test({ name: 'a Takeout zip is expanded, paired and dated by its sidecars',
       assertEquals([again.found, again.unmatched, again.paired], [0, 0, 0]);
     });
 
-    await t.step('each photo is dated by its sidecar when its metadata is read', async () => {
+    await t.step('each photo is dated by its sidecar when its metadata is read and interpreted', async () => {
       for (const photo of photos) {
         const path = `${BATCH}/${photo.path}`;
         const answer = await client.execJson<ExifExtractAnswer>(`CFG_EMS_URL=${stub.url} exif-extract '${path}'`);
         assertEquals('indexedAt' in answer, true, path);
+        await client.exec(`exif-interpret '${path}'`);
         const attrs = (await vfs.get(ADMIN_ACCESS, path)).attrs;
         assertEquals([attrs.takenAt, attrs.takenAtUtc, attrs.takenAtSource], [photo.takenAt, photo.takenAt, 'sidecar'], path);
         assertEquals(await vfs.exists(ADMIN_ACCESS, `${path}/position`), true, path);

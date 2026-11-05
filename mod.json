@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
   "coreApi": "^0.12.0",
@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "ems": "^0.10.0",
-    "media": "^0.1.1"
+    "media": "^0.1.2"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
@@ -64,8 +64,6 @@
     "@archive/media/chromaprint": "./lib/media/chromaprint.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
     "@archive/media/embedding-types": "./lib/media/embedding-types.ts",
-    "@archive/media/exif-date": "./lib/media/exif-date.ts",
-    "@archive/media/exif-service": "./lib/media/exif-service.ts",
     "@archive/media/extracted-text": "./lib/media/extracted-text.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
     "@archive/media/face-cluster": "./lib/media/face-cluster.ts",
@@ -94,7 +92,6 @@
     "@archive/media/transcript": "./lib/media/transcript.ts",
     "@archive/media/trip-album": "./lib/media/trip-album.ts",
     "@archive/media/types": "./types/media/mod.ts",
-    "@archive/media/video-codec": "./lib/media/video-codec.ts",
     "@archive/media/xmp": "./lib/media/xmp.ts",
     "@archive/news-albums": "./lib/news-albums.ts",
     "@archive/people/gedcom": "./lib/people/gedcom.ts",
@@ -118,7 +115,6 @@
     "@archive/staging/cluster": "./lib/staging/cluster.ts",
     "@archive/staging/decide": "./lib/staging/decide.ts",
     "@archive/staging/dedupe": "./lib/staging/dedupe.ts",
-    "@archive/staging/deferral": "./lib/staging/deferral.ts",
     "@archive/staging/detect": "./lib/staging/detect.ts",
     "@archive/staging/duplicate-read": "./lib/staging/duplicate-read.ts",
     "@archive/staging/duplicate-rules": "./lib/staging/duplicate-rules.ts",
@@ -494,12 +490,6 @@
       "description": "A box on a photo, kept under the photo's regions/ directory: a face the detector found, a box someone drew, or a tag imported from the old archive. It carries who is in it. A region that shows a usable face has the face's vector as a child named embedding, and only those take part in face recognition."
     },
     {
-      "type": "exif",
-      "label": "EXIF",
-      "category": "content",
-      "description": "The metadata read from a media file — camera, capture time, exposure, position — kept as a child of the file."
-    },
-    {
       "type": "album-profile",
       "label": "Album profile",
       "category": "content",
@@ -582,12 +572,6 @@
       "on": [
         "mimetype",
         "takenAtUtc"
-      ]
-    },
-    {
-      "name": "mime",
-      "on": [
-        "mimetype"
       ]
     },
     {

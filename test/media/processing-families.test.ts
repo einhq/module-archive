@@ -30,14 +30,13 @@ const FAMILIES: Record<string, string[]> = {
   'media-fingerprint': ['archive'],
   'media-device': ['archive'],
   'media-device-cover': ['archive'],
+  'media-interpret': ['archive'],
   'media-geocode': ['archive'],
   'media-duplicates': ['archive'],
 };
 
 /** The pipelines that name no family, and why. */
 const UNGATED: Record<string, string> = {
-  'media-ingest': 'reads the file, which every family needs',
-  'media-reindex': 'reads the file again when its bytes change, which every family needs',
   'media-heal': "a pass over the albums, the archive's own tree",
   'media-album': "an album's members, in the archive's own tree",
   'staging-organize': 'a staging category',

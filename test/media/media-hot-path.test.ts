@@ -101,10 +101,12 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       // The pipelines the facts below start: discovery's, the voices' on another media kind, and
       // the fingerprint's, which nothing below keeps busy.
       await client.exec('mkdir -p /tmp/defs');
-      for (const name of ['media-ingest', 'media-voiceprint', 'media-fingerprint']) {
+      for (const name of ['media-voiceprint', 'media-fingerprint']) {
         await write(`/tmp/defs/${name}.yaml`, await Deno.readTextFile(new URL(`../../pipelines/${name}.yaml`, import.meta.url)));
         assertEquals((await client.exec(`pipeline define /tmp/defs/${name}.yaml`)).success, true, `define ${name}`);
       }
+      // Discovery's is the media module's, mounted beside the archive.
+      assertEquals((await client.exec('pipeline define /usr/modules/media/pipelines/media-ingest.yaml')).success, true, 'define media-ingest');
       type Scan = { scanned: number; emitted: number; held: string[]; waiting?: boolean };
       const scan = (only = '') => client.execJson<Scan>(`${env}media-scan ${album} -n --restart --if-idle --max-active 0 --limit 0${only}`);
 
