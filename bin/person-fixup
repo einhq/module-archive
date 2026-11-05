@@ -3,7 +3,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import { basename, resolve } from '@std/path';
 import { CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationAttrs, type RelationEntry, removeRelationPair } from '@archive/people/genealogy';
-import { holdingsByPerson } from '@archive/people/person';
+import { holdingsByPerson, moveSeenSpeaking } from '@archive/people/person';
 
 const QUERY_LIMIT = 500000;
 
@@ -36,6 +36,7 @@ const deleteOrphans = async (cmd: Command, dryRun: boolean): Promise<number> => 
     if (!dryRun) {
       const parent = person.absPath.slice(0, person.absPath.lastIndexOf('/')) || '/';
       await cmd.sys.vfs.unlink(cmd.access, person.absPath, parent, { recursive: true });
+      await moveSeenSpeaking(cmd.sys.vfs, cmd.access, person.id, null);
     }
     await cmd.writeLn(`${dryRun ? '[dry] ' : ''}delete orphan ${person.absPath}`);
     deleted++;

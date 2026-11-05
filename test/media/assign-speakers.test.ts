@@ -234,6 +234,20 @@ Deno.test({
       assertEquals(attrs.asdAssisted, true);
     });
 
+    await t.step('a lip-sync match naming a person who is gone is ignored', async () => {
+      // Merged away or deleted: the match must not give the voice someone who does not exist.
+      await client.exec(`mknode -t person ${PEOPLE_ROOT}/ghost`);
+      const ghostId = (await vfs.get(ADMIN_ACCESS, `${PEOPLE_ROOT}/ghost`)).id;
+      await client.exec(`rm -r ${PEOPLE_ROOT}/ghost`);
+      await makeRecording('/rec/8b.mp4');
+      const path = await addSpeaker('/rec/8b.mp4', 's0', near(dir(2), 7), { talkSeconds: 4 });
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { asdPersonId: ghostId, asdScore: 0.95 } });
+
+      const res = await client.execJson<Summary>('assign-speakers /rec/8b.mp4');
+      assertEquals(res.attached, 0);
+      assertEquals((await attrsOf(path)).personId, undefined);
+    });
+
     await t.step('a weak lip-sync match is ignored', async () => {
       await makeRecording('/rec/9.mp4');
       const path = await addSpeaker('/rec/9.mp4', 's0', near(dir(2), 5), { talkSeconds: 4 });

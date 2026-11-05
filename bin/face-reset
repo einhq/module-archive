@@ -14,6 +14,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { REGION_TYPE } from '@archive/media/regions';
+import { moveSeenSpeaking } from '@archive/people/person';
 
 const QUERY_LIMIT = 500000;
 const SOURCES = ['auto', 'cluster', 'transfer'];
@@ -86,6 +87,7 @@ const faceReset = async (cmd: Command): CmdReturn => {
       try {
         const parent = person.absPath.slice(0, person.absPath.lastIndexOf('/')) || '/';
         await vfs.unlink(access, person.absPath, parent, { recursive: true });
+        await moveSeenSpeaking(vfs, access, person.id, null);
         peopleDeleted++;
         if (verbose) await cmd.writeLn(`deleted ${person.absPath}`);
       } catch (error) {

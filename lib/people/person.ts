@@ -46,7 +46,7 @@ export { PEOPLE_ROOT };
 const UNKNOWN_DIR = 'unknown';
 export const UNKNOWN_ROOT = `${PEOPLE_ROOT}/${UNKNOWN_DIR}`;
 
-const NODE_TYPE_PERSON = 'person';
+export const NODE_TYPE_PERSON = 'person';
 const NODE_TYPE_DIRECTORY = 'directory';
 const EVENTS_DIR = 'events';
 
@@ -260,6 +260,20 @@ export const voicesOf = (vfs: Vfs, access: Access, personId: string) =>
   });
 
 /**
+ * Hand the voices whose lip-sync match (`asdPersonId`) names a person on to `toId`, the person they
+ * were merged into, or clear it when they are deleted (`null`). The match is
+ * evidence `assign-speakers` votes with, so it follows the person as their voices do.
+ */
+export const moveSeenSpeaking = async (vfs: Vfs, access: Access, personId: string, toId: string | null): Promise<void> => {
+  const voices = await vfs.query(access, {
+    types: ['embedding'],
+    where: [{ ref: 'embeddingType', op: 'eq', value: 'voice' }, { ref: 'asdPersonId', op: 'eq', value: personId }],
+    limit: FACE_QUERY_LIMIT,
+  });
+  for (const voice of voices) await vfs.update(access, voice.absPath, { follow: false, attrs: { asdPersonId: toId } });
+};
+
+/**
  * The attrs that say a region or voice is not a person at all: no identity, and locked, so the
  * next `assign-faces` or `cluster-faces` run leaves it alone rather than re-tagging it. `null`
  * removes a key.
@@ -288,6 +302,7 @@ export const releasePerson = async (vfs: Vfs, access: Access, personId: string, 
   const removable = dirname(personPath) === UNKNOWN_ROOT && isUnnamed(person.attrs);
   if (removable && remainingFaces.length === 0 && (await voicesOf(vfs, access, personId)).length === 0) {
     await vfs.unlink(access, personPath, UNKNOWN_ROOT, { recursive: true });
+    await moveSeenSpeaking(vfs, access, personId, null);
     return { ...released, personRemoved: true };
   }
   const representative = person.attrs.representativeFaceId;
@@ -659,6 +674,9 @@ export const mergePersons = async (
       attrs: { personId: dst.id, personSource: 'manual', personAssignedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z') },
     });
   }
+
+  // A voice whose face was recognised as the source was seen saying the words of the destination.
+  if (!dryRun) await moveSeenSpeaking(vfs, access, src.id, dst.id);
 
   // --- events ---
   let events: { name: string }[] = [];

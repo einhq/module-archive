@@ -15,7 +15,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { dirname } from '@std/path';
-import { isUnnamed, NOT_A_PERSON, type PersonNodeAttrs, personPathOf, regionsOf, voicesOf } from '@archive/people/person';
+import { isUnnamed, moveSeenSpeaking, NOT_A_PERSON, type PersonNodeAttrs, personPathOf, regionsOf, voicesOf } from '@archive/people/person';
 import type { DiscardResult } from '@archive/people/api';
 
 const personDiscard = async (cmd: Command): CmdReturn => {
@@ -52,6 +52,7 @@ const personDiscard = async (cmd: Command): CmdReturn => {
       if (!dryRun) {
         for (const entry of held) await vfs.update(access, entry.absPath, { follow: false, attrs: NOT_A_PERSON });
         await vfs.unlink(access, path, dirname(path), { recursive: true });
+        await moveSeenSpeaking(vfs, access, node.id, null);
       }
       discarded.push({ path, regions, voices: held.length - regions });
     } catch (error) {

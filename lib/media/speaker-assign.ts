@@ -43,7 +43,7 @@
 import { type Command, NodeNotFoundError } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
-import { createUnnamedPerson, releasePerson, voicesOf } from '@archive/people/person';
+import { createUnnamedPerson, NODE_TYPE_PERSON, releasePerson, voicesOf } from '@archive/people/person';
 import type { RegionAttrs } from '@archive/media/regions';
 import { isHeld, type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 
@@ -237,6 +237,15 @@ export const assignSpeakersForFile = async (
   const seenRegionIds = [...new Set(speakers.map((c) => c.node.attrs.asdRegionId).filter(occ))];
   const seenRegions = seenRegionIds.length > 0 ? await vfs.getNodesByIds<RegionAttrs>(access, seenRegionIds) : new Map();
   const regionOf = (a: SpeakerAttrs): RegionAttrs | undefined => occ(a.asdRegionId) ? seenRegions.get(a.asdRegionId)?.attrs : undefined;
+
+  // A lip-sync match naming a person who is gone (merged away or deleted) is no evidence: it
+  // would give the voice someone who does not exist.
+  const matchedIds = [...new Set(speakers.map((c) => c.node.attrs.asdPersonId).filter(occ))];
+  const matched = matchedIds.length > 0 ? await vfs.getNodesByIds(access, matchedIds) : new Map();
+  for (const c of speakers) {
+    const id = c.node.attrs.asdPersonId;
+    if (occ(id) && matched.get(id)?.type !== NODE_TYPE_PERSON) c.node.attrs = { ...c.node.attrs, asdPersonId: null };
+  }
 
   const candidates = speakers
     .filter((c) => {

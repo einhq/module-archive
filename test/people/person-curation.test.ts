@@ -322,6 +322,17 @@ Deno.test({
       assertEquals((await client.execJson<FaceList>(`person-faces ${keep.path}`)).total, 6);
     });
 
+    await t.step('person-merge hands a lip-sync match on to the destination', async () => {
+      // A voice that only names the source as the face seen saying its words, not as its person.
+      const keep = await seedUnknown('s1', 1);
+      const gone = await seedUnknown('s2', 1);
+      await client.exec('echo x > /img/s2.mp3 && mkdir -p /img/s2.mp3/voices');
+      await vfs.create(ADMIN_ACCESS, 'embedding', '/img/s2.mp3/voices', 'v0', { attrs: { embeddingType: 'voice', asdPersonId: gone.id, asdScore: 0.9 } });
+
+      assertEquals((await client.execJson<MergeResult>(`person-merge ${gone.path} ${keep.path}`)).ok, true);
+      assertEquals((await vfs.get<{ asdPersonId?: string }>(ADMIN_ACCESS, '/img/s2.mp3/voices/v0')).attrs.asdPersonId, keep.id);
+    });
+
     await t.step('a failing source does not abandon the rest of the batch', async () => {
       const keep = await seedUnknown('n1', 1);
       const good = await seedUnknown('n2', 1);
@@ -459,6 +470,15 @@ Deno.test({
         assertEquals(Object.hasOwn(attrs, 'personSource'), false, path);
         assertEquals(attrs.assignLocked, true, path);
       }
+    });
+
+    await t.step('person-discard clears a lip-sync match that names them', async () => {
+      const person = await seedUnknown('x6', 1);
+      await client.exec('echo x > /img/x6.mp3 && mkdir -p /img/x6.mp3/voices');
+      await vfs.create(ADMIN_ACCESS, 'embedding', '/img/x6.mp3/voices', 'v0', { attrs: { embeddingType: 'voice', asdPersonId: person.id, asdScore: 0.9 } });
+
+      assertEquals((await client.execJson<DiscardResult>(`person-discard ${person.path}`)).ok, true);
+      assertEquals(Object.hasOwn((await vfs.get(ADMIN_ACCESS, '/img/x6.mp3/voices/v0')).attrs, 'asdPersonId'), false);
     });
 
     await t.step('person-discard refuses a named person and keeps going', async () => {
