@@ -392,6 +392,9 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     const start = index < 0 ? 0 : index;
 
     for (let i = start; i < children.length; i++) {
+      // Hung up — EiN or the pipeline engine stopping under a pass, or ^C: stop where it is, so the
+      // pass is stored below and the next run goes on from here.
+      if (cmd.interrupted) stopped = true;
       if (stopped) return;
 
       const child = children[i];
@@ -519,7 +522,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     }
   }
 
-  return 0;
+  return cmd.interrupted ? 130 : 0;
 };
 
 mediaScan.spec = {
