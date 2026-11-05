@@ -1,5 +1,5 @@
 {
-  "description": "Closes the media gaps nothing announced — a pipeline never run on a file, work a crash lost, data from a superseded model — once the engine has caught up",
+  "description": "Starts a pass of the media-heal pipeline when one is due, which announces the media gaps nothing else did — a pipeline never run on a file, work a crash lost, data from a superseded model",
   "restartPolicy": "on-failure",
   "workClass": "background"
 }

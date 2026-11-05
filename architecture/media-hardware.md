@@ -90,19 +90,25 @@ one, so a step that kills its worker every time does run out.
 - **A new EMS build** reruns every failed instance at once (`pipeline heal --now`, from the
   `ems-link` service): a new build is the likeliest fix. Such a run is out of turn and does not
   count as a heal.
-- **`media-heal`** (an archive service) closes gaps nothing announced: a file that never got its
-  fingerprint, transcript, voices, picture vectors or extracted text, or whose transcript or vectors are from a
-  superseded model or setting. It runs `media-scan --if-idle`, which holds back each gap a pipeline
-  with work ready would take (a ready trigger, or a ready media job of one of its kinds) and names
-  the fact types it held: a gap announced is a real gap, not work on its way, and a backlog of one
-  kind holds off only its own gaps. A pass over the whole archive runs as one run of 5000 files
-  after another, each storing where it stopped and what the pass has announced and held so far on
-  the scanned root, so a restart of EiN loses at most one run; the runs of a pass hold back the
-  types that waited when it began. A pass is followed by one over the types it held, once their
-  work drains, and it rests six hours after a pass that finds and holds nothing
-  (`CFG_MEDIA_HEAL_INTERVAL`, `CFG_MEDIA_HEAL_REST`). This is also how a change of model or setting reaches the whole archive:
-  a new transcript signature transcribes every recording again, as the engine has time
-  (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).
+- **`media-heal`** (an archive pipeline, and the service that says when it is due) closes gaps
+  nothing announced: a file that never got its fingerprint, transcript, voices, picture vectors or
+  extracted text, or whose transcript or vectors are from a superseded model or setting. Its one
+  step, run by the engine on the albums root, is `media-scan --if-idle`, which holds back each gap
+  a pipeline with work ready would take (a ready trigger, or a ready media job of one of its kinds)
+  and names the fact types it held: a gap announced is a real gap, not work on its way, and a
+  backlog of one kind holds off only its own gaps. A pass is one instance: it shows under Ongoing
+  with the files walked out of the files under the root as its progress, and is in no pool, so
+  `health` does not count it as waiting. It stores where it is and what it has announced and held
+  on the root every thousand files, so a step run again after a restart goes on from there, and
+  holds back the types that waited when it began; its step's `output` is what the whole pass
+  found. The `media-heal` service runs the `media-heal` command each `CFG_MEDIA_HEAL_INTERVAL`,
+  which announces `media.heal.due` on the albums root unless a pass is live or failed (that one is
+  `pipeline heal`'s), every type it would scan waits, or the last pass, recorded on the root, found
+  and held nothing less than `CFG_MEDIA_HEAL_REST` ago; the fact carries the types the last pass
+  held, so the next is over those alone. The engine drops a fact for a subject whose instance is
+  live, so there is never a second pass. This is also how a change of model or setting reaches the
+  whole archive: a new transcript signature transcribes every recording again, as the engine has
+  time (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).
 
 ## Seeing it
 

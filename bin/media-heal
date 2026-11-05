@@ -1,0 +1,135 @@
+#!ts
+/**
+ * media-heal — announce a pass of `media-scan` over the archive when one is due.
+ *
+ * A pass is the `media-heal` pipeline: one step that runs `media-scan --if-idle` over the albums
+ * root and announces every gap a pipeline missed, so a pass is an instance with its progress while
+ * it runs, and a failed pass a failed instance. This says when one is due; the media-heal service
+ * runs it every `CFG_MEDIA_HEAL_INTERVAL`. It announces `media.heal.due` on the albums root unless
+ *
+ * - a pass is running: the engine would drop the fact anyway, as it does every trigger for a
+ *   subject whose instance is live;
+ * - the last pass failed: `pipeline heal` runs it again, and one that keeps failing is left for a
+ *   person;
+ * - the last pass found nothing and held nothing back, less than `--rest` ago: a caught-up archive
+ *   gains new gaps only from new files and model changes (ein/core#515);
+ * - every fact type the pass would announce has work waiting, which `--if-idle` would hold back
+ *   whole (ein/core#546).
+ *
+ * The fact carries the types the last pass held back (`only`), so the pass after one that held
+ * types back is over those alone. A pass stopped before its end is stored on the root and is
+ * announced over every type, and goes on from where it stopped (ein/core#976).
+ */
+
+import { PIPELINE_INSTANCES_PATH } from '@ein/paths';
+import { ALBUMS_ROOT } from '@archive/paths';
+import type { CmdReturn, Command, DomainEvent } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
+import { join } from '@std/path';
+import { ulid } from '@std/ulid/ulid';
+import type { MediaHealAnswer } from '@archive/media/api';
+import { MEDIA_EVENTS } from '@archive/media/event-rules';
+import { allWait, factsWaiting, HEAL_DUE, readLastPass, readPass } from '@archive/media/scan';
+
+/** The pipeline a pass runs as. */
+const PIPELINE = 'media-heal';
+
+/** Seconds a pass that found nothing is followed by no other, when neither `--rest` nor `CFG_MEDIA_HEAL_REST` says. */
+const DEFAULT_REST_S = 21600;
+
+/** A non-negative number of seconds, or the fallback. */
+const seconds = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  return value === undefined || value === '' || !Number.isFinite(parsed) || parsed < 0 ? fallback : parsed;
+};
+
+const mediaHeal = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['rest'],
+    boolean: ['dry-run'],
+    alias: { n: 'dry-run' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const rest = seconds(flags.rest, seconds(cmd.env.CFG_MEDIA_HEAL_REST, DEFAULT_REST_S));
+  const dry = flags['dry-run'];
+
+  let rootId: string;
+  try {
+    rootId = (await cmd.sys.vfs.get(cmd.access, ALBUMS_ROOT)).id;
+  } catch {
+    await cmd.writeError(`media-heal: no archive at ${ALBUMS_ROOT}\n`);
+    return 1;
+  }
+
+  const answer = async (result: MediaHealAnswer, text: string): CmdReturn => {
+    if (cmd.json) await cmd.writeJSON(result satisfies MediaHealAnswer);
+    else await cmd.writeLn(`media-heal: ${text}`);
+    return 0;
+  };
+
+  let status: string | undefined;
+  try {
+    status = String((await cmd.sys.vfs.get(cmd.access, join(PIPELINE_INSTANCES_PATH, PIPELINE, rootId))).attrs.status);
+  } catch {
+    // No pass has run yet, or the pruner removed the last one.
+  }
+  if (status === 'running' || status === 'queued') return await answer({ announced: false, reason: 'running', only: [] }, 'a pass is running');
+  if (status === 'failed') return await answer({ announced: false, reason: 'failed', only: [] }, 'the last pass failed; pipeline heal runs it again');
+
+  let reason: MediaHealAnswer['reason'] = 'unfinished';
+  let only: string[] = [];
+  if (!await readPass(cmd, ALBUMS_ROOT)) {
+    reason = 'due';
+    const last = await readLastPass(cmd, ALBUMS_ROOT);
+    const until = last ? last.at + rest * 1000 : 0;
+    if (last && last.emitted === 0 && last.held.length === 0 && Date.now() < until) {
+      return await answer({ announced: false, reason: 'resting', only: [], until }, `the last pass found nothing; resting until ${new Date(until).toISOString()}`);
+    }
+    only = last?.held ?? [];
+    if (allWait(await factsWaiting(cmd, 'media-heal'), only.length > 0 ? only : Object.values(MEDIA_EVENTS))) {
+      return await answer({ announced: false, reason: 'waiting', only }, 'media work is waiting, no pass started');
+    }
+  }
+
+  const over = only.length > 0 ? ` over ${only.join(', ')}` : '';
+  const what = reason === 'unfinished' ? 'the stored pass goes on' : `a pass is due${over}`;
+  if (dry) return await answer({ announced: false, reason, only }, `${what} (dry run)`);
+
+  // In the bulk lane: nobody waits on a pass, so it runs behind every step someone does.
+  const event: DomainEvent = {
+    id: ulid(),
+    type: HEAL_DUE,
+    subject: ALBUMS_ROOT,
+    nodeId: rootId,
+    time: Date.now(),
+    source: 'media-heal',
+    lane: 'bulk',
+    data: { only: only.join(',') },
+  };
+  const events = await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+  try {
+    await events.write(new TextEncoder().encode(JSON.stringify(event) + '\n'));
+  } finally {
+    await events.close();
+  }
+
+  return await answer({ announced: true, reason, only }, `${what}, announced`);
+};
+
+mediaHeal.spec = {
+  name: 'media-heal',
+  effect: 'write' as const,
+  description: 'Start a pass of media-scan over the archive when one is due: none is running or failed, the last found something or rested, and not all its media work waits',
+  flags: [
+    { name: 'rest', type: 'number' as const, description: `Seconds after a pass that found nothing before the next (default CFG_MEDIA_HEAL_REST, else ${DEFAULT_REST_S})` },
+    { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — say whether a pass is due without announcing it' },
+  ],
+  examples: ['media-heal -n', 'media-heal --rest 0'],
+  returns: 'whether a pass was announced, and why or why not.',
+};
+
+export default mediaHeal;

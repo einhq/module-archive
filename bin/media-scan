@@ -27,13 +27,19 @@
  * or a pipeline change.
  *
  * A pass is **resumable**. Each run examines at most `--scan-limit` files and stores where it
- * stopped on the root node (`mediaScanPass`); the next run carries on from there and clears it
- * once it reaches the end of the subtree. Repeated runs cover the library instead of repeating its
- * first slice — a run that spent its event budget in the first thousand files would otherwise
- * announce those same thousand again — and a pass outlives a restart of EiN between its runs. The
- * stored pass also counts what its runs announced and held back, so the run that finishes it
- * reports the whole pass (`pass`), and under `--if-idle` it keeps the fact types that waited when
- * it began, which every later run of the pass holds back in their place (ein/core#976).
+ * stopped on the root node (`mediaScanPass`), and where it is every thousand files on the way;
+ * the next run carries on from there and clears it once it reaches the end of the subtree.
+ * Repeated runs cover the library instead of repeating its first slice — a run that spent its
+ * event budget in the first thousand files would otherwise announce those same thousand again —
+ * and a pass outlives a restart of EiN, between its runs or during one. The stored pass also
+ * counts what its runs examined, announced and held back, so the run that finishes it reports the
+ * whole pass (`pass`), and under `--if-idle` it keeps the fact types that waited when it began,
+ * which every later run of the pass holds back in their place (ein/core#976). The run that
+ * finishes a pass records it on the root (`mediaScanLast`), which is how `media-heal` knows what
+ * the last pass found and held back.
+ *
+ * A run says how far through the subtree its pass is (`Command.progress`), counted against the
+ * files under the root, so a pass run as a pipeline step draws its progress where the step shows.
  *
  * The staleness checks compare a file with what EMS runs now, so a run that cannot ask EMS cannot
  * make them. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
@@ -43,43 +49,23 @@
 
 import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
-import type { PipelineSummary } from '@ein/api';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { stampLanes } from '@archive/staging/facts';
+import { allWait, factsWaiting, LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
 import { generations } from '@ems/client';
 
 const encoder = new TextEncoder();
 
 /**
- * An unfinished pass, kept on the node that was scanned.
- *
- * On the root rather than in a state directory of its own so it is per-subtree without any
- * encoding of the path into a name, and so it disappears with the root it describes — a staging
- * area that is deleted leaves nothing behind to go stale.
+ * Files between two stores of where a run is. A run over the whole archive takes the best part of
+ * an hour, so it stores its place as it goes, and a run that is stopped — EiN restarted under it —
+ * leaves a pass the next run goes on with.
  */
-const PASS_ATTR = 'mediaScanPass';
-
-/** What `PASS_ATTR` holds. */
-type Pass = {
-  /** The last file examined; the next run resumes past it. */
-  cursor: string;
-  /** Facts announced by the pass's runs so far. */
-  emitted: number;
-  /** Fact types the pass's runs held back so far. */
-  held: string[];
-  /**
-   * Under `--if-idle`, the fact types whose work waited when the pass began. Its later runs hold
-   * back these rather than what waits by then, which is mostly what the pass's own earlier runs
-   * announced: asked afresh, a pass would hold back every kind of gap it had found in its first run.
-   */
-  busy?: string[];
-};
-
-const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === 'string');
+const CHECKPOINT_FILES = 1000;
 
 /**
  * A numeric flag, falling back to its default when it is absent or not a number.
@@ -94,36 +80,17 @@ const numFlag = (value: unknown, fallback: number): number => {
   return value === undefined || !Number.isFinite(parsed) ? fallback : parsed;
 };
 
-/** The unfinished pass stored on `root`, or undefined when there is none. */
-const readPass = async (cmd: Command, root: string): Promise<Pass | undefined> => {
-  try {
-    const node = await cmd.sys.vfs.get(cmd.access, root);
-    const pass = (node.attrs as Record<string, unknown>)[PASS_ATTR] as Partial<Pass> | undefined;
-
-    if (!pass || typeof pass.cursor !== 'string' || !pass.cursor) return undefined;
-
-    return {
-      cursor: pass.cursor,
-      emitted: typeof pass.emitted === 'number' ? pass.emitted : 0,
-      held: isStrings(pass.held) ? pass.held : [],
-      ...(isStrings(pass.busy) ? { busy: pass.busy } : {}),
-    };
-  } catch {
-    return undefined;
-  }
-};
-
 /**
- * Store the pass where it stopped, or clear it when it finished.
+ * Store the pass where it stopped, clear it when it finished, or record the finished pass.
  *
- * Not being able to write it does not fail the scan: the walk has already happened and its
- * events are out. All that is lost is the resume point, and the next run starts at the top.
+ * Not being able to write does not fail the scan: the walk has already happened and its events
+ * are out. All that is lost is the resume point, and the next run starts at the top.
  */
-const writePass = async (cmd: Command, root: string, pass: Pass | null): Promise<void> => {
+const writeRoot = async (cmd: Command, root: string, attrs: Record<string, unknown>): Promise<void> => {
   try {
-    await cmd.sys.vfs.update(cmd.access, root, { attrs: { [PASS_ATTR]: pass } });
+    await cmd.sys.vfs.update(cmd.access, root, { attrs });
   } catch (error) {
-    await cmd.writeError(`media-scan: could not store the resume point on ${root}: ${error instanceof Error ? error.message : String(error)}\n`);
+    await cmd.writeError(`media-scan: could not store the pass on ${root}: ${error instanceof Error ? error.message : String(error)}\n`);
   }
 };
 
@@ -140,45 +107,19 @@ const segmentsBelow = (root: string, cursor: string | undefined): string[] | und
   return segments.length > 0 ? segments : undefined;
 };
 
-/** The kinds with a ready job in the pool at `path`; none when there is no pool yet (a fresh boot). */
-const readyKinds = async (cmd: Command, path: string): Promise<Set<string>> => {
-  if (!await cmd.sys.vfs.exists(cmd.access, path)) return new Set();
-  const stat = await cmd.sys.vfs.stat(cmd.access, path) as { byKind?: Record<string, { ready?: number }> };
-  return new Set(Object.entries(stat.byKind ?? {}).filter(([, counts]) => (counts.ready ?? 0) > 0).map(([kind]) => kind));
-};
-
-/**
- * The fact types whose work waits, each mapped to whether it does: a type waits when a pipeline it
- * starts has a ready trigger, or a ready job in the media pool of a kind one of its steps runs. A
- * scan then would announce again what is already on its way (the 8.1x above), so `--if-idle` holds
- * those facts back. Counted per pipeline, not per pool: a backlog of one kind of work does not
- * hold off gaps that feed another, and a live tracker's debounced `track-trips` job, ready for as
- * long as it sends, holds off nothing here. Types no pipeline starts are left out.
- *
- * Undefined when the definitions cannot be read, which the caller takes as everything waiting.
- */
-const factsWaiting = async (cmd: Command): Promise<Map<string, boolean> | undefined> => {
-  const listed = await cmd.execute('JSON_OUTPUT=1 pipeline list');
-  let pipelines: PipelineSummary[];
+/** The files under `root` a pass walks, for its progress: the originals, not their renditions. Undefined when they cannot be counted. */
+const filesUnder = async (cmd: Command, root: string): Promise<number | undefined> => {
   try {
-    pipelines = JSON.parse(listed.stdout);
+    const buckets = await cmd.sys.vfs.aggregate(cmd.access, {
+      types: ['file'],
+      within: root,
+      where: [{ ref: 'sourceId', op: 'missing' }],
+      group: [{ column: 'type' }],
+    });
+    return buckets.reduce((sum, bucket) => sum + bucket.count, 0);
   } catch {
-    await cmd.writeError(`media-scan: could not read the pipeline definitions: ${listed.stderr.trim() || listed.stdout.trim()}\n`);
     return undefined;
   }
-
-  const pools = cmd.env.POOLS_PATH || POOLS_PATH;
-  const triggers = await readyKinds(cmd, join(pools, 'triggers'));
-  const media = await readyKinds(cmd, join(pools, 'media'));
-  const waiting = new Map<string, boolean>();
-  for (const pipeline of pipelines) {
-    const busy = triggers.has(pipeline.name) || Object.values(pipeline.stepKinds ?? {}).some((kind) => media.has(kind));
-    for (const type of pipeline.triggers.flatMap((trigger) => trigger.on ?? [])) {
-      waiting.set(type, (waiting.get(type) ?? false) || busy);
-    }
-  }
-
-  return waiting;
 };
 
 const mediaScan = async (cmd: Command): CmdReturn => {
@@ -221,7 +162,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   const resumed = flags.restart ? undefined : stored;
   const resumeAt = segmentsBelow(root, resumed?.cursor);
   /** The stored pass as a run that examines nothing reports it. */
-  const untouched = { cursor: stored?.cursor ?? null, pass: { emitted: stored?.emitted ?? 0, held: stored?.held ?? [] } };
+  const untouched = { cursor: stored?.cursor ?? null, pass: { scanned: stored?.scanned ?? 0, emitted: stored?.emitted ?? 0, held: stored?.held ?? [] } };
 
   // Under `--if-idle`, the fact types held back because their work waits: those of the pass this
   // run continues, or asked now when it starts one. A pass is not started when every type the scan
@@ -230,9 +171,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   if (flags['if-idle'] && resumed?.busy) {
     waiting = new Map(resumed.busy.map((type) => [type, true]));
   } else if (flags['if-idle']) {
-    waiting = await factsWaiting(cmd);
-    const announceable = only ? [...only] : Object.values(MEDIA_EVENTS);
-    if (!waiting || announceable.every((type) => waiting!.get(type) !== false)) {
+    waiting = await factsWaiting(cmd, 'media-scan');
+    if (allWait(waiting, only ? [...only] : Object.values(MEDIA_EVENTS))) {
       // As under a spent budget below: nothing examined, the pass where the last run left it.
       if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, ...untouched, paths: [], held: [], waiting: true });
       else await cmd.writeLn('media-scan: media work is waiting, nothing started');
@@ -401,6 +341,11 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   };
 
   const events = dry ? undefined : await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+  /** The fact types that waited when the pass began, which every later run of it holds back. */
+  const busy = waiting ? [...waiting].filter(([, waits]) => waits).map(([type]) => type) : undefined;
+  /** What the pass's earlier runs examined, so its progress goes on from where they left it. */
+  const before = resumed?.scanned ?? 0;
+  const total = await filesUnder(cmd, root);
 
   let scanned = 0;
   let emitted = 0;
@@ -412,6 +357,14 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   /** The last file examined, and whether a budget cut the walk short there. */
   let lastPath: string | undefined;
   let stopped = false;
+
+  /** The pass so far, this run included. */
+  const passSoFar = (): Omit<Pass, 'cursor' | 'busy'> => ({
+    scanned: before + scanned,
+    emitted: (resumed?.emitted ?? 0) + emitted,
+    // The types EMS could not be asked about are owed like the ones held back.
+    held: [...new Set([...resumed?.held ?? [], ...held, ...unchecked])],
+  });
 
   /** Depth-first walk, stopping as soon as either budget is spent. */
   const walk = async (path: string, depth: number, resume: string[] | undefined): Promise<void> => {
@@ -523,9 +476,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
 
       // Recorded after the file is done, so the next run resumes past it rather than at it.
       lastPath = childPath;
+      if (total) cmd.progress((before + scanned) / total);
       if (emitted >= budget || (scanLimit > 0 && scanned >= scanLimit)) {
         stopped = true;
         return;
+      }
+      if (!dry && scanned % CHECKPOINT_FILES === 0) {
+        await writeRoot(cmd, root, { [PASS_ATTR]: { cursor: childPath, ...passSoFar(), ...(busy ? { busy } : {}) } satisfies Pass });
       }
     }
   };
@@ -537,25 +494,25 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   }
 
   const cursor = stopped ? lastPath ?? null : null;
-  // The pass so far, this run included.
-  const pass = { emitted: (resumed?.emitted ?? 0) + emitted, held: [...new Set([...resumed?.held ?? [], ...held, ...unchecked])] };
+  const pass = passSoFar();
 
-  // A completed pass over a root that never had one stored must not write to the root at all, or
-  // every run would bump its modtime to say nothing changed.
+  // A run that stopped stores where; one that finished clears the stored pass and records what the
+  // whole pass found.
   if (!dry && cursor) {
-    const busy = waiting ? [...waiting].filter(([, waits]) => waits).map(([type]) => type) : undefined;
-    await writePass(cmd, root, { cursor, ...pass, ...(busy ? { busy } : {}) });
-  } else if (!dry && stored) {
-    await writePass(cmd, root, null);
+    await writeRoot(cmd, root, { [PASS_ATTR]: { cursor, ...pass, ...(busy ? { busy } : {}) } satisfies Pass });
+  } else if (!dry) {
+    await writeRoot(cmd, root, { [PASS_ATTR]: null, [LAST_PASS_ATTR]: { at: Date.now(), ...pass } satisfies LastPass });
   }
 
   if (cmd.json) {
     await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...new Set([...held, ...unchecked])], unchecked });
   } else {
-    const resumedNote = resumed ? ` (${pass.emitted} over the whole pass)` : '';
-    const progress = stopped ? `, paused at ${cursor} (run again to continue)` : `, pass complete${resumedNote}`;
-    await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${progress}${dry ? ' (dry run)' : ''}`);
-    if (held.size > 0) await cmd.writeLn(`Held back while their work waits: ${[...held].join(', ')}`);
+    // A finished pass is told whole: run as a pipeline step, this is what its instance found.
+    const told = stopped ? { scanned, emitted, held: [...held] } : pass;
+    const progress = stopped ? `, paused at ${cursor} (run again to continue)` : resumed ? ', pass complete over several runs' : ', pass complete';
+    await cmd.writeLn(`Scanned ${told.scanned} file(s), emitted ${told.emitted} event(s)${progress}${dry ? ' (dry run)' : ''}`);
+    const waited = told.held.filter((type) => !unchecked.includes(type));
+    if (waited.length > 0) await cmd.writeLn(`Held back while their work waits: ${waited.join(', ')}`);
     if (unchecked.length > 0) await cmd.writeLn(`Not checked, EMS could not say what it runs now: ${unchecked.join(', ')}`);
     if (verbose) {
       for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);

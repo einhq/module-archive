@@ -61,7 +61,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
         assertEquals(before.budget, 1, 'empty pool must not block a scan');
         await vfs.poolAdd(ADMIN_ACCESS, `${root}/triggers`, { kind: 'media-ingest', params: {} });
         const blocked = await client.execJson<Record<string, unknown>>(`${env}media-scan ${ALBUMS_ROOT} --restart --max-active 1`);
-        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, pass: { emitted: 3, held: pass.held }, paths: [], held: [] });
+        assertEquals(blocked, { scanned: 0, emitted: 0, budget: 0, complete: false, cursor, pass: { scanned: 0, emitted: 3, held: pass.held }, paths: [], held: [] });
         assertEquals((await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanPass, pass);
       });
     }
@@ -143,7 +143,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
         assertEquals((await client.exec(`echo 'not really a jpeg' > ${album}/${name}`)).success, true);
         await vfs.update(ADMIN_ACCESS, `${album}/${name}`, { attrs: { mimetype: 'image/jpeg' } });
       }
-      type Scan = { scanned: number; emitted: number; complete: boolean; cursor: string | null; held: string[]; pass: { emitted: number; held: string[] } };
+      type Scan = { scanned: number; emitted: number; complete: boolean; cursor: string | null; held: string[]; pass: { scanned: number; emitted: number; held: string[] } };
       const scan = () => client.execJson<Scan>(`POOLS_PATH=${root} CFG_EMS_URL=${ems.url} media-scan ${album} --if-idle --scan-limit 1 --max-active 0 --limit 0`);
 
       const first = await scan();
@@ -161,7 +161,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       assertEquals(runs.reduce((sum, run) => sum + run.scanned, 0), 3);
       assertEquals(runs.every((run) => run.held.length === 0), true, JSON.stringify(runs));
       assertEquals(runs[1].emitted > 0, true, `emitted ${runs[1].emitted}`);
-      assertEquals(last.pass, { emitted: runs.reduce((sum, run) => sum + run.emitted, 0), held: [] });
+      assertEquals(last.pass, { scanned: 3, emitted: runs.reduce((sum, run) => sum + run.emitted, 0), held: [] });
       assertEquals((await vfs.get(ADMIN_ACCESS, album)).attrs.mediaScanPass, undefined);
 
       // A new pass asks again.

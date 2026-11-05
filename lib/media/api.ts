@@ -950,3 +950,15 @@ export type ContainerSubjects = {
   /** The container holds more than its listing reached; the counts are over what it did. */
   truncated: boolean;
 };
+
+/**
+ * `media-heal`: whether it announced a pass of `media-scan` over the archive, and why or why not.
+ * `only` is the fact types the announced pass is over; empty for every type.
+ */
+export type MediaHealAnswer = {
+  announced: boolean;
+  reason: 'due' | 'unfinished' | 'running' | 'failed' | 'resting' | 'waiting';
+  only: string[];
+  /** Under `resting`, when the rest ends, epoch ms. */
+  until?: number;
+};

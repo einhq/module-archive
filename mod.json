@@ -3,7 +3,7 @@
   "version": "0.11.4",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
-  "coreApi": "^0.11.0",
+  "coreApi": "^0.11.1",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -88,6 +88,7 @@
     "@archive/media/paired-sidecar": "./lib/media/paired-sidecar.ts",
     "@archive/media/picture-source": "./lib/media/picture-source.ts",
     "@archive/media/resolve-time": "./lib/media/resolve-time.ts",
+    "@archive/media/scan": "./lib/media/scan.ts",
     "@archive/media/sidecars": "./lib/media/sidecars.ts",
     "@archive/media/sizes": "./lib/media/sizes.ts",
     "@archive/media/staging": "./lib/media/staging.ts",
@@ -323,7 +324,7 @@
         "type": "number",
         "default": "21600",
         "label": "Rest after a full gap check (seconds)",
-        "description": "How long the background gap check waits after it has been through the whole archive before it starts over.",
+        "description": "How long the background gap check waits after a pass through the whole archive that found nothing before it starts another.",
         "group": "Processing",
         "restarts": ["media-heal"]
       },
