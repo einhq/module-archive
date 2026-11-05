@@ -458,11 +458,11 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
       assertEquals([again.cleared, again.trashed, again.recomputed], [0, 0, 0]);
     });
 
-    await t.step('the media-duplicates pipeline queues a kind the media worker takes', async () => {
+    await t.step('the media-duplicates pipeline queues a kind the media worker is offered', async () => {
       const pipeline = await Deno.readTextFile(new URL('../../pipelines/media-duplicates.yaml', import.meta.url));
-      const worker = await Deno.readTextFile(new URL('../../services/media-worker/start.sh', import.meta.url));
+      const kinds = await Deno.readTextFile(new URL('../../etc/media-worker.d/kinds', import.meta.url));
       assert(pipeline.includes('kind: dedupe') && pipeline.includes('on: media.duplicates.stale'));
-      assert(worker.includes('--kind dedupe'));
+      assert(/^dedupe\b/m.test(kinds));
     });
   } finally {
     await stub.close();

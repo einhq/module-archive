@@ -29,7 +29,8 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.10.0"
+    "ems": "^0.10.0",
+    "media": "^0.1.0"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
@@ -172,78 +173,6 @@
   },
   "config": {
     "options": [
-      {
-        "key": "CFG_CPU_SLOTS",
-        "scope": "system",
-        "type": "number",
-        "default": "2",
-        "label": "Media worker budget",
-        "description": "How much media work the media-worker service runs at once: thumbnails, renditions, fingerprints, face matching, duplicates and staging. Each job declares what it costs, so one video transcode can exclude a face assignment on a small box.",
-        "group": "Processing",
-        "restarts": [
-          "media-worker"
-        ]
-      },
-      {
-        "key": "CFG_CPU_WORKERS",
-        "scope": "system",
-        "type": "number",
-        "default": "4",
-        "label": "Media worker jobs in flight",
-        "description": "Upper bound on the media worker's concurrent jobs. The budget above is the real limit; this only caps how many can be in flight.",
-        "group": "Processing",
-        "restarts": [
-          "media-worker"
-        ]
-      },
-      {
-        "key": "CFG_CPU_NON_ENTRY_SLOTS",
-        "scope": "system",
-        "type": "number",
-        "default": "1",
-        "label": "Media worker slots for downstream work",
-        "description": "Soft reservation in the media worker's budget for work after ingest. Ingest borrows unused slots, but ready downstream jobs get them first so a continuous ingest backlog cannot starve the rest of the pipeline.",
-        "group": "Processing",
-        "restarts": [
-          "media-worker"
-        ]
-      },
-      {
-        "key": "CFG_MODEL_SLOTS",
-        "scope": "system",
-        "type": "number",
-        "default": "2",
-        "label": "Model requests in flight",
-        "description": "How many model-bound media steps (faces, picture vectors, text in pictures, text vectors, transcripts, voices) EiN keeps in flight against the media service at once. Whether each runs on the GPU or the CPU is the media service's decision; size this against its own model limit, since more slots than it runs at once only move the wait into its queue.",
-        "group": "Processing",
-        "restarts": [
-          "models"
-        ]
-      },
-      {
-        "key": "CFG_MODEL_SECOND_SLOTS",
-        "scope": "system",
-        "type": "number",
-        "default": "0",
-        "label": "Second models worker's slots",
-        "description": "Slots of a second worker for the model-bound media steps, which goes through the same backlogs in the reverse order, so the media service runs a second model family beside the first worker's. 0 leaves it off. Size both workers' slots together against the media service's model limit, and mind its card: two families' models must fit there, or one runs on the CPU.",
-        "group": "Processing",
-        "restarts": [
-          "models-second"
-        ]
-      },
-      {
-        "key": "CFG_MODEL_KIND_QUANTUM_MS",
-        "scope": "system",
-        "type": "number",
-        "default": "3600000",
-        "label": "Model backlog rotation (ms)",
-        "description": "How long the models worker stays on one backlog (faces, picture vectors, text in pictures, text vectors, transcripts, voices) before rotating to the next when work remains on more than one. Faces outrank the other backlogs and a crawl finds new ones continuously, so without this they would starve the rest outright. Each rotation costs the media service a minute or two of loading models and of slots waiting for the last long step of the old backlog, so an hour puts throughput before the wait of the other backlogs; a backlog with no work hands its turn on at once either way.",
-        "group": "Processing",
-        "restarts": [
-          "models"
-        ]
-      },
       {
         "key": "CFG_FACE_ATTACH_THRESHOLD",
         "scope": "system",

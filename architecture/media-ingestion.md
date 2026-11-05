@@ -111,12 +111,15 @@ waits for rather than by a shared DAG:
    Pooled work is the work a crawl must not start all at once: the model requests (slow calls
    into EMS), metadata ingestion, the stills, fingerprints and transcodes EMS makes while the step
    waits, `assign-faces` (a kNN over every known face, kept out of `detect-faces` so it holds no
-   model slot), and staging's own steps. All of it sits in one `/pools/media`, and the two
-   workers differ only in what they offer: the `models` service offers `models` slots and takes
-   `faces`/`embed-picture`/`embed-text`/`transcribe`/`diarize`, the `media-worker` service offers `cpu` slots and
-   takes `unzip`/`ingest`/`stills`/`fingerprint` plus `face-assign`/`speaker-assign`/`dedupe`/`retime`/`organize`/`sidecars`/`transcode`.
-   A `kind` no worker declares does not run slowly — it never runs at all, so the two
-   lists have to be kept in step (`modules/archive/services/*/start.sh`).
+   model slot), and staging's own steps. All of it sits in one `/pools/media`, which the media
+   module's workers serve, and they differ only in what they offer: `models` (and `models-second`)
+   offers `models` slots, `media-worker` offers `cpu` slots. Each takes the kinds the modules name
+   in their drop-ins, and the archive names its own: `etc/media-models.d/kinds` (`faces`,
+   `embed-picture`, `ocr`, `embed-text`, `transcribe`, `diarize`, `shots`) and
+   `etc/media-worker.d/kinds` (`unzip`, `ingest`, `stills`, `fingerprint`, `face-assign`,
+   `speaker-assign`, `dedupe`, `retime`, `organize`, `sidecars`, `transcode`, all but the first two
+   in the share kept for the work after ingest). A `kind` no worker takes does not run slowly — it
+   never runs at all, so `test/media/model-slots.test.ts` holds every step's kind to a drop-in.
    `assign-faces` also declares `exclusive: person-mint`, so two faces of the same
    new person cannot each mint one — previously only the worker's concurrency
    prevented that, and only by accident.
