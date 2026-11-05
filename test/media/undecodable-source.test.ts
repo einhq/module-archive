@@ -2,7 +2,7 @@
  * A source whose container cannot be read at all is a fact about the file, not a pipeline
  * failure — see ein/core#145.
  *
- * `exif-extract` writes the reason onto the file node (@archive/media/media-probe UNDECODABLE_ATTR);
+ * `exif-extract` writes the reason onto the file node (@media/probe UNDECODABLE_ATTR);
  * the pipelines that would try to decode it skip on the attr, and the two commands that
  * can also be invoked below a trigger answer the same way rather than spending an ffmpeg per
  * size on a file with no frame table.
@@ -19,8 +19,6 @@ type PipelineFile = { trigger?: { skipIfAttr?: string }; triggers?: { skipIfAttr
 
 /** Everything triggered by `media.metadata.extracted` that needs to decode the bytes. */
 const DECODING_PIPELINES = [
-  'media-stills',
-  'media-transcode',
   'media-fingerprint',
   'media-transcribe',
 ];

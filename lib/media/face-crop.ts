@@ -10,7 +10,7 @@
  */
 
 import type { Box, RenditionTarget } from '@ems/client';
-import { type Dims, type FracBox, type PixelBox, toPixels } from '@archive/media/orientation';
+import { type Dims, type FracBox, type PixelBox, toPixels } from '@media/orientation';
 
 /** Padding around the box, as a fraction of its size — a face reads better with some margin. */
 export const CROP_PADDING = 0.3;

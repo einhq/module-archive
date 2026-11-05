@@ -1,8 +1,7 @@
 /**
  * A pass of `media-scan` runs as the media-heal pipeline in a booted EiN: `media-heal` announces
  * it, the engine runs it as one instance on the albums root, the step's output says what the pass
- * found, `renditions-scan` runs beside it, and the pass after one that held types back is over
- * those types alone.
+ * found, and the pass after one that held types back is over those types alone.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
@@ -47,10 +46,9 @@ Deno.test({ name: 'a heal pass is a pipeline instance', sanitizeResources: false
       completedAt = status.completedAt!;
       assertEquals(status.triggerPath, ALBUMS_ROOT);
       assertEquals(status.triggerEvent?.data, { only: '' });
-      const steps = Object.fromEntries(status.steps.map((step) => [step.stepName, step]));
-      assertEquals([steps.scan?.status, steps.renditions?.status], ['completed', 'completed']);
-      assertStringIncludes(steps.scan.output ?? '', 'pass complete');
-      assertStringIncludes(steps.renditions.output ?? '', 'file(s) announced');
+      const [scan] = status.steps;
+      assertEquals([scan.stepName, scan.status], ['scan', 'completed']);
+      assertStringIncludes(scan.output ?? '', 'pass complete');
       const last = (await vfs.get(ADMIN_ACCESS, ALBUMS_ROOT)).attrs.mediaScanLast as { at: number };
       assertEquals(typeof last.at, 'number');
     });
@@ -61,7 +59,7 @@ Deno.test({ name: 'a heal pass is a pipeline instance', sanitizeResources: false
       assertEquals(await client.execJson<MediaHealAnswer>('media-heal'), { announced: true, reason: 'due', only: ['media.picture.stale'] });
       const status = await finished(completedAt);
       assertEquals(status.triggerEvent?.data, { only: 'media.picture.stale' });
-      assertEquals(status.steps.map((step) => step.status), ['completed', 'completed']);
+      assertEquals(status.steps[0].status, 'completed');
       // Nothing was held back this time, and nothing found: the next is a rest.
       assertEquals((await client.execJson<MediaHealAnswer>('media-heal')).reason, 'resting');
     });

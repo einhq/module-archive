@@ -10,7 +10,7 @@ import type { TimelineEntry } from '@archive/timeline/api';
 import type { NodeOwnership } from '@ein/api';
 import type { SourceFile } from '@archive/sources/api';
 import type { DateQualifier } from '@archive/people/date-qualifier';
-import type { Storyboard } from '@archive/media/api';
+import type { Storyboard } from '@media/api';
 
 export type PersonFace = {
   /** The region. Its crop is `<facePath>/image.avif`; a row does not repeat it, since a page is held under a byte budget. */

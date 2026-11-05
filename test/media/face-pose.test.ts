@@ -3,7 +3,7 @@
  */
 
 import { assertEquals } from '@std/assert';
-import type { Angle } from '@archive/media/orientation';
+import type { Angle } from '@media/orientation';
 import { type FacePose, isFacePose, remapPose, storedPose } from '@archive/media/face-pose';
 
 const frame = (angle: Angle, mirror = false) => ({ angle, mirror });

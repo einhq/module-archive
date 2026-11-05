@@ -15,7 +15,7 @@ import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnk
 import { stepExitCode } from '@ems/client';
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { seeSpeakers, tiedToRegions } from '@archive/media/speaker-faces';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 
 const seeSpeakersCmd = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];

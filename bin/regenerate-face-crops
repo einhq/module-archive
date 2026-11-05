@@ -1,16 +1,17 @@
 #!ts
 /**
- * Re-encode existing face crops from their source image and stored face box.
+ * Re-encode existing face crops from their source image and stored face box, or with `--missing`
+ * cut the ones an interrupted write left without bytes, or never created.
  *
- * This deliberately does not re-run detection and does not create missing crops: those are
- * separate repair concerns. A finite page plus an explicit cursor makes a corpus pass safe to
- * resume in production without one shell invocation owning tens of thousands of EMS calls.
+ * This deliberately does not re-run detection: the box is the input, and a crop is reproducible
+ * from it forever. A finite page plus an explicit cursor makes a corpus pass safe to resume in
+ * production without one shell invocation owning tens of thousands of EMS calls.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, verifyAccess } from '@ein/client';
 import { FACE_CROP_NAME, faceCropRect, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
-import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
-import { displayDims, type FracBox } from '@archive/media/orientation';
+import { rebuildFaceCrops, writeFaceCrop } from '@archive/media/face-crop-rebuild';
+import { displayDims, type FracBox } from '@media/orientation';
 import { imageOfRegion, REGION_TYPE } from '@archive/media/regions';
 
 const DEFAULT_LIMIT = 100;
@@ -39,7 +40,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
     string: ['limit', 'after', 'file'],
-    boolean: ['dry-run', 'verbose'],
+    boolean: ['dry-run', 'verbose', 'missing'],
     alias: { n: 'dry-run', v: 'verbose' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -56,6 +57,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
   const access = cmd.access;
   const dryRun = Boolean(flags['dry-run']);
   const verbose = Boolean(flags.verbose);
+  const missing = Boolean(flags.missing);
 
   let onlyFileId: string | undefined;
   if (flags.file) {
@@ -88,10 +90,15 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     regenerated: 0,
     skippedWithinBound: 0,
     skippedMissingCrop: 0,
+    skippedPresent: 0,
     skippedInvalid: 0,
     refused: 0,
     failed: 0,
   };
+
+  // `--missing`: the faces whose crop has no bytes or no node, cut again per picture, as
+  // `detect-faces` cuts them, so a picture's crops come from one decode.
+  const pictures = new Map<string, { path: string; attrs: FileAttrs }>();
 
   for (const face of faces) {
     const attrs = face.node.attrs as FaceAttrs;
@@ -107,6 +114,17 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
 
     const cropPath = `${face.absPath}/${FACE_CROP_NAME}`;
     const crop = await vfs.get(access, cropPath).catch(() => undefined);
+    if (missing) {
+      if (crop && Number(crop.attrs.size ?? 0) > 0) {
+        stats.skippedPresent++;
+        if (verbose) await cmd.writeLn(`skip present crop ${cropPath}`);
+        continue;
+      }
+      stats.candidates++;
+      if (verbose) await cmd.writeLn(`${dryRun ? 'would cut' : 'cutting'} ${cropPath}`);
+      pictures.set(fileId!, { path: sourcePath, attrs: file.attrs });
+      continue;
+    }
     if (!crop) {
       stats.skippedMissingCrop++;
       if (verbose) await cmd.writeLn(`skip missing crop ${cropPath}`);
@@ -147,6 +165,15 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     if (verbose) await cmd.writeLn(`regenerated ${cropPath}`);
   }
 
+  for (const [sourceId, picture] of dryRun ? [] : pictures) {
+    const rebuilt = await rebuildFaceCrops(cmd, { source: picture.path, sourceId, attrs: picture.attrs });
+    stats.regenerated += rebuilt.written.length;
+    for (const failure of rebuilt.failed) {
+      stats.failed++;
+      await cmd.writeError(`regenerate-face-crops: ${failure.path}: ${failure.reason}\n`);
+    }
+  }
+
   const summary = {
     ...stats,
     dryRun,
@@ -159,11 +186,14 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     await cmd.writeJSON(summary);
   } else {
     await cmd.writeLn(
-      `${dryRun ? 'Would regenerate' : 'Regenerated'} ${dryRun ? stats.candidates : stats.regenerated} face crop(s); ` +
-        `${stats.skippedWithinBound} already bounded, ${stats.skippedMissingCrop} missing, ${stats.skippedInvalid} invalid, ${stats.refused} refused, ${stats.failed} failed`,
+      missing
+        ? `${dryRun ? 'Would cut' : 'Cut'} ${dryRun ? stats.candidates : stats.regenerated} missing face crop(s); ` +
+          `${stats.skippedPresent} present, ${stats.skippedInvalid} invalid, ${stats.failed} failed`
+        : `${dryRun ? 'Would regenerate' : 'Regenerated'} ${dryRun ? stats.candidates : stats.regenerated} face crop(s); ` +
+          `${stats.skippedWithinBound} already bounded, ${stats.skippedMissingCrop} missing, ${stats.skippedInvalid} invalid, ${stats.refused} refused, ${stats.failed} failed`,
     );
     if (!summary.done && summary.nextAfter) {
-      await cmd.writeLn(`Next batch: regenerate-face-crops --limit ${limit} --after ${summary.nextAfter}`);
+      await cmd.writeLn(`Next batch: regenerate-face-crops${missing ? ' --missing' : ''} --limit ${limit} --after ${summary.nextAfter}`);
     }
   }
 
@@ -173,17 +203,19 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
 regenerateFaceCrops.spec = {
   name: 'regenerate-face-crops',
   effect: 'write' as const,
-  description: 'Re-encode a bounded, resumable batch of existing face crops without re-detecting faces',
+  description: 'Re-encode a bounded, resumable batch of existing face crops without re-detecting faces, or with --missing cut the ones that have no bytes',
   args: [],
   flags: [
     { name: 'limit', type: 'string' as const, description: `maximum face nodes to scan (default ${DEFAULT_LIMIT})` },
     { name: 'after', type: 'string' as const, description: 'resume after the node id returned as nextAfter' },
     { name: 'file', type: 'path' as const, description: 'restrict the batch to one source image' },
-    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report existing crops without rewriting them' },
+    { name: 'missing', type: 'bool' as const, description: 'cut the crops an interrupted write left without bytes, or never created, instead' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report the crops without writing them' },
     { name: 'verbose', type: 'bool' as const, description: 'print each crop considered' },
   ],
   examples: [
     'regenerate-face-crops --limit 200',
+    'regenerate-face-crops --missing --file /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
   ],
   returns: 'how many face crops were re-encoded, and where to resume.',
 };

@@ -3,10 +3,10 @@ import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
 import { embedImage, type EmbedImageResult, stepExitCode } from '@ems/client';
-import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { UNDECODABLE_ATTR } from '@media/probe';
 import { pictureSource } from '@archive/media/picture-source';
 import { PICTURE_DIR, pictureEmbeddingType, pictureNodeName } from '@archive/media/embedding-types';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 
 /**
  * Embed a photo or a video's keyframes in the image-text space (SigLIP2 through EMS

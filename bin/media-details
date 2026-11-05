@@ -20,11 +20,11 @@ import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, isMarkedDoubt, liveDoubt, typ
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { basename, resolve } from '@std/path';
 import { isFingerprintName } from '@archive/media/fingerprints';
-import { readStoryboard } from '@archive/media/storyboard';
-import type { ChapterBoundary } from '@archive/media/chapters';
+import { readStoryboard } from '@media/storyboard';
+import type { ChapterBoundary } from '@media/chapters';
 import { toText } from '@std/streams/to-text';
 import { ageAt, ageMonthsAt } from '@archive/people/genealogy';
-import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@archive/media/orientation';
+import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@media/orientation';
 import type {
   AlbumRef,
   DeviceRef,

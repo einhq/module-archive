@@ -26,7 +26,7 @@ import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnk
 import { stepExitCode, transcribe, type TranscribeResult } from '@ems/client';
 import { CHUNK_TARGET_SECONDS, chunkSegments, chunkVectors, parseVtt, segmentsToVtt, transcriptText } from '@archive/media/transcript';
 import { storeCurrentChunks } from '@ems/text-embedding';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 
 /**
  * Run whisper over the file. EMS extracts the sound itself, once per file and shared with the

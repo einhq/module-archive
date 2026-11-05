@@ -5,7 +5,7 @@
 
 import { imageFileName } from '@ein/api';
 import { type Command, type NodeAttrs, readRenditionTable } from '@ein/client';
-import { normalizeAngle, normalizeMirror } from '@archive/media/orientation';
+import { normalizeAngle, normalizeMirror } from '@media/orientation';
 
 /** The role of the rendition a photo is embedded from, in the rendition table. */
 const EMBED_ROLE = 'small';

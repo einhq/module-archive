@@ -10,7 +10,7 @@ import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client'
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
 import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
 import { LIGHTBOX_MANUAL_DETECTOR, nextManualName, REGION_TYPE, REGIONS_DIR, regionsPathOf } from '@archive/media/regions';
-import { clampBox, type FracBox, roundBox } from '@archive/media/orientation';
+import { clampBox, type FracBox, roundBox } from '@media/orientation';
 import { createUnnamedPerson, UNKNOWN_ROOT } from '@archive/people/person';
 import type { FaceAddResult } from '@archive/media/api';
 

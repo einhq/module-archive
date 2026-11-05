@@ -29,7 +29,8 @@ import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import type { MediaHealAnswer } from '@archive/media/api';
 import { MEDIA_EVENTS } from '@archive/media/event-rules';
-import { allWait, factsWaiting, HEAL_DUE, readLastPass, readPass } from '@archive/media/scan';
+import { HEAL_DUE, readLastPass, readPass } from '@archive/media/scan';
+import { allWait, factsWaiting } from '@media/waiting';
 
 /** The pipeline a pass runs as. */
 const PIPELINE = 'media-heal';

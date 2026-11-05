@@ -14,7 +14,7 @@
  * is the same in every frame.
  */
 
-import { type Angle, type FracPoint, pointDisplayToRaw, pointRawToDisplay } from '@archive/media/orientation';
+import { type Angle, type FracPoint, pointDisplayToRaw, pointRawToDisplay } from '@media/orientation';
 
 export type FacePose = { pitch: number; yaw: number; roll: number };
 

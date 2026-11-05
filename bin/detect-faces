@@ -8,7 +8,7 @@ import { type FaceCropRequest, writeFaceCrops } from '@archive/media/face-crop-r
 import { storedPose } from '@archive/media/face-pose';
 import { qualityLimitsFrom, type QualityReason, recognizable } from '@archive/media/face-quality';
 import { planRedetection } from '@archive/media/face-redetect';
-import { clampBox, displayDims, type FracBox, normalizeAngle, normalizeMirror, roundBox } from '@archive/media/orientation';
+import { clampBox, displayDims, type FracBox, normalizeAngle, normalizeMirror, roundBox } from '@media/orientation';
 import {
   detectedRegions,
   FACE_EMBEDDING_NAME,
@@ -21,8 +21,8 @@ import {
   REGIONS_DIR,
   regionsPathOf,
 } from '@archive/media/regions';
-import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
-import { reportUnwritable } from '@archive/media/writable';
+import { UNDECODABLE_ATTR } from '@media/probe';
+import { reportUnwritable } from '@media/writable';
 import { releasePerson } from '@archive/people/person';
 
 const log = (...args: unknown[]) => console.log('[detect-faces]', ...args);

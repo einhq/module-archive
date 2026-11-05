@@ -13,7 +13,7 @@ import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client'
 import { resolve } from '@std/path';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME } from '@archive/media/face-crop';
 import { writeFaceCrop } from '@archive/media/face-crop-rebuild';
-import { clampBox, type FracBox, roundBox } from '@archive/media/orientation';
+import { clampBox, type FracBox, roundBox } from '@media/orientation';
 import { faceEmbeddingPathOf, imageOfRegion, REGION_TYPE } from '@archive/media/regions';
 import type { FaceSetBoxResult } from '@archive/media/api';
 

@@ -11,7 +11,6 @@ import {
   CHUNK_TARGET_SECONDS,
   chunkNodeName,
   chunkSegments,
-  formatVttTime,
   MAX_CHUNKS,
   parseVtt,
   parseVttTime,
@@ -22,21 +21,6 @@ import {
 } from '../../lib/media/transcript.ts';
 
 const seg = (start: number, end: number, text: string): TranscriptSegment => ({ start, end, text });
-
-Deno.test('vtt time always carries the hours field', () => {
-  assertEquals(formatVttTime(0), '00:00:00.000');
-  assertEquals(formatVttTime(1.5), '00:00:01.500');
-  assertEquals(formatVttTime(83.25), '00:01:23.250');
-});
-
-Deno.test('vtt time crosses the hour boundary', () => {
-  assertEquals(formatVttTime(3600), '01:00:00.000');
-  assertEquals(formatVttTime(3661.007), '01:01:01.007');
-});
-
-Deno.test('a negative start clamps rather than emitting a broken cue', () => {
-  assertEquals(formatVttTime(-1), '00:00:00.000');
-});
 
 Deno.test('vtt carries the header, numbered cues and timings', () => {
   const vtt = segmentsToVtt([seg(0, 2.5, 'hej'), seg(2.5, 5, 'hur mar du')]);

@@ -206,7 +206,7 @@ justified. The choice is a per-browser preference (`media.layout`).
 
 Three details carry their weight. A tile's aspect is the **display** frame — `width`/`height` on
 the node are the raw raster and `angle` swaps the axes, so `displayAspect()` mirrors
-`@archive/media/orientation`'s `displayDims` (duplicated, not imported: the shell imports nothing of
+`@media/orientation`'s `displayDims` (duplicated, not imported: the shell imports nothing of
 a module's). Files indexed before `exif-extract` promoted dimensions have
 none, so the tile reports `naturalWidth/naturalHeight` back on load and the grid re-lays out —
 but only when the decoded shape disagrees with the one on screen by more than 1%, because

@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals-react';
 import { mediaItemFrom } from '@ein/ui/lib';
-import type { Storyboard } from '@archive/media/api';
+import type { Storyboard } from '@media/api';
 
 /**
  * Where one voice speaks in a recording: its longest turn. `key` names it (its speaker node). A

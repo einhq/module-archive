@@ -10,7 +10,7 @@
 
 import type { Command } from '@ein/client';
 import { probe, type ProbeResult } from '@ems/client';
-import type { StreamProbe } from '@archive/media/media-probe';
+import type { StreamProbe } from '@media/probe';
 
 /** One `media.probe`, with both tools' dumps. */
 export async function probeFile(cmd: Command, vfsPath: string, mimetype?: string): Promise<ProbeResult> {

@@ -32,8 +32,9 @@ import {
   pointDisplayToRaw,
   pointRawToDisplay,
   roundBox,
-} from '@archive/media/orientation';
+} from '@media/orientation';
 import { isFacePose, remapPose } from '@archive/media/face-pose';
+import { rebuildFaceCrops } from '@archive/media/face-crop-rebuild';
 
 const ANGLES = [0, 90, 180, 270];
 const ROTATIONS = ['cw', 'ccw', '180'];
@@ -155,16 +156,20 @@ const fileSetOrientation = async (cmd: Command): CmdReturn => {
   let stillsCode = 0;
 
   if (regenerate) {
-    // Face crops are cut from the raster *after* it is rotated into the display frame, so they
-    // come out sideways once the frame changes — even though the pixels they cover did not
-    // move. `-f` therefore has to reach them too, and it does: the crops are a target of the
-    // still class, cut from the boxes remapped just above. Doing it here as well was a
-    // second `convert` per face on every rotation, and one that never knew about a RAW's two
-    // rasters. See @media/face-crop-rebuild.
     const stills = await cmd.execute(`generate-derivatives ${shq(path)} -f --only still`);
     stillsCode = stills.code;
     if (stills.code !== 0) {
       await cmd.writeError(`file-set-orientation: still derivatives failed: ${stills.stderr}\n`);
+    }
+    // Face crops are cut from the raster *after* it is rotated into the display frame, so they
+    // come out sideways once the frame changes — even though the pixels they cover did not
+    // move. So every crop is cut again, from the boxes remapped just above
+    // (`@archive/media/face-crop-rebuild`).
+    const turned = await vfs.get(access, path);
+    const crops = await rebuildFaceCrops(cmd, { source: path, sourceId: turned.id, attrs: turned.attrs, force: true });
+    for (const failure of crops.failed) {
+      stillsCode = 1;
+      await cmd.writeError(`file-set-orientation: ${failure.path}: ${failure.reason}\n`);
     }
   }
 

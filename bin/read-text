@@ -3,10 +3,10 @@ import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
 import { EmsError, generations, readText, type ReadTextResult, stepExitCode } from '@ems/client';
-import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
-import { normalizeAngle, normalizeMirror } from '@archive/media/orientation';
+import { UNDECODABLE_ATTR } from '@media/probe';
+import { normalizeAngle, normalizeMirror } from '@media/orientation';
 import { clearExtractedText, storeExtractedText } from '@archive/media/extracted-text';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 
 /**
  * Read the text written in a picture — a sign, a shop front, a photographed page — with EMS

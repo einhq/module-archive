@@ -32,8 +32,8 @@ import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { FaceDoubtView } from '@archive/people/api';
 import { CROP_PADDING, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { FACE_EMBEDDING_NAME, REGION_TYPE } from '@archive/media/regions';
-import { readStoryboards } from '@archive/media/storyboard';
-import type { Storyboard } from '@archive/media/api';
+import { readStoryboards } from '@media/storyboard';
+import type { Storyboard } from '@media/api';
 
 // Re-exported so #!ts bins can reach the person types: a bin is copied to /tmp
 // and cannot use relative imports, only the import map's aliases.

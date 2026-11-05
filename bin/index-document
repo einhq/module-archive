@@ -4,7 +4,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, stepPhase } from '@ein/client';
 import { EmsError, extractText, stepExitCode } from '@ems/client';
 import { storeExtractedText } from '@archive/media/extracted-text';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 
 type ExtractResult = {
   text: string;

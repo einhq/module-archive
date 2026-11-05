@@ -6,11 +6,11 @@ import { type ExifDateParts, parseExifDate, pickCaptureDate } from '@archive/med
 import { resolveTime, stampedSources, timeAttrs } from '@archive/media/capture-resolve';
 import { clockForFile, offsetAt } from '@archive/device/device-zone';
 import { stepExitCode } from '@ems/client';
-import { resolveMediaFacts, UNDECODABLE_ATTR } from '@archive/media/media-probe';
-import { angleFromExifRaster, angleFromHeifRotation, angleFromVideoRotation, isAnamorphic, isHeifMimetype, pictureDims, sarFromExifRaw } from '@archive/media/orientation';
+import { resolveMediaFacts, UNDECODABLE_ATTR } from '@media/probe';
+import { angleFromExifRaster, angleFromHeifRotation, angleFromVideoRotation, isAnamorphic, isHeifMimetype, pictureDims, sarFromExifRaw } from '@media/orientation';
 import { videoCodecFromExifRaw } from '@archive/media/video-codec';
 import { probeFile, streamProbeOf } from '@archive/media/exif-service';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 import type { DuplicateFinding, ExifExtractAnswer } from '@archive/media/api';
 import { isIndexableMedia } from '@archive/media/event-rules';
 import { checkArrival, DUPLICATE_ATTR, findingOf, inboxOf, sameFinding, undeferred } from '@archive/staging/duplicates';
@@ -307,7 +307,7 @@ const exifExtract = async (cmd: Command): CmdReturn => {
   // conservative raster-shape policy in `angleFromExifRaster`.
   //
   // Neither the mappings nor the portrait exceptions are this command's: they live in
-  // `@archive/media/orientation`, and EMS subtracts the HEIF one back out to work out what a decoder
+  // `@media/orientation`, and EMS subtracts the HEIF one back out to work out what a decoder
   // has already done — the two have to cancel exactly.
   let angle: number | undefined;
   // The `irot` first, and with no portrait gate: it is not a tag an editor can leave behind but the
@@ -330,7 +330,7 @@ const exifExtract = async (cmd: Command): CmdReturn => {
   // A container matrix has no such failure mode: it is the instruction every player acts on, so
   // a portrait source that says "turn me" means it.
   //
-  // The mapping itself is `@archive/media/orientation`'s, shared with `promote-exif-attrs` and the legacy
+  // The mapping itself is `@media/orientation`'s, shared with `promote-exif-attrs` and the legacy
   // importer — all three have to read the matrix the same way or a file's angle changes with
   // whichever of them touched it last.
   if (rotation !== undefined) {

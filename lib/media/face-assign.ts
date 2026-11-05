@@ -22,7 +22,7 @@
 import { type Command, NodeNotFoundError } from '@ein/client';
 import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
-import { type Dims, displayDims, toPixels } from '@archive/media/orientation';
+import { type Dims, displayDims, toPixels } from '@media/orientation';
 import { createUnnamedPerson, releasePerson } from '@archive/people/person';
 import { FACE_EMBEDDING_TYPE, faceEmbeddingPathOf, faceEmbeddingsOfRegions, type RegionAttrs, regionsOfEmbeddings, regionsPathOf } from '@archive/media/regions';
 

@@ -1,7 +1,7 @@
 #!ts
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
-import { angleFromVideoRotation } from '@archive/media/orientation';
+import { angleFromVideoRotation } from '@media/orientation';
 import { videoCodecFromExifRaw } from '@archive/media/video-codec';
 
 /**

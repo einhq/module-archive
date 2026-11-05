@@ -63,7 +63,7 @@ export const MANUAL_PREFIX = 'manual-';
 /** Attributes of a region. The box and every person field are here, never on the embedding. */
 export type RegionAttrs = {
   fileId?: string;
-  /** Fractions (0..1) of the display frame — see @archive/media/orientation. */
+  /** Fractions (0..1) of the display frame — see @media/orientation. */
   faceBox?: { x: number; y: number; width: number; height: number };
   /** The detector's five points (eyes, nose, mouth corners), fractions of the display frame. */
   landmarks?: [number, number][] | null;

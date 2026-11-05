@@ -14,7 +14,7 @@ import { shq } from '@ein/client';
 import { MAX_RENDITION_TARGETS, poster, renditions } from '@ems/client';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME, faceCropTarget } from '@archive/media/face-crop';
 import { REGION_TYPE, regionsPathOf } from '@archive/media/regions';
-import { type FracBox, normalizeAngle, normalizeMirror } from '@archive/media/orientation';
+import { type FracBox, normalizeAngle, normalizeMirror } from '@media/orientation';
 
 /** What a crop needs off the source image's file node: the display frame the box is a fraction of. */
 type FaceSourceAttrs = {

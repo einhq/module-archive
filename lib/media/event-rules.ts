@@ -17,7 +17,8 @@
 import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
-import { RENDITIONS_AT_ATTR, RENDITIONS_FOR_ATTR } from '@archive/media/rendition-marker';
+import { RENDITIONS_AT_ATTR, RENDITIONS_FOR_ATTR } from '@media/rendition-marker';
+import { RENDITION_FACTS } from '@media/facts';
 import type { DomainEvent } from '@ein/client';
 import { DEV_PATH, ETC_PATH, isTrashPath, TEMP_PATH, USR_PATH, VAR_PATH } from '@ein/paths';
 import { deferredCopy } from '@archive/staging/deferral';
@@ -49,19 +50,10 @@ export const MEDIA_EVENTS = {
   textLanguageSet: 'media.text.language-set',
   /** `<file>/metadata/exif` is populated. Unlocks most of the pipeline fan-out. */
   metadataExtracted: 'media.metadata.extracted',
-  /**
-   * A file's renditions are all there under the rendition table in force: `generate-derivatives`
-   * wrote `renditionsAt` (`@archive/media/rendition-marker`). Only on the write that changed it,
-   * so a video's poster frame can be offered to its device once it exists.
-   */
-  renditionsMade: 'media.renditions.made',
-  /**
-   * A file's renditions are missing or were made by another rendition table: its `renditionsFor`
-   * is not the signature of the table in force, or a rendition was refused under a CPU budget EMS
-   * no longer runs. `renditions-scan` announces it; only the rendition pipelines take it, and they
-   * make what is missing.
-   */
-  renditionsStale: 'media.renditions.stale',
+  /** A file's renditions are all there under the rendition table in force (`@media/facts`). */
+  renditionsMade: RENDITION_FACTS.made,
+  /** A file's renditions are missing or stale; the media module's `renditions-scan` announces it. */
+  renditionsStale: RENDITION_FACTS.stale,
   /** `<file>/position` exists. Subject is the position node. */
   positionAvailable: 'media.position.available',
   /** A fingerprint landed under `<file>/metadata/`. */

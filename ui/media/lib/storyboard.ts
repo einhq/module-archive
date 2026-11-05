@@ -2,7 +2,7 @@
  * Reading a video's storyboard sheet: which tile shows the frame at a time, and how to draw that
  * tile alone as a preview. Pure, so it is tested without a browser.
  */
-import type { Storyboard } from '@archive/media/api';
+import type { Storyboard } from '@media/api';
 
 /**
  * The tile nearest `seconds`, and its top-left corner on the sheet in the sheet's pixels.

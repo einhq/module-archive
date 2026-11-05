@@ -3,11 +3,11 @@ import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_INPUT, stepPhase } from '@ein/client';
 import { stepExitCode } from '@ems/client';
-import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { UNDECODABLE_ATTR } from '@media/probe';
 import { computeFingerprints, type FingerprintResult } from '@archive/media/fingerprint-service';
 import { fingerprintDone } from '@archive/media/fingerprints';
 import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@archive/media/chromaprint';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 import { recordPaths } from '@archive/staging/duplicates';
 
 /**

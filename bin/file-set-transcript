@@ -17,7 +17,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
 import { storeCurrentChunks } from '@ems/text-embedding';
 import { CHUNK_TARGET_SECONDS, chunkSegments, chunkVectors, parseVtt, segmentsToVtt, type TranscriptSegment } from '@archive/media/transcript';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 import { decodeBase64 } from '@std/encoding/base64';
 import { resolve } from '@std/path';
 import { toText } from '@std/streams/to-text';

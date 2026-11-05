@@ -11,6 +11,7 @@
 
 import type { TranscriptSegment, TranscriptWord } from '@ems/client';
 import type { TextChunk } from '@ems/text-embedding';
+import { formatVttTime } from '@media/vtt';
 
 export type { TranscriptSegment };
 
@@ -41,18 +42,6 @@ export const CHUNK_TARGET_SECONDS = 60;
  * the window widens instead, so a very long file is coarser rather than louder.
  */
 export const MAX_CHUNKS = 400;
-
-/** Seconds as `HH:MM:SS.mmm`. WebVTT tolerates a missing hours field; players vary, so always emit it. */
-export const formatVttTime = (seconds: number): string => {
-  const clamped = Math.max(0, seconds);
-  const ms = Math.round(clamped * 1000);
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor(ms / 60_000) % 60;
-  const s = Math.floor(ms / 1000) % 60;
-  const rest = ms % 1000;
-  const pad = (value: number, width = 2) => String(value).padStart(width, '0');
-  return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(rest, 3)}`;
-};
 
 /**
  * WebVTT for the `<track>` element and the transcript panel.

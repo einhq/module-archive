@@ -17,7 +17,7 @@
  * `@archive/people/cover` (is it a good portrait) are separate, stricter questions.
  */
 
-import { type Dims, type FracBox, toPixels } from '@archive/media/orientation';
+import { type Dims, type FracBox, toPixels } from '@media/orientation';
 
 type QualityLimits = {
   /** Minimum detector confidence. */

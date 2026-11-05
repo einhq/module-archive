@@ -55,7 +55,8 @@ import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { stampLanes } from '@archive/staging/facts';
-import { allWait, factsWaiting, LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
+import { LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
+import { allWait, factsWaiting } from '@media/waiting';
 import { generations } from '@ems/client';
 
 const encoder = new TextEncoder();

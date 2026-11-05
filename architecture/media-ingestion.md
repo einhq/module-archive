@@ -100,7 +100,7 @@ waits for rather than by a shared DAG:
    **`undecodable`** is a file-node attr naming why nothing can read the container, written by
    `exif-extract` when ffprobe refuses the file outright and cleared (set to null) by any later
    index that succeeds — see `UNDECODABLE_ATTR` in
-   [media-probe.ts](../lib/media/media-probe.ts). ffprobe still exits 0 on a container
+   the media module's `@media/probe`. ffprobe still exits 0 on a container
    holding a codec it cannot decode, so a refusal means there is no track table and no decoder
    will ever get a frame out of the bytes. That is a property of the file, not a transient
    error, so the four decoding pipelines `skipIfAttr` on it instead of counting the same
@@ -134,105 +134,27 @@ waits for rather than by a shared DAG:
    ranking changes without touching a cover somebody set. Faces moved by hand — naming, merging, splitting — pass no
    pipeline, so the `people` module's `person-covers` service runs `person-cover --all` hourly
    as the reconciler.
-4. **Derivatives.** `generate-derivatives` reads the rendition table, `/etc/renditions.yaml`
-   (`readRenditionTable` in `@ein/client`; the archive ships it in its `etc/`, which `mod setup`
-   copies once and never overwrites), and writes each role's rendition as a **child file node**
-   under a `thumbnails/` directory of the media node, named after the role's box. Images are
-   **AVIF** (`thumb`, a `320x320` cover crop, and the `contain` roles `grid`, `small`, `medium`
-   and `large`: `512x512`/`800x800`/`1600x1600`/`2560x2560`), video is **AV1** in MP4 (`playback`,
-   `1920x1080.mp4` with AAC, and the silent `preview` clip, `480x480.mp4`) with the image roles up
-   to `medium` as poster frames — the frame a
-   second in, unless it is blank (black, white or a tape's blue screen): then EMS's `skip_blank`
-   takes the first of the frames at a tenth, a quarter and half of the picture that is not,
-   `posterAt` on the file says which second, and the hover clip starts there too — audio is AAC
-   in MP4 (`playback`, `128k-44100.m4a`) plus a rendered waveform in the image sizes. Which roles a
-   media type gets is the table's (`kinds` on each image role). The `<width>x<height>` name is the target **box**: a `contain`
-   rendition is usually shorter, and never upscaled past the source (`fit: contain` in EMS's
-   `image.renditions`, `min(iw,W)` in `video.transcode`). Only the `cover` thumb enlarges, because
-   it owes its consumers an exact square. A source smaller than a box lands at its own size in
-   the first box it fits, and the boxes above it are **not made** — they would be byte-for-byte
-   copies. The rule is `imageRolesOf` in `@ein/api`, and the shell's pages ask by it too (from the
-   node's `width`/`height`/`angle`/`sar`), so they never ask for a size a small file lacks, and
-   their `w` descriptors say the rendition's real width rather than the box's. A file without stored dimensions gets, and is
-   asked for, the whole ladder; `regenerate --prune` removes the copies made before this rule.
-   Only two consumers use the `cover` crop now — the 48px map marker and the album cover
-   card — so `512x512` (`grid`) exists as the _contain_ rendition the justified media grid draws
-   a tile from, and video gets it too so a video poster is the clip's own shape rather than a
-   square. `--only still|transcode|preview|storyboard` splits by the cost of the work, not by
-   media type: `media-stills` runs `still`, every AVIF picture of every type (photo sizes and face
-   crops, poster frames, waveforms), then `preview`, a video's hover clip (below);
-   `media-transcode` runs `transcode`, the full ffmpeg renditions of video and audio, so a failed
-   encode never takes the poster frame with it, and then `storyboard` (below); `--size a,b`
-   narrows a run to named roles, which is what makes adding a size a ~1-hour backfill rather than a
-   re-encode of the whole ladder; `--prune` deletes renditions that are no longer targets, which
-   is how a format change cleans up after itself. Every still-image size of one file is one
-   EMS call from `@archive/media/image-ladder` — `image.renditions` for a photo, `video.poster` for a
-   clip, `audio.waveform` for a recording — so the source is decoded once and every output is
-   an independent clone of it; no smaller rendition is ever cascaded from a larger one, and a
-   video's poster frame is extracted and square-pixelled once. Every image output is first
-   written to a hidden temporary VFS sibling whose physical path EMS is handed, and all staged
-   outputs must be non-empty and reconciled before any final path is replaced, so an
-   interrupted or partially successful ladder leaves the old renditions servable. A temp an
-   interrupted step leaves behind is removed by the next ladder or transcode into the same
-   directory once it is a day old (`@archive/media/staging`). Both
-   audio/video transcode settings are unchanged. All derivatives carry `sourceId`, which is
-   how the bridge knows not to index them. Originals are never modified (rotation applied
-   from the `angle` attr at derivative time, by EMS, in the display frame).
+4. **Derivatives.** The media module makes a file's renditions, and its `architecture/renditions.md`
+   says how: `media-stills` and `media-transcode` start on `media.metadata.extracted`, which this
+   bridge announces until the media module reads files itself, and the marker they write is
+   announced as `media.renditions.made`, on which `media-device-cover` offers a video's poster
+   frame to its device.
 
-   **Audio carries both a sound rendition and a picture.** EMS's `audio.waveform` draws the
-   envelope with ffmpeg's `showwavespic` in the UI's own accent-on-media-bg palette
-   (`WAVEFORM_STYLE` in `@archive/media/image-ladder` states the colours and the banner aspect), so audio
-   gets the same `thumb/grid/small/medium` AVIF renditions a photo does and the tile, the srcset and
-   the cover card need no special case. The picture is drawn at each target's aspect rather than
-   resized into one — `cover` draws square, `contain` a 3:1 banner — because centre-cropping a
-   waveform leaves a slice that reads as a blob, and every size comes from one decode of the
-   track (`aresample=8000` ahead of the drawing still leaves thousands of samples per column).
-
-   **Video carries two mp4s, and they are not a ladder.** `1920x1080.mp4` is what the lightbox
-   plays; `480x480.mp4` is a silent 20-second clip a grid tile plays under the pointer, and on a
-   touch screen when it scrolls into view. Both are one `video.transcode` call each — the hover
-   clip with `clip: {start, duration}` (an input-side seek, so the decode starts at a keyframe
-   near the offset instead of at zero) and `audio: null`, neither of which touches the filter
-   graph, so EMS's CPU and CUDA chains stay in lockstep. The clip starts exactly where the poster
-   frame was taken, at 00:00:01 or at `posterAt`, so swapping the still for the clip shows the
-   same frame twice rather than a jump cut. That second is known only once the poster frame is
-   made, so the clip is a class of its own, `preview`: a step of `media-stills` after `still`, on
-   the `transcode` kind beside the full rendition, since a 20-second re-encode costs like one.
-   `media-transcode` makes it again only when forced, as when a video is turned. A source
-   under 2s gets no clip at all — the poster already is the whole video — which is read off the
-   file node's promoted `duration`. The sound rendition's `bitrate`/`sampleRate` in the table
-   are **ceilings**, not targets — `audio.transcode` caps them at the source's own and stays
-   mono for a mono source, after a flat 128k stereo turned a 14.8 MB 64 kbps mono tape rip into
-   a 30 MB rendition carrying strictly less information.
-
-   The transcodes (`@archive/media/transcode`) and the image ladder
-   **create the output node before EMS writes** — `sourceId` has to be set at creation so
-   the bytes route to the volatile tier — and so they must delete that node again when the encode
-   fails, or the failure is indistinguishable from success to anything downstream. For the same
-   reason `generate-derivatives` treats a **0-byte rendition as absent** rather than as done:
-   presence alone made one failed encode permanent, since every later run skipped the empty
-   placeholder.
-
-   **Face crops are a target too, and that is what makes them repairable.** A face crop
-   (`regions/<region>/image.avif`) is a rendition like any other — it carries the source's
-   `sourceId` and routes to the volatile tier — but it is _written_ by `detect-faces`, from a
-   box rather than from a role of the table, and it lands under the region instead of under
-   `thumbnails/`. For a long time that also meant it was in no entry of `generate-derivatives`'
-   target table, and the table is what a `regenerate` sweep walks: `find-broken-renditions`
-   could _find_ an interrupted crop and nothing could rebuild it, so on a multi-week crawl
-   every interrupted write was permanent (14 of them in production, and the UI shows its placeholder
-   for those faces indefinitely). It is now the `face` target of the `still` class, so
-   `regenerate --size face` is the repair pass and `-f` re-cuts. Rebuilding needs no detection —
-   the box is stored on the region and a crop is reproducible from it forever — and both
-   authors of `regions/` are covered, `face-*` and `manual-*` alike. A video region's crop is
-   cut from the frame at its `atSeconds` (`video.poster` with the box as `crop`, one call per
-   frame). `--prune` never
-   reaches it: prune only walks `thumbnails/`. The rebuild itself is
+   **Face crops are the archive's own renditions.** A face crop (`regions/<region>/image.avif`)
+   is a rendition like any other — it carries the source's `sourceId` and routes to the volatile
+   tier — but it is _written_ by `detect-faces`, from a box rather than from a role of the table,
+   and it lands under the region instead of under `thumbnails/`. `regenerate-face-crops
+   --missing` cuts the crops an interrupted write left without bytes, or never created, which on
+   a multi-week crawl would otherwise stay as placeholders for good; without `--missing` it
+   re-encodes crops that exceed `MAX_CROP_DIMENSION`, both in resumable pages over the whole
+   corpus. Turning a picture (`file-set-orientation`) cuts every one of its crops again, from the
+   remapped boxes. Rebuilding needs no detection — the box is stored on the region and a crop is
+   reproducible from it forever — and both authors of `regions/` are covered, `face-*` and
+   `manual-*` alike. A video region's crop is cut from the frame at its `atSeconds`
+   (`video.poster` with the box as `crop`, one call per frame). The rebuild itself is
    [@archive/media/face-crop-rebuild](../lib/media/face-crop-rebuild.ts), shared with
-   `detect-faces` and `regenerate-face-crops` so the four spellings this used to have cannot
-   come apart again; the geometry stays in `@archive/media/face-crop`.
-   `regenerate-face-crops` remains separate because it answers a different question — re-encode
-   crops that exceed `MAX_CROP_DIMENSION`, in resumable pages over the whole corpus.
+   `detect-faces`, `regenerate-face-crops` and `file-set-orientation`; the geometry stays in
+   `@archive/media/face-crop`.
    Cutting from the original rather than from a decoded copy used to mean the rebuild owed the
    frame question its own answer per family, which is where face crops have gone wrong before: a
    RAW's box was measured on the embedded preview while ImageMagick decoded the sensor image, and
@@ -240,51 +162,6 @@ waits for rather than by a shared DAG:
    fraction and nothing else, and EMS cuts it out of whatever raster it decodes, so neither family
    needs a declared frame any more (docs/api.md §3.3 and §4.2 in the ems repo; what EiN owes
    is the node's `angle`/`mirror` and its mimetype).
-
-   Two constraints are worth knowing before touching this. **A rendition must carry no
-   orientation tag** — ImageMagick's `-strip` does not clear its own orientation property, only
-   the EXIF block, and the AVIF encoder writes the property as a HEIF `irot` transform which every
-   decoder then applies, undoing the rotation: the identical chain measured 800x1600 as PNG and
-   1600x800 as AVIF, so every rendition of an EXIF-rotated photo was served in the original
-   orientation. EMS clears it (`-orient Undefined` beside `-strip`, `ems/tools/magick.py`) and the
-   contract promises it (§4.2). And an AVIF's `ftyp` header is indistinguishable from an MP4's
-   to the content sniffer, so `src/lib/media/mime.ts` classifies it by major brand — otherwise
-   every thumbnail is stored, and served, as `video/mp4`. The audio rendition uses ffmpeg's
-   **ipod** muxer for the same reason: it writes the `M4A` brand that marks the file as audio.
-
-   **A video also carries a storyboard**, `storyboard-<tile>.avif`: its frames at an even interval
-   tiled into one sheet, for the frame the lightbox player's timeline shows under the pointer,
-   and for the picture of a voice heard in the video (`person-voices`, `person-unknown`). EMS's `video.storyboard` makes it from the `1920x1080.mp4` rendition rather than the source —
-   the rendition is upright and is the timeline the player plays — so it is its own class,
-   `storyboard`, run by `media-transcode` after the transcode and forced with it when a video is
-   turned; not `still`, which a turn re-makes inline. The interval grows with the length rather
-   than the sheet (the table's `storyboard`: at most 240 tiles of 160 px), so any video is one sheet, and how
-   to cut it into tiles is on the sheet's node (`storyboard` attr: interval, count, columns,
-   rows, tile size; `@archive/media/storyboard`). A video under 4 s gets none, and an EMS from
-   before the op is skipped rather than failed. `--prune` keeps it by name; writing a sheet
-   removes any other. The marker waits for it, so a video without one is a gap
-   `renditions-scan` announces, and `media-transcode` makes the sheet.
-
-   **The marker says a file's renditions are complete, and under which table.** Once a file has
-   every rendition the table owes it — each role of its kind, less the sizes a small picture
-   does without, the clip a video under 2 s and the storyboard one under 4 s are never owed —
-   `generate-derivatives` writes `renditionsFor`, the first 16 hex digits of the SHA-256 of the
-   table's entries for the file's kind (`@archive/media/rendition-marker`), and `renditionsAt`.
-   A rendition EMS refused under its CPU budget (`transcodeRefused`), a storyboard EMS cannot read
-   the rendition for or has no route for, and the storyboard of a refused playback count as
-   accounted for. Stills and transcodes are separate pipelines, so whichever run completes the
-   set writes it; a run with a failure marks nothing, and a run that finds everything in place
-   writes nothing, so the write is news. The bridge announces it as `media.renditions.made`, on
-   which `media-device-cover` offers a video's poster frame to its device. The gap is the other
-   side of the same attr: `renditions-scan` asks, per kind, for the files of that mimetype whose
-   `renditionsFor` is not the signature in force — an attr query over every tree, not a walk of
-   the albums or a listing of `thumbnails/` — passes over a rendition, an undecodable file, an
-   empty or unread one, a trash and a folder that wants no renditions, and announces
-   `media.renditions.stale`, which only `media-stills` and `media-transcode` take; a refusal
-   recorded under another budget than EMS runs now reopens its file too. `media-heal` runs it
-   beside `media-scan`, whose walk has no rendition term any more. A changed table changes the
-   signature of the kinds it touched and no other, so editing `/etc/renditions.yaml` reopens
-   those files at the next pass; the files no role names any more stay until `regenerate --prune`.
 5. **Serve/browse.** The UI lists a media directory via `ls -l`; when a `thumbnails/` child is present
    it requests `/file/<path>/thumbnails/512x512.avif` (grid tile) and a `srcset` of the photo renditions
    (lightbox, so the browser picks per viewport), falling back to the original when `thumbnails/`
@@ -930,11 +807,6 @@ waits for rather than by a shared DAG:
    Region search stays fast by **batching**, not duplicating: see "Batch resolution" above. A
    Gothenburg bbox went from ~23s to **0.6s** with no denormalized copy to keep in sync.
 
-`regenerate <path>` re-runs derivative generation over existing media (backfill); add `--force
---prune` after a format or size change to rebuild the set and drop the renditions it replaced.
-`--size a,b` narrows it to named sizes and `--mime 'video/*'` to one media type, so adding a size
-that only one type has does not cost a `generate-derivatives` exec per photo in the corpus.
-
 `promote-exif-attrs <path>` copies `width`/`height`/`duration` from a file's `metadata/exif` node
 onto the file node itself, for everything indexed before `exif-extract` started promoting them.
 Two reads and a write per file, against a full exiftool run for `exif-extract -f`. It deliberately
@@ -958,22 +830,8 @@ it by) and a video's `metadata/chapters` (below). Keeping these here deliberatel
 **manual** `description` file attr (shown in the lightbox sidebar) so no extraction ever overwrites
 a hand-written one.
 
-**A video's chapters (`metadata/chapters`).** `detect-chapters`, a step of `media-transcode` after
-the transcode, asks EMS where the `playback` rendition cuts from one shot to the next (`video.shots`:
-TransNetV2 over every frame at 48×27, and its rules — a peak over 0.6, leader as a gap, a lasting
-change of colour, cuts under a second apart merged, no shot under three seconds — measured on the
-archive's own film transfers and phone clips, wow `notes/lessons-media.md`). A video whose EXIF
-names its camera is one take with no leader: a cut there must score 0.85, and a blank stretch in it
-is a dark scene, not leader. The rendition, not the original: its clock is the player's and it is
-upright. The node is a db-tier `file` holding one
-WebVTT cue per chapter, with the cuts on it (`boundaries`: `{t, score, kind}`, `kind: leader` at the
-end of black or white leader), `detectedBy`, `detectedWith` (the rules) and `detectedAt`, which marks
-it done. A cut's `t` is the new shot's first frame. A video with no cut gets the node with no
-boundaries, so it is not looked at again; one EMS cannot decode, or will not within its CPU budget,
-gets it with `unreadable` and no `detectedAt`, and any other failure fails the step. `media-details` reads the cuts off the
-node as `chapters`, the lightbox player's segments and skip buttons. Not forced when a video is
-turned, which moves no cut in time; no gap term: chapters are no rendition, and the marker does not
-wait for them.
+**A video's chapters (`metadata/chapters`)** are the media module's: `detect-chapters`, a step of
+`media-transcode`, writes them, and `media-details` reads their cuts as `chapters`.
 
 **Duplicate findings on staged media.** A staged media original carries `duplicate`
 (`DuplicateFinding` in `@archive/media/api`), and `@archive/staging/duplicates` is its one writer.
@@ -1145,7 +1003,7 @@ nothing a person wrote lives only in the trash.
 command that asks for it — `transcribe-file`, `detect-faces`, `embed-picture`, `voiceprint-file`,
 `compute-fingerprint`, `exif-extract`, `generate-derivatives`, `index-document` — first checks that
 the caller may write the file
-(`@archive/media/writable`, on `verifyAccess` from `@ein/client`), and the passes over the archive
+(`@media/writable`, on `verifyAccess` from `@ein/client`), and the passes over the archive
 (`media-reembed`, `regenerate-face-crops`) skip what the caller may not write. A
 write refused only after EMS answered would let anyone who may read a file, the guest included,
 spend the service's time on it as often as they asked. The pipeline runs these as the
@@ -1203,7 +1061,7 @@ onto the file node's attrs by `exif-extract`; the raw exiftool output stays on `
 doesn't bloat every file-node read. A video's duration is ffprobe's container duration from the
 same `media.probe`, and exiftool's only when ffprobe has none: exiftool reads a DV AVI's length from
 its first RIFF segment and estimates an MPEG program stream's from the bitrate, and was short by
-ten hours over fry's 50 such videos where ffprobe was short on none (`@archive/media/media-probe`).
+ten hours over fry's 50 such videos where ffprobe was short on none (`@media/probe`).
 Audio keeps exiftool's duration and falls back to ffprobe's, which it already reads for normalized
 stream facts. An OpenDML AVI's `fileinfo.frames` is exiftool's `TotalFrameCount`, not the first
 segment's `FrameCount`. The `metadata/exif` child's existence doubles as the pipeline's
@@ -1367,37 +1225,9 @@ legacy import places the node under the old entry name (whitespace slugified, `_
 and keeps the filename in the attr, so anything displaying a file reads `attrs.name` and falls
 back to the node name only when it is absent.
 
-**Orientation, and the frame coordinates live in.** A file node's `angle` (0/90/180/270) plus
-`mirror` define the **display frame**: the raster rotated counter-clockwise by `angle`, then
-flopped. `exif-extract` derives `angle` from the EXIF Orientation tag — through
-`angleFromExifOrientation`, and from a HEIF's `irot` through `angleFromHeifRotation`, the same
-reading EMS subtracts back out for the turn libheif already made, so the tag has one reading
-and not two — but a manual override
-(`angleManual`, which the legacy import sets) always wins and after that step the tag is never
-read again: every renderer and every model call rotates by the node's angle instead
-([@archive/media/orientation](../lib/media/orientation.ts)). A **video**'s angle comes from the
-container display matrix rather than a tag, through `angleFromVideoRotation` — the one mapping
-`exif-extract`, `promote-exif-attrs --angle` and the legacy importer all read it with, and one
-that must only ever be applied to a `video/` mimetype because the ungrouped `Rotation` key means
-something else on a still and on a HEIF. That single authority is the point:
-OpenCV's `imread` silently applies the EXIF tag, so before this the detector worked in one frame
-while the cropper worked in another, and every face cutout on a rotated image (~20% of the
-corpus) came from the wrong part of the picture.
-
-**The pixel shape, `sar`.** A quarter turn is not the only difference between a stored raster and
-the picture it stands for: a video stream can declare a **sample aspect ratio**, and then the
-picture is the raster times that ratio (AVCHD records 1080 lines in 1440 coded columns at SAR 4:3
-and _is_ 1920x1080). What `width`/`height` hold depends on the container — exiftool reads a
-QuickTime track header, which already has the ratio applied, and an `.MTS`'s H.264 sequence
-header, which has no ratio in it at all — so the node stores `sar` **relative to its own raster**
-(`sarForRaster`): 1 for everything whose stored numbers are already the shape, and 4/3 for the
-`.MTS` album. `exif-extract` reads it off the dump where it can (`sarFromExifRaw`) and pays for
-one ffprobe where it cannot, which is the only container family that needs it. `pictureDims`
-applies it, `displayDims` deliberately does not — the crop paths measure real pixels of the
-original — and the UI's `displayAspect` mirrors the first so a grid tile is laid out at the shape
-it will paint at instead of reflowing when the picture decodes. Every path that writes a _still_
-from a video frame bakes the ratio into the pixels instead, because an image file has nowhere to
-put it.
+**Orientation, and the frame coordinates live in,** and the pixel shape `sar`, are the media
+module's (`@media/orientation`, and its `architecture/renditions.md`): a node's `angle` and
+`mirror` define the display frame renditions are made in.
 
 Derivatives are rendered in that frame, and **face boxes and landmarks are stored as fractions
 (0..1) of it** — the convention the legacy archive used. The same numbers therefore apply to the

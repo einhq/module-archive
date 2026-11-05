@@ -15,7 +15,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { clearExtractedText, storeExtractedText } from '@archive/media/extracted-text';
-import { reportUnwritable } from '@archive/media/writable';
+import { reportUnwritable } from '@media/writable';
 import { decodeBase64 } from '@std/encoding/base64';
 import { resolve } from '@std/path';
 

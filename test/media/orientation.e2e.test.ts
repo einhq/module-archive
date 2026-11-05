@@ -19,8 +19,8 @@
 import { assertAlmostEquals, assertEquals } from '@std/assert';
 import { poster, probe, renditions } from '@ems/client';
 import { faceCropTarget, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
-import { resolveMediaFacts } from '@archive/media/media-probe';
-import { pictureDims, sarFromExifRaw } from '@archive/media/orientation';
+import { resolveMediaFacts } from '@media/probe';
+import { pictureDims, sarFromExifRaw } from '@media/orientation';
 import { containerTest } from '@ein/testing';
 import { ANAMORPHIC, emsCommand, ROTATED, stageMediaFixtures } from './media-fixtures.ts';
 

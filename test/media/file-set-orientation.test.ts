@@ -11,7 +11,7 @@ import { ALBUMS_ROOT } from '@archive/paths';
 import { assertAlmostEquals, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext, testCommands } from '@ein/testing';
-import { boxDisplayToRaw } from '../../lib/media/orientation.ts';
+import { boxDisplayToRaw } from '@media/orientation';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 

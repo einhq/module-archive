@@ -30,7 +30,6 @@ const MODEL_STEPS = [
   { file: 'media-transcribe.yaml', step: 'transcribe-file', kind: 'transcribe' },
   { file: 'media-voiceprint.yaml', step: 'voiceprint-file', kind: 'diarize' },
   { file: 'media-speaker-faces.yaml', step: 'see', kind: 'diarize' },
-  { file: 'media-transcode.yaml', step: 'chapters', kind: 'shots' },
 ];
 
 Deno.test('model-bound steps take one slot each, and every kind they name is one the models worker is offered', async () => {
@@ -58,5 +57,5 @@ Deno.test('every kind a CPU-bound step queues under is one the media worker is o
       assertEquals(offered.includes(step.kind), true, `${entry.name}: ${name} queues under ${step.kind}, which the drop-in does not name`);
     }
   }
-  assertEquals(named.includes('stills') && named.includes('transcode'), true);
+  assertEquals(named.includes('ingest') && named.includes('fingerprint'), true);
 });
