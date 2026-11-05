@@ -248,7 +248,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
    * model worker is down and cannot say what a decode would be stamped with. A field EMS answers
    * with null is a model it does not run, which has nothing to compare with and owes nothing.
    */
-  const unchecked = !gaps ? [] : [
+  const unchecked: string[] = !gaps ? [] : [
     ...(ems ? [] : [MEDIA_EVENTS.pictureStale, MEDIA_EVENTS.facesStale, MEDIA_EVENTS.ocrStale, MEDIA_EVENTS.textEmbeddingStale]),
     ...(transcriptsOff || transcriptGeneration ? [] : [MEDIA_EVENTS.transcriptStale]),
   ].filter((type) => !only || only.has(type));
