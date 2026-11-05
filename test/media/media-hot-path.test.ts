@@ -2,12 +2,17 @@ import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
+import { startStubEms } from '@ems/testing';
 
 const testCtx = createTestContext({ modules: ['archive'] });
+
+/** An EMS that says what it runs now: a transcript signature and no other model. */
+const answeringEms = () => startStubEms({ capabilities: { signatures: { transcribe: 'whisper-test' } } });
 
 Deno.test({ name: 'media hot-path reads and reconciliation backpressure', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const { vfs } = await testCtx.setup();
   const client = await testCtx.server.createShellClient();
+  const ems = answeringEms();
   try {
     assertEquals((await client.exec(`mkdir -p ${ALBUMS_ROOT}/hot && mkfile ${ALBUMS_ROOT}/hot/p.jpg`)).success, true);
     const path = `${ALBUMS_ROOT}/hot/p.jpg`;
@@ -76,7 +81,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
 
     await t.step('--if-idle holds back only the facts whose pipelines have work ready', async () => {
       const root = '/idle-pools';
-      const env = `POOLS_PATH=${root} `;
+      const env = `POOLS_PATH=${root} CFG_EMS_URL=${ems.url} `;
       await client.exec(`mkdir -p ${root}`);
       for (const pool of ['triggers', 'media']) assertEquals((await client.exec(`mknode -t pool ${root}/${pool}`)).success, true);
       const write = async (file: string, body: string) => {
@@ -139,7 +144,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
         await vfs.update(ADMIN_ACCESS, `${album}/${name}`, { attrs: { mimetype: 'image/jpeg' } });
       }
       type Scan = { scanned: number; emitted: number; complete: boolean; cursor: string | null; held: string[]; pass: { emitted: number; held: string[] } };
-      const scan = () => client.execJson<Scan>(`POOLS_PATH=${root} media-scan ${album} --if-idle --scan-limit 1 --max-active 0 --limit 0`);
+      const scan = () => client.execJson<Scan>(`POOLS_PATH=${root} CFG_EMS_URL=${ems.url} media-scan ${album} --if-idle --scan-limit 1 --max-active 0 --limit 0`);
 
       const first = await scan();
       assertEquals([first.scanned, first.complete, first.held], [1, false, []]);
@@ -163,8 +168,62 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       const next = await scan();
       assertEquals(next.held, ['media.file.discovered']);
     });
+
+    await t.step('a pass waits while EMS cannot be asked, and a run by hand owes the checks it could not make', async () => {
+      const root = '/ems-down-pools';
+      if (!await vfs.exists(ADMIN_ACCESS, '/dev/events')) assertEquals((await client.exec('mkdir -p /dev && mkfile /dev/events')).success, true);
+      await client.exec(`mkdir -p ${root}`);
+      for (const pool of ['triggers', 'media']) assertEquals((await client.exec(`mknode -t pool ${root}/${pool}`)).success, true);
+      const album = `${ALBUMS_ROOT}/ems-down`;
+      await client.exec(`mkdir -p ${album}`);
+      for (const name of ['a.jpg', 'b.jpg', 'c.jpg']) {
+        assertEquals((await client.exec(`echo 'not really a jpeg' > ${album}/${name}`)).success, true);
+        await vfs.update(ADMIN_ACCESS, `${album}/${name}`, { attrs: { mimetype: 'image/jpeg' } });
+      }
+      type Scan = {
+        scanned: number;
+        complete: boolean;
+        cursor: string | null;
+        held: string[];
+        unchecked: string[];
+        waiting?: boolean;
+        pass: { held: string[] };
+      };
+      const scan = (url: string, flags: string) =>
+        client.execJson<Scan>(`POOLS_PATH=${root} CFG_EMS_URL=${url} media-scan ${album} --scan-limit 1 --max-active 0 --limit 0 ${flags}`);
+      const stored = async () => ((await vfs.get(ADMIN_ACCESS, album)).attrs.mediaScanPass as { cursor: string; held: string[] }).cursor;
+      const owed = ['media.picture.stale', 'media.faces.stale', 'media.ocr.stale', 'media.text-embedding.stale', 'media.transcript.stale'];
+
+      const down = answeringEms();
+      const first = await scan(down.url, '--if-idle');
+      assertEquals([first.scanned, first.complete, first.unchecked], [1, false, []]);
+      await down.close();
+
+      // The run that cannot ask EMS walks nothing and leaves the cursor where the last run stored it.
+      const waited = await scan(down.url, '--if-idle');
+      assertEquals([waited.waiting, waited.scanned, waited.cursor, waited.unchecked], [true, 0, first.cursor, owed]);
+      assertEquals(await stored(), first.cursor);
+
+      // One asked for a type EMS is not needed for walks on.
+      const discovery = await scan(down.url, '--if-idle --only media.file.discovered -n');
+      assertEquals([discovery.waiting, discovery.scanned, discovery.unchecked], [undefined, 1, []]);
+
+      // A run by hand walks on and counts what it could not check as held back, which the pass owes.
+      const byHand = await scan(down.url, '');
+      assertEquals([byHand.scanned, byHand.unchecked], [1, owed]);
+      assertEquals(owed.every((type) => byHand.held.includes(type) && byHand.pass.held.includes(type)), true, JSON.stringify(byHand));
+      assertEquals(await stored(), byHand.cursor);
+
+      // With EMS back the pass finishes, still owing them.
+      const runs = [await scan(ems.url, '--if-idle')];
+      while (!runs.at(-1)!.complete && runs.length < 3) runs.push(await scan(ems.url, '--if-idle'));
+      const last = runs.at(-1)!;
+      assertEquals([runs[0].scanned, last.complete, runs.every((run) => run.unchecked.length === 0)], [1, true, true]);
+      assertEquals(owed.every((type) => last.pass.held.includes(type)), true, JSON.stringify(last));
+    });
   } finally {
     client.close();
+    await ems.close();
     await testCtx.teardown();
   }
 });

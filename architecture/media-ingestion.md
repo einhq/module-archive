@@ -318,7 +318,7 @@ waits for rather than by a shared DAG:
    answers the matches as the `picture` channel, beside its `content`, `transcript`, `authored` and
    `name` channels; `search` fuses them by rank (below). Picture cosines have their
    own floor (0.08), since a clear SigLIP2 match is 0.1-0.2. `media-scan` announces `picture.stale` for a
-   photo or video with no vectors or vectors from another embedder (`imageEmbedGeneration()`).
+   photo or video with no vectors or vectors from another embedder (`generations()` in `@ems/client`).
    The model choice and the weights come from a retrieval eval over the archive.
    core's `src/lib/search` — core's since ein/core#442, its text from the modules' `search-*` providers — is a faceted **candidate-source pipeline**:
    text, tags, a time window, a map region, a content kind (a file's by its mimetype —
@@ -1136,7 +1136,7 @@ re-embed and never a re-transcription: `media-reembed` walks the text nodes and 
 missing or another model's, from the stored text alone. `media-scan` announces
 `media.text-embedding.stale` for a media file whose extracted text, transcript
 (also when cut at another `chunkSeconds`) or hand-written description has no vector from the
-embedder EMS runs now (`textEmbedGeneration()`), naming which in `data.stale`; `media-embed-text`
+embedder EMS runs now (`generations()` in `@ems/client`), naming which in `data.stale`; `media-embed-text`
 runs `media-reembed <file>`, the same rules for that one file. A text with nothing to embed (an
 empty text node, a transcript with `speech: false`) is never announced. Search has a
 floor of 0.35 on this space, measured on the retrieval eval's judgements.
@@ -1309,7 +1309,7 @@ region it does not find stays as a tag when a person decided who it is, and goes
 detection run here?" is the `facesAt` attr on the **file**, not the existence of `regions/` — a
 directory the importer also writes, and one a photo or video with nobody in it never gets — and
 `facesBy` names the face models that ran: `media-scan` announces `faces.stale` for a file whose
-`facesBy` is not what EMS runs (`faceGeneration()`), which `media-faces-stale` detects again behind
+`facesBy` is not what EMS runs (`generations()` in `@ems/client`), which `media-faces-stale` detects again behind
 new media. Vectors of two recognisers are never searched side by side. Which old boxes are named is decided by the
 legacy `tags/<faceId> -> /people/<slug>` links and not by the box's detector
 (`resolveFaceTags` in `@importer/legacy`): a machine-drawn box a human named carries exactly as

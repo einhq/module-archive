@@ -2,7 +2,7 @@
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, stepPhase } from '@ein/client';
-import { EmsError, ocrGeneration, readText, type ReadTextResult, stepExitCode } from '@ems/client';
+import { EmsError, generations, readText, type ReadTextResult, stepExitCode } from '@ems/client';
 import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
 import { normalizeAngle, normalizeMirror } from '@archive/media/orientation';
 import { clearExtractedText, storeExtractedText } from '@archive/media/extracted-text';
@@ -101,7 +101,7 @@ const readTextCommand = async (cmd: Command): CmdReturn => {
       }
       // The bytes are the problem: retrying cannot change the answer, so it is "no text".
       if (verbose) await cmd.writeLn(`Not readable, marking: ${error.message}`);
-      readBy = await ocrGeneration(cmd);
+      readBy = (await generations(cmd))?.ocr ?? null;
     }
   }
 

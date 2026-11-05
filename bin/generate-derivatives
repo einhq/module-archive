@@ -2,7 +2,7 @@
 import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_INPUT, STEP_EXIT_TEMPORARY } from '@ein/client';
-import { EmsError, stepExitCode, transcodeBudget } from '@ems/client';
+import { EmsError, generations, stepExitCode } from '@ems/client';
 import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
 import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/event-rules';
 import { rebuildFaceCrops } from '@archive/media/face-crop-rebuild';
@@ -558,7 +558,7 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
     // forever on a file that has nothing stale to prune. Record it and carry on; the marker is
     // what closes the gap, not the exit code.
     if ('refused' in outcome) {
-      if (encodeBudget === undefined) encodeBudget = await transcodeBudget(cmd);
+      if (encodeBudget === undefined) encodeBudget = (await generations(cmd))?.cpuBudget ?? null;
       refused.set(`${baseName}.${target.ext}`, { reason: outcome.refused, budget: encodeBudget ?? '', at: Date.now() });
       await cmd.writeError(`generate-derivatives: ${outputPath}: refused: ${outcome.refused}\n`);
       continue;

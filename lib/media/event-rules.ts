@@ -249,7 +249,7 @@ export type TranscodeRefusal = {
   /**
    * The signature of the CPU-decode budget the refusal was computed against —
    * `capabilities.encode.cpu_budget` as EMS reported it at the time (its
-   * `<max MB>/<MB per 1k frames>/<max windows>`), read through `transcodeBudget()`.
+   * `<max MB>/<MB per 1k frames>/<max windows>`), read through `generations()`.
    *
    * This is what makes the marker clearable without anyone having to remember to clear it. The
    * refusal is a function of EMS's memory budget and not of the source, so raising the budget
@@ -313,7 +313,7 @@ export type RuleContext = {
    */
   transcriptGeneration?: string;
   /**
-   * The image embedder EMS runs now (`imageEmbedGeneration()` in `@ems/client`). A photo or video
+   * The image embedder EMS runs now (`generations()` in `@ems/client`). A photo or video
    * whose `metadata/picture` carries another `embeddedBy`, or none, is re-embedded: vectors from
    * two models are not comparable and must not be searched side by side.
    *
@@ -324,14 +324,14 @@ export type RuleContext = {
    */
   pictureGeneration?: string;
   /**
-   * The engine EMS reads pictures' text with now (`ocrGeneration()` in `@ems/client`). A picture
+   * The engine EMS reads pictures' text with now (`generations()` in `@ems/client`). A picture
    * marked read whose `ocrBy` names another engine, or none, is read again; one whose text a
    * person wrote is not. Derived from EMS like `pictureGeneration`, and undefined when EMS cannot
    * be asked, which disables the check.
    */
   ocrGeneration?: string;
   /**
-   * The face models EMS runs now (`faceGeneration()` in `@ems/client`). A detected file whose
+   * The face models EMS runs now (`generations()` in `@ems/client`). A detected file whose
    * `facesBy` names others, or none, has its faces detected again: their vectors are in another
    * space. Only when EMS runs the models recognition is tuned for (`FACE_MODEL`), since a
    * re-detection with any others stores nothing. Derived from EMS like `pictureGeneration`, and
@@ -339,7 +339,7 @@ export type RuleContext = {
    */
   faceGeneration?: string;
   /**
-   * The text embedder EMS runs now (`textEmbedGeneration()` in `@ems/client`). A text under a
+   * The text embedder EMS runs now (`generations()` in `@ems/client`). A text under a
    * file's `metadata/` whose vector carries another `embeddedBy`, or has none, is embedded again
    * from the stored text. Derived from EMS like `pictureGeneration`, with no `off`, and undefined
    * when EMS cannot be asked or runs a model nothing has given a type to, which disables the check.
@@ -347,7 +347,7 @@ export type RuleContext = {
   textGeneration?: string;
   /**
    * The CPU-decode budget EMS is running under, as `TranscodeRefusal.budget` stores it
-   * (`transcodeBudget()` in `@ems/client`).
+   * (`generations()` in `@ems/client`).
    *
    * A refusal recorded against a different signature is stale: the operator changed the budget,
    * so the rendition deserves another attempt and the gap re-opens on its own. **Undefined

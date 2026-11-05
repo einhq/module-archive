@@ -34,6 +34,11 @@
  * stored pass also counts what its runs announced and held back, so the run that finishes it
  * reports the whole pass (`pass`), and under `--if-idle` it keeps the fact types that waited when
  * it began, which every later run of the pass holds back in their place (ein/core#976).
+ *
+ * The staleness checks compare a file with what EMS runs now, so a run that cannot ask EMS cannot
+ * make them. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
+ * names the types it could not check (`unchecked`) and counts them as held back, which the pass then
+ * owes (ein/core#1006).
  */
 
 import { POOLS_PATH } from '@ein/paths';
@@ -45,14 +50,7 @@ import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { stampLanes } from '@archive/staging/facts';
-import {
-  faceGeneration as faceGenerationOf,
-  imageEmbedGeneration,
-  ocrGeneration as readTextGeneration,
-  textEmbedGeneration,
-  transcodeBudget,
-  transcribeSignature,
-} from '@ems/client';
+import { generations } from '@ems/client';
 
 const encoder = new TextEncoder();
 
@@ -288,35 +286,40 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     return 0;
   }
 
-  // The `transcribedWith` a transcript decoded now would carry: a transcript stamped with anything
-  // else is transcribed again. The value is what EMS says it would write now, derived on the side
-  // that decodes — the only way the two cannot disagree. When EMS cannot be asked the check is off
-  // for this pass, and says so, rather than guessing. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off` turns it
-  // off for good: a change of whisper settings re-transcribes every recording, hours of the card,
-  // which an operator may rather schedule than have start itself.
+  // What EMS stamps its results with now: a file whose transcript, picture vectors, faces, read
+  // text or text vectors were made by something else is made again. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off`
+  // turns the transcript check off for good: a change of whisper settings re-transcribes every
+  // recording, hours of the card, which an operator may rather schedule than have start itself.
   const transcriptsOff = cmd.env.CFG_MEDIA_TRANSCRIPTS_CURRENT === 'off';
-  const transcriptGeneration = transcriptsOff || !gaps ? undefined : (await transcribeSignature(cmd) ?? undefined);
-  if (gaps && !transcriptsOff && !transcriptGeneration && verbose) {
-    await cmd.writeLn('EMS unavailable: transcripts are not checked for staleness this pass');
+  const ems = gaps ? await generations(cmd) : null;
+  const transcriptGeneration = transcriptsOff ? undefined : ems?.transcribe ?? undefined;
+  // The CPU-decode budget EMS refuses transcodes against. A rendition it refused under this same
+  // budget is not a gap; one refused under a different budget is, because the operator moved it
+  // and the refusal no longer follows. Undefined when EMS cannot be asked, which trusts no refusal
+  // — the direction that can only re-announce, never hide.
+  const cpuEncodeBudget = ems?.cpuBudget ?? undefined;
+  const pictureGeneration = ems?.imageEmbed ?? undefined;
+  const ocrGeneration = ems?.ocr ?? undefined;
+  const faceGeneration = ems?.faces ?? undefined;
+  const textGeneration = ems?.textEmbed ?? undefined;
+
+  /**
+   * The fact types whose check is off because EMS did not answer, or, for transcripts, because its
+   * model worker is down and cannot say what a decode would be stamped with. A field EMS answers
+   * with null is a model it does not run, which has nothing to compare with and owes nothing.
+   */
+  const unchecked = !gaps ? [] : [
+    ...(ems ? [] : [MEDIA_EVENTS.pictureStale, MEDIA_EVENTS.facesStale, MEDIA_EVENTS.ocrStale, MEDIA_EVENTS.textEmbeddingStale]),
+    ...(transcriptsOff || transcriptGeneration ? [] : [MEDIA_EVENTS.transcriptStale]),
+  ].filter((type) => !only || only.has(type));
+
+  // A pass that walked on would store its cursor past files whose gaps it never saw, and media-heal
+  // would rest on a pass that announced nothing. A type already held back is owed either way.
+  if (flags['if-idle'] && unchecked.some((type) => !waiting?.get(type))) {
+    if (cmd.json) await cmd.writeJSON({ scanned: 0, emitted: 0, budget: 0, complete: false, ...untouched, paths: [], held: [], waiting: true, unchecked });
+    else await cmd.writeLn(`media-scan: EMS cannot say what it runs now, nothing started (${unchecked.join(', ')} cannot be checked)`);
+    return 0;
   }
-
-  // The CPU-decode budget EMS refuses transcodes against, asked of EMS itself. A rendition it
-  // refused under this same budget is not a gap; one refused under a different budget is,
-  // because the operator moved it and the refusal no longer follows. Undefined when EMS cannot
-  // be asked, which trusts no refusal — the direction that can only re-announce, never hide.
-  const cpuEncodeBudget = gaps ? (await transcodeBudget(cmd) ?? undefined) : undefined;
-
-  // The image embedder EMS runs now: a file whose picture vectors name another, or none, is
-  // re-embedded. Asked of EMS like the transcript signature, and off for this pass when EMS
-  // cannot answer rather than guessed.
-  const pictureGeneration = gaps ? (await imageEmbedGeneration(cmd) ?? undefined) : undefined;
-  // The same for text in pictures: a picture read by another engine is read again.
-  const ocrGeneration = gaps ? (await readTextGeneration(cmd) ?? undefined) : undefined;
-  // The same for faces: a file whose faces other models found has them detected again.
-  const faceGeneration = gaps ? (await faceGenerationOf(cmd) ?? undefined) : undefined;
-  // The same for text vectors: extracted text, a transcript or a hand-written description
-  // whose vector names another text embedder, or has none, is embedded again from its text.
-  const textGeneration = gaps ? (await textEmbedGeneration(cmd) ?? undefined) : undefined;
 
   // Every *method* present, which is what the reconciler path needs. Spelled out rather than
   // `Required<RuleContext>` so the config fields stay genuinely optional.
@@ -535,7 +538,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
 
   const cursor = stopped ? lastPath ?? null : null;
   // The pass so far, this run included.
-  const pass = { emitted: (resumed?.emitted ?? 0) + emitted, held: [...new Set([...resumed?.held ?? [], ...held])] };
+  const pass = { emitted: (resumed?.emitted ?? 0) + emitted, held: [...new Set([...resumed?.held ?? [], ...held, ...unchecked])] };
 
   // A completed pass over a root that never had one stored must not write to the root at all, or
   // every run would bump its modtime to say nothing changed.
@@ -547,12 +550,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   }
 
   if (cmd.json) {
-    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...held] });
+    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...new Set([...held, ...unchecked])], unchecked });
   } else {
     const resumedNote = resumed ? ` (${pass.emitted} over the whole pass)` : '';
     const progress = stopped ? `, paused at ${cursor} (run again to continue)` : `, pass complete${resumedNote}`;
     await cmd.writeLn(`Scanned ${scanned} file(s), emitted ${emitted} event(s)${progress}${dry ? ' (dry run)' : ''}`);
     if (held.size > 0) await cmd.writeLn(`Held back while their work waits: ${[...held].join(', ')}`);
+    if (unchecked.length > 0) await cmd.writeLn(`Not checked, EMS could not say what it runs now: ${unchecked.join(', ')}`);
     if (verbose) {
       for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);
     }
@@ -578,7 +582,8 @@ mediaScan.spec = {
     {
       name: 'if-idle',
       type: 'bool' as const,
-      description: 'Hold back the facts whose pipelines have work ready, in the trigger pool or the media pool, and name them; scan nothing when all wait',
+      description:
+        'Hold back the facts whose pipelines have work ready, in the trigger pool or the media pool, and name them; scan nothing when all wait, or when EMS cannot be asked what it runs now',
     },
     {
       name: 'only',

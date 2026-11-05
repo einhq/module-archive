@@ -28,7 +28,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_TEMPORARY, verifyAccess } from '@ein/client';
 import { ETC_PATH, VAR_PATH } from '@ein/paths';
-import { stepExitCode, textEmbedGeneration } from '@ems/client';
+import { generations, stepExitCode } from '@ems/client';
 import { resolve } from '@std/path';
 import {
   authoredHash,
@@ -125,7 +125,7 @@ const mediaReembed = async (cmd: Command): CmdReturn => {
 
   // A minute, not the interactive five seconds: right after an EMS restart the worker is loading its
   // models and answers capabilities slowly, and a backfill has time to wait.
-  const generation = await textEmbedGeneration(cmd, 60);
+  const generation = (await generations(cmd, 60))?.textEmbed;
   const vectorType = generation ? textEmbeddingType(generation) : undefined;
   if (!generation || !vectorType) {
     await cmd.writeError(`media-reembed: EMS has no current text embedder this knows (${generation ?? 'not answering, or older than 2.1'})\n`);
