@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { MediaLightbox } from '../components/MediaLightbox.tsx';
 import { lightboxRestedPath } from '../signals/lightbox.ts';
-import { useSurface } from '@ein/ui/hooks';
+import { usePageSubject, useSurface } from '@ein/ui/hooks';
 import { lightboxRoute } from '@ein/ui/lib';
 import { currentMediaItem, endLightbox, showLightboxPath } from '@ein/ui/signals';
 
@@ -13,13 +13,14 @@ export const handle = { fullBleed: true };
 /**
  * One media file in the lightbox. Opened from a grid it is shown full screen over the page,
  * walking the list it was opened from (`openMediaAt`); opened by its URL it is the page, and
- * walks what the page behind offers, or nothing.
+ * walks what the page behind offers, or nothing, and says it is about the file (`usePageSubject`).
  */
 export default function MediaPage() {
   const { id } = useParams();
   const path = id ? decodeURIComponent(id) : undefined;
   const navigate = useNavigate();
   const surface = useSurface();
+  usePageSubject({ title: path?.split('/').pop(), node: path });
 
   useLayoutEffect(() => {
     if (path) showLightboxPath(path);
