@@ -7,6 +7,10 @@
  * not the node's, `--serial` writes `serialNumber`, and a timezone is checked
  * against ICU before it is stored rather than sitting there unusable.
  *
+ * A changed make, model or serial links the media already in the archive that carry the new
+ * fingerprint, and a changed clock setting re-dates the media already linked, both through
+ * `device-relink`.
+ *
  * Clearing is explicit. `--clear timezone` removes the attr; passing an empty
  * `--timezone ''` does not, because "set it to nothing" and "unset it" are
  * different intentions and only one of them is ever meant.
@@ -15,6 +19,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { resolve } from '@std/path';
 import { NODE_TYPE_DEVICE } from '@archive/device/device';
+import type { RelinkResult } from '@archive/device/api';
 import { DEVICE_KINDS, isDeviceKind } from '@archive/location/track-profile';
 
 /** Flag → attr name. `serial` is the flag; `serialNumber` is what the node carries. */
@@ -127,20 +132,35 @@ const deviceUpdate = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  // Three registry settings change the meaning of dates on files already linked to this device:
-  // `digitizer` says its clock records the scan rather than the exposure, `timezone` says which
-  // meridian its clock was set to, and `quicktimeUtc` says its videos' `CreateDate` is UTC. Each
-  // moves its files' dates, so they reapply through the indexed file-side devicePath lookup — no
-  // EXIF scan, no exiftool. An unapplied setting is worse than an absent one.
+  // A changed make, model or serial decides which files are this device's, and the files already
+  // in the archive that carry the new fingerprint were passed over when they were indexed: they
+  // are linked now, as `device-create` links a new device's. Three registry settings change the
+  // meaning of dates on files already linked to it instead: `digitizer` says its clock records the
+  // scan rather than the exposure, `timezone` says which meridian its clock was set to, and
+  // `quicktimeUtc` says its videos' `CreateDate` is UTC. Each moves its files' dates, so they
+  // reapply through the indexed file-side devicePath lookup — no EXIF scan, no exiftool. Linking
+  // re-dates every file of the device as well, so one `device-relink` covers both. An unapplied
+  // setting is worse than an absent one. A fingerprint cleared down to nothing links nothing.
+  const FINGERPRINT = ['make', 'model', 'serialNumber'];
   const RETIMING_SETTINGS = ['digitizer', 'timezone', 'quicktimeUtc'];
-  let relink: Record<string, unknown> | undefined;
-  if (changed.some((field) => RETIMING_SETTINGS.includes(field))) {
-    const reapplied = await cmd.execute(`JSON_OUTPUT=1 device-relink ${shq(path)} --reapply`);
-    if (reapplied.code !== 0) {
-      await cmd.writeError(`device-update: ${path}: setting saved, but existing media were not updated: ${reapplied.stderr.trim() || 'relink failed'}\n`);
+  const after = { ...node.attrs } as Record<string, unknown>;
+  for (const flag of Object.keys(FIELDS)) {
+    const value = flags[flag as keyof typeof flags];
+    if (typeof value === 'string') after[FIELDS[flag]] = value;
+  }
+  for (const field of clear) delete after[FIELDS[field]];
+  const has = (attr: string) => typeof after[attr] === 'string' && after[attr] !== '';
+  const links = changed.some((field) => FINGERPRINT.includes(field)) && (has('serialNumber') || (has('make') && has('model')));
+  const retimes = changed.some((field) => RETIMING_SETTINGS.includes(field));
+
+  let relink: RelinkResult | undefined;
+  if (links || retimes) {
+    const ran = await cmd.execute(`JSON_OUTPUT=1 device-relink ${shq(path)}${links ? '' : ' --reapply'}`);
+    if (ran.code !== 0) {
+      await cmd.writeError(`device-update: ${path}: setting saved, but existing media were not ${links ? 'linked' : 'updated'}: ${ran.stderr.trim() || 'relink failed'}\n`);
       return 1;
     }
-    relink = JSON.parse(reapplied.stdout) as Record<string, unknown>;
+    relink = JSON.parse(ran.stdout) as RelinkResult;
   }
 
   if (cmd.json) await cmd.writeJSON({ ok: true, path, changed, ...(relink ? { relink } : {}) });

@@ -2,7 +2,7 @@ import { DEVICES_ROOT } from '@archive/paths';
 import { useCallback, useEffect, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { NodeChildEntry, NodeOwnership, shq } from '@ein/ui/lib';
-import type { DeviceProposal, ScanResult } from '@archive/device/api';
+import type { DeviceProposal, RelinkResult, ScanResult } from '@archive/device/api';
 export type { DeviceProposal } from '@archive/device/api';
 
 export { DEVICES_ROOT };
@@ -125,14 +125,10 @@ export function useDevices(): UseDevicesResult {
     if (proposal.make) parts.push(`--make ${shq(proposal.make)}`);
     if (proposal.model) parts.push(`--model ${shq(proposal.model)}`);
     if (proposal.serialNumber) parts.push(`--serial ${shq(proposal.serialNumber)}`);
-    if (parts.length > 0) await execCommand(`device-update ${shq(path)} ${parts.join(' ')}`);
-
-    // Writing the fingerprint only decides *future* indexing; the files already
-    // in the archive were passed over when they were indexed and stay unlinked
-    // until something goes and gets them.
-    const result = await execCommand<{ linked: number }>(`device-relink ${shq(path)}`);
+    // Writing the fingerprint links the files already in the archive that carry it.
+    const result: { relink?: RelinkResult } = parts.length > 0 ? await execCommand<{ relink?: RelinkResult }>(`device-update ${shq(path)} ${parts.join(' ')}`) : {};
     await Promise.all([fetchDevices(), runScan()]);
-    return result.linked ?? 0;
+    return result.relink?.linked ?? 0;
   }, [fetchDevices, runScan]);
 
   return { devices, loading, error, refetch: fetchDevices, scan, scanning, scanError, runScan, adopt };

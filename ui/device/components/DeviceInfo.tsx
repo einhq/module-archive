@@ -59,8 +59,8 @@ export function DeviceInfo({ device, owners, editable, travels, setOwner, remove
               Link existing media
             </Button>
             <Text size='xs' c='dimmed'>
-              Files are linked to their device when it is registered and when they are indexed. A make, model or serial number changed afterwards leaves the files it now
-              matches unclaimed; this finds them by fingerprint and attaches them.
+              Files are linked to their device when they are indexed, when it is registered and when its make, model or serial number is changed. This looks again for the
+              files that carry its fingerprint and are linked to no device, such as one indexed while linking was not running.
             </Text>
           </Stack>
         )}

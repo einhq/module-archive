@@ -231,7 +231,7 @@ export default function DeviceDetailPage() {
             <MediaTimeline
               device={device.path}
               emptyMessage={matchable
-                ? 'Nothing is linked to this device yet: no file carries its make and model or serial number. If they changed since it was registered, use “Link existing media” on its Info tab.'
+                ? 'Nothing is linked to this device yet: no file carries its make and model or serial number. If files from it are missing, “Link existing media” on its Info tab looks again.'
                 : 'Nothing is linked to this device yet, and nothing can be: give it a serial number, or both a make and a model.'}
               selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
             />

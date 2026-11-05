@@ -26,7 +26,7 @@ type DeviceEditModalProps = {
   opened: boolean;
   onClose: () => void;
   device: DeviceDetail;
-  /** `useDevice().save`: writes the settings, and says how many linked files a changed policy re-dated. */
+  /** `useDevice().save`: writes the settings, and says how many files a changed fingerprint linked and a changed policy re-dated. */
   save: (fields: DeviceFields) => Promise<RelinkResult | null>;
   /** After a save, with what it did to the linked files when it did anything. */
   onSaved: (message?: string) => void;
@@ -57,12 +57,14 @@ export function DeviceEditModal({ opened, onClose, device, save, onSaved }: Devi
     setBusy(true);
     setError(null);
     try {
-      const reapplied = await save(draft);
+      const relink = await save(draft);
       await labels.save();
-      const files = (n: number) => `${n.toLocaleString()} linked file${n === 1 ? '' : 's'}`;
+      const files = (n: number) => `${n.toLocaleString()} file${n === 1 ? '' : 's'}`;
       onSaved(
-        reapplied && reapplied.retimed > 0
-          ? draft.digitizer && !device.digitizer ? `Removed scanner dates from ${files(reapplied.retimed)}.` : `Re-dated ${files(reapplied.retimed)}.`
+        relink && relink.linked > 0
+          ? `Linked ${files(relink.linked)}${relink.retimed > 0 ? ` and updated dates on ${relink.retimed.toLocaleString()}` : ''}.`
+          : relink && relink.retimed > 0
+          ? draft.digitizer && !device.digitizer ? `Removed scanner dates from ${files(relink.retimed)}.` : `Re-dated ${files(relink.retimed)}.`
           : undefined,
       );
       onClose();

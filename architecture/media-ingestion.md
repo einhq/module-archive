@@ -1252,7 +1252,8 @@ re-resolves what changed, a page of 500 files in a fixed number of store calls.
 Consumers: `device-link` re-resolves through `@archive/media/resolve-time`; `device-relink` links and
 then runs `media-resolve-time --device` over the device's files (a command rather than an import,
 from when device and media were separate modules and media depended on device), and
-`device-update` does the same through `device-relink --reapply` whenever `digitizer`, `timezone`
+`device-update` does the same through `device-relink` whenever `make`, `model` or `serialNumber`
+changes and leaves a fingerprint, and through `device-relink --reapply` whenever `digitizer`, `timezone`
 or `quicktimeUtc` changes; `media-resolve-time` re-resolves a whole corpus from the stored `when` blocks, with no exiftool
 and no file reads, which is the repair pass for rules that changed under an already-indexed
 archive; and `device-link` and `device-relink` both end with `device-cover <device>`, which points

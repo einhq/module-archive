@@ -159,14 +159,16 @@ Deno.test({
       assertEquals(iphone?.existingOwnership, { mode: device.props.mode, uid: device.props.uid, gid: device.props.gid });
     });
 
-    await t.step('device-relink attaches the media a device was registered too late for', async () => {
-      // Registering the camera does nothing to files already indexed: the
-      // pipeline linked them (or failed to) when they arrived.
+    await t.step('giving a device its fingerprint links the media already carrying it', async () => {
+      // Registered without one, the device matched nothing when its files were indexed.
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/shots/b.jpg/device'), false);
 
-      await cmd.shouldSucceed(`device-update ${DEVICES_ROOT}/iPhone_12 --make Apple --model "iPhone 12"`);
-      const result = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/iPhone_12`);
-      assertEquals(result.linked, 2);
+      // Half a fingerprint matches nothing yet, and is no error.
+      const half = await client.execJson<{ relink?: Relink }>(`device-update ${DEVICES_ROOT}/iPhone_12 --make Apple`);
+      assertEquals(half.relink, undefined);
+
+      const updated = await client.execJson<{ relink: Relink }>(`device-update ${DEVICES_ROOT}/iPhone_12 --model "iPhone 12"`);
+      assertEquals(updated.relink.linked, 2);
 
       const attrs = await client.execJson<{ devicePath: string }>('attrs /shots/b.jpg');
       assertEquals(attrs.devicePath, `${DEVICES_ROOT}/iPhone_12`);
