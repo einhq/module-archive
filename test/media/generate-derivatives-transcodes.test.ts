@@ -11,7 +11,7 @@ import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { parse as parseYaml } from '@std/yaml';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
-import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/event-rules';
+import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/rendition-marker';
 import { startStubEms, type StubAnswer } from '@ems/testing';
 
 const fileRoot = await Deno.makeTempDir({ prefix: 'ein-transcodes-' });

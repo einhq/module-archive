@@ -6,14 +6,20 @@ description: Still pictures of every media file — a photo's sizes and face cro
 # frame down with it. A video's hover clip is the one re-encode here: it starts
 # where the poster frame was taken, a later second when the first was blank, and
 # only the stills step finds that second.
-trigger:
-  on: media.metadata.extracted
-  wants: renditions
-  # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
-  # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
-  # three attempts of the same permanent answer only make a corrupt original look like a
-  # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
-  skipIfAttr: undecodable
+triggers:
+  - on: media.metadata.extracted
+    wants: renditions
+    # A source whose container cannot be read at all — `exif-extract` writes the reason onto the
+    # file node when ffprobe refuses it. Nothing downstream will ever get a frame out of it, so
+    # three attempts of the same permanent answer only make a corrupt original look like a
+    # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
+    skipIfAttr: undecodable
+
+  # A file whose renditions are not those the rendition table names now (`renditions-scan`): the
+  # pictures it lacks are made, and the file is marked once it has them all.
+  - on: media.renditions.stale
+    wants: renditions
+    skipIfAttr: undecodable
 
 steps:
   stills:
@@ -24,17 +30,6 @@ steps:
     priority: 60
     requires:
       cpu: 1
-  device-cover:
-    command: device-cover --media $NODE_PATH
-    description: Offer a video's poster frame to its device as a cover
-    dependsOn: [stills]
-    # device-link covers a device as it links each file, which for a video is usually before
-    # its poster frame exists: a device that took only videos would stay uncovered. Only a
-    # video with device information gets here; an image is covered at link time, as it needs
-    # no rendition to be picked.
-    condition: |
-      case "$EVENT_MIMETYPE" in video/*) ;; *) exit 1;; esac
-      [ -n "$EVENT_DEVICE_KEY" ]
   preview:
     command: generate-derivatives $NODE_PATH --only preview
     description: The video's muted hover clip, from its poster frame on

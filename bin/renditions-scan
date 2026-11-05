@@ -1,0 +1,207 @@
+#!ts
+/**
+ * renditions-scan — announce every file whose renditions are not those the rendition table names now.
+ *
+ * `generate-derivatives` marks a file once it has every rendition the table owes it
+ * (`@archive/media/rendition-marker`): `renditionsFor`, the signature of the table's entries for the
+ * file's kind. This finds the files whose marker is missing or names another signature, by one
+ * query per kind rather than a walk, in every tree under the path (`/` unless one is given), and
+ * announces `media.renditions.stale` for each, which only the rendition pipelines take: they make
+ * what is missing and mark the file. A changed table changes the signature of the kinds it
+ * changed, so the next scan reopens those files and no others. A file with a rendition refused
+ * under a CPU budget EMS no longer runs is announced too, so the refused rendition is tried again.
+ *
+ * Passed over: a rendition itself (it carries `sourceId`), a file nothing can decode, one with no
+ * bytes, one whose metadata is not read yet (that is discovery's gap, `media-scan`'s), one in a
+ * trash or in `/etc`, `/var` and the like, and one in a folder that does not want renditions
+ * (`processing`).
+ *
+ * `--if-idle` announces nothing while the rendition pipelines have work waiting, which is how
+ * `media-heal` runs it; `--limit` caps the facts of one run, and 0 lifts the cap.
+ */
+
+import { DEV_PATH, ETC_PATH, isTrashPath, TEMP_PATH, USR_PATH, VAR_PATH } from '@ein/paths';
+import type { RenditionKind } from '@ein/api';
+import type { AttrCondition, CmdReturn, Command, DomainEvent } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, processingRoots, readRenditionTable, reportUnknownFlags, wantsProcessing } from '@ein/client';
+import { resolve } from '@std/path';
+import { ulid } from '@std/ulid/ulid';
+import { generations } from '@ems/client';
+import type { RenditionsScanAnswer } from '@archive/media/api';
+import { MEDIA_EVENTS } from '@archive/media/event-rules';
+import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
+import { refusalsOf, RENDITIONS_FOR_ATTR, renditionSignature, TRANSCODE_REFUSED_ATTR } from '@archive/media/rendition-marker';
+import { allWait, factsWaiting } from '@archive/media/scan';
+
+/** The mimetypes of each kind of the table. */
+const PREFIXES: Record<RenditionKind, string> = { photo: 'image/', video: 'video/', audio: 'audio/' };
+
+/** Files one query page returns. */
+const PAGE = 500;
+
+/** Facts one run announces at most, unless `--limit` says otherwise. */
+const DEFAULT_LIMIT = 1000;
+
+/** The trees that hold no one's media. */
+const NOT_MEDIA = [ETC_PATH, VAR_PATH, USR_PATH, DEV_PATH, TEMP_PATH];
+
+const renditionsScan = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    string: ['limit'],
+    boolean: ['if-idle', 'dry-run', 'verbose'],
+    alias: { n: 'dry-run', v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const limitFlag = Number(flags.limit);
+  const limit = flags.limit === undefined || !Number.isFinite(limitFlag) || limitFlag < 0 ? DEFAULT_LIMIT : limitFlag;
+  const dry = Boolean(flags['dry-run']);
+  const verbose = Boolean(flags.verbose);
+  const root = flags._.length > 0 ? resolve(cmd.cwd, String(flags._[0])) : '/';
+
+  const answer = async (result: RenditionsScanAnswer, text: string): CmdReturn => {
+    if (cmd.json) await cmd.writeJSON(result satisfies RenditionsScanAnswer);
+    else await cmd.writeLn(`renditions-scan: ${text}`);
+    return 0;
+  };
+
+  if (flags['if-idle'] && allWait(await factsWaiting(cmd, 'renditions-scan'), [MEDIA_EVENTS.renditionsStale])) {
+    return await answer(
+      { examined: 0, announced: 0, waiting: true, limited: false, unchecked: [] },
+      'rendition work is waiting, nothing announced',
+    );
+  }
+
+  let table;
+  try {
+    table = (await readRenditionTable(cmd.sys.vfs)).table;
+  } catch (error) {
+    await cmd.writeError(`renditions-scan: failed to read /etc/renditions.yaml: ${(error as Error).message}\n`);
+    return 1;
+  }
+
+  const roots = await processingRoots(cmd.sys.vfs);
+  // The CPU budget EMS runs under, which a refusal is trusted under only while it is the same.
+  const budget = (await generations(cmd))?.cpuBudget ?? undefined;
+  const unchecked = budget === undefined ? ['refusals'] : [];
+
+  let examined = 0;
+  const announced: string[] = [];
+  const seen = new Set<string>();
+  let limited = false;
+  const events = dry ? undefined : await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+  const encoder = new TextEncoder();
+
+  /**
+   * Announce the file at `path` unless it is passed over. False once the run has announced its
+   * `--limit`, which ends it.
+   */
+  const consider = async (path: string, node: { id: string; attrs: Record<string, unknown> }, expected: string): Promise<boolean> => {
+    if (seen.has(path)) return true;
+    seen.add(path);
+    examined++;
+    if (isTrashPath(path) || !(Number(node.attrs.size ?? 0) > 0)) return true;
+    if (!wantsProcessing(roots, path, ['renditions'])) return true;
+    const exif = await cmd.sys.vfs.get(cmd.access, `${path}/metadata/exif`).catch(() => undefined);
+    if (!exif?.attrs.indexedAt) return true;
+    if (limit > 0 && announced.length >= limit) {
+      limited = true;
+      return false;
+    }
+
+    const fact: DomainEvent = {
+      id: ulid(),
+      type: MEDIA_EVENTS.renditionsStale,
+      subject: path,
+      nodeId: node.id,
+      time: Date.now(),
+      source: 'renditions-scan',
+      // Nobody waits on a repair: it runs behind every step someone does.
+      lane: 'bulk',
+      data: {
+        mimetype: String(node.attrs.mimetype ?? ''),
+        renditionsFor: typeof node.attrs[RENDITIONS_FOR_ATTR] === 'string' ? node.attrs[RENDITIONS_FOR_ATTR] : '',
+        expected,
+      },
+    };
+    if (events) await events.write(encoder.encode(JSON.stringify(fact) + '\n'));
+    announced.push(path);
+    if (verbose && !cmd.json) await cmd.writeLn(`${fact.type} ${path}`);
+    return true;
+  };
+
+  try {
+    // Pages of files of one kind whose `where` holds, until `consider` ends the run.
+    const each = async (where: AttrCondition[], expected: (attrs: Record<string, unknown>) => string | undefined) => {
+      let after: { value: string | null; id: string } | undefined;
+      do {
+        const page = await cmd.sys.vfs.query(cmd.access, {
+          types: ['file'],
+          where: [...where, { ref: 'sourceId', op: 'missing' }, { ref: UNDECODABLE_ATTR, op: 'missing' }],
+          ...(root === '/' ? {} : { within: root }),
+          notWithin: NOT_MEDIA,
+          after,
+          limit: PAGE,
+        });
+        for (const hit of page) {
+          const signature = expected(hit.node.attrs);
+          if (signature !== undefined && !await consider(hit.absPath, hit.node, signature)) return false;
+        }
+        after = page.length === PAGE ? { value: page[page.length - 1].sortValue, id: page[page.length - 1].id } : undefined;
+      } while (after);
+      return true;
+    };
+
+    const signatures = new Map<RenditionKind, string>();
+    for (const kind of Object.keys(PREFIXES) as RenditionKind[]) signatures.set(kind, await renditionSignature(table, kind));
+    const kindOf = (attrs: Record<string, unknown>) => (Object.keys(PREFIXES) as RenditionKind[]).find((kind) => String(attrs.mimetype ?? '').startsWith(PREFIXES[kind]));
+
+    let going = true;
+    for (const [kind, signature] of signatures) {
+      if (!going) break;
+      going = await each(
+        [{ ref: 'mimetype', op: 'prefix', value: PREFIXES[kind] }, { ref: RENDITIONS_FOR_ATTR, op: 'ne', value: signature }],
+        () => signature,
+      );
+    }
+    // A marked file whose refusal was recorded under another budget: the rendition may be made now.
+    if (going && budget !== undefined) {
+      await each([{ ref: TRANSCODE_REFUSED_ATTR, op: 'exists' }], (attrs) => {
+        const kind = kindOf(attrs);
+        const stale = Object.values(refusalsOf(attrs)).some((refusal) => refusal.budget !== budget);
+        return kind && stale ? signatures.get(kind) : undefined;
+      });
+    }
+  } finally {
+    await events?.close();
+  }
+
+  const unsure = unchecked.length > 0 ? ` (${unchecked.join(', ')} not checked: EMS did not say its CPU budget)` : '';
+  return await answer(
+    { examined, announced: announced.length, waiting: false, limited, unchecked, ...(verbose ? { paths: announced } : {}) },
+    `${announced.length} of ${examined} file(s) announced${dry ? ' (dry run)' : ''}${limited ? `, stopped at --limit ${limit}` : ''}${unsure}`,
+  );
+};
+
+renditionsScan.spec = {
+  name: 'renditions-scan',
+  effect: 'write' as const,
+  description:
+    'Announce every file whose renditions are not those the rendition table names now: its marker is missing or names another table, or a rendition was refused under a CPU budget EMS no longer runs',
+  args: [
+    { name: 'path', type: 'path' as const, optional: true, description: 'The tree to look in (default /)' },
+  ],
+  flags: [
+    { name: 'limit', type: 'number' as const, description: `Facts one run announces at most (default ${DEFAULT_LIMIT}; 0 for no cap)` },
+    { name: 'if-idle', type: 'bool' as const, description: 'Announce nothing while the rendition pipelines have work waiting' },
+    { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — count what would be announced without announcing it' },
+    { name: 'v', type: 'bool' as const, description: 'Name each file announced' },
+  ],
+  examples: ['renditions-scan -n', 'renditions-scan /archive/recipes', 'renditions-scan --if-idle --limit 0'],
+  returns: 'how many files it looked at and how many it announced as media.renditions.stale.',
+};
+
+export default renditionsScan;

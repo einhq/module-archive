@@ -50,7 +50,7 @@
 import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, readRenditionTable, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
@@ -233,18 +233,10 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   const transcriptsOff = cmd.env.CFG_MEDIA_TRANSCRIPTS_CURRENT === 'off';
   const ems = gaps ? await generations(cmd) : null;
   const transcriptGeneration = transcriptsOff ? undefined : ems?.transcribe ?? undefined;
-  // The CPU-decode budget EMS refuses transcodes against. A rendition it refused under this same
-  // budget is not a gap; one refused under a different budget is, because the operator moved it
-  // and the refusal no longer follows. Undefined when EMS cannot be asked, which trusts no refusal
-  // — the direction that can only re-announce, never hide.
-  const cpuEncodeBudget = ems?.cpuBudget ?? undefined;
   const pictureGeneration = ems?.imageEmbed ?? undefined;
   const ocrGeneration = ems?.ocr ?? undefined;
   const faceGeneration = ems?.faces ?? undefined;
   const textGeneration = ems?.textEmbed ?? undefined;
-  // How many transcoded renditions a video and a recording get, off the rendition table.
-  const renditions = (await readRenditionTable(cmd.sys.vfs)).table;
-  const transcodes = { video: Object.keys(renditions.video).length, audio: Object.keys(renditions.audio).length, preview: 'preview' in renditions.video };
 
   /**
    * The fact types whose check is off because EMS did not answer, or, for transcripts, because its
@@ -290,8 +282,6 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       }
     },
     transcriptGeneration,
-    cpuEncodeBudget,
-    transcodes,
     pictureGeneration,
     ocrGeneration,
     faceGeneration,
@@ -302,7 +292,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
    * `ctx` narrowed to one file, answered from the directory listing wherever it can be.
    *
    * The rules ask the same handful of questions of every file — the exif child, the names under
-   * `metadata/`, whether `thumbnails/` and `location` are there — and at 126k files those reads
+   * `metadata/`, whether `location` is there — and at 126k files those reads
    * are the pass. The listing already carries the file's own child edges, which settles every
    * "does it exist" outright and lets anything below a branch the file does not have answer
    * without a read at all. What is left is memoised, because `deriveForFile` and `deriveGaps`
@@ -333,11 +323,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       exists: async (path: string): Promise<boolean> => listed(path) ?? await ctx.exists(path),
       childNames: async (path: string): Promise<string[]> => listed(path) === false ? [] : await ctx.childNames(path),
       // Every setting of the full context, not only the listing answers: a field left out here
-      // silently turns its check off on the fast path — `cpuEncodeBudget` was, and every
-      // refused rendition was re-announced on each scan.
+      // silently turns its check off on the fast path.
       transcriptGeneration,
-      cpuEncodeBudget: ctx.cpuEncodeBudget,
-      transcodes: ctx.transcodes,
       pictureGeneration,
       ocrGeneration,
       faceGeneration,

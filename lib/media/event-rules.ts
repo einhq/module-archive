@@ -17,6 +17,7 @@
 import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
+import { RENDITIONS_AT_ATTR, RENDITIONS_FOR_ATTR } from '@archive/media/rendition-marker';
 import type { DomainEvent } from '@ein/client';
 import { DEV_PATH, ETC_PATH, isTrashPath, TEMP_PATH, USR_PATH, VAR_PATH } from '@ein/paths';
 import { deferredCopy } from '@archive/staging/deferral';
@@ -48,6 +49,19 @@ export const MEDIA_EVENTS = {
   textLanguageSet: 'media.text.language-set',
   /** `<file>/metadata/exif` is populated. Unlocks most of the pipeline fan-out. */
   metadataExtracted: 'media.metadata.extracted',
+  /**
+   * A file's renditions are all there under the rendition table in force: `generate-derivatives`
+   * wrote `renditionsAt` (`@archive/media/rendition-marker`). Only on the write that changed it,
+   * so a video's poster frame can be offered to its device once it exists.
+   */
+  renditionsMade: 'media.renditions.made',
+  /**
+   * A file's renditions are missing or were made by another rendition table: its `renditionsFor`
+   * is not the signature of the table in force, or a rendition was refused under a CPU budget EMS
+   * no longer runs. `renditions-scan` announces it; only the rendition pipelines take it, and they
+   * make what is missing.
+   */
+  renditionsStale: 'media.renditions.stale',
   /** `<file>/position` exists. Subject is the position node. */
   positionAvailable: 'media.position.available',
   /** A fingerprint landed under `<file>/metadata/`. */
@@ -201,69 +215,6 @@ export const isTextIndexedMimetype = (mimetype: string): boolean =>
     'application/vnd.oasis.opendocument.text',
   ].includes(mimetype);
 
-/**
- * The extension of the transcoded renditions each media type gets, which `lacksTranscode` counts:
- * a video's roles in the rendition table (the `playback` the lightbox plays and the muted
- * `preview` a grid tile plays) and a recording's. Counted by extension rather than looked up by
- * name because the names are the boxes (`1920x1080.mp4`, `128k-44100.m4a`), so changing a box
- * would otherwise turn every video in the archive into a permanent gap.
- */
-const TRANSCODE_EXTENSIONS: Record<string, string> = { video: '.mp4', audio: '.m4a' };
-
-/**
- * Under this many seconds a video gets no hover clip at all: `generate-derivatives` skips it
- * because the poster frame already is the whole video. Expecting one anyway would report a gap
- * no amount of transcoding can close, and `media-scan` would republish that file on every run
- * forever — the redundancy the whole command is built to avoid.
- */
-const MIN_PREVIEW_SECONDS = 2;
-
-/**
- * File-node attr recording renditions EMS *refused* on its CPU-decode budget, as distinct from
- * ones it failed at or never reached.
- *
- * Written by `generate-derivatives` (and cleared per rendition the moment one is made), read
- * here so `lacksTranscode` stops counting a rendition nothing on this box is going to produce.
- * The same shape as `undecodable` and for the same reason — a gap no re-announcement can close
- * has to be recorded on the file node, because that is what the reconciler reads — but keyed
- * per rendition rather than per file: a source can be over budget for the full 1080p rendition
- * and comfortably inside it for the 20-second hover clip, and that is the common case, not the
- * corner one.
- */
-export const TRANSCODE_REFUSED_ATTR = 'transcodeRefused';
-
-/**
- * One refusal, keyed in `TRANSCODE_REFUSED_ATTR` by the rendition's file name (`1920x1080.mp4`),
- * which is what `lacksTranscode` counts.
- */
-export type TranscodeRefusal = {
-  /** The message EMS refused with, for a human reading `attrs`. */
-  reason: string;
-  /**
-   * The signature of the CPU-decode budget the refusal was computed against —
-   * `capabilities.encode.cpu_budget` as EMS reported it at the time (its
-   * `<max MB>/<MB per 1k frames>/<max windows>`), read through `generations()`.
-   *
-   * This is what makes the marker clearable without anyone having to remember to clear it. The
-   * refusal is a function of EMS's memory budget and not of the source, so raising the budget
-   * must re-open the gap — and it does, because the signature stored here no longer matches
-   * the one the scan reads from EMS, and the exclusion below stops applying. The whole
-   * signature, not just the megabytes: a source can be refused for needing too many windows at
-   * an unchanged budget. Opaque here on purpose: both the writer and the reader take it from
-   * EMS, so they cannot derive it differently.
-   */
-  budget: string;
-  /** When the refusal was recorded, epoch ms. */
-  at: number;
-};
-
-/** The refusals recorded on a file node, tolerant of an attr written by an older shape. */
-const refusalsOf = (file: NodeSnapshot): Record<string, TranscodeRefusal> => {
-  const raw = file.attrs[TRANSCODE_REFUSED_ATTR];
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-  return raw as Record<string, TranscodeRefusal>;
-};
-
 export type NodeSnapshot = {
   id: string;
   type: string;
@@ -338,22 +289,6 @@ export type RuleContext = {
    * when EMS cannot be asked or runs a model nothing has given a type to, which disables the check.
    */
   textGeneration?: string;
-  /**
-   * The CPU-decode budget EMS is running under, as `TranscodeRefusal.budget` stores it
-   * (`generations()` in `@ems/client`).
-   *
-   * A refusal recorded against a different signature is stale: the operator changed the budget,
-   * so the rendition deserves another attempt and the gap re-opens on its own. **Undefined
-   * means no refusal is trusted** — the conservative direction, since it can only cause a
-   * re-announcement, never suppress one — and it is undefined whenever EMS cannot be asked.
-   */
-  cpuEncodeBudget?: string;
-  /**
-   * How many transcoded renditions a video and a recording get: their roles in the rendition
-   * table (`/etc/renditions.yaml`), and whether a video's include a `preview`, which one too short
-   * to preview does without. Undefined means none is expected, which turns the transcode term off.
-   */
-  transcodes?: { video: number; audio: number; preview: boolean };
 };
 
 /** The slim VFS event as published on `system.vfs.<nodeType>.<eventType>`. */
@@ -394,57 +329,6 @@ export const isIndexableMedia = (node: NodeSnapshot): boolean => {
   if (!MEDIA_MIMETYPE.test(str(node.attrs.mimetype) ?? '')) return false;
   // No bytes yet: the node exists but the upload has not landed.
   return (num(node.attrs.size) ?? 0) > 0;
-};
-
-/** How many transcoded renditions this file should have; `undefined` for a type that gets none. */
-const expectedTranscodes = (file: NodeSnapshot, ctx: RuleContext): { ext: string; count: number } | undefined => {
-  const mediaType = (str(file.attrs.mimetype) ?? '').split('/')[0];
-  const ext = TRANSCODE_EXTENSIONS[mediaType];
-  if (!ext || !ctx.transcodes) return undefined;
-
-  if (mediaType === 'audio') return ctx.transcodes.audio > 0 ? { ext, count: ctx.transcodes.audio } : undefined;
-
-  // `duration` may be absent; `generate-derivatives` falls through and makes the clip in that
-  // case, so expect it here too.
-  const duration = num(file.attrs.duration);
-  const tooShortToPreview = ctx.transcodes.preview && duration !== undefined && duration > 0 && duration < MIN_PREVIEW_SECONDS;
-  const count = ctx.transcodes.video - (tooShortToPreview ? 1 : 0);
-  return count > 0 ? { ext, count } : undefined;
-};
-
-/**
- * True when a video or audio file is short of its transcoded renditions (`expectedTranscodes`).
- *
- * They land under `thumbnails/` alongside the poster frames, so the derivatives term cannot see
- * them: a video that got its still frames and no transcode has a `thumbnails/` directory and
- * reads as complete. Hence the separate listing — which is why the caller reaches for this last,
- * once every cheaper term has come back clean, since any of them re-opens the same fan-out.
- *
- * `generate-derivatives` counts a rendition as present only when it has bytes, which a listing
- * cannot see, so this under-detects a zero-byte rendition left by a failed encode. That is the
- * safe direction: `regenerate` is what repairs those, and over-detecting here would republish
- * files this fact cannot fix.
- */
-const lacksTranscode = async (filePath: string, file: NodeSnapshot, ctx: RuleContext): Promise<boolean> => {
-  const expected = expectedTranscodes(file, ctx);
-
-  if (!expected) return false;
-
-  const names = (await ctx.childNames?.(`${filePath}/thumbnails`)) ?? [];
-  const present = names.filter((name) => name.endsWith(expected.ext)).length;
-
-  // Renditions this box refused to make count as accounted for, not as gaps. Only those whose
-  // recorded budget matches the one in force: a raised budget makes the refusal stale, the
-  // count drops back, and the file is announced again — which is the whole point of storing the
-  // signature rather than a bare flag.
-  //
-  // Counted against the same extension the presence check uses, and only for names that are not
-  // already present, so a refusal left behind by a rendition that has since been made by hand
-  // cannot push the total past what exists.
-  const refused = ctx.cpuEncodeBudget === undefined ? 0 : Object.entries(refusalsOf(file))
-    .filter(([name, refusal]) => name.endsWith(expected.ext) && refusal?.budget === ctx.cpuEncodeBudget && !names.includes(name)).length;
-
-  return present + refused < expected.count;
 };
 
 /**
@@ -517,6 +401,23 @@ function deriveSpeakersDetected(event: VfsEventInput, file: NodeSnapshot, now: n
     time: now,
     source: MEDIA_EVENT_SOURCE,
     data: { mimetype: str(file.attrs.mimetype) ?? '', speakersAt, speakerCount: num(file.attrs.speakerCount) ?? 0 },
+  }];
+}
+
+/**
+ * The fact `generate-derivatives` announces by writing `renditionsAt` on the file, which it does
+ * once the file's renditions are all there. Only on the write that changed it.
+ */
+function deriveRenditionsMade(event: VfsEventInput, file: NodeSnapshot, now: number): Omit<DomainEvent, 'id'>[] {
+  const renditionsAt = str(file.attrs[RENDITIONS_AT_ATTR]);
+  if (!renditionsAt || event.type !== 'updated' || !(event.changedAttrs ?? []).includes(RENDITIONS_AT_ATTR)) return [];
+  return [{
+    type: MEDIA_EVENTS.renditionsMade,
+    subject: event.path,
+    nodeId: file.id,
+    time: now,
+    source: MEDIA_EVENT_SOURCE,
+    data: { mimetype: str(file.attrs.mimetype) ?? '', renditionsAt, renditionsFor: str(file.attrs[RENDITIONS_FOR_ATTR]) ?? '' },
   }];
 }
 
@@ -693,7 +594,6 @@ export async function deriveGaps(
   const missingFingerprint = !fingerprintDone(str(file.attrs.mimetype) ?? '', file.attrs.fingerprintedAt, metadataChildren);
   // Every audio and video file gets a transcript node, a silent one an empty cue list.
   const missingTranscript = !metadataChildren.includes('transcript');
-  const missingDerivatives = !(await ctx.exists(`${filePath}/thumbnails`));
   // `detect-faces` writes `facesAt` in both of its exit paths, including on a photo with nobody
   // in it, so its absence means the step never ran — which a `regions/` directory would not say,
   // since the legacy importer writes one at import time. Images only: a video gets the marker
@@ -707,8 +607,11 @@ export async function deriveGaps(
   // already done, so this predicate wants a term per pipeline hanging off the fact. A stage it
   // does not ask about is a stage nothing ever re-announces — and a guard like
   // `skipIfAttr: facesAt` cannot rescue a pipeline nobody announces, it only skips one that is.
-  // That is a one-way door: an image with a fingerprint and thumbnails but no `facesAt` reads as
-  // complete to the fingerprint and derivative terms alone (ein/core#140).
+  // That is a one-way door: an image with a fingerprint but no `facesAt` reads as complete to the
+  // fingerprint term alone (ein/core#140).
+  //
+  // Renditions have no term here: their marker is compared by `renditions-scan`, in every tree,
+  // and a gap there is `media.renditions.stale`, which only the rendition pipelines take.
   //
   // `media-device` deliberately has no term and must not get one: `device-link` writes nothing
   // when the registry holds no match, so "no `devicePath`" cannot tell a link that never ran
@@ -723,11 +626,9 @@ export async function deriveGaps(
   // without ever closing the gap.
   const undecodable = Boolean(str(file.attrs.undecodable));
   const isImage = IMAGE_MIMETYPE.test(str(file.attrs.mimetype) ?? '');
-  const incomplete = missingFingerprint || missingDerivatives || missingFaces || (!isImage && missingTranscript);
+  const incomplete = missingFingerprint || missingFaces || (!isImage && missingTranscript);
 
-  // `lacksTranscode` is last because it is the only term that costs a read of its own, and it is
-  // asked only of a decodable file nothing else has already re-announced.
-  if (!undecodable && (incomplete || await lacksTranscode(filePath, file, ctx))) {
+  if (!undecodable && incomplete) {
     events.push(...await deriveForExif(`${filePath}/metadata/exif`, ctx, now));
   }
 
@@ -1295,6 +1196,7 @@ export async function deriveEvents(
         ...arrival,
         ...deriveFacesCompleted(event, file, now),
         ...deriveSpeakersDetected(event, file, now),
+        ...deriveRenditionsMade(event, file, now),
         ...await deriveFileTurned(event, file, ctx, now),
         ...deriveTextLanguageSet(event, file, now),
         ...retimed,

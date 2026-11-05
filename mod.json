@@ -88,6 +88,7 @@
     "@archive/media/on-this-day": "./lib/media/on-this-day.ts",
     "@archive/media/paired-sidecar": "./lib/media/paired-sidecar.ts",
     "@archive/media/picture-source": "./lib/media/picture-source.ts",
+    "@archive/media/rendition-marker": "./lib/media/rendition-marker.ts",
     "@archive/media/resolve-time": "./lib/media/resolve-time.ts",
     "@archive/media/scan": "./lib/media/scan.ts",
     "@archive/media/sidecars": "./lib/media/sidecars.ts",

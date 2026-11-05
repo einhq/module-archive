@@ -33,29 +33,30 @@ waits for rather than by a shared DAG:
    their own guards and run overrides, so a stale-transcript fact can bypass the
    ordinary "transcript already exists" guard without defining another pipeline:
 
-   | pipeline               | fact                                                                            | resource                                                                                                                             |
-   | ---------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-   | `media-ingest`         | `file.discovered`                                                               | pool `ingest` (1 cpu, priority 100)                                                                                                  |
-   | `media-reindex`        | `file.content-changed`                                                          | pool `ingest` (1 cpu, priority 100)                                                                                                  |
-   | `media-device`         | `metadata.extracted` (has device info)                                          | inline                                                                                                                               |
-   | `media-geocode`        | `position.available`                                                            | inline                                                                                                                               |
-   | `media-stills`         | `metadata.extracted`, not `undecodable`                                         | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
-   | `media-transcode`      | `metadata.extracted` (video/audio) or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
-   | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                         | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
-   | `media-faces`          | `metadata.extracted` (image)                                                    | pool `faces` (1 model slot, priority 100)                                                                                            |
-   | `media-video-faces`    | `metadata.extracted` (video)                                                    | pool `faces` (1 model slot, priority 50)                                                                                             |
-   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                  | pool `faces` (1 model slot; priority 20/10)                                                                                          |
-   | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                           | pool `embed-picture` (1 model slot; priority 50/10)                                                                                  |
-   | `media-embed-text`     | `text-embedding.stale`                                                          | pool `embed-text` (1 model slot; priority 20)                                                                                        |
-   | `media-face-assign`    | `face.detected` (one per face)                                                  | pool `face-assign` (1 cpu, exclusive)                                                                                                |
-   | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`     | pool `transcribe` (1 model slot; priority 50/10)                                                                                     |
-   | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                    | pool `diarize` (1 model slot; priority 30)                                                                                           |
-   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
-   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                     | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
-   | `media-duplicates`     | `duplicates.stale`                                                              | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
-   | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)       | pool `retime` (1 cpu, priority 20)                                                                                                   |
-   | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed) | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
-   | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for) | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
+   | pipeline               | fact                                                                                                   | resource                                                                                                                             |
+   | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+   | `media-ingest`         | `file.discovered`                                                                                      | pool `ingest` (1 cpu, priority 100)                                                                                                  |
+   | `media-reindex`        | `file.content-changed`                                                                                 | pool `ingest` (1 cpu, priority 100)                                                                                                  |
+   | `media-device`         | `metadata.extracted` (has device info)                                                                 | inline                                                                                                                               |
+   | `media-geocode`        | `position.available`                                                                                   | inline                                                                                                                               |
+   | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
+   | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
+   | `media-device-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
+   | `media-fingerprint`    | `metadata.extracted`, not `undecodable`                                                                | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
+   | `media-faces`          | `metadata.extracted` (image)                                                                           | pool `faces` (1 model slot, priority 100)                                                                                            |
+   | `media-video-faces`    | `metadata.extracted` (video)                                                                           | pool `faces` (1 model slot, priority 50)                                                                                             |
+   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
+   | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                                                  | pool `embed-picture` (1 model slot; priority 50/10)                                                                                  |
+   | `media-embed-text`     | `text-embedding.stale`                                                                                 | pool `embed-text` (1 model slot; priority 20)                                                                                        |
+   | `media-face-assign`    | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
+   | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`                            | pool `transcribe` (1 model slot; priority 50/10)                                                                                     |
+   | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                                           | pool `diarize` (1 model slot; priority 30)                                                                                           |
+   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
+   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                                            | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
+   | `media-duplicates`     | `duplicates.stale`                                                                                     | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
+   | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)                              | pool `retime` (1 cpu, priority 20)                                                                                                   |
+   | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed)                        | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
+   | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for)                        | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
    **Families.** Every pipeline here that acts on a file wherever it lies names the family of work
    it does with `wants` (core's "Which processing a folder wants"): `renditions` (`media-stills`,
@@ -261,8 +262,29 @@ waits for rather than by a shared DAG:
    to cut it into tiles is on the sheet's node (`storyboard` attr: interval, count, columns,
    rows, tile size; `@archive/media/storyboard`). A video under 4 s gets none, and an EMS from
    before the op is skipped rather than failed. `--prune` keeps it by name; writing a sheet
-   removes any other. It is no gap: nothing announces a video without one, so the videos indexed
-   before it have none until they are re-imported or transcoded again.
+   removes any other. The marker waits for it, so a video without one is a gap
+   `renditions-scan` announces, and `media-transcode` makes the sheet.
+
+   **The marker says a file's renditions are complete, and under which table.** Once a file has
+   every rendition the table owes it — each role of its kind, less the sizes a small picture
+   does without, the clip a video under 2 s and the storyboard one under 4 s are never owed —
+   `generate-derivatives` writes `renditionsFor`, the first 16 hex digits of the SHA-256 of the
+   table's entries for the file's kind (`@archive/media/rendition-marker`), and `renditionsAt`.
+   A rendition EMS refused under its CPU budget (`transcodeRefused`), a storyboard EMS cannot read
+   the rendition for or has no route for, and the storyboard of a refused playback count as
+   accounted for. Stills and transcodes are separate pipelines, so whichever run completes the
+   set writes it; a run with a failure marks nothing, and a run that finds everything in place
+   writes nothing, so the write is news. The bridge announces it as `media.renditions.made`, on
+   which `media-device-cover` offers a video's poster frame to its device. The gap is the other
+   side of the same attr: `renditions-scan` asks, per kind, for the files of that mimetype whose
+   `renditionsFor` is not the signature in force — an attr query over every tree, not a walk of
+   the albums or a listing of `thumbnails/` — passes over a rendition, an undecodable file, an
+   empty or unread one, a trash and a folder that wants no renditions, and announces
+   `media.renditions.stale`, which only `media-stills` and `media-transcode` take; a refusal
+   recorded under another budget than EMS runs now reopens its file too. `media-heal` runs it
+   beside `media-scan`, whose walk has no rendition term any more. A changed table changes the
+   signature of the kinds it touched and no other, so editing `/etc/renditions.yaml` reopens
+   those files at the next pass; the files no role names any more stay until `regenerate --prune`.
 5. **Serve/browse.** The UI lists a media directory via `ls -l`; when a `thumbnails/` child is present
    it requests `/file/<path>/thumbnails/512x512.avif` (grid tile) and a `srcset` of the photo renditions
    (lightbox, so the browser picks per viewport), falling back to the original when `thumbnails/`
@@ -950,7 +972,8 @@ it done. A cut's `t` is the new shot's first frame. A video with no cut gets the
 boundaries, so it is not looked at again; one EMS cannot decode, or will not within its CPU budget,
 gets it with `unreadable` and no `detectedAt`, and any other failure fails the step. `media-details` reads the cuts off the
 node as `chapters`, the lightbox player's segments and skip buttons. Not forced when a video is
-turned, which moves no cut in time; no gap term, as for the storyboard.
+turned, which moves no cut in time; no gap term: chapters are no rendition, and the marker does not
+wait for them.
 
 **Duplicate findings on staged media.** A staged media original carries `duplicate`
 (`DuplicateFinding` in `@archive/media/api`), and `@archive/staging/duplicates` is its one writer.
@@ -1278,9 +1301,9 @@ archive; and `device-link` and `device-relink` both end with `device-cover <devi
 the device's `coverPhoto` at its newest image (by `takenAtUtc`, on the `device_taken_utc` index),
 or, for a device with no image, at its newest video that has `thumbnails/`, unless somebody chose
 the cover — a link it writes carries `autoCover: true` and is picked again
-on the next run. A video's poster frame usually lands after its `device-link`, so `media-stills`
-ends with `device-cover --media <file>` for a video that has device information, which offers
-the new poster to the device it is linked to;
+on the next run. A video's poster frame usually lands after its `device-link`, so
+`media-device-cover` runs `device-cover --media <file>` once a video's renditions are made
+(`media.renditions.made`), which offers the new poster to the device it is linked to;
 the archive bridge treats `metadata/exif` existence as the boundary between `media.file.discovered` and `media.metadata.extracted`, and stores the `sourceSha256` it indexed so a changed file is detected by content, not timestamp.
 
 **File-node children (conventions).** Besides the `thumbnails/` (renditions, posters and a video's

@@ -31,6 +31,7 @@ const FAMILIES: Record<string, string[]> = {
   'media-voiceprint': ['archive'],
   'media-fingerprint': ['archive'],
   'media-device': ['archive'],
+  'media-device-cover': ['archive'],
   'media-geocode': ['archive'],
   'media-duplicates': ['archive'],
 };

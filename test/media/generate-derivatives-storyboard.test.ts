@@ -13,7 +13,7 @@ import { startStubEms, type StubAnswer } from '@ems/testing';
 const fileRoot = await Deno.makeTempDir({ prefix: 'ein-storyboard-' });
 const testCtx = createTestContext({ modules: ['archive'], fileRoot });
 
-type Report = { created: string[]; pruned: string[]; failed: number };
+type Report = { created: string[]; pruned: string[]; failed: number; marked: boolean };
 
 const SHEET = { interval: 1, count: 182, columns: 12, rows: 16, tile: { width: 160, height: 120 }, duration: 181.2 };
 
@@ -52,7 +52,7 @@ Deno.test({
     await t.step('before the rendition exists there is nothing to make it from, and nothing has failed', async () => {
       answer = sheetMade;
       const report = await client.execJson<Report>(`${env} JSON_OUTPUT=1 generate-derivatives ${film} --only storyboard`);
-      assertEquals(report, { created: [], pruned: [], failed: 0 });
+      assertEquals(report, { created: [], pruned: [], failed: 0, marked: false });
       assertEquals(asked.length, 0);
     });
 

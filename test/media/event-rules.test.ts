@@ -9,16 +9,7 @@
 import { DOCS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import {
-  deriveEvents,
-  deriveGaps,
-  deriveTextGap,
-  MEDIA_EVENTS,
-  type NodeSnapshot,
-  type RuleContext,
-  TRANSCODE_REFUSED_ATTR,
-  type VfsEventInput,
-} from '../../lib/media/event-rules.ts';
+import { deriveEvents, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '../../lib/media/event-rules.ts';
 import type { DomainEvent } from '@ein/client';
 import { authoredHash } from '@ems/text-embedding';
 import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
@@ -34,8 +25,6 @@ const tree = (nodes: Record<string, NodeSnapshot>, extra: Partial<RuleContext> =
         .filter((p) => p.startsWith(`${path}/`) && !p.slice(path.length + 1).includes('/'))
         .map((p) => p.slice(path.length + 1)),
     ),
-  // What `media-scan` reads off a rendition table whose videos get `preview` and `playback`.
-  transcodes: { video: 2, audio: 1, preview: true },
   ...extra,
 });
 
@@ -318,6 +307,19 @@ Deno.test('rule: the voices of a recording are one fact, when speakersAt is writ
 
   const later = await deriveEvents(updated(['description']), ctx, 100);
   assertEquals(later.filter((f) => f.type === MEDIA_EVENTS.speakersDetected).length, 0);
+});
+
+Deno.test("rule: a file's renditions are made on the write that marked them, and only then", async () => {
+  // `generate-derivatives` writes the marker once the set is complete; every later attr write to
+  // the file says nothing of its renditions.
+  const ctx = tree(indexedVideo({ renditionsFor: '0123456789abcdef', renditionsAt: '2026-11-05T22:00:00Z' }));
+  const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', VID, 'updated'), changedAttrs });
+
+  const facts = (await deriveEvents(updated(['renditionsFor', 'renditionsAt']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.renditionsMade);
+  assertEquals(facts.map((f) => [f.subject, f.data]), [[VID, { mimetype: 'video/mp4', renditionsAt: '2026-11-05T22:00:00Z', renditionsFor: '0123456789abcdef' }]]);
+
+  const later = await deriveEvents(updated(['description']), ctx, 100);
+  assertEquals(later.filter((f) => f.type === MEDIA_EVENTS.renditionsMade).length, 0);
 });
 
 Deno.test("rule: a video's faces complete on the write that finished detection, saying whether its voices are there", async () => {
@@ -664,7 +666,6 @@ const indexed = (attrs: Record<string, unknown> = {}, path = IMG): Record<string
   [path]: file('f1', { facesAt: '2026-08-23T00:00:00Z', ...attrs }),
   [`${path}/metadata/exif`]: exifNode(),
   [`${path}/metadata/sscd-image`]: { id: 'p1', type: 'embedding', attrs: { embeddingType: 'sscd-image' } },
-  [`${path}/thumbnails`]: { id: 't1', type: 'directory', attrs: {} },
 });
 
 /** A finished transcript: `transcribe-file` writes `transcribedAt` once the cues are in. */
@@ -674,34 +675,21 @@ const transcribed = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({
   attrs: { mimetype: 'text/vtt', transcribedAt: '2026-08-23T00:00:00Z', speech: false, ...attrs },
 });
 
-/** A rendition under `thumbnails/` — it carries the id of the file it was made from. */
-const rendition = (id: string): NodeSnapshot => ({ id, type: 'file', attrs: { sourceId: 'f1', size: 4096 } });
-
 /**
- * Complete for a video: its transcript, the poster frame `media-stills` writes, and both renditions
- * beside it — the 1080p one `media-transcode` writes for the lightbox and the muted hover clip
- * `media-stills` writes for a tile. They share `thumbnails/` with the poster frames, which is exactly why the
- * derivatives term cannot stand in for a transcode term.
- *
- * No `facesAt`: a video indexed before its faces were looked for has none, so an image's marker
- * must not creep in here and hide a term that reads it.
+ * Complete for a video: its transcript. No `facesAt`: a video indexed before its faces were looked
+ * for has none, so an image's marker must not creep in here and hide a term that reads it.
  */
 const indexedVideo = (attrs: Record<string, unknown> = {}): Record<string, NodeSnapshot> => {
   const nodes = indexed({ mimetype: 'video/mp4', duration: 42, ...attrs }, VID);
   delete nodes[VID].attrs.facesAt;
-  nodes[`${VID}/thumbnails/512x512.avif`] = rendition('r0');
-  nodes[`${VID}/thumbnails/1920x1080.mp4`] = rendition('r1');
-  nodes[`${VID}/thumbnails/480x480.mp4`] = rendition('r2');
   nodes[`${VID}/metadata/transcript`] = transcribed();
   return nodes;
 };
 
-/** Complete for audio: its transcript, the waveform picture, and the one normalised track. */
+/** Complete for audio: its transcript. */
 const indexedAudio = (attrs: Record<string, unknown> = {}): Record<string, NodeSnapshot> => {
   const nodes = indexed({ mimetype: 'audio/x-wav', duration: 180, ...attrs }, SND);
   delete nodes[SND].attrs.facesAt;
-  nodes[`${SND}/thumbnails/512x512.avif`] = rendition('r0');
-  nodes[`${SND}/thumbnails/128k-44100.m4a`] = rendition('r1');
   nodes[`${SND}/metadata/transcript`] = transcribed();
   return nodes;
 };
@@ -739,119 +727,7 @@ Deno.test('gap: a video without a face marker is not a gap', async () => {
   assertEquals(await deriveGaps(VID, tree(indexedVideo()), 100), []);
 });
 
-Deno.test('gap: a video with poster frames but no transcode re-opens the fan-out', async () => {
-  // The one-way door this term exists for: the renditions live under `thumbnails/` next to the
-  // poster frames, so a video that got its still frames and nothing else has a `thumbnails/`
-  // directory and reads as complete to every other term.
-  const nodes = indexedVideo();
-  delete nodes[`${VID}/thumbnails/1920x1080.mp4`];
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  const facts = await deriveGaps(VID, tree(nodes), 100);
-
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-  assertEquals(facts[0].subject, VID);
-  assertEquals(facts[0].data?.mimetype, 'video/mp4');
-});
-
-Deno.test('gap: a video missing only its hover clip is still a gap', async () => {
-  // Both renditions come out of one step, so a half-done transcode is a failed one.
-  const nodes = indexedVideo();
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  assertEquals((await deriveGaps(VID, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a clip too short for a hover preview is complete with one rendition', async () => {
-  // `generate-derivatives` skips the clip below MIN_PREVIEW_SECONDS because the poster frame
-  // already is the whole video. Asking for it anyway would republish the file on every scan.
-  const nodes = indexedVideo({ duration: 1.2 });
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  assertEquals(await deriveGaps(VID, tree(nodes), 100), []);
-});
-
-Deno.test('gap: a video indexed before `duration` was promoted still owes a hover clip', async () => {
-  const nodes = indexedVideo({ duration: undefined });
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  assertEquals((await deriveGaps(VID, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-/** The budget signature as EMS reports it in `capabilities.encode.cpu_budget`. */
-const BUDGET = '4000/170/64';
-
-/** A video whose 1080p rendition was refused, with the refusal recorded on the file node. */
-const refusedVideo = (budget = BUDGET): Record<string, NodeSnapshot> => {
-  const nodes = indexedVideo();
-  delete nodes[`${VID}/thumbnails/1920x1080.mp4`];
-  nodes[VID].attrs[TRANSCODE_REFUSED_ATTR] = {
-    '1920x1080.mp4': { reason: 'a CPU decode of 125675 frames projects to 21364MB', budget, at: 1 },
-  };
-  return nodes;
-};
-
-Deno.test('gap: a rendition refused at the budget in force is not a gap', async () => {
-  // The whole point of the marker: EMS will refuse this source identically every time, so
-  // announcing it again only spends two more `media-transcode` attempts on it.
-  assertEquals(await deriveGaps(VID, tree(refusedVideo(), { cpuEncodeBudget: BUDGET }), 100), []);
-});
-
-Deno.test('gap: a refusal recorded at a different budget re-opens the gap', async () => {
-  // Raising EMS_CPU_ENCODE_MAX_MB on the service is exactly the act that should make the file
-  // worth another attempt, and it must not need anyone to clear the attr by hand.
-  const ctx = tree(refusedVideo('4000/170/64'), { cpuEncodeBudget: '8000/170/64' });
-
-  assertEquals((await deriveGaps(VID, ctx, 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a refusal is not trusted when the host budget is unknown', async () => {
-  // No `cpuEncodeBudget` in the context means nothing can be compared, and the safe direction is
-  // to re-announce: that costs attempts, where wrongly excluding costs the rendition forever.
-  assertEquals((await deriveGaps(VID, tree(refusedVideo()), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a refusal for one rendition does not excuse the other', async () => {
-  const nodes = refusedVideo();
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  const ctx = tree(nodes, { cpuEncodeBudget: BUDGET });
-
-  assertEquals((await deriveGaps(VID, ctx, 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a stale refusal for a rendition that exists cannot mask a missing one', async () => {
-  // A refusal left behind after the rendition was made by hand must not be counted a second
-  // time — otherwise the pair reads as complete while one of them is genuinely absent.
-  const nodes = indexedVideo();
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-  nodes[VID].attrs[TRANSCODE_REFUSED_ATTR] = {
-    '1920x1080.mp4': { reason: 'over budget', budget: BUDGET, at: 1 },
-  };
-
-  const ctx = tree(nodes, { cpuEncodeBudget: BUDGET });
-
-  assertEquals((await deriveGaps(VID, ctx, 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a non-object refusal attr is ignored rather than thrown on', async () => {
-  const nodes = indexedVideo();
-  delete nodes[`${VID}/thumbnails/1920x1080.mp4`];
-  nodes[VID].attrs[TRANSCODE_REFUSED_ATTR] = 'over budget';
-
-  const ctx = tree(nodes, { cpuEncodeBudget: BUDGET });
-
-  assertEquals((await deriveGaps(VID, ctx, 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: an audio file with no rendition re-opens the fan-out', async () => {
-  const nodes = indexedAudio();
-  delete nodes[`${SND}/thumbnails/128k-44100.m4a`];
-
-  assertEquals((await deriveGaps(SND, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
-});
-
-Deno.test('gap: a fully transcoded audio file needs nothing', async () => {
+Deno.test('gap: a fully indexed recording needs nothing', async () => {
   assertEquals(await deriveGaps(SND, tree(indexedAudio()), 100), []);
 });
 
@@ -865,44 +741,21 @@ Deno.test('gap: a recording fingerprinted with no print to show is complete', as
   assertEquals(await deriveGaps(SND, tree(tooShort), 100), []);
 });
 
-Deno.test('gap: an image is never asked for a transcode', async () => {
-  // The term must not reach for a listing on a media type that has no transcode at all — an
-  // image's `thumbnails/` holds only .avif, so counting mp4s there would make every photo a gap.
-  const nodes = indexed();
-  nodes[`${IMG}/thumbnails/512x512.avif`] = rendition('r0');
-
-  assertEquals(await deriveGaps(IMG, tree(nodes), 100), []);
-});
-
-Deno.test('gap: an undecodable video is not a transcode gap', async () => {
-  const nodes = indexedVideo({ undecodable: 'moov atom not found' });
-  delete nodes[`${VID}/thumbnails/1920x1080.mp4`];
-  delete nodes[`${VID}/thumbnails/480x480.mp4`];
-
-  assertEquals(await deriveGaps(VID, tree(nodes), 100), []);
-});
-
 Deno.test('gap: an undecodable source is not a gap', async () => {
   // Nothing downstream can ever fill these in, so announcing them again on every scan only
   // republishes the same file — the redundancy media-scan is built to avoid.
   const nodes = indexed();
   nodes[IMG] = file('f1', { mimetype: 'video/quicktime', undecodable: 'moov atom not found' });
   delete nodes[`${IMG}/metadata/sscd-image`];
-  delete nodes[`${IMG}/thumbnails`];
 
   assertEquals(await deriveGaps(IMG, tree(nodes), 100), []);
 });
 
-Deno.test('gap: exif but no derivatives re-opens the fan-out', async () => {
-  const nodes = indexed();
-  delete nodes[`${IMG}/thumbnails`];
-  const ctx = tree(nodes);
-
-  const facts = await deriveGaps(IMG, ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.metadataExtracted);
-  assertEquals(facts[0].subject, IMG);
+Deno.test('gap: renditions are no term of the walk', async () => {
+  // A file with no rendition and no marker reads as complete here: `renditions-scan` finds it by
+  // its marker, in every tree, and announces it to the rendition pipelines alone.
+  assertEquals(await deriveGaps(IMG, tree(indexed()), 100), []);
+  assertEquals(await deriveGaps(VID, tree(indexedVideo()), 100), []);
 });
 
 Deno.test('gap: exif but no fingerprint re-opens the fan-out', async () => {

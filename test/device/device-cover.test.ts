@@ -2,7 +2,7 @@
  * `device-cover`: a device's cover is its newest image. Covers the image-over-video preference,
  * a device with only videos, an undated device, an automatic cover following a newer picture, a
  * chosen cover left alone, a dangling one replaced, `--all`, `--media`, `device-relink` covering
- * the device it linked files to, and which files `media-stills` offers to their device.
+ * the device it linked files to, and which files `media-device-cover` offers to their device.
  */
 
 import { DEVICES_ROOT } from '@archive/paths';
@@ -13,13 +13,12 @@ import type { DeviceCoverSweep } from '@archive/device/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
-/** The condition on `media-stills`' device-cover step. */
-const stillsCoverCondition = async (): Promise<string> => {
-  const def = parseYaml(await Deno.readTextFile(new URL('../../pipelines/media-stills.yaml', import.meta.url))) as {
-    steps: Record<string, { condition?: string }>;
+/** `media-device-cover`'s trigger and steps. */
+const coverPipeline = async () =>
+  parseYaml(await Deno.readTextFile(new URL('../../pipelines/media-device-cover.yaml', import.meta.url))) as {
+    trigger: { on: string; match?: Record<string, unknown> };
+    steps: Record<string, { command: string; condition?: string }>;
   };
-  return def.steps['device-cover'].condition ?? '';
-};
 
 Deno.test({
   name: 'device cover',
@@ -144,12 +143,11 @@ Deno.test({
       assertEquals(result.devices, [{ path: camcorder, cover: '/shots/clip-new.mp4' }]);
     });
 
-    await t.step('media-stills offers a video to its device, and nothing else', async () => {
-      const condition = await stillsCoverCondition();
-      const holds = (mimetype: string, deviceKey: string) => client.exec(`(\nexport EVENT_MIMETYPE=${mimetype}\nexport EVENT_DEVICE_KEY=${deviceKey}\n${condition}\n)`);
-      assertEquals((await holds('video/mp4', 'HDR-1')).success, true);
-      assertEquals((await holds('video/mp4', "''")).success, false);
-      assertEquals((await holds('image/jpeg', 'HDR-1')).success, false);
+    await t.step('a video is offered to its device once its renditions are made, and nothing else', async () => {
+      const def = await coverPipeline();
+      assertEquals(def.trigger.on, 'media.renditions.made');
+      assertEquals(def.trigger.match, { mimetype: 'video/*' });
+      assertEquals(Object.values(def.steps).map((step) => [step.command, step.condition]), [['device-cover --media $NODE_PATH', undefined]]);
     });
 
     await t.step('a path or --all is required, and only a device is covered', async () => {

@@ -26,6 +26,14 @@ triggers:
     # pipeline that is failing. See @media/media-probe UNDECODABLE_ATTR.
     skipIfAttr: undecodable
 
+  # A file whose renditions are not those the rendition table names now (`renditions-scan`): the
+  # transcodes it lacks are made, and the file is marked once it has them all.
+  - on: media.renditions.stale
+    wants: renditions
+    match:
+      mimetype: [video/*, audio/*]
+    skipIfAttr: undecodable
+
   # A video turned or flipped by hand: its renditions show the old orientation. Forced, so the
   # old rendition stays playable (turned the old way) until the new one replaces it.
   - on: media.file.turned

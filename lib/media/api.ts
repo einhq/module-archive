@@ -962,3 +962,25 @@ export type MediaHealAnswer = {
   /** Under `resting`, when the rest ends, epoch ms. */
   until?: number;
 };
+
+/**
+ * `renditions-scan`: the files it found whose renditions are not those the rendition table names
+ * now, and what it announced of them.
+ */
+export type RenditionsScanAnswer = {
+  /** Files the queries returned and the scan looked at. */
+  examined: number;
+  /** `media.renditions.stale` facts written (or, with `-n`, that would be). */
+  announced: number;
+  /** True when the rendition pipelines had work waiting under `--if-idle`, and nothing was announced. */
+  waiting: boolean;
+  /** True when `--limit` stopped the run before the queries were done. */
+  limited: boolean;
+  /**
+   * What could not be checked: `refusals` when EMS did not say its CPU budget, so a rendition
+   * refused under another one was not tried again.
+   */
+  unchecked: string[];
+  /** The files announced, with `-v`. */
+  paths?: string[];
+};

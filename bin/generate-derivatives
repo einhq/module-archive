@@ -6,7 +6,7 @@ import { audioFileName, imageFileName, imageRolesOf, type RenditionKind, type Re
 import { readRenditionTable } from '@ein/client';
 import { EmsError, generations, stepExitCode } from '@ems/client';
 import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
-import { TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/event-rules';
+import { RENDITIONS_AT_ATTR, RENDITIONS_FOR_ATTR, renditionSignature, TRANSCODE_REFUSED_ATTR, type TranscodeRefusal } from '@archive/media/rendition-marker';
 import { rebuildFaceCrops } from '@archive/media/face-crop-rebuild';
 import { generateImageLadder, type ImageLadderTarget } from '@archive/media/image-ladder';
 import { type Dims, pictureDims } from '@archive/media/orientation';
@@ -93,6 +93,22 @@ const DERIVATIVE_CLASSES: DerivativeClass[] = ['still', 'transcode', 'preview', 
  * that short has no place a frame would help find.
  */
 const MIN_STORYBOARD_SECONDS = 4;
+
+/**
+ * Below this, a video gets no clipped rendition, such as its hover clip: the poster frame already
+ * is the whole video.
+ */
+const MIN_CLIP_SECONDS = 2;
+
+/**
+ * Whether a source of `duration` seconds is too short for the target, which it is then never owed.
+ * An unknown duration — absent on anything indexed before it was promoted — is long enough.
+ */
+const tooShort = (table: RenditionTable, target: Target, duration: number): boolean => {
+  if (!(Number.isFinite(duration) && duration > 0)) return false;
+  if (target.kind === 'storyboard') return duration < MIN_STORYBOARD_SECONDS;
+  return target.kind === 'video' && table.video[target.role]?.seconds !== undefined && duration < MIN_CLIP_SECONDS;
+};
 
 /**
  * File-node attr: the second a video's poster frame was taken at, when EMS passed over a blank
@@ -233,9 +249,14 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
   const refused = new Map<string, TranscodeRefusal>();
   const cleared = new Set<string>();
   // The budget a refusal is recorded against — EMS's, asked for once and only when a refusal
-  // has to be written — so raising it there re-opens the gap without anyone clearing the attr
-  // by hand. `media-scan` counts a refusal only while its signature is the one in force.
+  // has to be written — so raising it there reopens the file without anyone clearing the attr
+  // by hand. `renditions-scan` trusts a refusal only while its signature is the one in force.
   let encodeBudget: string | null | undefined;
+  // Renditions this run found nothing can make: a storyboard EMS cannot read the rendition for,
+  // or has no route for. They count as accounted for when the marker is written.
+  const unmakeable = new Set<string>();
+  // The source's length, which decides whether it is owed a clip and a storyboard at all.
+  const duration = Number(fileAttrs.duration);
 
   const allTargets = targetsOf(table, mediaType);
 
@@ -261,6 +282,9 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
   const expectedNames = new Set(
     allTargets.filter((t) => !redundant.has(t.role)).map((t) => fileNameOf(table, t)).filter((name): name is string => name !== undefined),
   );
+  // What the marker waits for: the same set, less what this source is too short for.
+  const owedNames = allTargets.filter((t) => !redundant.has(t.role) && !tooShort(table, t, duration))
+    .map((t) => fileNameOf(table, t)).filter((name): name is string => name !== undefined);
   const storyboard = table.storyboard && table.video.playback
     ? { ...table.storyboard, from: videoFileName(table.video.playback) } satisfies StoryboardSpec & { from: string }
     : undefined;
@@ -338,8 +362,7 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
       // A target only when the table has both, so this is a guard for the type alone.
       if (!storyboard) continue;
       const outputPath = `${destDir}/${storyboardFileName(storyboard)}`;
-      const duration = Number(fileAttrs.duration);
-      if (Number.isFinite(duration) && duration > 0 && duration < MIN_STORYBOARD_SECONDS) {
+      if (tooShort(table, target, duration)) {
         if (verbose) await cmd.writeLn(`${outputPath} skipped: source is ${duration}s, shorter than a storyboard`);
         continue;
       }
@@ -364,13 +387,17 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
         // An EMS from before the op has no route for it; the sheet waits for one that has.
         if (error instanceof EmsError && error.code === 'http_404') {
           if (verbose) await cmd.writeLn(`${outputPath} skipped: this EMS makes no storyboards`);
+          unmakeable.add(storyboardFileName(storyboard));
           continue;
         }
         await cmd.writeError(`generate-derivatives: ${outputPath}: ${error instanceof Error ? error.message : String(error)}\n`);
         // A rendition EMS cannot read will not be read on a retry either. Failing the step for it
         // would only have the pipeline run again, and a turned video's run re-encodes it first.
         const code = stepExitCode(error);
-        if (code === STEP_EXIT_INPUT) continue;
+        if (code === STEP_EXIT_INPUT) {
+          unmakeable.add(storyboardFileName(storyboard));
+          continue;
+        }
         failed++;
         emsFailures.push(code);
       }
@@ -414,16 +441,13 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
       // promoted attr, absent on anything indexed before it existed — in which case fall
       // through with the configured start, the same >=1s the poster frame already assumes.
       if (videoDef.seconds !== undefined) {
-        const duration = Number(fileAttrs.duration);
         const known = Number.isFinite(duration) && duration > 0;
         // Where the poster frame is, when the frame at the configured start was blank.
         const posterAt = Number(fileAttrs[POSTER_AT_ATTR]);
         let start = Math.max(videoDef.start ?? 0, Number.isFinite(posterAt) ? posterAt : 0);
 
-        // Nothing to preview: the poster frame already is the whole video. `MIN_PREVIEW_SECONDS`
-        // in `@archive/media/event-rules` is this same threshold — without it `media-scan` would report
-        // every short clip as missing a rendition it is never going to get.
-        if (known && duration < 2) {
+        // Nothing to preview: the poster frame already is the whole video, which is then owed no clip.
+        if (tooShort(table, target, duration)) {
           if (verbose) await cmd.writeLn(`${outputPath} skipped: source is ${duration}s, shorter than a preview`);
           continue;
         }
@@ -488,14 +512,34 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
   for (const name of cleared) delete next[name];
   for (const [name, refusal] of refused) next[name] = refusal;
 
-  if (JSON.stringify(next) !== JSON.stringify(existing)) {
+  // The marker (`@archive/media/rendition-marker`), once every rendition the table owes this file
+  // is there with bytes, refused, or found this run to be one nothing can make — as is a
+  // storyboard whose playback rendition was refused, since it is tiled from that. Stills and
+  // transcodes are made by separate pipelines, so whichever run completes the set writes it. Only
+  // when it is not current or this run made a rendition: a run that found everything in place
+  // writes nothing, and repeats no `media.renditions.made`.
+  const signature = await renditionSignature(table, KIND_OF[mediaType]);
+  const madeOne = created.some((path) => path.startsWith(`${destDir}/`));
+  let marked = false;
+  if (failed === 0 && (fileAttrs[RENDITIONS_FOR_ATTR] !== signature || madeOne)) {
+    const sizes = new Map((await cmd.sys.vfs.children(cmd.access, destDir).catch(() => [])).map((child) => [child.name, Number(child.node.attrs.size ?? 0)]));
+    const sheet = storyboard && storyboard.from in next ? storyboardFileName(storyboard) : undefined;
+    marked = owedNames.every((name) => (sizes.get(name) ?? 0) > 0 || name in next || unmakeable.has(name) || name === sheet);
+  }
+
+  const refusalsChanged = JSON.stringify(next) !== JSON.stringify(existing);
+  if (refusalsChanged || marked) {
     // An empty map is removed rather than stored: `undecodable` reads as absent-or-set and this
     // attr should too, so `attrs` on a file that no longer refuses anything says nothing at all.
     // `null` is what removes an attr — omitting the key means "leave it alone", so `undefined`
     // here would silently keep the last refusal forever. See NodeAttrsUpdate.
     await cmd.sys.vfs.update(cmd.access, inputPath, {
-      attrs: { [TRANSCODE_REFUSED_ATTR]: Object.keys(next).length > 0 ? next : null },
+      attrs: {
+        ...(refusalsChanged ? { [TRANSCODE_REFUSED_ATTR]: Object.keys(next).length > 0 ? next : null } : {}),
+        ...(marked ? { [RENDITIONS_FOR_ATTR]: signature, [RENDITIONS_AT_ATTR]: new Date().toISOString() } : {}),
+      },
     });
+    if (marked && verbose) await cmd.writeLn(`Every rendition the table owes ${inputPath} is there, marked ${signature}`);
   }
 
   // Drop renditions that are no longer part of the target set. Only ever runs when nothing
@@ -518,7 +562,7 @@ const generateDerivatives = async (cmd: Command): CmdReturn => {
   }
 
   if (cmd.json) {
-    await cmd.writeLn(JSON.stringify({ created, pruned, failed }));
+    await cmd.writeLn(JSON.stringify({ created, pruned, failed, marked }));
   } else {
     await cmd.writeLn(
       `Created ${created.length} derivative(s)${pruned.length ? `, pruned ${pruned.length}` : ''}${failed ? `, ${failed} failed` : ''}`,
@@ -558,7 +602,8 @@ generateDerivatives.spec = {
     'generate-derivatives /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
     'generate-derivatives --only still /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
   ],
-  returns: 'nothing; the thumbnail, display and transcode renditions are written.',
+  returns:
+    'nothing; the thumbnail, display and transcode renditions are written, and the file is marked (renditionsFor, renditionsAt) once it has every one the table owes it.',
 };
 
 export default generateDerivatives;
