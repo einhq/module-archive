@@ -34,6 +34,8 @@ const tree = (nodes: Record<string, NodeSnapshot>, extra: Partial<RuleContext> =
         .filter((p) => p.startsWith(`${path}/`) && !p.slice(path.length + 1).includes('/'))
         .map((p) => p.slice(path.length + 1)),
     ),
+  // What `media-scan` reads off a rendition table whose videos get `preview` and `playback`.
+  transcodes: { video: 2, audio: 1, preview: true },
   ...extra,
 });
 

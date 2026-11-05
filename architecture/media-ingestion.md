@@ -130,23 +130,26 @@ waits for rather than by a shared DAG:
    ranking changes without touching a cover somebody set. Faces moved by hand — naming, merging, splitting — pass no
    pipeline, so the `people` module's `person-covers` service runs `person-cover --all` hourly
    as the reconciler.
-4. **Derivatives.** `generate-derivatives` reads `config/sizes.yaml` and writes web renditions as
-   **child file nodes** under a `thumbnails/` directory of the media node, named by size class.
-   Images are **AVIF** (`320x320` cover thumb, plus `512x512`/`800x800`/`1600x1600`/`2560x2560`
-   `contain` sizes), video is **AV1** in MP4 (`1920x1080.mp4` with AAC, and a silent
-   `480x480.mp4` hover clip) with the image sizes up to `1600x1600` as poster frames — the frame a
+4. **Derivatives.** `generate-derivatives` reads the rendition table, `/etc/renditions.yaml`
+   (`readRenditionTable` in `@ein/client`; the archive ships it in its `etc/`, which `mod setup`
+   copies once and never overwrites), and writes each role's rendition as a **child file node**
+   under a `thumbnails/` directory of the media node, named after the role's box. Images are
+   **AVIF** (`thumb`, a `320x320` cover crop, and the `contain` roles `grid`, `small`, `medium`
+   and `large`: `512x512`/`800x800`/`1600x1600`/`2560x2560`), video is **AV1** in MP4 (`playback`,
+   `1920x1080.mp4` with AAC, and the silent `preview` clip, `480x480.mp4`) with the image roles up
+   to `medium` as poster frames — the frame a
    second in, unless it is blank (black, white or a tape's blue screen): then EMS's `skip_blank`
    takes the first of the frames at a tenth, a quarter and half of the picture that is not,
    `posterAt` on the file says which second, and the hover clip starts there too — audio is AAC
-   in MP4 (`128k-44100.m4a`) plus a rendered waveform in the image sizes. The `<width>x<height>` name is the target **box**: a `contain`
+   in MP4 (`playback`, `128k-44100.m4a`) plus a rendered waveform in the image sizes. Which roles a
+   media type gets is the table's (`kinds` on each image role). The `<width>x<height>` name is the target **box**: a `contain`
    rendition is usually shorter, and never upscaled past the source (`fit: contain` in EMS's
    `image.renditions`, `min(iw,W)` in `video.transcode`). Only the `cover` thumb enlarges, because
    it owes its consumers an exact square. A source smaller than a box lands at its own size in
    the first box it fits, and the boxes above it are **not made** — they would be byte-for-byte
-   copies. The UI applies the same cut (`availableBoxes` in
-   `src/builtin/ui/src/client/lib/derivatives.ts`, from the node's `width`/`height`/`angle`/
-   `sar`) so it never asks for a size a small file lacks, and its `w` descriptors say the
-   rendition's real width rather than the box's. A file without stored dimensions gets, and is
+   copies. The rule is `imageRolesOf` in `@ein/api`, and the shell's pages ask by it too (from the
+   node's `width`/`height`/`angle`/`sar`), so they never ask for a size a small file lacks, and
+   their `w` descriptors say the rendition's real width rather than the box's. A file without stored dimensions gets, and is
    asked for, the whole ladder; `regenerate --prune` removes the copies made before this rule.
    Only two consumers use the `cover` crop now — the 48px map marker and the album cover
    card — so `512x512` (`grid`) exists as the _contain_ rendition the justified media grid draws
@@ -156,7 +159,7 @@ waits for rather than by a shared DAG:
    crops, poster frames, waveforms), then `preview`, a video's hover clip (below);
    `media-transcode` runs `transcode`, the full ffmpeg renditions of video and audio, so a failed
    encode never takes the poster frame with it, and then `storyboard` (below); `--size a,b`
-   narrows a run to named sizes, which is what makes adding a size a ~1-hour backfill rather than a
+   narrows a run to named roles, which is what makes adding a size a ~1-hour backfill rather than a
    re-encode of the whole ladder; `--prune` deletes renditions that are no longer targets, which
    is how a format change cleans up after itself. Every still-image size of one file is one
    EMS call from `@archive/media/image-ladder` — `image.renditions` for a photo, `video.poster` for a
@@ -193,7 +196,7 @@ waits for rather than by a shared DAG:
    the `transcode` kind beside the full rendition, since a 20-second re-encode costs like one.
    `media-transcode` makes it again only when forced, as when a video is turned. A source
    under 2s gets no clip at all — the poster already is the whole video — which is read off the
-   file node's promoted `duration`. The sound rendition's `bitrate`/`sample-rate` in `sizes.yaml`
+   file node's promoted `duration`. The sound rendition's `bitrate`/`sampleRate` in the table
    are **ceilings**, not targets — `audio.transcode` caps them at the source's own and stays
    mono for a mono source, after a flat 128k stereo turned a 14.8 MB 64 kbps mono tape rip into
    a 30 MB rendition carrying strictly less information.
@@ -209,7 +212,7 @@ waits for rather than by a shared DAG:
    **Face crops are a target too, and that is what makes them repairable.** A face crop
    (`regions/<region>/image.avif`) is a rendition like any other — it carries the source's
    `sourceId` and routes to the volatile tier — but it is _written_ by `detect-faces`, from a
-   box rather than from a size class, and it lands under the region instead of under
+   box rather than from a role of the table, and it lands under the region instead of under
    `thumbnails/`. For a long time that also meant it was in no entry of `generate-derivatives`'
    target table, and the table is what a `regenerate` sweep walks: `find-broken-renditions`
    could _find_ an interrupted crop and nothing could rebuild it, so on a multi-week crawl
@@ -251,7 +254,7 @@ waits for rather than by a shared DAG:
    the rendition is upright and is the timeline the player plays — so it is its own class,
    `storyboard`, run by `media-transcode` after the transcode and forced with it when a video is
    turned; not `still`, which a turn re-makes inline. The interval grows with the length rather
-   than the sheet (`sizes.yaml`: at most 240 tiles of 160 px), so any video is one sheet, and how
+   than the sheet (the table's `storyboard`: at most 240 tiles of 160 px), so any video is one sheet, and how
    to cut it into tiles is on the sheet's node (`storyboard` attr: interval, count, columns,
    rows, tile size; `@archive/media/storyboard`). A video under 4 s gets none, and an EMS from
    before the op is skipped rather than failed. `--prune` keeps it by name; writing a sheet
@@ -931,7 +934,7 @@ it by) and a video's `metadata/chapters` (below). Keeping these here deliberatel
 a hand-written one.
 
 **A video's chapters (`metadata/chapters`).** `detect-chapters`, a step of `media-transcode` after
-the transcode, asks EMS where the 1080p rendition cuts from one shot to the next (`video.shots`:
+the transcode, asks EMS where the `playback` rendition cuts from one shot to the next (`video.shots`:
 TransNetV2 over every frame at 48×27, and its rules — a peak over 0.6, leader as a gap, a lasting
 change of colour, cuts under a second apart merged, no shot under three seconds — measured on the
 archive's own film transfers and phone clips, wow `notes/lessons-media.md`). A video whose EXIF

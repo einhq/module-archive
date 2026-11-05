@@ -19,12 +19,12 @@
  */
 
 import { resolve } from '@std/path';
-import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, shq, STEP_EXIT_TEMPORARY } from '@ein/client';
+import { videoFileName } from '@ein/api';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, readRenditionTable, reportUnknownFlags, shq, STEP_EXIT_TEMPORARY } from '@ein/client';
 import { EmsError, stepExitCode, videoShots } from '@ems/client';
 import type { DetectChaptersAnswer } from '@archive/media/api';
 import { type ChapterBoundary, chaptersToVtt } from '@archive/media/chapters';
 import { UNDECODABLE_ATTR } from '@archive/media/media-probe';
-import { playbackRendition, readSizes } from '@archive/media/sizes';
 import { reportUnwritable } from '@archive/media/writable';
 
 /** EMS's codes that are the file's own fault, when permanent: no run can get past the same file. */
@@ -109,8 +109,8 @@ const detectChapters = async (cmd: Command): CmdReturn => {
     return await answer({ path: inputPath, skipped: 'detected', boundaries }, `${inputPath}: ${boundaries.length + 1} chapter(s), found before (use -f to look again)`);
   }
 
-  const rendition = playbackRendition(await readSizes(cmd));
-  const renditionPath = rendition ? `${inputPath}/thumbnails/${rendition}` : '';
+  const playback = (await readRenditionTable(cmd.sys.vfs)).table.video.playback;
+  const renditionPath = playback ? `${inputPath}/thumbnails/${videoFileName(playback)}` : '';
   const made = renditionPath ? await cmd.sys.vfs.get(cmd.access, renditionPath).catch(() => undefined) : undefined;
   if (!(Number(made?.attrs.size ?? 0) > 0)) {
     return await answer({ path: inputPath, skipped: 'no-rendition' }, `${inputPath}: no rendition to look in yet`);

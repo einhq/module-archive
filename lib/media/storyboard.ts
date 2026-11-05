@@ -27,13 +27,10 @@ type StoryboardGeometry = {
   tileHeight: number;
 };
 
-/** A sheet is named by its tile size, as a rendition is by its box. */
-export const storyboardName = (tile: number): string => `storyboard-${tile}.avif`;
-
 /** Whether a name under `thumbnails/` is a storyboard sheet. */
 const isStoryboardName = (name: string): boolean => /^storyboard-\d+\.avif$/.test(name);
 
-/** What a sheet is made of, from sizes.yaml's `storyboard`. */
+/** What a sheet is made of: the rendition table's `storyboard`. */
 export type StoryboardSpec = { tile: number; columns?: number; maxTiles?: number; minInterval?: number; quality?: number };
 
 const TEMP_PREFIX = '.tmpstoryboard-';

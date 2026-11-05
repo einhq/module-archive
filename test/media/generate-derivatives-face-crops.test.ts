@@ -123,7 +123,7 @@ Deno.test({
       assertEquals(report.failed, 0);
     });
 
-    await cmd.shouldFailWith(`generate-derivatives ${ALBUMS_ROOT}/a/kept.jpg --size faces`, 'unknown size');
+    await cmd.shouldFailWith(`generate-derivatives ${ALBUMS_ROOT}/a/kept.jpg --size faces`, 'unknown role');
   } finally {
     client.close();
     await testCtx.teardown();

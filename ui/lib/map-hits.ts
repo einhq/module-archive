@@ -5,7 +5,7 @@
 
 import { LOCATIONS_ROOT } from '@archive/paths';
 import type { MediaItem } from '@ein/ui/signals';
-import { displayDims, displayUrl, fileUrl, imageSrcSet, THUMB_NAME, typeFromPath } from '@ein/ui/lib';
+import { displayDims, displayUrl, imageSrcSet, thumbnailUrl, typeFromPath } from '@ein/ui/lib';
 import { albumPathOf } from '../media/lib/album-path.ts';
 
 /**
@@ -93,7 +93,7 @@ export function classifyHits(hits: MapHit[]): { media: MediaHit[]; locations: Lo
       lat: hit.lat,
       lng: hit.lng,
       filePath,
-      thumbnailUrl: `${fileUrl(filePath)}/thumbnails/${THUMB_NAME}`,
+      thumbnailUrl: thumbnailUrl(filePath, true),
       albumPath: albumPathOf(filePath),
       takenAt: hit.takenAt,
       takenAtUtc: hit.takenAtUtc,

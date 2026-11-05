@@ -129,7 +129,7 @@ Deno.test({
       assertEquals((await vfs.children(ADMIN_ACCESS, `${video}/thumbnails`)).map((c) => c.name).sort(), ['1920x1080.mp4', '480x480.mp4']);
     });
 
-    await t.step('an audio file gets its m4a with the ceilings from sizes.yaml', async () => {
+    await t.step('an audio file gets its m4a with the ceilings from the rendition table', async () => {
       const audio = `${ALBUMS_ROOT}/t/tape.mp3`;
       await client.exec(`mkfile ${audio}`);
       await vfs.update(ADMIN_ACCESS, audio, { attrs: { mimetype: 'audio/mpeg', duration: 2756 } });

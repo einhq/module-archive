@@ -5,11 +5,11 @@ arg --effect write
 arg '<target>' path "VFS path to file or directory"
 arg -f --force "Force regenerate even if derivatives exist"
 arg --prune "Delete renditions that are no longer part of the target set"
-arg -s --size string "Generate only these size classes, comma-separated (e.g. small,medium)"
+arg -s --size string "Generate only these roles, comma-separated: roles of /etc/renditions.yaml, face or storyboard (e.g. small,medium)"
 arg --mime string "Only files whose mimetype matches this glob (e.g. 'video/*')"
 arg -v --verbose "Verbose output"
 arg --example "regenerate /archive/albums/Exempelalbum_2019"
-arg --example "regenerate --force --size thumbnail /archive/albums"
+arg --example "regenerate --force --size thumb /archive/albums"
 arg --returns "how many files had their derivatives regenerated."
 arg --export
 
@@ -53,7 +53,7 @@ else
       *) continue ;;
     esac
 
-    # A size class that only one media type has (say the video poster set) otherwise costs an
+    # A role that only one media type has (say a video's preview) otherwise costs an
     # attrs read and a generate-derivatives exec on every photo in the corpus to do nothing.
     if [ -n "$MIME" ]; then
       case "$MIMETYPE" in

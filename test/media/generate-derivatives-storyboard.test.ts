@@ -62,7 +62,7 @@ Deno.test({
       assertEquals(report.failed, 0);
       assertEquals(report.created, [`${thumbnails}/storyboard-160.avif`]);
 
-      // EMS is handed the rendition's physical file, upright, and the sheet as sizes.yaml has it.
+      // EMS is handed the rendition's physical file, upright, and the sheet as the rendition table has it.
       const body = asked[0];
       assertEquals(String((body.file as { path: string }).path).startsWith(fileRoot), true);
       assertEquals((body.file as Record<string, unknown>).angle, undefined);

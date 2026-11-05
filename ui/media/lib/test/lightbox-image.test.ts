@@ -1,9 +1,21 @@
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { mediaItemFrom } from '@ein/ui/lib';
+import { renditionTable } from '@ein/ui/signals';
 import { itemAtAngle, lightboxPhotoSources } from '../lightbox-image.ts';
 
 const path = `${ALBUMS_ROOT}/trip/photo.jpg`;
+
+// The lightbox's sizes, as a rendition table names them.
+renditionTable.value = {
+  image: {
+    small: { width: 800, height: 800, fit: 'contain', quality: 60, kinds: ['photo'] },
+    medium: { width: 1600, height: 1600, fit: 'contain', quality: 60, kinds: ['photo'] },
+    large: { width: 2560, height: 2560, fit: 'contain', quality: 60, kinds: ['photo'] },
+  },
+  video: {},
+  audio: {},
+};
 
 Deno.test('lightbox photo sources drop the failed rendition ladder for the original', () => {
   assertEquals(

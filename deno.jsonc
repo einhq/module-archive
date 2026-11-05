@@ -70,7 +70,6 @@
     "@archive/media/resolve-time": "./lib/media/resolve-time.ts",
     "@archive/media/scan": "./lib/media/scan.ts",
     "@archive/media/sidecars": "./lib/media/sidecars.ts",
-    "@archive/media/sizes": "./lib/media/sizes.ts",
     "@archive/media/speaker-assign": "./lib/media/speaker-assign.ts",
     "@archive/media/speaker-faces": "./lib/media/speaker-faces.ts",
     "@archive/media/speakers": "./lib/media/speakers.ts",

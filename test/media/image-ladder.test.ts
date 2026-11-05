@@ -10,11 +10,11 @@ Deno.test('a ladder target is asked for as an AVIF rendition, cover by default',
     { output: '/out/.tmp', format: 'avif', quality: 55, box: { width: 320, height: 320 }, fit: 'cover' },
   );
   assertEquals(
-    renditionTarget({ outputPath: '/out/800x800.avif', width: 800, height: 800, mode: 'contain' }, '/out/.tmp2'),
+    renditionTarget({ outputPath: '/out/800x800.avif', width: 800, height: 800, fit: 'contain' }, '/out/.tmp2'),
     { output: '/out/.tmp2', format: 'avif', box: { width: 800, height: 800 }, fit: 'contain' },
   );
-  assertEquals(renditionTarget({ outputPath: '/out/x.avif', width: 100, height: 0, mode: 'fill' }, '/out/.t').box, { width: 100, height: undefined });
-  assertEquals(renditionTarget({ outputPath: '/out/x.avif', width: 100, height: 50, mode: 'stretch' }, '/out/.t').fit, 'cover');
+  assertEquals(renditionTarget({ outputPath: '/out/x.avif', width: 100, height: 0, fit: 'fill' }, '/out/.t').box, { width: 100, height: undefined });
+  assertEquals(renditionTarget({ outputPath: '/out/x.avif', width: 100, height: 50, fit: 'stretch' }, '/out/.t').fit, 'cover');
 });
 
 /**
@@ -73,8 +73,8 @@ Deno.test('image ladder asks EMS once per source and dispatches by media type', 
   try {
     const cmd = fakeCommand(stub.url, nodes, published);
     const targets = [
-      { outputPath: '/albums/a/photo.jpg/thumbnails/320x320.avif', width: 320, height: 320, mode: 'cover', quality: 55 },
-      { outputPath: '/albums/a/photo.jpg/thumbnails/800x800.avif', width: 800, height: 800, mode: 'contain', quality: 60 },
+      { outputPath: '/albums/a/photo.jpg/thumbnails/320x320.avif', width: 320, height: 320, fit: 'cover', quality: 55 },
+      { outputPath: '/albums/a/photo.jpg/thumbnails/800x800.avif', width: 800, height: 800, fit: 'contain', quality: 60 },
     ];
     const made = await generateImageLadder(cmd, { path: '/albums/a/photo.jpg', id: 'p', mimetype: 'image/jpeg', angle: 90, mirror: true }, targets);
     assertEquals(made, { written: targets.map((t) => t.outputPath) });
@@ -98,7 +98,7 @@ Deno.test('image ladder asks EMS once per source and dispatches by media type', 
     const video = await generateImageLadder(
       cmd,
       { path: '/albums/a/clip.mp4', id: 'v', mimetype: 'video/mp4', angle: 270, mirror: false },
-      [{ outputPath: '/albums/a/clip.mp4/thumbnails/512x512.avif', width: 512, height: 512, mode: 'contain' }],
+      [{ outputPath: '/albums/a/clip.mp4/thumbnails/512x512.avif', width: 512, height: 512, fit: 'contain' }],
     );
     const clip = stub.requests[1];
     assertEquals(clip.op, 'video.poster');
@@ -109,7 +109,7 @@ Deno.test('image ladder asks EMS once per source and dispatches by media type', 
     await generateImageLadder(
       cmd,
       { path: '/albums/a/tape.mp3', id: 't', mimetype: 'audio/mpeg', angle: 0, mirror: false },
-      [{ outputPath: '/albums/a/tape.mp3/thumbnails/320x320.avif', width: 320, height: 320, mode: 'cover' }],
+      [{ outputPath: '/albums/a/tape.mp3/thumbnails/320x320.avif', width: 320, height: 320, fit: 'cover' }],
     );
     const tape = stub.requests[2];
     assertEquals(tape.op, 'audio.waveform');

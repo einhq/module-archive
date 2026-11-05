@@ -4,7 +4,7 @@ import { Anchor, Avatar, Group, Stack, Text } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { TimelineEntry, TimelineKind } from '../lib/timeline-entries.ts';
-import { fileUrl, THUMB_NAME } from '@ein/ui/lib';
+import { fileUrl, thumbnailUrl } from '@ein/ui/lib';
 import { UserText } from './UserText.tsx';
 
 /**
@@ -121,8 +121,8 @@ const coverUrls = (entry: TimelineEntry): { url: string; fallback?: string } | u
   if (!entry.cover) return undefined;
   const base = fileUrl(entry.cover.path);
   // `thumbnails/` existing says the crawl reached the file, not which renditions
-  // it produced: a missing 320 is a 404, so the original stands behind it.
-  return entry.cover.thumb ? { url: `${base}/thumbnails/${THUMB_NAME}`, fallback: base } : { url: base };
+  // it produced: a missing square thumbnail is a 404, so the original stands behind it.
+  return entry.cover.thumb ? { url: thumbnailUrl(entry.cover.path, true), fallback: base } : { url: base };
 };
 
 type TimelineEntryCardProps = { entry: TimelineEntry };

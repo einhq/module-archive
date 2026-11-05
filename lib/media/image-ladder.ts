@@ -20,7 +20,7 @@ export type ImageLadderTarget = {
   outputPath: string;
   width: number;
   height: number;
-  mode?: string;
+  fit?: string;
   quality?: number;
 };
 
@@ -68,7 +68,7 @@ export const renditionTarget = (target: ImageLadderTarget, output: string): Rend
     format: 'avif',
     ...(target.quality !== undefined ? { quality: target.quality } : {}),
     ...(box.width || box.height ? { box } : {}),
-    fit: (FITS.has(target.mode ?? '') ? target.mode : 'cover') as RenditionFit,
+    fit: (FITS.has(target.fit ?? '') ? target.fit : 'cover') as RenditionFit,
   };
 };
 

@@ -50,7 +50,7 @@
 import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, readRenditionTable, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveForFile, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
@@ -242,6 +242,9 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   const ocrGeneration = ems?.ocr ?? undefined;
   const faceGeneration = ems?.faces ?? undefined;
   const textGeneration = ems?.textEmbed ?? undefined;
+  // How many transcoded renditions a video and a recording get, off the rendition table.
+  const renditions = (await readRenditionTable(cmd.sys.vfs)).table;
+  const transcodes = { video: Object.keys(renditions.video).length, audio: Object.keys(renditions.audio).length, preview: 'preview' in renditions.video };
 
   /**
    * The fact types whose check is off because EMS did not answer, or, for transcripts, because its
@@ -288,6 +291,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     },
     transcriptGeneration,
     cpuEncodeBudget,
+    transcodes,
     pictureGeneration,
     ocrGeneration,
     faceGeneration,
@@ -333,6 +337,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // refused rendition was re-announced on each scan.
       transcriptGeneration,
       cpuEncodeBudget: ctx.cpuEncodeBudget,
+      transcodes: ctx.transcodes,
       pictureGeneration,
       ocrGeneration,
       faceGeneration,

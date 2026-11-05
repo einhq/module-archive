@@ -1,6 +1,6 @@
 import { type GeoBounds, MapMarkers, type MapMarkerSpec, MapShape, MapView, useMap } from '@ein/ui/components';
 import type { PositionListing } from '@ein/api';
-import { fileUrl, lightboxRoute, shq, THUMB_NAME } from '@ein/ui/lib';
+import { lightboxRoute, shq, thumbnailUrl } from '@ein/ui/lib';
 import { execCommand, openFullscreen, openRoute } from '@ein/ui/signals';
 import { Box, Center, Loader, Text } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
@@ -113,7 +113,7 @@ export default function MapPinsPage() {
         lat: pin.lat,
         lng: pin.lng,
         label: pin.label,
-        ...(picture ? { thumbnailUrl: `${fileUrl(picture)}/thumbnails/${THUMB_NAME}` } : {}),
+        ...(picture ? { thumbnailUrl: thumbnailUrl(picture, true) } : {}),
         onClick: picture ? () => openFullscreen(lightboxRoute(picture)) : route ? () => navigate(route) : undefined,
       };
     }), [pins, navigate]);

@@ -202,20 +202,13 @@ export const isTextIndexedMimetype = (mimetype: string): boolean =>
   ].includes(mimetype);
 
 /**
- * The transcoded renditions each media type gets: their extension and how many. Video gets the
- * 1080p rendition the lightbox plays (`media-transcode`) and the muted hover clip a grid tile
- * plays (`media-stills`, after the poster frame); audio gets the one normalised track.
- *
- * Counted by extension rather than looked up by name because the names are the target boxes
- * out of `config/sizes.yaml` (`1920x1080.mp4`, `480x480.mp4`, `128k-44100.m4a`), so changing a
- * size would otherwise turn every video in the archive into a permanent gap. The table still
- * has to move with `TARGETS` in `bin/generate-derivatives` when a rendition is added or
- * dropped, and that table says so.
+ * The extension of the transcoded renditions each media type gets, which `lacksTranscode` counts:
+ * a video's roles in the rendition table (the `playback` the lightbox plays and the muted
+ * `preview` a grid tile plays) and a recording's. Counted by extension rather than looked up by
+ * name because the names are the boxes (`1920x1080.mp4`, `128k-44100.m4a`), so changing a box
+ * would otherwise turn every video in the archive into a permanent gap.
  */
-const TRANSCODE_RENDITIONS: Record<string, { ext: string; count: number }> = {
-  video: { ext: '.mp4', count: 2 },
-  audio: { ext: '.m4a', count: 1 },
-};
+const TRANSCODE_EXTENSIONS: Record<string, string> = { video: '.mp4', audio: '.m4a' };
 
 /**
  * Under this many seconds a video gets no hover clip at all: `generate-derivatives` skips it
@@ -355,6 +348,12 @@ export type RuleContext = {
    * re-announcement, never suppress one — and it is undefined whenever EMS cannot be asked.
    */
   cpuEncodeBudget?: string;
+  /**
+   * How many transcoded renditions a video and a recording get: their roles in the rendition
+   * table (`/etc/renditions.yaml`), and whether a video's include a `preview`, which one too short
+   * to preview does without. Undefined means none is expected, which turns the transcode term off.
+   */
+  transcodes?: { video: number; audio: number; preview: boolean };
 };
 
 /** The slim VFS event as published on `system.vfs.<nodeType>.<eventType>`. */
@@ -398,22 +397,23 @@ export const isIndexableMedia = (node: NodeSnapshot): boolean => {
 };
 
 /** How many transcoded renditions this file should have; `undefined` for a type that gets none. */
-const expectedTranscodes = (file: NodeSnapshot): { ext: string; count: number } | undefined => {
+const expectedTranscodes = (file: NodeSnapshot, ctx: RuleContext): { ext: string; count: number } | undefined => {
   const mediaType = (str(file.attrs.mimetype) ?? '').split('/')[0];
-  const expected = TRANSCODE_RENDITIONS[mediaType];
+  const ext = TRANSCODE_EXTENSIONS[mediaType];
+  if (!ext || !ctx.transcodes) return undefined;
 
-  if (!expected) return undefined;
+  if (mediaType === 'audio') return ctx.transcodes.audio > 0 ? { ext, count: ctx.transcodes.audio } : undefined;
 
   // `duration` may be absent; `generate-derivatives` falls through and makes the clip in that
   // case, so expect it here too.
   const duration = num(file.attrs.duration);
-  const tooShortToPreview = mediaType === 'video' && duration !== undefined && duration > 0 && duration < MIN_PREVIEW_SECONDS;
-
-  return tooShortToPreview ? { ...expected, count: 1 } : expected;
+  const tooShortToPreview = ctx.transcodes.preview && duration !== undefined && duration > 0 && duration < MIN_PREVIEW_SECONDS;
+  const count = ctx.transcodes.video - (tooShortToPreview ? 1 : 0);
+  return count > 0 ? { ext, count } : undefined;
 };
 
 /**
- * True when a video or audio file is short of its transcoded renditions (`TRANSCODE_RENDITIONS`).
+ * True when a video or audio file is short of its transcoded renditions (`expectedTranscodes`).
  *
  * They land under `thumbnails/` alongside the poster frames, so the derivatives term cannot see
  * them: a video that got its still frames and no transcode has a `thumbnails/` directory and
@@ -426,7 +426,7 @@ const expectedTranscodes = (file: NodeSnapshot): { ext: string; count: number } 
  * files this fact cannot fix.
  */
 const lacksTranscode = async (filePath: string, file: NodeSnapshot, ctx: RuleContext): Promise<boolean> => {
-  const expected = expectedTranscodes(file);
+  const expected = expectedTranscodes(file, ctx);
 
   if (!expected) return false;
 

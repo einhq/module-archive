@@ -1,0 +1,53 @@
+# The renditions made of every picture, video and recording, by the role each plays. The pages ask
+# for a role (a grid tile draws `grid`, the lightbox chooses among `small`, `medium` and `large`),
+# and the media pipelines make them.
+#
+# A rendition is named after its box (`<width>x<height>.avif`), so a box changed here is a new file
+# for every picture: `regenerate --prune` under /archive makes them, hours to days of work on a large
+# archive, and removes the files no role names any more. A role taken away is no rendition: the
+# pages show the original in its place. Pages read this file as they load, so a
+# change reaches a page that is opened again. `renditions` shows what is read, and any entry left
+# out as wrong.
+#
+# The Archive installed this copy; a newer version of it never overwrites it.
+
+# Pictures, in AVIF: a photo at each size, a video's poster frames, a recording's waveform.
+#
+# `contain` fits the picture inside the box and never enlarges it, so a picture smaller than a box
+# is kept at its own size in the first box it fits, and the boxes above it are not made: they
+# would be copies. `cover` fills the box exactly, cropping, and is always made: the square `thumb`
+# serves only what crops to a square anyway, the map marker and the album cover card.
+#
+# `quality` is libheif's AVIF scale: 60 lands within 0.006 SSIM of WebP at 85, at about half the
+# bytes. `kinds` says what each is made of; a video's poster frames and a recording's waveform stop
+# at `medium`, since only the photo lightbox reaches `large`.
+image:
+  thumb: { width: 320, height: 320, fit: cover, quality: 55, kinds: [photo, video, audio] }
+  # The justified grid's tile: `contain`, since a tile is the picture's own shape, and 512 so a row
+  # about 200 px high still has pixels to spare on a 2x display.
+  grid: { width: 512, height: 512, fit: contain, quality: 58, kinds: [photo, video, audio] }
+  small: { width: 800, height: 800, fit: contain, quality: 60, kinds: [photo, video, audio] }
+  medium: { width: 1600, height: 1600, fit: contain, quality: 60, kinds: [photo, video, audio] }
+  large: { width: 2560, height: 2560, fit: contain, quality: 60, kinds: [photo] }
+
+# Video, in AV1 in MP4, fitted inside the box and never enlarged, so a portrait keeps its shape and
+# 720p stays 720p. `crf` is SVT-AV1's scale (0-63, lower is better).
+video:
+  # The silent clip a grid tile plays under the pointer, or as a phone scrolls past it, so its
+  # budget is hundreds of kilobytes. It starts where the poster frame was taken (`start`, or a
+  # later second when that frame was blank), so the still and the clip's first frame are the same
+  # picture; the page loops it rather than playing on.
+  preview: { width: 480, height: 480, crf: 36, preset: 10, start: 1, seconds: 20, mute: true }
+  # What the lightbox plays.
+  playback: { width: 1920, height: 1080, crf: 32, preset: 8, audioBitrate: 128k }
+
+# A recording's sound, AAC in MP4. The bitrate and sample rate are ceilings, not targets: a
+# rendition never holds more than the original did, so a mono 64k tape stays one.
+audio:
+  playback: { bitrate: 128k, sampleRate: 44100 }
+
+# A video's frames at an even interval tiled into one sheet, for the frame the lightbox player's
+# timeline shows under the pointer. Made from the `playback` rendition, which is upright and is the
+# timeline the player plays. The interval is the longer of `minInterval` seconds and the length over
+# `maxTiles`, so any video is one sheet; 240 tiles of 160 in 12 columns is at most 1920x3200.
+storyboard: { tile: 160, columns: 12, maxTiles: 240, minInterval: 1, quality: 55 }
