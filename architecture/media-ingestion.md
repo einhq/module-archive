@@ -234,8 +234,8 @@ waits for rather than by a shared DAG:
    **ipod** muxer for the same reason: it writes the `M4A` brand that marks the file as audio.
 
    **A video also carries a storyboard**, `storyboard-<tile>.avif`: its frames at an even interval
-   tiled into one sheet, for the frame the lightbox player's timeline shows under the pointer.
-   EMS's `video.storyboard` makes it from the `1920x1080.mp4` rendition rather than the source —
+   tiled into one sheet, for the frame the lightbox player's timeline shows under the pointer,
+   and for the picture of a voice heard in the video (`person-voices`, `person-unknown`). EMS's `video.storyboard` makes it from the `1920x1080.mp4` rendition rather than the source —
    the rendition is upright and is the timeline the player plays — so it is its own class,
    `storyboard`, run by `media-transcode` after the transcode and forced with it when a video is
    turned; not `still`, which a turn re-makes inline. The interval grows with the length rather

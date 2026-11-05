@@ -10,6 +10,7 @@ import type { TimelineEntry } from '@archive/timeline/api';
 import type { NodeOwnership } from '@ein/api';
 import type { SourceFile } from '@archive/sources/api';
 import type { DateQualifier } from '@archive/people/date-qualifier';
+import type { Storyboard } from '@archive/media/api';
 
 export type PersonFace = {
   /** The region. Its crop is `<facePath>/image.avif`; a row does not repeat it, since a page is held under a byte budget. */
@@ -86,6 +87,8 @@ export type PersonVoice = {
   takenAt?: string;
   /** The recording's kind (`audio/…`, `video/…`), so a player knows which rendition to fetch. */
   mimetype?: string;
+  /** A video recording's storyboard, whose tiles show the voice's turn. */
+  storyboard?: Storyboard;
 };
 
 export type VoicePerson = {
@@ -120,8 +123,11 @@ export type UnknownPerson = {
   voices: UnknownVoiceThumb[];
 };
 
-/** A voice on a card: the recording, its longest turn to play, and the recording's kind. */
-export type UnknownVoiceThumb = { voicePath: string; filePath?: string; start: number; end: number; mimetype?: string };
+/**
+ * A voice on a card: the recording, its longest turn to play, the recording's kind, and a video's
+ * storyboard for a picture of the turn.
+ */
+export type UnknownVoiceThumb = { voicePath: string; filePath?: string; start: number; end: number; mimetype?: string; storyboard?: Storyboard };
 
 /** `total` counts every match of the filter; `nextOffset` is absent on the last page. */
 export type UnknownListResult = { total: number; offset: number; nextOffset?: number; people: UnknownPerson[] };

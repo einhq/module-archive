@@ -20,7 +20,7 @@ import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, isMarkedDoubt, liveDoubt, typ
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { basename, resolve } from '@std/path';
 import { isFingerprintName } from '@archive/media/fingerprints';
-import { isStoryboardName, STORYBOARD_ATTR, type StoryboardGeometry } from '@archive/media/storyboard';
+import { readStoryboard } from '@archive/media/storyboard';
 import type { ChapterBoundary } from '@archive/media/chapters';
 import { toText } from '@std/streams/to-text';
 import { ageAt, ageMonthsAt } from '@archive/people/genealogy';
@@ -114,27 +114,6 @@ const readTranscript = async (vfs: Vfs, access: Access, path: string): Promise<{
   } catch {
     return null;
   }
-};
-
-/**
- * A video's storyboard sheet and how to cut it into tiles, from the sheet's node; null when it
- * has none. Only a sheet with bytes and its geometry counts: a temp or a half-written one is not one.
- */
-const readStoryboard = async (vfs: Vfs, access: Access, path: string): Promise<MediaDetails['storyboard'] | null> => {
-  try {
-    for (const child of await vfs.children(access, `${path}/thumbnails`)) {
-      if (!isStoryboardName(child.name)) continue;
-      const attrs = child.node.attrs as Record<string, unknown>;
-      const geometry = attrs[STORYBOARD_ATTR] as Partial<StoryboardGeometry> | undefined;
-      if (!geometry || !(Number(attrs.size) > 0) || typeof attrs.sha256 !== 'string') continue;
-      const { interval, count, columns, tileWidth, tileHeight } = geometry;
-      if (![interval, count, columns, tileWidth, tileHeight].every((n) => typeof n === 'number' && n > 0)) continue;
-      return { name: child.name, sha256: attrs.sha256, interval: interval!, count: count!, columns: columns!, tileWidth: tileWidth!, tileHeight: tileHeight! };
-    }
-  } catch {
-    // No thumbnails yet.
-  }
-  return null;
 };
 
 /**

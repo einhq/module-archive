@@ -109,7 +109,7 @@ const topVoices = async (vfs: NodeVFS, access: Access, ids: string[], per: numbe
 
 /** A card's voices, as the player needs them. */
 const voiceThumbs = (voices: VoiceView[]): UnknownVoiceThumb[] =>
-  voices.map(({ voicePath, filePath, start, end, mimetype }) => ({ voicePath, filePath, start, end, mimetype }));
+  voices.map(({ voicePath, filePath, start, end, mimetype, storyboard }) => ({ voicePath, filePath, start, end, mimetype, storyboard }));
 
 const personUnknown = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];

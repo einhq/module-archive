@@ -2,9 +2,7 @@
  * Reading a video's storyboard sheet: which tile shows the frame at a time, and how to draw that
  * tile alone as a preview. Pure, so it is tested without a browser.
  */
-import type { MediaDetails } from '@archive/media/api';
-
-type Storyboard = NonNullable<MediaDetails['storyboard']>;
+import type { Storyboard } from '@archive/media/api';
 
 /**
  * The tile nearest `seconds`, and its top-left corner on the sheet in the sheet's pixels.
@@ -41,3 +39,25 @@ export const tileBackground = (url: string, sheet: Storyboard, seconds: number, 
 
 /** Where a preview `width` wide sits, centred on `x` and held inside a bar `barWidth` wide. */
 export const previewLeft = (x: number, width: number, barWidth: number): number => Math.min(Math.max(x - width / 2, 0), Math.max(barWidth - width, 0));
+
+/**
+ * Where the whole sheet goes, as an image under a square window `size` pixels wide, for the tile
+ * at `seconds` to fill the window: scaled by its shorter side, centred, its neighbours outside.
+ * A pixel over the window's size keeps a neighbour's edge from showing through the rounding.
+ */
+export const coverTile = (sheet: Storyboard, seconds: number, size: number): { width: number; left: number; top: number } => {
+  const scale = (size + 1) / Math.min(sheet.tileWidth, sheet.tileHeight);
+  const { x, y } = storyboardTile(sheet, seconds);
+  return {
+    width: sheet.columns * sheet.tileWidth * scale,
+    left: (size - sheet.tileWidth * scale) / 2 - x * scale,
+    top: (size - sheet.tileHeight * scale) / 2 - y * scale,
+  };
+};
+
+/** One time for each tile from `start` to `end`, in order: the frames a stretch of the video shows. */
+export const tileTimes = (sheet: Storyboard, start: number, end: number): number[] => {
+  const first = storyboardTile(sheet, start).index;
+  const last = storyboardTile(sheet, Math.max(start, end)).index;
+  return Array.from({ length: last - first + 1 }, (_, i) => (first + i) * sheet.interval);
+};

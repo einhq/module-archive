@@ -1,11 +1,18 @@
 import { signal } from '@preact/signals-react';
 import { mediaItemFrom } from '@ein/ui/lib';
+import type { Storyboard } from '@archive/media/api';
 
-/** Where one voice speaks in a recording: its longest turn. `key` names it (its speaker node). */
-export type Clip = { key: string; filePath?: string; start: number; end: number; mimetype?: string };
+/**
+ * Where one voice speaks in a recording: its longest turn. `key` names it (its speaker node). A
+ * video's `storyboard` gives the turn its pictures.
+ */
+export type Clip = { key: string; filePath?: string; start: number; end: number; mimetype?: string; storyboard?: Storyboard };
 
 /** The clip playing now, by key, or null: one plays at a time, wherever on the page it was started. */
 export const playingClip = signal<string | null>(null);
+
+/** Where in its recording the playing clip is, in seconds. */
+export const clipTime = signal(0);
 
 let audio: HTMLAudioElement | null = null;
 
@@ -18,6 +25,7 @@ const element = (): HTMLAudioElement => {
   };
   created.addEventListener('pause', stopped);
   created.addEventListener('ended', stopped);
+  created.addEventListener('timeupdate', () => clipTime.value = created.currentTime);
   return created;
 };
 
@@ -35,6 +43,7 @@ export function toggleClip(clip: Clip): void {
   }
   const url = mediaItemFrom({ path: clip.filePath, mimetype: clip.mimetype ?? 'audio/mpeg' }).fullUrl;
   player.src = `${url}#t=${clip.start},${clip.end}`;
+  clipTime.value = clip.start;
   playingClip.value = clip.key;
   player.play().catch(() => {
     if (playingClip.value === clip.key) playingClip.value = null;

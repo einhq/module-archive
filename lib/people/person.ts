@@ -32,6 +32,8 @@ import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { FaceDoubtView } from '@archive/people/api';
 import { CROP_PADDING, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { FACE_EMBEDDING_NAME, REGION_TYPE } from '@archive/media/regions';
+import { readStoryboards } from '@archive/media/storyboard';
+import type { Storyboard } from '@archive/media/api';
 
 // Re-exported so #!ts bins can reach the person types: a bin is copied to /tmp
 // and cannot use relative imports, only the import map's aliases.
@@ -437,6 +439,8 @@ export type VoiceView = {
   takenAtUtc?: string;
   /** The recording's kind, so a player knows which rendition to fetch. */
   mimetype?: string;
+  /** A video recording's storyboard, whose tiles show the voice's turn. */
+  storyboard?: Storyboard;
 };
 
 /**
@@ -464,8 +468,9 @@ export const voiceView = (entry: { absPath: string; node: { attrs: unknown } }):
 };
 
 /**
- * Fill in each voice's recording: its kind, for a player to pick the rendition, and its date. By id
- * in one read; a speaker node without a `fileId` is found by the path it sits under instead.
+ * Fill in each voice's recording: its kind, for a player to pick the rendition, its date, and a
+ * video's storyboard, for a picture of the turn. By id in one read; a speaker node without a
+ * `fileId` is found by the path it sits under instead. The storyboards are one more read.
  */
 export async function withRecordings(vfs: Vfs, access: Access, voices: VoiceView[]): Promise<VoiceView[]> {
   const fileIds = [...new Set(voices.map((voice) => voice.fileId).filter((id): id is string => !!id))];
@@ -480,6 +485,12 @@ export async function withRecordings(vfs: Vfs, access: Access, voices: VoiceView
     if (typeof attrs.mimetype === 'string') voice.mimetype = attrs.mimetype;
     if (typeof attrs.takenAt === 'string') voice.takenAt = attrs.takenAt;
     if (typeof attrs.takenAtUtc === 'string') voice.takenAtUtc = attrs.takenAtUtc;
+  }
+  const videos = voices.filter((voice) => voice.filePath && voice.mimetype?.startsWith('video/'));
+  const sheets = await readStoryboards(vfs, access, [...new Set(videos.map((voice) => voice.filePath!))]);
+  for (const voice of videos) {
+    const sheet = sheets.get(voice.filePath!);
+    if (sheet) voice.storyboard = sheet;
   }
   return voices;
 }

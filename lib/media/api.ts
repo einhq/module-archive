@@ -162,6 +162,14 @@ export type DetectChaptersAnswer = {
   detectedBy?: string;
 };
 
+/**
+ * A video's storyboard: its frames at an even interval tiled row by row into one sheet,
+ * `<path>/thumbnails/<name>`. Tile `i` is the frame at `i × interval` seconds; `count` can fall
+ * short of a full grid. `sha256` is the sheet's, so a sheet made again under the same name is a
+ * new URL.
+ */
+export type Storyboard = { name: string; sha256: string; interval: number; count: number; columns: number; tileWidth: number; tileHeight: number };
+
 export type MediaDetails = {
   path: string;
   name: string;
@@ -185,13 +193,8 @@ export type MediaDetails = {
   hasTranscript?: boolean;
   /** What whisper detected, for the subtitles' language and the panel heading. */
   transcriptLanguage?: string;
-  /**
-   * A video's storyboard: its frames at an even interval tiled row by row into one sheet,
-   * `<path>/thumbnails/<name>`, for the frame the player's timeline shows under the pointer.
-   * Tile `i` is the frame at `i × interval` seconds; `count` can fall short of a full grid.
-   * `sha256` is the sheet's, so a sheet made again under the same name is a new URL.
-   */
-  storyboard?: { name: string; sha256: string; interval: number; count: number; columns: number; tileWidth: number; tileHeight: number };
+  /** A video's storyboard, for the frame the player's timeline shows under the pointer. */
+  storyboard?: Storyboard;
   /**
    * Where a video's chapters start, in seconds on the rendition's clock, the first at 0: its cuts,
    * from `<path>/metadata/chapters`. Present only when there is at least one cut.

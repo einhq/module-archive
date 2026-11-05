@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { previewLeft, previewSize, storyboardTile, tileBackground } from '../storyboard.ts';
+import { coverTile, previewLeft, previewSize, storyboardTile, tileBackground, tileTimes } from '../storyboard.ts';
 
 // A three-minute 4:3 film: a tile a second, 182 of them in rows of 12.
 const film = { name: 'storyboard-160.avif', sha256: 'ab', interval: 1, count: 182, columns: 12, tileWidth: 160, tileHeight: 120 };
@@ -38,4 +38,23 @@ Deno.test('a preview stays inside the bar at both ends', () => {
   assertEquals(previewLeft(20, 160, 1000), 0);
   assertEquals(previewLeft(990, 160, 1000), 840);
   assertEquals(previewLeft(50, 160, 100), 0);
+});
+
+Deno.test('a tile fills a square window by its shorter side, centred', () => {
+  // Scaled by a pixel over the window's 120: tile 13 is the second column of the second row.
+  const scale = 121 / 120;
+  assertEquals(coverTile(film, 13, 120), { width: 12 * 160 * scale, left: (120 - 160 * scale) / 2 - 160 * scale, top: (120 - 120 * scale) / 2 - 120 * scale });
+  // A portrait tile is scaled by its width and centred upright.
+  const portrait = coverTile({ ...film, tileWidth: 90, tileHeight: 160 }, 0, 89);
+  assertEquals(portrait.width, 12 * 90);
+  assertEquals(portrait.left, -0.5);
+  assertEquals(portrait.top, (89 - 160) / 2);
+});
+
+Deno.test('a stretch of the video is the tiles from its start to its end', () => {
+  assertEquals(tileTimes(film, 3.2, 6.6), [3, 4, 5, 6, 7]);
+  assertEquals(tileTimes(film, 4.1, 4.3), [4]);
+  // A turn ending past the sheet stops at its last tile.
+  assertEquals(tileTimes(film, 180, 400), [180, 181]);
+  assertEquals(tileTimes({ ...film, interval: 30, count: 240 }, 100, 170), [90, 120, 150, 180]);
 });
