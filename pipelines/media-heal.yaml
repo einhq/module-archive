@@ -1,9 +1,10 @@
 # A pass of `media-scan` over the archive, which announces every gap a pipeline missed: a file
-# never taken in, a fingerprint, transcript, voices, picture vectors or extracted text a crash
-# lost, a transcript or vectors from a superseded model or setting. Renditions are the media
-# module's to heal (its `renditions-heal` service). The fact comes from `media-heal`, which the
-# media-heal service runs as a clock; its subject is the root to walk, the albums or a user's staged
-# files, so each root has one instance, and a fact arriving while its pass runs is dropped.
+# never taken in or interpreted, faces, a transcript, voices or extracted text a crash lost, a
+# transcript or vectors from a superseded model or setting. Renditions, picture vectors and
+# fingerprints are the media module's to heal (its `renditions-heal`, `pictures-heal` and
+# `fingerprints-heal` services). The fact comes from `media-heal`, which the media-heal service
+# runs as a clock; its subject is the root to walk, the albums or a user's staged files, so each
+# root has one instance, and a fact arriving while its pass runs is dropped.
 #
 # `--if-idle` holds back each fact a pipeline with work ready would take, and `$EVENT_ONLY` is the
 # types the last pass held back, empty for every type. The engine substitutes it quoted, and an

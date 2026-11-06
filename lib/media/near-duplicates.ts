@@ -21,7 +21,7 @@
  * A video is alike another when most of its keyframes (`NEAR.keyframeShare`) each have a keyframe
  * of the other at `NEAR.video` or above, and the two last as long, give or take
  * `NEAR.durationSeconds` or `NEAR.durationShare`. A recording is alike another when their
- * chromaprints, aligned, are at least `NEAR.audio` alike (`@archive/media/chromaprint`) and they
+ * chromaprints, aligned, are at least `NEAR.audio` alike (`@media/chromaprint`) and they
  * last as long. Neither is alike another timed a second or more apart by one kind of clock.
  */
 

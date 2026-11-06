@@ -131,11 +131,30 @@ Deno.test('staging rules: a file filed into the library is announced; a move wit
   assertEquals(await stale({ path: '/home/anna/elsewhere/IMG_0001.jpg', fromPath: STAGED }), { subjects: [], reads: 0 });
 });
 
-Deno.test('staging rules: a file whose fingerprint lands is announced nowhere, as compute-fingerprint checks it', async () => {
+Deno.test('staging rules: a file in an inbox or the library is announced when its prints land after its reading; a staged one also on its reading', async () => {
   const library = `${ALBUMS_ROOT}/lake/files/IMG_0001.jpg`;
-  const fingerprinted = { type: 'updated', changedAttrs: ['fingerprintedAt'] };
-  assertEquals((await stale({ ...fingerprinted, path: library }, { [library]: photo() })).subjects, []);
-  assertEquals((await stale({ ...fingerprinted, path: STAGED }, { [STAGED]: photo() })).subjects, []);
+  const exif = (path: string) => ({ [`${path}/metadata/exif`]: { id: 'e9', type: 'exif', attrs: { indexedAt: '2026-11-06T08:00:00Z' } } });
+  const printed = { type: 'updated', changedAttrs: ['fingerprintedAt'] };
+  const read = { type: 'updated', changedAttrs: ['takenAt', 'interpretedAt'] };
+  const both = photo(undefined, { fingerprintedAt: '2026-11-06T08:05:00Z', interpretedAt: '2026-11-06T08:01:00Z' });
+
+  // The prints land after the reading: announced on the prints.
+  assertEquals((await stale({ ...printed, path: STAGED }, { [STAGED]: both })).subjects, [STAGED]);
+  assertEquals((await stale({ ...printed, path: library }, { [library]: both })).subjects, [library]);
+  // The prints land before the reading: nothing yet, then announced on the reading.
+  const unread = photo(undefined, { fingerprintedAt: '2026-11-06T08:05:00Z' });
+  assertEquals((await stale({ ...printed, path: STAGED }, { [STAGED]: unread })).subjects, []);
+  assertEquals((await stale({ ...read, path: STAGED }, { [STAGED]: both, ...exif(STAGED) })).subjects, [STAGED]);
+  // A reading with no prints yet, or with prints older than the file's read, announces nothing.
+  const unprinted = photo(undefined, { interpretedAt: '2026-11-06T08:01:00Z' });
+  assertEquals((await stale({ ...read, path: STAGED }, { [STAGED]: unprinted, ...exif(STAGED) })).subjects, []);
+  const old = photo(undefined, { fingerprintedAt: '2026-10-01T08:00:00Z', interpretedAt: '2026-11-06T08:01:00Z' });
+  assertEquals((await stale({ ...read, path: STAGED }, { [STAGED]: old, ...exif(STAGED) })).subjects, []);
+  // A library file's reading announces nothing, its prints being of this read or not.
+  assertEquals((await stale({ ...read, path: library }, { [library]: both, ...exif(library) })).subjects, []);
+  // Outside every inbox and the library, nothing.
+  const elsewhere = '/home/anna/elsewhere/IMG_0001.jpg';
+  assertEquals((await stale({ ...printed, path: elsewhere }, { [elsewhere]: both })).subjects, []);
 });
 
 /** A category directory of `kind`'s time rules, as the bridge reads it. */

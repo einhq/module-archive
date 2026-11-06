@@ -15,7 +15,7 @@
  */
 
 import { CHUNK_TARGET_SECONDS } from '@media/transcript';
-import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
+import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
 import { parseStagedPath } from '@archive/staging/paths';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
@@ -66,7 +66,7 @@ export const MEDIA_EVENTS = {
   /**
    * What a file's metadata means in the archive is read: `exif-interpret` wrote its capture time
    * and place and, last, `interpretedAt`. Only on the write that changed it. Starts the archive's
-   * analysis: faces, fingerprints, the device link.
+   * analysis: faces and the device link.
    */
   metadataInterpreted: 'media.metadata.interpreted',
   renditionsMade: FILE_FACTS.renditionsMade,
@@ -74,8 +74,6 @@ export const MEDIA_EVENTS = {
   renditionsStale: RENDITION_FACTS.stale,
   /** `<file>/position` exists. Subject is the position node. */
   positionAvailable: 'media.position.available',
-  /** A fingerprint landed under `<file>/metadata/`. */
-  fingerprintComputed: 'media.fingerprint.computed',
   /** One face. Subject is the face node, so assignment is a per-face unit. */
   faceDetected: 'media.face.detected',
   /**
@@ -372,7 +370,6 @@ export async function deriveGaps(
   if (!exif?.attrs.indexedAt) return [];
 
   const metadataChildren = (await ctx.childNames?.(`${filePath}/metadata`)) ?? [];
-  const missingFingerprint = !fingerprintDone(str(file.attrs.mimetype) ?? '', file.attrs.fingerprintedAt, metadataChildren);
   // Every audio and video file gets a transcript node, a silent one an empty cue list.
   const missingTranscript = !metadataChildren.includes('transcript');
   // `detect-faces` writes `facesAt` in both of its exit paths, including on a photo with nobody
@@ -388,14 +385,12 @@ export async function deriveGaps(
   // done, so this predicate wants a term per pipeline hanging off the fact: the media module's
   // `media.metadata.extracted` for a file whose metadata the archive never read (then interpreting
   // it starts the rest) or that lacks a transcript, and the archive's `media.metadata.interpreted`
-  // for its own analysis, a fingerprint or faces. A stage it does not ask about is a stage nothing
-  // ever re-announces — and a guard like
-  // `skipIfAttr: facesAt` cannot rescue a pipeline nobody announces, it only skips one that is.
-  // That is a one-way door: an image with a fingerprint but no `facesAt` reads as complete to the
-  // fingerprint term alone (ein/core#140).
+  // for its own analysis, faces. A stage it does not ask about is a stage nothing ever
+  // re-announces — and a guard like `skipIfAttr: facesAt` cannot rescue a pipeline nobody
+  // announces, it only skips one that is (ein/core#140).
   //
-  // Renditions have no term here: their marker is compared by `renditions-scan`, in every tree,
-  // and a gap there is `media.renditions.stale`, which only the rendition pipelines take.
+  // Renditions, picture vectors and fingerprints have no term here: the media module's scans
+  // compare their markers, in every tree, and announce a gap as a fact only their pipelines take.
   //
   // `media-device` deliberately has no term and must not get one: `device-link` writes nothing
   // when the registry holds no match, so "no `devicePath`" cannot tell a link that never ran
@@ -414,7 +409,7 @@ export async function deriveGaps(
 
   if (!undecodable && (!interpreted || (!isImage && missingTranscript))) {
     events.push(...(await extractedFacts(`${filePath}/metadata/exif`, ctx, now)).map((fact) => ({ ...fact, source: MEDIA_EVENT_SOURCE })));
-  } else if (!undecodable && (missingFingerprint || missingFaces)) {
+  } else if (!undecodable && missingFaces) {
     const fact = await interpretedFact(filePath, file, ctx, now);
     if (fact) events.push(fact);
   }
@@ -557,7 +552,7 @@ async function deriveForDirectoryMove(dirPath: string, ctx: RuleContext, now: nu
   return (await ctx.unreadFilesWithin(dirPath)).flatMap(({ path, node }) => deriveTextGap(path, node, now));
 }
 
-/** Facts derivable from an embedding node — faces, fingerprints, descriptions. */
+/** Facts derivable from an embedding node: a face's. */
 async function deriveForEmbedding(
   path: string,
   ctx: RuleContext,
@@ -592,76 +587,7 @@ async function deriveForEmbedding(
     }];
   }
 
-  // <file>/metadata/sscd-* — a picture's or video's fingerprint, which album stacking waits for.
-  if ((embeddingType === FINGERPRINT_TYPES.image || embeddingType === FINGERPRINT_TYPES.video) && nameOf(parent) === 'metadata') {
-    const filePath = parentOf(parent);
-    const file = await ctx.getNode(filePath);
-
-    if (!file) return [];
-
-    return [{
-      type: MEDIA_EVENTS.fingerprintComputed,
-      subject: filePath,
-      nodeId: file.id,
-      time: now,
-      source: MEDIA_EVENT_SOURCE,
-      data: {
-        mimetype: str(file.attrs.mimetype) ?? '',
-        kind: embeddingType,
-        label: str(node.attrs.label) ?? '',
-      },
-    }];
-  }
-
   return [];
-}
-
-/**
- * `<file>/metadata/chromaprint` — a recording's fingerprint, announced as an `sscd-*` embedding is.
- * `compute-fingerprint` writes the values first and `computedAt` last, so that write is the one
- * that announces it.
- */
-async function deriveForChromaprint(
-  event: VfsEventInput,
-  ctx: RuleContext,
-  now: number,
-): Promise<Omit<DomainEvent, 'id'>[]> {
-  const changed = event.type === 'created' || (event.type === 'updated' && (event.changedAttrs ?? ['computedAt']).includes('computedAt'));
-  if (!changed) return [];
-  const print = await ctx.getNode(event.path);
-  if (!print || !str(print.attrs.computedAt)) return [];
-  const filePath = parentOf(parentOf(event.path));
-  const file = await ctx.getNode(filePath);
-  if (!file || file.type !== 'file') return [];
-
-  return [{
-    type: MEDIA_EVENTS.fingerprintComputed,
-    subject: filePath,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: {
-      mimetype: str(file.attrs.mimetype) ?? '',
-      kind: 'chromaprint',
-      label: str(print.attrs.label) ?? '',
-    },
-  }];
-}
-
-/**
- * The fingerprint facts with the album fact that rides on them: stacking reads the fingerprint,
- * which lands after the attachment and after the metadata; without this the stacks would wait
- * for the sweep.
- */
-async function withMemberFingerprinted(
-  facts: Omit<DomainEvent, 'id'>[],
-  ctx: RuleContext,
-  now: number,
-): Promise<Omit<DomainEvent, 'id'>[]> {
-  const fingerprint = facts.find((fact) => fact.type === MEDIA_EVENTS.fingerprintComputed);
-  if (!fingerprint) return facts;
-  const file = await ctx.getNode(fingerprint.subject);
-  return file ? [...facts, ...await deriveForMemberChange(fingerprint.subject, file, 'member-fingerprinted', ctx, now)] : facts;
 }
 
 /** Facts derivable from a file's position node. */
@@ -855,10 +781,6 @@ export async function deriveEvents(
 
   switch (event.nodeType) {
     case 'file': {
-      if (nameOf(event.path) === 'chromaprint' && nameOf(parentOf(event.path)) === 'metadata') {
-        return await withMemberFingerprinted(await deriveForChromaprint(event, ctx, now), ctx, now);
-      }
-
       // The child's side of an arrival in an imported album's `files/`. Answered
       // before the node is read: the name test decides for almost every file.
       if (event.type === 'moved') return await deriveForFilesDirArrival(event.path, 'member-attached', ctx, now);
@@ -877,6 +799,11 @@ export async function deriveEvents(
       const retimed = event.type === 'updated' && (event.changedAttrs ?? []).some((name) => CAPTURE_TIME_ATTRS.includes(name))
         ? await deriveForMemberChange(event.path, file, 'member-retimed', ctx, now)
         : [];
+      // Stacking reads a member's print, which lands after the attachment and after the metadata:
+      // `compute-fingerprint` writes `fingerprintedAt` once every print is there.
+      const fingerprinted = event.type === 'updated' && (event.changedAttrs ?? []).includes(FINGERPRINTED_AT_ATTR)
+        ? await deriveForMemberChange(event.path, file, 'member-fingerprinted', ctx, now)
+        : [];
 
       return [
         ...arrival,
@@ -884,10 +811,11 @@ export async function deriveEvents(
         ...await deriveInterpreted(event, file, ctx, now),
         ...deriveSpeakersDetected(event, file, now),
         ...retimed,
+        ...fingerprinted,
       ];
     }
     case 'embedding':
-      return await withMemberFingerprinted(await deriveForEmbedding(event.path, ctx, now), ctx, now);
+      return await deriveForEmbedding(event.path, ctx, now);
     case 'position':
       return await deriveForPosition(event.path, ctx, now);
     case 'media-region':

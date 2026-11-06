@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "ems": "^0.10.0",
-    "media": "^0.1.5"
+    "media": "^0.1.8"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
@@ -61,7 +61,6 @@
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",
     "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
-    "@archive/media/chromaprint": "./lib/media/chromaprint.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
     "@archive/media/face-cluster": "./lib/media/face-cluster.ts",
@@ -71,8 +70,6 @@
     "@archive/media/face-redetect": "./lib/media/face-redetect.ts",
     "@archive/media/face-subcluster": "./lib/media/face-subcluster.ts",
     "@archive/media/filename-date": "./lib/media/filename-date.ts",
-    "@archive/media/fingerprint-service": "./lib/media/fingerprint-service.ts",
-    "@archive/media/fingerprints": "./lib/media/fingerprints.ts",
     "@archive/media/media-stacks": "./lib/media/media-stacks.ts",
     "@archive/media/merge-duplicates": "./lib/media/merge-duplicates.ts",
     "@archive/media/name-quality": "./lib/media/name-quality.ts",

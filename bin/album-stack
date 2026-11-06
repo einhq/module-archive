@@ -13,7 +13,7 @@ import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, MEDIA_STACKS_VERSION, type Me
 import { basename, dirname, resolve } from '@std/path';
 import type { AlbumStackMutation } from '@archive/media/api';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
-import { FINGERPRINT_TYPES } from '@archive/media/fingerprints';
+import { FINGERPRINT_TYPES } from '@media/fingerprints';
 
 // SSCD cosine: frames of one burst score above it, a retake of the same scene below
 // (ein/core#334).

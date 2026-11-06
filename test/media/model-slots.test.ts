@@ -54,5 +54,5 @@ Deno.test('every kind a CPU-bound step queues under is one the media worker is o
       assertEquals(offered.includes(step.kind), true, `${entry.name}: ${name} queues under ${step.kind}, which the drop-in does not name`);
     }
   }
-  assertEquals(named.includes('interpret') && named.includes('fingerprint'), true);
+  assertEquals(named.includes('interpret') && named.includes('dedupe'), true);
 });

@@ -2,8 +2,8 @@
  * Near findings on staged media (`@archive/staging/duplicates`): a staged picture's look-alikes in
  * the library and in its inbox, found by fingerprint and kept apart from a burst's frames; a
  * recording's, found by chromaprint among those as long; the cascade that makes a look-alike one
- * both ways; the reverse check a library file's fingerprints start; `compute-fingerprint`
- * deciding a finding as its prints land; `staging separate`, which a recheck never undoes; the hub
+ * both ways; the reverse check a library file's fingerprints start; the prints `compute-fingerprint`
+ * stores compared once they land; `staging separate`, which a recheck never undoes; the hub
  * guard; and reading, resolving and counting the sets (`staging duplicates`, `staging dedupe`),
  * for a folder, a suggested group and files named one by one.
  *
@@ -13,7 +13,7 @@
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
-import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@archive/media/chromaprint';
+import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@media/chromaprint';
 import type { DuplicateCounts, DuplicateFinding, DuplicatePage, DuplicateResolveResult, DuplicateSeparateResult } from '@archive/media/api';
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
@@ -297,7 +297,7 @@ Deno.test({ name: 'staged near findings', sanitizeResources: false, sanitizeOps:
       assertEquals([(await finding(other))?.kind, (await finding(longer))?.kind], [undefined, undefined]);
     });
 
-    await t.step("compute-fingerprint decides a staged file's look-alikes as its prints land", async () => {
+    await t.step("a staged file's look-alikes are decided from the prints compute-fingerprint stores", async () => {
       const dune = scene();
       const filed = await photo(`${LAKE}/IMG_0600.jpg`, dune, { takenAtSource: 'name' });
       const staged = await photo(`${UPLOAD}/IMG_0600-small.jpg`, null, { takenAtSource: 'name', width: 2000, height: 1500 });
@@ -316,6 +316,7 @@ Deno.test({ name: 'staged near findings', sanitizeResources: false, sanitizeOps:
       } finally {
         await stub.close();
       }
+      await record(staged);
       assertEquals([(await finding(staged))?.kind, (await finding(staged))?.where, await peersOf(staged)], ['near', 'library', [await idOf(filed)]]);
     });
 

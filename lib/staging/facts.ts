@@ -8,8 +8,10 @@
  * file or a directory moved into an inbox from anywhere else (an upload is checked by
  * `exif-extract` instead), and a file or a directory moved into the library from outside it, whose
  * staged byte twins in every inbox may now be copies of a library file. A move inside an inbox,
- * from one category to another, announces nothing. A file whose fingerprints land is checked by
- * `compute-fingerprint` itself, so it needs no fact.
+ * from one category to another, announces nothing. A file in an inbox or the library is announced
+ * too when its fingerprints land (`fingerprintedAt`, `@media/fingerprints`) after the archive's
+ * reading of its metadata (`interpretedAt`): a near check compares prints, and tells two shots from
+ * one by their capture times. A staged file whose prints came first is announced on its reading.
  *
  * **Dating**, announced as `staging.retime.requested` for `staging retime`. A staged file is dated
  * by its category's time rules (`StagingTimeRules`), stamped on it as `digitized` and `whenName`,
@@ -49,7 +51,8 @@
 
 import type { DomainEvent } from '@ein/client';
 import { isLibraryPath } from '@archive/paths';
-import { isIndexableMedia, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '@archive/media/event-rules';
+import { INTERPRETED_AT_ATTR, isIndexableMedia, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '@archive/media/event-rules';
+import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import type { StagingCategorySettings } from '@archive/staging/api';
 import { CATEGORY_ATTR, parseCategorySettings, sameTimeRules, stampsHold, timeStamps } from '@archive/staging/category';
 import { SIDECAR_MIMETYPES } from '@archive/media/paired-sidecar';
@@ -164,6 +167,31 @@ async function movedDuplicates(event: VfsEventInput, now: number, file: () => Pr
     return checkable(moved) ? [stale(event, now, 'filed', { sha256: String(moved.attrs.sha256) })] : [];
   }
   return [];
+}
+
+/** Whether `a` is no earlier than `b`, both ISO times; false when either is missing. */
+const notBefore = (a: unknown, b: unknown): boolean => typeof a === 'string' && typeof b === 'string' && Date.parse(a) >= Date.parse(b);
+
+/**
+ * The duplicate-finding fact of a file in an inbox or the library whose fingerprints landed once it
+ * was read, or of a staged file read once its fingerprints are in. On a reading the prints count
+ * when they were made after the file's metadata was (`indexedAt` on its exif node): a file read
+ * again keeps its old prints, already checked. A library file is not announced on its reading, as
+ * the reading comes first and every library file read again would be checked again for nothing.
+ */
+async function printedDuplicates(event: VfsEventInput, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
+  const changed = event.changedAttrs ?? [];
+  const printed = changed.includes(FINGERPRINTED_AT_ATTR);
+  if (!printed && !changed.includes(INTERPRETED_AT_ATTR)) return [];
+  const staged = inboxOf(event.path) !== undefined;
+  if (printed ? !staged && !isLibraryPath(event.path) : !staged) return [];
+  const file = await ctx.getNode(event.path);
+  if (!checkable(file) || typeof file.attrs[FINGERPRINTED_AT_ATTR] !== 'string' || typeof file.attrs[INTERPRETED_AT_ATTR] !== 'string') return [];
+  if (!printed) {
+    const exif = await ctx.getNode(`${event.path}/metadata/exif`);
+    if (!notBefore(file.attrs[FINGERPRINTED_AT_ATTR], exif?.attrs.indexedAt)) return [];
+  }
+  return [stale(event, now, printed ? 'fingerprinted' : 'interpreted', { sha256: String(file.attrs.sha256) })];
 }
 
 /** The dating fact of a file or directory move into a category; `file` reads the moved file once. */
@@ -313,9 +341,11 @@ async function otherFacts(event: VfsEventInput, ctx: RuleContext, now: number): 
     return [...await movedDuplicates(event, now, file), ...await movedRetime(event, ctx, now, file), ...await arrivedSidecars(event, ctx, now, file)];
   }
 
-  if (event.type === 'updated' && event.nodeType === 'file' && (event.changedAttrs ?? []).includes('sha256') && stagedPlace(event.path)) {
+  if (event.type === 'updated' && event.nodeType === 'file') {
+    const printed = await printedDuplicates(event, ctx, now);
+    if (!(event.changedAttrs ?? []).includes('sha256') || !stagedPlace(event.path)) return printed;
     let read: Promise<NodeSnapshot | undefined> | undefined;
-    return await arrivedSidecars(event, ctx, now, () => read ??= ctx.getNode(event.path));
+    return [...printed, ...await arrivedSidecars(event, ctx, now, () => read ??= ctx.getNode(event.path))];
   }
 
   return [];

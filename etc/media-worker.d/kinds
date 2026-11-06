@@ -12,5 +12,3 @@ dedupe reserve           # a staged file's duplicate findings                  (
 retime reserve           # staged files dated by a category's rules            (priority 20)
 organize reserve         # a staging category's groups planned again           (priority 15)
 sidecars reserve         # Takeout and XMP sidecars paired with files          (priority 30)
-# and one waits on EMS, which decodes the media:
-fingerprint reserve      # perceptual hashes                                   (priority 30)

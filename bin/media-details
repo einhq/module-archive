@@ -10,7 +10,7 @@
  * `position` (content = lat/lng, attrs = reverse geocode), `location` and
  * `photographer` softlinks, `people/<slug>` softlinks, `regions/*`
  * carrying `personId`, `metadata/content` (index-document's extracted text), `metadata/sscd-*` and
- * `metadata/chromaprint` (compute-fingerprint) and `comments/<slug>` blobs. Every section is
+ * `metadata/chromaprint` (the media module's compute-fingerprint) and `comments/<slug>` blobs. Every section is
  * best-effort — a missing or unreadable child yields null/[] instead of an
  * error, so a half-indexed file still renders.
  */
@@ -19,7 +19,7 @@ import { type AlbumMediaStacks, MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from 
 import { FACE_TRACK_NAME, faceEmbeddingsOfRegions, isMarkedDoubt, liveDoubt, type RegionAttrs, regionsPathOf } from '@archive/media/regions';
 import { type SpeakerAttrs, speakersPathOf, VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { basename, resolve } from '@std/path';
-import { isFingerprintName } from '@archive/media/fingerprints';
+import { isFingerprintName } from '@media/fingerprints';
 import { readStoryboard } from '@media/storyboard';
 import type { ChapterBoundary } from '@media/chapters';
 import { toText } from '@std/streams/to-text';
@@ -493,7 +493,7 @@ const readDevice = async (vfs: Vfs, access: Access, devicePath: string): Promise
 /**
  * Fingerprints, as provenance only.
  *
- * `compute-fingerprint` writes them as children of `metadata/` (@archive/media/fingerprints).
+ * They are children of `metadata/` (`@media/fingerprints`).
  * The values themselves say nothing to a reader, so only the name and who computed it when are
  * reported.
  */

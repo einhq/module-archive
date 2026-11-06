@@ -3,7 +3,7 @@
  * near them. Reads only; what is near is `@archive/media/near-duplicates`' to say, and what is
  * written `@archive/staging/duplicates`'.
  *
- * A file's fingerprints are under its `metadata/` (`@archive/media/fingerprints`): `sscd-image`
+ * A file's fingerprints are under its `metadata/` (`@media/fingerprints`): `sscd-image`
  * for a picture, `sscd-video-keyframe-<n>` for each of a video's keyframes, embedding nodes both,
  * and `chromaprint` for a recording, a file of its values. The nearest pictures and videos are
  * asked of the embedding index (HNSW over each type's vectors, `findSimilar`), and the files they
@@ -13,9 +13,9 @@
  * dozen round trips whatever the archive's size. Chromaprints have no index: a recording is
  * compared with the recordings nearest it in length, read off the mimetype index, one read each.
  */
-import { decodeChromaprint } from '@archive/media/chromaprint';
+import { decodeChromaprint } from '@media/chromaprint';
 import { lengthWindow, NEAR, parseVector } from '@archive/media/near-duplicates';
-import { FINGERPRINT_TYPES } from '@archive/media/fingerprints';
+import { FINGERPRINT_TYPES } from '@media/fingerprints';
 import type { Command } from '@ein/client';
 import { NOT_DERIVED } from '@ein/client';
 

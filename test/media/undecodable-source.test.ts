@@ -3,32 +3,13 @@
  * failure — see ein/core#145.
  *
  * `exif-extract` writes the reason onto the file node (@media/probe UNDECODABLE_ATTR);
- * the pipelines that would try to decode it skip on the attr, and the two commands that
- * can also be invoked below a trigger answer the same way rather than spending an ffmpeg per
- * size on a file with no frame table.
+ * `generate-derivatives`, invoked below a trigger, answers with it rather than spending an ffmpeg
+ * per size on a file with no frame table, and `media-details` carries it.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { parse as parseYaml } from '@std/yaml';
 import { createTestContext, testCommands } from '@ein/testing';
-
-const moduleRoot = new URL('../../', import.meta.url);
-
-type PipelineFile = { trigger?: { skipIfAttr?: string }; triggers?: { skipIfAttr?: string }[] };
-
-/** The archive's pipelines that decode the bytes of a read file. */
-const DECODING_PIPELINES = [
-  'media-fingerprint',
-];
-
-Deno.test('every pipeline that decodes a source skips one that cannot be decoded', async () => {
-  for (const name of DECODING_PIPELINES) {
-    const def = parseYaml(await Deno.readTextFile(new URL(`pipelines/${name}.yaml`, moduleRoot))) as PipelineFile;
-    const triggers = def.triggers ?? (def.trigger ? [def.trigger] : []);
-    assertEquals(triggers.every((trigger) => trigger.skipIfAttr === 'undecodable'), true, name);
-  }
-});
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -55,12 +36,6 @@ Deno.test({
       );
       assertEquals(result.created, []);
       assertEquals(result.failed, 0);
-      assertEquals(result.undecodable, REASON);
-    });
-
-    await t.step('compute-fingerprint writes nothing and does not fail', async () => {
-      const result = await client.execJson<{ count: number; undecodable?: string }>(`compute-fingerprint ${VIDEO}`);
-      assertEquals(result.count, 0);
       assertEquals(result.undecodable, REASON);
     });
 

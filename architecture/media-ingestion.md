@@ -42,7 +42,6 @@ waits for rather than by a shared DAG:
    | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
    | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
    | `media-device-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
-   | `media-fingerprint`    | `metadata.interpreted`, not `undecodable`                                                              | pool `fingerprint` (1 cpu, priority 30)                                                                                              |
    | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
    | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
    | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
@@ -59,9 +58,9 @@ waits for rather than by a shared DAG:
    it does with `wants` (core's "Which processing a folder wants"): `renditions` (the media module's
    `media-stills` and `media-transcode`), `picture-vectors` (its `media-embed-picture`), `text` (its
    `media-ocr` and `document-index`), `transcripts` (its `media-transcribe`; `media-embed-text` is
-   either), and
+   either), `fingerprints` (its `media-fingerprint`), and
    `archive` for everything that gives a file its people, places, device and copies (faces, voices,
-   fingerprints, device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
+   device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
    since every family needs the file read, and nor do the pipelines that act only on the archive's
    own trees (albums, staging, tracks, locations). A folder whose `processing` attr names some
    families gets only those: one that wants `[renditions]` has its pictures read and rendered, and
@@ -101,10 +100,10 @@ waits for rather than by a shared DAG:
    the media module's `@media/probe`. ffprobe still exits 0 on a container
    holding a codec it cannot decode, so a refusal means there is no track table and no decoder
    will ever get a frame out of the bytes. That is a property of the file, not a transient
-   error, so the four decoding pipelines `skipIfAttr` on it instead of counting the same
-   permanent answer as two or three failures; `generate-derivatives` and `compute-fingerprint`
-   repeat the answer for callers that come in below a trigger, and the lightbox shows the reason
-   in place of a player that cannot work. `-f` overrides both commands; re-indexing with
+   error, so the decoding pipelines `skipIfAttr` on it instead of counting the same
+   permanent answer as two or three failures; the media module's `generate-derivatives` and
+   `compute-fingerprint` repeat the answer for callers that come in below a trigger, and the
+   lightbox shows the reason in place of a player that cannot work. `-f` overrides both commands; re-indexing with
    `exif-extract -f` is what takes the mark off.
 
    Pooled work is the work a crawl must not start all at once: the model requests (slow calls
@@ -115,9 +114,9 @@ waits for rather than by a shared DAG:
    offers `models` slots, `media-worker` offers `cpu` slots. Each takes the kinds the modules name
    in their drop-ins, and the archive names its own: `etc/media-models.d/kinds` (`faces`, `ocr`,
    `embed-text`, `transcribe`, `diarize`) and `etc/media-worker.d/kinds` (`unzip`, `interpret`,
-   `face-assign`, `speaker-assign`, `dedupe`, `retime`, `organize`, `sidecars`, `fingerprint`, all
-   but the first in the share kept for the work after ingest); the media module names the reading,
-   the renditions and the picture vectors. A `kind` no worker takes does not run slowly — it
+   `face-assign`, `speaker-assign`, `dedupe`, `retime`, `organize`, `sidecars`, all but the first
+   in the share kept for the work after ingest); the media module names the reading, the
+   renditions, the picture vectors and the fingerprints. A `kind` no worker takes does not run slowly — it
    never runs at all, so `test/media/model-slots.test.ts` holds every step's kind to a drop-in.
    `assign-faces` also declares `exclusive: person-mint`, so two faces of the same
    new person cannot each mint one — previously only the worker's concurrency
@@ -189,7 +188,7 @@ waits for rather than by a shared DAG:
    own. Leaving unmounts the `<video>`, which is the whole reset: the still underneath is the same
    frame the clip started on. `prefers-reduced-motion` disables it, and a clip that 404s is
    remembered so a not-yet-backfilled video is asked for once and never again.
-7. **Search.** The media module's `embed-picture`, `transcribe-file`, `index-document` and `read-text`, and the archive's `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads, `@media/picture-source`) populate the embedding registry.
+7. **Search.** The media module's `embed-picture`, `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor) populate the embedding registry.
 
    **Text indexing** is the media module's (its architecture's text.md): `document-index` reads a
    document's text and `media-ocr` a picture's, each once, and nothing staged. What the archive
@@ -791,7 +790,8 @@ child directory: `metadata/exif` (the `exif`-type node, described in `mod.json`'
 chromaprint as little-endian uint32s in a db-tier `file` typed `application/x-chromaprint`, which
 `duplicates --fuzzy` aligns pair by pair rather than looking up as a vector; a recording under about
 2.5 s has none, and `fingerprintedAt` on the file says `compute-fingerprint` ran all the same, so the
-gap scan does not re-announce it), `metadata/content` (text extracted by `index-document`, a
+media module's `fingerprints-scan` does not re-announce it; those three are the media module's,
+`@media/fingerprints`), `metadata/content` (text extracted by `index-document`, a
 db-tier `file`), `metadata/transcript` (a db-tier `file` holding **WebVTT**, written by
 `transcribe-file` for audio and video, or by hand with `file-set-transcript`, the lightbox's
 subtitle editor, which rewrites the cues in place under the voices, re-embeds the chunks and
@@ -854,13 +854,16 @@ write, so two twins checked at once cannot overwrite each other's result.
   checksum is decided in its inbox and the file checked for look-alikes, a library file's checksum
   in every inbox and the staged files the index finds near it checked with it (the **reverse
   check**), a directory's files one by one, and a file elsewhere loses its finding.
-- **Fingerprints landing.** `compute-fingerprint`, once every print is written and
-  `fingerprintedAt` stamped, decides the same findings as `duplicates --record` for its file
-  itself, inside its own step: a staged file is then checked for look-alikes, and a library file —
-  taken in after it came into the library some other way, an upload or a copy — rechecks the
-  staged files that copy it or look like it. No fact is announced for it, so a file costs no
-  `media-duplicates` instance of its own; a check that fails is reported and leaves the prints,
-  and `staging duplicates --refresh` finds the staged finding older than them.
+- **Fingerprints landing.** A file in an inbox or the library is announced `media.duplicates.stale`
+  when its prints land (`fingerprintedAt`, which the media module's `compute-fingerprint` writes
+  last) after the archive's reading of it (`interpretedAt`), as a near check tells shots apart by
+  their capture times: a staged file is then checked for look-alikes, and a library file — taken
+  in after it came into the library some other way, an upload or a copy — rechecks the staged
+  files that copy it or look like it. A staged file whose prints came first is announced on its
+  reading, when its prints were made after it was last read (its exif `indexedAt`); a library file
+  is not, since its reading comes first (fingerprinting waits on EMS) and every library file read
+  again would be checked again for nothing. A check that fails is a failed `media-duplicates`
+  instance, and `staging duplicates --refresh` finds the staged finding older than the prints.
 - **Near findings.** A staged original with fingerprints — a picture's `sscd-image`, a video's
   `sscd-video-keyframe-<n>`, a recording's `chromaprint` — is checked for look-alikes (`recordNear`): the files whose prints
   the embedding index finds nearest to its own (`findSimilar`, an HNSW scan, 100 per print), the

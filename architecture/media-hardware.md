@@ -91,7 +91,7 @@ one, so a step that kills its worker every time does run out.
   `ems-link` service): a new build is the likeliest fix. Such a run is out of turn and does not
   count as a heal.
 - **`media-heal`** (an archive pipeline, and the service that says when it is due) closes gaps
-  nothing announced: a file that never got its fingerprint, transcript, voices, picture vectors or
+  nothing announced: a file that never got its interpretation, faces, transcript, voices or
   extracted text, or whose transcript or vectors are from a superseded model or setting. Its one
   step, run by the engine on a root — the albums, or a user's staged files
   (`/home/<user>/staging/files`, whose faces the staging organizer reads) — is

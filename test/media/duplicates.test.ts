@@ -11,7 +11,7 @@ import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
 import type { DuplicatePathTag, ExactDuplicateScan, ExactDuplicatesOf, FuzzyDuplicateScan, FuzzyDuplicatesOf } from '@archive/media/api';
-import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@archive/media/chromaprint';
+import { CHROMAPRINT_MIMETYPE, encodeChromaprint } from '@media/chromaprint';
 import { chainedFiles, duplicateClusters } from '@archive/media/duplicate-clusters';
 
 // Keep registries on the VFS mounted at `/`, not on the root returned to

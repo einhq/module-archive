@@ -265,44 +265,17 @@ Deno.test('gap: a recording with speech and no voices is a gap; one without spee
   assertEquals(await deriveGaps(VID, tree(voiced), 100), []);
 });
 
-Deno.test('rule: a fingerprint embedding reports the file, not the embedding', async () => {
+Deno.test('rule: a fingerprint embedding or a chromaprint reports nothing of its own', async () => {
+  const print = `${SND}/metadata/chromaprint`;
   const ctx = tree({
     [IMG]: file('f1'),
-    [`${IMG}/metadata/sscd-image`]: {
-      id: 'p1',
-      type: 'embedding',
-      attrs: { embeddingType: 'sscd-image', label: 'primary' },
-    },
+    [`${IMG}/metadata/sscd-image`]: { id: 'p1', type: 'embedding', attrs: { embeddingType: 'sscd-image', label: 'primary' } },
+    [SND]: file('f2', { mimetype: 'audio/wav' }),
+    [print]: { id: 'c1', type: 'file', attrs: { mimetype: 'application/x-chromaprint', computedAt: '2026-10-10T10:00:00Z' } },
   });
 
-  const facts = await deriveEvents(event('embedding', `${IMG}/metadata/sscd-image`), ctx, 100);
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.fingerprintComputed);
-  assertEquals(facts[0].subject, IMG);
-  assertEquals(facts[0].data?.kind, 'sscd-image');
-});
-
-Deno.test('rule: a chromaprint gaining its computedAt reports the recording, once per print', async () => {
-  const print = `${SND}/metadata/chromaprint`;
-  const nodes: Record<string, NodeSnapshot> = {
-    [SND]: file('f1', { mimetype: 'audio/wav' }),
-    [print]: { id: 'c1', type: 'file', attrs: { mimetype: 'application/x-chromaprint' } },
-  };
-  const ctx = tree(nodes);
-
-  // compute-fingerprint writes the values first: nothing to announce yet.
-  assertEquals(await deriveEvents(event('file', print), ctx, 100), []);
-
-  nodes[print] = { id: 'c1', type: 'file', attrs: { mimetype: 'application/x-chromaprint', computedAt: '2026-10-10T10:00:00Z', label: 'primary' } };
-  const facts = await deriveEvents({ ...event('file', print, 'updated'), changedAttrs: ['computedAt', 'computedBy', 'label', 'values'] }, ctx, 100);
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.fingerprintComputed);
-  assertEquals(facts[0].subject, SND);
-  assertEquals(facts[0].data?.kind, 'chromaprint');
-
-  // Rewriting the values leaves computedAt alone and says nothing.
-  assertEquals(await deriveEvents({ ...event('file', print, 'updated'), changedAttrs: ['size'] }, ctx, 100), []);
+  assertEquals(await deriveEvents(event('embedding', `${IMG}/metadata/sscd-image`), ctx, 100), []);
+  assertEquals(await deriveEvents({ ...event('file', print, 'updated'), changedAttrs: ['computedAt'] }, ctx, 100), []);
 });
 
 Deno.test('rule: an unrelated embedding produces nothing', async () => {
@@ -380,7 +353,7 @@ Deno.test("album: a file created directly in an album is the album key's job, no
   assertEquals(albumFacts(await deriveEvents(event('file', IMG, 'created'), ctx, 100)), []);
 });
 
-Deno.test("album: the archive's reading of the metadata and a computed fingerprint announce every album holding the member", async () => {
+Deno.test("album: the archive's reading of the metadata and the file's fingerprinting done announce every album holding the member", async () => {
   const linked = `${ALBUMS_ROOT}/picked/a.jpg`;
   const ctx = tree({
     [ALBUM]: albumNode('al1'),
@@ -399,8 +372,7 @@ Deno.test("album: the archive's reading of the metadata and a computed fingerpri
   assertEquals(read[0].type, MEDIA_EVENTS.metadataInterpreted);
   assertEquals(albumFacts(read), [[ALBUM, 'al1', 'member-indexed'], [IMPORTED, 'al2', 'member-indexed'], [`${ALBUMS_ROOT}/picked`, 'al3', 'member-indexed']]);
 
-  const printed = await deriveEvents(event('embedding', `${IMG}/metadata/sscd-image`), ctx, 100);
-  assertEquals(printed[0].type, MEDIA_EVENTS.fingerprintComputed);
+  const printed = await deriveEvents({ ...event('file', IMG, 'updated'), changedAttrs: ['fingerprintedAt'] }, ctx, 100);
   assertEquals(albumFacts(printed).map((f) => f[2]), ['member-fingerprinted', 'member-fingerprinted', 'member-fingerprinted']);
 });
 
@@ -452,7 +424,6 @@ const exifNode = (): NodeSnapshot => ({
 const indexed = (attrs: Record<string, unknown> = {}, path = IMG): Record<string, NodeSnapshot> => ({
   [path]: file('f1', { facesAt: '2026-08-23T00:00:00Z', interpretedAt: '2026-08-23T00:00:00Z', ...attrs }),
   [`${path}/metadata/exif`]: exifNode(),
-  [`${path}/metadata/sscd-image`]: { id: 'p1', type: 'embedding', attrs: { embeddingType: 'sscd-image' } },
 });
 
 /** A finished transcript: `transcribe-file` writes `transcribedAt` once the cues are in. */
@@ -527,50 +498,21 @@ Deno.test('gap: a fully indexed recording needs nothing', async () => {
   assertEquals(await deriveGaps(SND, tree(indexedAudio()), 100), []);
 });
 
-Deno.test('gap: a recording fingerprinted with no print to show is complete', async () => {
-  const unprinted = indexedAudio();
-  delete unprinted[`${SND}/metadata/sscd-image`];
-  assertEquals((await deriveGaps(SND, tree(unprinted), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
-
-  const tooShort = indexedAudio({ fingerprintedAt: '2026-10-11T10:00:00Z' });
-  delete tooShort[`${SND}/metadata/sscd-image`];
-  assertEquals(await deriveGaps(SND, tree(tooShort), 100), []);
-});
-
 Deno.test('gap: an undecodable source is not a gap', async () => {
   // Nothing downstream can ever fill these in, so announcing them again on every scan only
   // republishes the same file — the redundancy media-scan is built to avoid.
   const nodes = indexed();
   nodes[IMG] = file('f1', { mimetype: 'video/quicktime', undecodable: 'moov atom not found' });
-  delete nodes[`${IMG}/metadata/sscd-image`];
 
   assertEquals(await deriveGaps(IMG, tree(nodes), 100), []);
 });
 
-Deno.test('gap: renditions are no term of the walk', async () => {
-  // A file with no rendition and no marker reads as complete here: `renditions-scan` finds it by
-  // its marker, in every tree, and announces it to the rendition pipelines alone.
+Deno.test('gap: renditions, picture vectors and fingerprints are no term of the walk', async () => {
+  // A file with no rendition, picture vector or print and no marker reads as complete here: the
+  // media module's scans find it by its marker, in every tree, and announce it to their own
+  // pipelines alone.
   assertEquals(await deriveGaps(IMG, tree(indexed()), 100), []);
   assertEquals(await deriveGaps(VID, tree(indexedVideo()), 100), []);
-});
-
-Deno.test('gap: exif but no fingerprint re-opens the fan-out', async () => {
-  const nodes = indexed();
-  delete nodes[`${IMG}/metadata/sscd-image`];
-  const ctx = tree(nodes);
-
-  const facts = await deriveGaps(IMG, ctx, 100);
-
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
-});
-
-Deno.test('gap: a picture marked fingerprinted without a print of its own is not done', async () => {
-  // Only a recording can be too short for a print; a picture always gets one.
-  const nodes = indexed({ fingerprintedAt: '2026-10-11T10:00:00Z' });
-  delete nodes[`${IMG}/metadata/sscd-image`];
-  nodes[`${IMG}/metadata/other-print`] = { id: 'o1', type: 'embedding', attrs: { embeddingType: 'other-print' } };
-
-  assertEquals((await deriveGaps(IMG, tree(nodes), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataInterpreted]);
 });
 
 Deno.test('gap: an ungeocoded position is its own gap', async () => {

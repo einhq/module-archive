@@ -99,9 +99,9 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       await write(`${album}/q.jpg`, 'not really a jpeg');
       await vfs.update(ADMIN_ACCESS, `${album}/q.jpg`, { attrs: { mimetype: 'image/jpeg' } });
       // The pipelines the facts below start: discovery's, the voices' on another media kind, and
-      // the fingerprint's, which nothing below keeps busy.
+      // the faces', which nothing below keeps busy.
       await client.exec('mkdir -p /tmp/defs');
-      for (const name of ['media-voiceprint', 'media-fingerprint']) {
+      for (const name of ['media-voiceprint', 'media-faces']) {
         await write(`/tmp/defs/${name}.yaml`, await Deno.readTextFile(new URL(`../../pipelines/${name}.yaml`, import.meta.url)));
         assertEquals((await client.exec(`pipeline define /tmp/defs/${name}.yaml`)).success, true, `define ${name}`);
       }

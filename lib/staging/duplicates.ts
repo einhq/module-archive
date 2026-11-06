@@ -28,10 +28,10 @@
  * the file yet, and each that the file no longer lists, is checked again with it (the cascade), so
  * neither side depends on the index's approximate walk finding the other. The near part rides along
  * every exact decision about an original, and a file that becomes a copy hands its look-alikes over
- * to a recheck. A near check runs when the file's fingerprints land, when a library file's do and
- * the index finds a staged look-alike of it (the reverse check, both by `compute-fingerprint`
- * through `recordPaths`), when staging files or discards a look-alike, after a person separates
- * two files, and in the hourly repair.
+ * to a recheck. A near check runs when the file's fingerprints and capture time are both in, when a
+ * library file's are and the index finds a staged look-alike of it (the reverse check, both by
+ * `duplicates --record` on the bridge's `media.duplicates.stale`), when staging files or discards
+ * a look-alike, after a person separates two files, and in the hourly repair.
  */
 
 import type {
@@ -45,7 +45,7 @@ import type {
   DuplicateWhere,
 } from '@archive/media/api';
 import { isIndexableMedia, MEDIA_EVENTS, type NodeSnapshot } from '@archive/media/event-rules';
-import { matchChromaprints } from '@archive/media/chromaprint';
+import { matchChromaprints } from '@media/chromaprint';
 import { cosine, displaySize, keyframeVote, NEAR, type NearFacts, nearPictures, nearRecordings, nearVideos, rankPeers, sameShot } from '@archive/media/near-duplicates';
 import { isLibraryPath } from '@archive/paths';
 import { chromaprintsOf, nearCandidates, nearFilesOf, ownPrints, type PrintKind, printKindOf, recordingsLike, subSecondsOf } from '@archive/staging/near-candidates';

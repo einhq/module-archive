@@ -16,8 +16,7 @@
  *   unless a person set it (`positionManual`).
  *
  * `interpretedAt` is written last, and the archive's bridge announces that write as
- * `media.metadata.interpreted`, which starts the archive's analysis: faces, fingerprints, the
- * device link.
+ * `media.metadata.interpreted`, which starts the archive's analysis: faces and the device link.
  */
 
 import { basename, resolve } from '@std/path';

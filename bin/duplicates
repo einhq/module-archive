@@ -13,7 +13,7 @@
  *     Pictures and video by the cosine of their SSCD descriptors (a video's
  *     keyframes); sound by aligning chromaprints, so a copy with other audio in
  *     front of it or cut short still matches. Only covers files that already have
- *     fingerprints (the compute-fingerprint step). Every file of a cluster is a copy
+ *     fingerprints (the media module's compute-fingerprint). Every file of a cluster is a copy
  *     of every other, so a chain of retakes, each close to the next, does not form
  *     one. Clusters of identical files are included too.
  *
@@ -47,10 +47,10 @@ import type {
   FuzzyDuplicateScan,
   FuzzyDuplicatesOf,
 } from '@archive/media/api';
-import { CHROMAPRINT_MIMETYPE, decodeChromaprint, matchChromaprints } from '@archive/media/chromaprint';
+import { CHROMAPRINT_MIMETYPE, decodeChromaprint, matchChromaprints } from '@media/chromaprint';
 import { chainedFiles, duplicateClusters, type Edge } from '@archive/media/duplicate-clusters';
 import { isIndexableMedia } from '@archive/media/event-rules';
-import { FINGERPRINT_TYPES } from '@archive/media/fingerprints';
+import { FINGERPRINT_TYPES } from '@media/fingerprints';
 import { checksumMatches, recordPaths } from '@archive/staging/duplicates';
 import { resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
@@ -452,7 +452,7 @@ async function readChromaprints(cmd: Command): Promise<{ id: string; file: strin
   return prints;
 }
 
-/** `fingerprinted`: compute-fingerprint ran on the file, so a missing print means it is too short. */
+/** `fingerprinted`: the file's fingerprinting is done, so a missing print means it is too short. */
 async function chromaprintSingle(cmd: Command, filePath: string, fingerprinted: boolean, threshold: number, limit: number): Promise<number> {
   const ownPath = `${filePath}/metadata/chromaprint`;
   const ownNode = await cmd.sys.vfs.get(cmd.access, ownPath).catch(() => null);
