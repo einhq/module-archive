@@ -1,6 +1,6 @@
 /**
- * A first transcript and a stale one's redo are two trigger modes of one pipeline, for audio and
- * video alike, and the voices start from the transcript.
+ * The voices start from the transcript (the media module's `media.transcript.generated`) and from
+ * the speakers gap, and no pipeline describes media.
  */
 
 import { assertEquals } from '@std/assert';
@@ -24,26 +24,6 @@ type PipelineFile = {
 };
 
 const read = async (name: string): Promise<PipelineFile> => parseYaml(await Deno.readTextFile(new URL(name, pipelinesDir))) as PipelineFile;
-
-Deno.test('media-transcribe carries ordinary triggers per media type and one forced trigger', async () => {
-  const def = await read('media-transcribe.yaml');
-  const ordinary = def.triggers.filter((trigger) => trigger.on === 'media.metadata.extracted');
-  const stale = def.triggers.filter((trigger) => trigger.on === 'media.transcript.stale');
-
-  assertEquals(ordinary.map((trigger) => trigger.match?.mimetype).sort(), ['audio/*', 'video/*']);
-  for (const trigger of ordinary) {
-    assertEquals(trigger.skipIfExists, '$NODE_PATH/metadata/transcript');
-    assertEquals(trigger.vars, undefined);
-  }
-  assertEquals(stale.length, 1);
-  assertEquals(stale[0].skipIfExists, undefined);
-  assertEquals(stale[0].vars, { FORCE: '-f' });
-  assertEquals(stale[0].priority, 10);
-  assertEquals(def.options.priority, 50);
-  assertEquals(def.steps['transcribe-file'].command, 'transcribe-file $FORCE $NODE_PATH');
-  assertEquals(def.steps['transcribe-file'].kind, 'transcribe');
-  assertEquals(def.steps['transcribe-file'].requires, { models: 1 });
-});
 
 Deno.test('media-voiceprint starts from a transcript and from the speakers gap', async () => {
   const def = await read('media-voiceprint.yaml');

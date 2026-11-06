@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
   "license": "Elastic-2.0, with an added permission (LICENSE)",
   "coreApi": "^0.12.0",
@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "ems": "^0.10.0",
-    "media": "^0.1.4"
+    "media": "^0.1.5"
   },
   "imports": {
     "@archive/device/api": "./lib/device/api.ts",
@@ -63,7 +63,6 @@
     "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
     "@archive/media/chromaprint": "./lib/media/chromaprint.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
-    "@archive/media/extracted-text": "./lib/media/extracted-text.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
     "@archive/media/face-cluster": "./lib/media/face-cluster.ts",
     "@archive/media/face-match": "./lib/media/face-match.ts",
@@ -87,7 +86,6 @@
     "@archive/media/speaker-assign": "./lib/media/speaker-assign.ts",
     "@archive/media/speaker-faces": "./lib/media/speaker-faces.ts",
     "@archive/media/speakers": "./lib/media/speakers.ts",
-    "@archive/media/transcript": "./lib/media/transcript.ts",
     "@archive/media/trip-album": "./lib/media/trip-album.ts",
     "@archive/media/types": "./types/media/mod.ts",
     "@archive/media/xmp": "./lib/media/xmp.ts",

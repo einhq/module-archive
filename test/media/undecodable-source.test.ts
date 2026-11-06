@@ -17,10 +17,9 @@ const moduleRoot = new URL('../../', import.meta.url);
 
 type PipelineFile = { trigger?: { skipIfAttr?: string }; triggers?: { skipIfAttr?: string }[] };
 
-/** Everything triggered by `media.metadata.extracted` that needs to decode the bytes. */
+/** The archive's pipelines that decode the bytes of a read file. */
 const DECODING_PIPELINES = [
   'media-fingerprint',
-  'media-transcribe',
 ];
 
 Deno.test('every pipeline that decodes a source skips one that cannot be decoded', async () => {

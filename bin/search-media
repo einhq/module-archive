@@ -33,7 +33,7 @@ import { embedQuery, isContentPartName, isTextVectorName, TEXT_VECTOR_NAMES } fr
 import { fileOfPictureVector, PICTURE_DIR, PICTURE_FLOOR, pictureEmbeddingType, pictureQuery } from '@media/pictures';
 import { MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
 import { pictureSource } from '@media/picture-source';
-import { resolveChunkPath } from '@archive/media/transcript';
+import { resolveChunkPath } from '@media/transcript';
 import { type LabelLike, labelLike } from '@archive/labels/label-model';
 import { listedRows } from '@archive/search/listed';
 

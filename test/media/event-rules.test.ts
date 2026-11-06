@@ -11,7 +11,7 @@ import { assertEquals } from '@std/assert';
 import { deriveEvents, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '../../lib/media/event-rules.ts';
 import type { DomainEvent } from '@ein/client';
 import { authoredHash } from '@ems/text-embedding';
-import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
+import { CHUNK_TARGET_SECONDS } from '@media/transcript';
 
 const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
 
@@ -249,23 +249,6 @@ Deno.test("rule: a face of a video with voices changing person is a fact about t
   assertEquals(changed(await deriveEvents(updated(['personId'], `${IMG}/regions/face-0`), tree(photo), 100)), []);
 });
 
-Deno.test('rule: a read picture whose text language is set by hand is announced; any other write is not', async () => {
-  const updated = (changedAttrs: string[]): VfsEventInput => ({ ...event('file', IMG, 'updated'), changedAttrs });
-  const set = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.textLanguageSet);
-  const read = tree(indexed({ textIndexedAt: '2026-10-19T10:00:00Z', ocrLanguageManual: 'en' }));
-
-  const facts = set(await deriveEvents(updated(['ocrLanguageManual']), read, 100));
-  assertEquals(facts.length, 1);
-  assertEquals([facts[0].subject, facts[0].data], [IMG, { mimetype: 'image/jpeg', language: 'en' }]);
-  // Cleared, the language is told from the text again.
-  const cleared = tree(indexed({ textIndexedAt: '2026-10-19T10:00:00Z' }));
-  assertEquals(set(await deriveEvents(updated(['ocrLanguageManual']), cleared, 100))[0].data?.language, null);
-
-  assertEquals(set(await deriveEvents(updated(['textIndexedAt', 'ocrBy']), read, 100)), []);
-  // Never read: the reading it waits for asks in the language anyway.
-  assertEquals(set(await deriveEvents(updated(['ocrLanguageManual']), tree(indexed({ ocrLanguageManual: 'en' })), 100)), []);
-});
-
 Deno.test('gap: a recording with speech and no voices is a gap; one without speech is not', async () => {
   const transcript = (speech: boolean): NodeSnapshot => transcribed({ speech });
 
@@ -320,28 +303,6 @@ Deno.test('rule: a chromaprint gaining its computedAt reports the recording, onc
 
   // Rewriting the values leaves computedAt alone and says nothing.
   assertEquals(await deriveEvents({ ...event('file', print, 'updated'), changedAttrs: ['size'] }, ctx, 100), []);
-});
-
-Deno.test('rule: a transcript gaining its transcribedAt reports the recording, once per transcription', async () => {
-  const transcript = `${VID}/metadata/transcript`;
-  const nodes: Record<string, NodeSnapshot> = {
-    [VID]: file('f1', { mimetype: 'video/mp4' }),
-    [transcript]: { id: 't1', type: 'file', attrs: {} },
-  };
-  const ctx = tree(nodes);
-
-  // transcribe-file writes the cues first: nothing to announce yet.
-  assertEquals(await deriveEvents(event('file', transcript), ctx, 100), []);
-
-  nodes[transcript] = transcribed({ speech: true, language: 'sv' });
-  const facts = await deriveEvents({ ...event('file', transcript, 'updated'), changedAttrs: ['mimetype', 'transcribedAt', 'speech', 'language'] }, ctx, 100);
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].type, MEDIA_EVENTS.transcriptGenerated);
-  assertEquals(facts[0].subject, VID);
-  assertEquals(facts[0].data, { mimetype: 'video/mp4', speech: true, language: 'sv' });
-
-  // Its chunks are written beneath it; an update that leaves transcribedAt alone says nothing.
-  assertEquals(await deriveEvents({ ...event('file', transcript, 'updated'), changedAttrs: ['size'] }, ctx, 100), []);
 });
 
 Deno.test('rule: an unrelated embedding produces nothing', async () => {

@@ -46,9 +46,7 @@ waits for rather than by a shared DAG:
    | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
    | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
    | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
-   | `media-embed-text`     | `text-embedding.stale`                                                                                 | pool `embed-text` (1 model slot; priority 20)                                                                                        |
    | `media-face-assign`    | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
-   | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`                            | pool `transcribe` (1 model slot; priority 50/10)                                                                                     |
    | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                                           | pool `diarize` (1 model slot; priority 30)                                                                                           |
    | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
    | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                                            | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
@@ -59,8 +57,9 @@ waits for rather than by a shared DAG:
 
    **Families.** Every pipeline here that acts on a file wherever it lies names the family of work
    it does with `wants` (core's "Which processing a folder wants"): `renditions` (the media module's
-   `media-stills` and `media-transcode`), `picture-vectors` (its `media-embed-picture`), `text` (`media-ocr`,
-   `document-index`), `transcripts` (`media-transcribe`; `media-embed-text` is either), and
+   `media-stills` and `media-transcode`), `picture-vectors` (its `media-embed-picture`), `text` (its
+   `media-ocr` and `document-index`), `transcripts` (its `media-transcribe`; `media-embed-text` is
+   either), and
    `archive` for everything that gives a file its people, places, device and copies (faces, voices,
    fingerprints, device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
    since every family needs the file read, and nor do the pipelines that act only on the archive's
@@ -190,42 +189,15 @@ waits for rather than by a shared DAG:
    own. Leaving unmounts the `<video>`, which is the whole reset: the still underneath is the same
    frame the clip started on. `prefers-reduced-motion` disables it, and a clip that 404s is
    remembered so a not-yet-backfilled video is asked for once and never again.
-7. **Search.** The media module's `embed-picture`, and `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads, `@media/picture-source`) populate the embedding registry.
+7. **Search.** The media module's `embed-picture`, `transcribe-file`, `index-document` and `read-text`, and the archive's `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads, `@media/picture-source`) populate the embedding registry.
 
-   **Text indexing.** `document-index` runs `index-document` on a file's VFS `updated` and on its
-   `moved`, one trigger body shared by both: PDF, plain text, Word and OpenDocument text. JSON and
-   XMP sidecars are not documents (step 1). Pictures are `media-ocr`'s: `read-text` on the media
-   pool (kind `ocr`), after `media.metadata.extracted` so the picture is read in its display frame,
-   and on a `moved`. It asks EMS `ocr.read` (PP-OCRv6) for the original's lines and keeps them
-   beside the text, `lines` on `<file>/metadata/content` (each line's words, four corners as
-   fractions of the picture, and score), and stamps the file `ocrBy`. `media-scan` announces
-   `media.ocr.stale` for a read picture whose `ocrBy` names another engine than EMS names in
-   `capabilities.models.ocr`, or none, and `media-ocr` reads it again with `-f`; a reading without
-   text removes the old one. A picture never read has no `textIndexedAt` and is
-   `media.text.missing`'s. Plan: wow `history/ocr-tiers.md`.
-   EMS tells the language of the text from its reading, and the language picks the transcriber
-   that writes the picture's handwriting (Swedish and Finnish, or English); `read-text` keeps it
-   as `ocrLanguage` and `ocrLanguageConfidence` on `<file>/metadata/content`, none when there is
-   too little text to tell. `file-set-text-language <file> <code|auto>` sets it by hand as
-   `ocrLanguageManual` on the file, which `read-text` gives EMS instead; the bridge reads that
-   write on a read picture as `media.text.language-set`, and `media-ocr` reads it again with `-f`.
-   Plan: wow `history/ocr-language.md`.
-   `file-set-text <file> --text-base64 <b64>` (the lightbox's text editor) writes the text by
-   hand: it replaces `<file>/metadata/content` without `lines`, embeds it, and marks the file
-   `textManual` with no `ocrBy`, so `media.ocr.stale` passes it by and `read-text` refuses it
-   even with `-f`.
-   Nothing under `/home/<user>/staging/` is read while it is staged: the triggers' `unless`
-   skips it before any shell runs, so an import costs no OCR and no filter evaluation per write.
-   The same `unless` leaves out EiN's own paths (`/var`, `/etc`, `/usr`, `/dev`, `/tmp`),
-   dotfiles, a trash among them, and the pipeline's own `metadata/content`.
-   A file is read when it leaves staging, by the `moved` trigger; staging's own filing (promote,
-   `album add`) moves the files themselves, a `moved` event each. A directory moved out whole
-   publishes `moved` for the directory alone: the bridge binds `directory.moved` and announces
-   `media.text.missing` for each file within it that has no `textIndexedAt` (one subtree query,
-   `deriveTextGap` per file). A write while the engine was down reaches no trigger: for that
-   `media-scan` announces the same fact (the filter's mimetypes and every picture as
-   `isTextIndexedMimetype`). The fact is a trigger of both pipelines, each for its mimetypes, with
-   the same `unless`, so a directory moved within staging reads nothing. `textIndexedAt` is written whether text was found or not, so a file is read once.
+   **Text indexing** is the media module's (its architecture's text.md): `document-index` reads a
+   document's text and `media-ocr` a picture's, each once, and nothing staged. What the archive
+   adds is finding what nothing announced: `media-scan` announces `media.text.missing` for a file
+   whose text was never read (`isTextIndexedMimetype`, `@media/file-rules`) and `media.ocr.stale`
+   for a picture read by another engine than EMS reads with now, and the bridge announces
+   `media.text.missing` for each unread file within a directory moved whole, which publishes a
+   `moved` for the directory alone.
 
    **Picture search.** The media module's `embed-picture` writes a SigLIP2 vector per photo, or per
    video keyframe, under `<file>/metadata/picture/` (`embedding`, or `k0`… with `atSeconds`), typed
@@ -1007,54 +979,17 @@ write refused only after EMS answered would let anyone who may read a file, the 
 spend the service's time on it as often as they asked. The pipeline runs these as the
 administrator, who is never refused.
 
-**The text space.** Every text
-is embedded by EMS's current text embedder (`text.embed` `model: current`, bge-m3)
-into a type per model, at a node named after the type beside the text:
-`metadata/content/text_bgem3` and `metadata/transcript/text_bgem3/t<second>` (a directory stamped
-`embeddedBy` last). An extracted text longer than 6 000 characters is embedded in
-parts of about 400 tokens instead: `metadata/content/text_bgem3/c<N>`, a directory like the
-transcript's, each part cut at paragraphs and sentences and carrying its character `offset`
-(`contentParts`); `search-media` and `search-document` score the file by its best part. The
-**hand-written** `description` attr is embedded as `metadata/authored/text_bgem3` (no text node;
-the attr stays the one copy of the text) with an `authoredHash` of the text it was made from;
-`file-set-description` writes it on save and removes it on clear, and `search-media` ranks it as a
-channel of its own at the picture channel's weight, counting only hits from the space's `strict`
-level (0.66 for bge-m3), where judged pairs hold 0.9 precision.
-
-A vector carries nothing but `embeddedBy` and `embeddedAt`, and a transcript chunk's its start and
-end seconds and its `text`, the words it was made from, which search matches a phrase against. So a
-transcript whose chunks are not embedded yet is found by neither, until `media-reembed` embeds them.
-What a text is and where it came from
-is on its **text node**: a transcript's `transcribedBy`, `transcribedWith` and `transcribedAt`,
-the last written once the cues are, are both the "already transcribed" marker (the transcribe
-pipeline's guard, `transcribe-file`'s own skip, the staleness rule) and what announces a transcript
-(`media.transcript.generated` fires when `transcribedAt` is written). So a new embedding model is a
-re-embed and never a re-transcription: `media-reembed` walks the text nodes and embeds what is
-missing or another model's, from the stored text alone. `media-scan` announces
-`media.text-embedding.stale` for a media file whose extracted text, transcript
-(also when cut at another `chunkSeconds`) or hand-written description has no vector from the
-embedder EMS runs now (`generations()` in `@ems/client`), naming which in `data.stale`; `media-embed-text`
-runs `media-reembed <file>`, the same rules for that one file. A text with nothing to embed (an
-empty text node, a transcript with `speech: false`) is never announced. Search has a
-floor of 0.35 on this space, measured on the retrieval eval's judgements.
-`@ems/text-embedding` (module-ems's `lib/text-embedding.ts`) holds the types, the layout and the
-query side.
-
-The transcript is WebVTT rather than a JSON of segments because that is the format `<video>` already
-understands: `get-file` serves the node with the mimetype it carries, so the lightbox's video
-player and the sidebar's transcript panel both read `/file/<path>/metadata/transcript` with no
-route, no converter and no second copy (one request between them, `useTranscriptCues`). The player
-draws the subtitles itself; its `<track>` is shown only in an iPhone's fullscreen, which is the
-system's player. Its `text_bgem3/t<second>` children are embedding nodes, one
-per minute of speech (`CHUNK_TARGET_SECONDS`; it was 30 s, sized to MiniLM's 128-token window), so
-a hit says where in the recording it matched. A set carries the length it was cut at
-(`chunkSeconds`), and `media-reembed` re-chunks a set cut at another. Each chunk node is **named for
-its start second**, which is what lets a vector hit carry its own seek target:
-[search-media](../bin/search-media) resolves a hit to a path and nothing else, so
-reading an attr per hit would put a node read back on the search path. The timecode travels out as
-`atSeconds` on the search hit, and the lightbox opens the player there. Composition rules
-(WebVTT in and out, chunking, chunk-path resolution) are pure and tested in
-[modules/archive/lib/media/transcript.ts](../lib/media/transcript.ts). Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `devicePath`) are still promoted
+**The text space** — what a file's texts are embedded into, the transcript's WebVTT and its chunks —
+is the media module's (its architecture's text.md, `@media/transcript`). What the archive keeps is
+finding the gaps: `media-scan` announces `media.transcript.stale` for a transcript decoded with other
+whisper settings than EMS runs now, or left without `transcribedAt` (`CFG_MEDIA_TRANSCRIPTS_CURRENT`
+set to `off` turns that check off), and `media.text-embedding.stale` for a media file whose
+extracted text, transcript (also when cut at another `chunkSeconds`) or hand-written description has
+no vector from the embedder EMS runs now (`generations()` in `@ems/client`), naming which in
+`data.stale`; and search, which reads the vectors. The hand-written `description` is embedded by
+the archive's `file-set-description` (`metadata/authored/text_bgem3`, with an `authoredHash`), and
+search ranks it as a channel of its own at the picture channel's weight, from the space's `strict`
+level. Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `devicePath`) are still promoted
 onto the file node's attrs by `exif-extract`; the raw exiftool output stays on `metadata/exif` so it
 doesn't bloat every file-node read. A video's duration is ffprobe's container duration from the
 same `media.probe`, and exiftool's only when ffprobe has none: exiftool reads a DV AVI's length from

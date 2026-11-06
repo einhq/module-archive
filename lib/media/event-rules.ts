@@ -14,10 +14,10 @@
  * is harmless — the pipeline's `skipIf` and one-instance-per-node absorb it.
  */
 
-import { CHUNK_TARGET_SECONDS } from '@archive/media/transcript';
+import { CHUNK_TARGET_SECONDS } from '@media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
-import { RENDITION_FACTS } from '@media/facts';
+import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
 import {
   deriveForExif as extractedFacts,
   deriveForFile as fileFacts,
@@ -25,6 +25,7 @@ import {
   type FileRuleContext,
   isIndexableMedia,
   isMediaPath,
+  isTextIndexedMimetype,
   type NodeSnapshot,
   type VfsEventInput,
 } from '@media/file-rules';
@@ -52,13 +53,15 @@ export const MEDIA_EVENTS = {
   fileContentChanged: FILE_FACTS.contentChanged,
   fileRemoved: FILE_FACTS.removed,
   fileTurned: FILE_FACTS.turned,
-  /**
-   * A person set or cleared the language of a read picture's text (`ocrLanguageManual`,
-   * `file-set-text-language`). The picture is read again in it: the language picks the transcriber
-   * for its handwriting.
-   */
-  textLanguageSet: 'media.text.language-set',
   metadataExtracted: FILE_FACTS.metadataExtracted,
+  // The facts of a file's text, the media module's too (`@media/facts`): the bridge there derives
+  // the first two, and this module's scan finds the others' gaps.
+  textLanguageSet: TEXT_FACTS.languageSet,
+  transcriptGenerated: TEXT_FACTS.transcriptGenerated,
+  transcriptStale: TEXT_FACTS.transcriptStale,
+  ocrStale: TEXT_FACTS.ocrStale,
+  textEmbeddingStale: TEXT_FACTS.textEmbeddingStale,
+  textMissing: TEXT_FACTS.textMissing,
   /**
    * What a file's metadata means in the archive is read: `exif-interpret` wrote its capture time
    * and place and, last, `interpretedAt`. Only on the write that changed it. Starts the archive's
@@ -95,43 +98,10 @@ export const MEDIA_EVENTS = {
    */
   speakersMissing: 'media.speakers.missing',
   /**
-   * A video's or a recording's transcript is written: `<file>/metadata/transcript` gained its
-   * `transcribedAt`. Subject is the file; `data.speech` says whether anything was said.
-   */
-  transcriptGenerated: 'media.transcript.generated',
-  /**
-   * A transcript exists but was decoded with other whisper settings than EMS runs now, or an
-   * interrupted run left it without `transcribedAt`. Its own fact because the transcribe
-   * pipeline's ordinary trigger skips every file that has the node — exactly the set this fact is
-   * about.
-   */
-  transcriptStale: 'media.transcript.stale',
-  /**
    * A photo or video's faces were found by other face models than EMS runs now (`facesBy`). Its
    * own fact because the face pipelines' ordinary trigger skips every file that has `facesAt`.
    */
   facesStale: 'media.faces.stale',
-  /**
-   * A picture's text was read by another engine than EMS reads with now, or by none named
-   * (`ocrBy`). Its own fact because `media-ocr`'s ordinary triggers skip every picture already
-   * read.
-   */
-  ocrStale: 'media.ocr.stale',
-  /**
-   * A file's texts lack a vector from the text embedder EMS runs now: extracted text, a
-   * transcript or a hand-written description with no vector, or one from another model (a
-   * transcript also when its chunks were cut at another length). `data.stale` names which. The
-   * repair embeds the stored text again and never re-runs what wrote it.
-   */
-  textEmbeddingStale: 'media.text-embedding.stale',
-  /**
-   * A document or picture `document-index` reads has never had its text extracted: no
-   * `textIndexedAt`. The bridge announces it for each such file in a directory that was moved,
-   * since the move publishes an event for the directory only; the reconciler announces it for a
-   * file whose write or move came while nothing was listening. `document-index` excludes the
-   * same paths for it as for the write.
-   */
-  textMissing: 'media.text.missing',
   /**
    * The set of media an album holds, or what is known about a member's location in it, changed.
    * Subject is the **album** node — the one fact here whose subject is an aggregate rather than
@@ -190,18 +160,6 @@ const CAPTURE_TIME_ATTRS = ['takenAt', 'takenAtUtc'];
 const IMAGE_MIMETYPE = /^image\//;
 /** A photo or a video: what faces are found in. */
 const PICTURE_MIMETYPE = /^(image|video)\//;
-/**
- * What gets extracted text: the documents `document-index` reads (its trigger's `filter` says the
- * same, and `document-index.test.ts` holds the two together) and every picture, which `media-ocr`
- * reads — a camera RAW through its preview.
- */
-export const isTextIndexedMimetype = (mimetype: string): boolean =>
-  /^image\//.test(mimetype) || [
-    'application/pdf',
-    'text/plain',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.oasis.opendocument.text',
-  ].includes(mimetype);
 
 /** Everything a rule needs from the VFS, so the rules stay testable in isolation. */
 export type RuleContext = FileRuleContext & {
@@ -278,24 +236,6 @@ function deriveSpeakersDetected(event: VfsEventInput, file: NodeSnapshot, now: n
     time: now,
     source: MEDIA_EVENT_SOURCE,
     data: { mimetype: str(file.attrs.mimetype) ?? '', speakersAt, speakerCount: num(file.attrs.speakerCount) ?? 0 },
-  }];
-}
-
-/**
- * The fact a hand-set text language of a read picture reveals. Only on the write that changed it,
- * and only once the picture was read: before that, the reading it is queued for asks in it anyway.
- */
-function deriveTextLanguageSet(event: VfsEventInput, file: NodeSnapshot, now: number): Omit<DomainEvent, 'id'>[] {
-  if (event.type !== 'updated' || !(event.changedAttrs ?? []).includes('ocrLanguageManual')) return [];
-  const mimetype = str(file.attrs.mimetype) ?? '';
-  if (!IMAGE_MIMETYPE.test(mimetype) || !str(file.attrs.textIndexedAt)) return [];
-  return [{
-    type: MEDIA_EVENTS.textLanguageSet,
-    subject: event.path,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: { mimetype, language: str(file.attrs.ocrLanguageManual) ?? null },
   }];
 }
 
@@ -674,39 +614,6 @@ async function deriveForEmbedding(
 }
 
 /**
- * `<file>/metadata/transcript` gaining its `transcribedAt`: a transcript finished. transcribe-file
- * writes the cues first and the attrs with `transcribedAt` after, anew on every run, so this fires
- * once per transcription — and never for a re-embed of its chunks, which writes only the vectors
- * beneath it.
- */
-async function deriveForTranscript(
-  event: VfsEventInput,
-  ctx: RuleContext,
-  now: number,
-): Promise<Omit<DomainEvent, 'id'>[]> {
-  const changed = event.type === 'created' || (event.type === 'updated' && (event.changedAttrs ?? ['transcribedAt']).includes('transcribedAt'));
-  if (!changed) return [];
-  const transcript = await ctx.getNode(event.path);
-  if (!transcript || !str(transcript.attrs.transcribedAt)) return [];
-  const filePath = parentOf(parentOf(event.path));
-  const file = await ctx.getNode(filePath);
-  if (!file || file.type !== 'file') return [];
-
-  return [{
-    type: MEDIA_EVENTS.transcriptGenerated,
-    subject: filePath,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: {
-      mimetype: str(file.attrs.mimetype) ?? '',
-      speech: transcript.attrs.speech === true,
-      language: str(transcript.attrs.language) ?? '',
-    },
-  }];
-}
-
-/**
  * `<file>/metadata/chromaprint` — a recording's fingerprint, announced as an `sscd-*` embedding is.
  * `compute-fingerprint` writes the values first and `computedAt` last, so that write is the one
  * that announces it.
@@ -945,7 +852,6 @@ export async function deriveEvents(
 
   switch (event.nodeType) {
     case 'file': {
-      if (nameOf(event.path) === 'transcript' && nameOf(parentOf(event.path)) === 'metadata') return await deriveForTranscript(event, ctx, now);
       if (nameOf(event.path) === 'chromaprint' && nameOf(parentOf(event.path)) === 'metadata') {
         return await withMemberFingerprinted(await deriveForChromaprint(event, ctx, now), ctx, now);
       }
@@ -974,7 +880,6 @@ export async function deriveEvents(
         ...deriveFacesCompleted(event, file, now),
         ...await deriveInterpreted(event, file, ctx, now),
         ...deriveSpeakersDetected(event, file, now),
-        ...deriveTextLanguageSet(event, file, now),
         ...retimed,
       ];
     }

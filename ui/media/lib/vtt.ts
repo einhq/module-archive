@@ -6,7 +6,7 @@
  * transcript serves both (`useTranscriptCues`), and the audio player has no `<video>` for a
  * `<track>` to live on at all.
  *
- * The server's writer is `@archive/media/transcript`. This is a second reader on purpose:
+ * The server's writer is the media module's `@media/transcript`. This is a second reader on purpose:
  * importing that into a browser bundle would drag its server-side imports along with it.
  */
 
