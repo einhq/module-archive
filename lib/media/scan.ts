@@ -17,7 +17,7 @@ export const PASS_ATTR = 'mediaScanPass';
 /** The last pass that walked to the end of the root, kept beside `PASS_ATTR`. */
 export const LAST_PASS_ATTR = 'mediaScanLast';
 
-/** The fact `media-heal` announces on the albums root when a pass over it is due. */
+/** The fact `media-heal` announces on a root, the albums or a staging area's files, when a pass over it is due. */
 export const HEAL_DUE = 'media.heal.due';
 
 /** What `PASS_ATTR` holds. */

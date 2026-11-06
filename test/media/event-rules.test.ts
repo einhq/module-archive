@@ -735,6 +735,12 @@ Deno.test('ocr: a picture read by the current engine, written by hand, never rea
   assertEquals(ocrFacts(await deriveGaps(VID, tree(indexedVideo(), { ocrGeneration: PPOCR }), 100)), []);
 });
 
+Deno.test('ocr: a staged picture read by another engine waits until it is filed', async () => {
+  const staged = '/home/anna/staging/files/inbox/batch/a.jpg';
+  const nodes = indexed({ textIndexedAt: READ_AT, ocrBy: 'PP-OCRv6_small' }, staged);
+  assertEquals(ocrFacts(await deriveGaps(staged, tree(nodes, { ocrGeneration: PPOCR }), 100)), []);
+});
+
 const BGE = 'bge-m3';
 const textFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.textEmbeddingStale);
 const textVector = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id: 'tv', type: 'embedding', attrs: { embeddedBy: BGE, ...attrs } });
@@ -809,7 +815,7 @@ Deno.test('text: a file announced for a new transcript is not also announced for
   assertEquals(textFacts(facts), []);
 });
 
-Deno.test('gap: a document or picture with no textIndexedAt is a text gap; other media and derivatives are not', () => {
+Deno.test('gap: a document or picture with no textIndexedAt is a text gap; other media, derivatives and staged files are not', () => {
   const PDF = `${ALBUMS_ROOT}/x/a.pdf`;
   const gap = (attrs: Record<string, unknown>) => deriveTextGap(PDF, file('f1', attrs), 100).map((fact) => fact.type);
 
@@ -827,6 +833,9 @@ Deno.test('gap: a document or picture with no textIndexedAt is a text gap; other
   // A node's own metadata is no document: an album's description, a file's extracted text.
   assertEquals(deriveTextGap(`${ALBUMS_ROOT}/x/metadata/description`, file('f1', { mimetype: 'text/plain' }), 100), []);
   assertEquals(deriveTextGap(`${PDF}/metadata/content`, file('f1', { mimetype: 'text/plain' }), 100), []);
+  // A staged file is read when it is filed.
+  assertEquals(deriveTextGap('/home/anna/staging/files/inbox/batch/a.jpg', file('f1', { mimetype: 'image/jpeg' }), 100), []);
+  assertEquals(deriveTextGap('/home/anna/staging/files/inbox/menu.pdf', file('f1', { mimetype: 'application/pdf' }), 100), []);
 });
 
 Deno.test('rule: a directory moved whole announces the text gap of each unread file within it', async () => {

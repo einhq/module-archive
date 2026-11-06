@@ -17,6 +17,7 @@
 import { CHUNK_TARGET_SECONDS } from '@media/transcript';
 import { FINGERPRINT_TYPES, fingerprintDone } from '@archive/media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
+import { parseStagedPath } from '@archive/staging/paths';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
 import {
   deriveForExif as extractedFacts,
@@ -479,10 +480,11 @@ export async function deriveGaps(
 
   // Text in a picture read by another engine than EMS reads with now, or marked read with none
   // named. A picture never read (no `textIndexedAt`) is `media.text.missing`'s, so it is not
-  // announced twice, and one whose text a person wrote (`textManual`) is never read again.
+  // announced twice, one whose text a person wrote (`textManual`) is never read again, and a staged
+  // one, which `media-ocr` does not read, is found again once it is filed.
   const ocrBy = str(file.attrs.ocrBy);
   const read = Boolean(str(file.attrs.textIndexedAt)) && file.attrs.textManual !== true;
-  if (ctx.ocrGeneration && !undecodable && isImage && read && ocrBy !== ctx.ocrGeneration) {
+  if (ctx.ocrGeneration && !undecodable && isImage && read && ocrBy !== ctx.ocrGeneration && !parseStagedPath(filePath)) {
     events.push({
       type: MEDIA_EVENTS.ocrStale,
       subject: filePath,
@@ -525,13 +527,14 @@ export async function deriveGaps(
  * writes whether it found text or not. Apart from `deriveGaps` because a document is not media
  * and has no exif, and a file with no children can have this gap. Read by the reconciler for every
  * file it walks and by the bridge for the files a directory move carried. None for a file in a
- * node's `metadata/` — extracted text, an album's description — which `document-index` never reads.
+ * node's `metadata/` — extracted text, an album's description — nor for one in a staging area,
+ * neither of which the text pipelines read: a staged file is read when it is filed.
  */
 export function deriveTextGap(filePath: string, file: NodeSnapshot, now: number): Omit<DomainEvent, 'id'>[] {
   const mimetype = str(file.attrs.mimetype) ?? '';
 
   if (file.type !== 'file' || file.attrs.sourceId || (num(file.attrs.size) ?? 0) === 0) return [];
-  if (filePath.includes('/metadata/')) return [];
+  if (filePath.includes('/metadata/') || parseStagedPath(filePath)) return [];
   if (!isTextIndexedMimetype(mimetype) || str(file.attrs.textIndexedAt)) return [];
 
   return [{

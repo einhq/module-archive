@@ -93,7 +93,9 @@ one, so a step that kills its worker every time does run out.
 - **`media-heal`** (an archive pipeline, and the service that says when it is due) closes gaps
   nothing announced: a file that never got its fingerprint, transcript, voices, picture vectors or
   extracted text, or whose transcript or vectors are from a superseded model or setting. Its one
-  step, run by the engine on the albums root, is `media-scan --if-idle`, which holds back each gap
+  step, run by the engine on a root — the albums, or a user's staged files
+  (`/home/<user>/staging/files`, whose faces the staging organizer reads) — is
+  `media-scan --if-idle`, which holds back each gap
   a pipeline with work ready would take (a ready trigger, or a ready media job of one of its kinds)
   and names the fact types it held: a gap announced is a real gap, not work on its way, and a
   backlog of one kind holds off only its own gaps. A pass is one instance: it shows under Ongoing
@@ -102,11 +104,13 @@ one, so a step that kills its worker every time does run out.
   on the root every thousand files, so a step run again after a restart goes on from there, and
   holds back the types that waited when it began; its step's `output` is what the whole pass
   found. The `media-heal` service runs the `media-heal` command each `CFG_MEDIA_HEAL_INTERVAL`,
-  which announces `media.heal.due` on the albums root unless a pass is live or failed (that one is
-  `pipeline heal`'s), every type it would scan waits, or the last pass, recorded on the root, found
-  and held nothing less than `CFG_MEDIA_HEAL_REST` ago; the fact carries the types the last pass
-  held, so the next is over those alone. The engine drops a fact for a subject whose instance is
-  live, so there is never a second pass. This is also how a change of model or setting reaches the
+  which announces nothing while a pass over any root is live, and otherwise `media.heal.due` on
+  the first root, the albums before the staging areas, whose pass is due: not failed (that one is
+  `pipeline heal`'s), not every type it would scan waiting, and not a last pass, recorded on the
+  root, that found and held nothing less than `CFG_MEDIA_HEAL_REST` ago; the fact carries the types
+  that root's last pass held, so its next is over those alone. One pass runs at a time, and the
+  engine drops a fact for a subject whose instance is live. A staged file's text is not a gap: it is
+  read when it is filed. This is also how a change of model or setting reaches the
   whole archive: a new transcript signature transcribes every recording again, as the engine has
   time (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).
 

@@ -56,12 +56,14 @@ Deno.test({ name: 'a heal pass is a pipeline instance', sanitizeResources: false
     await t.step('the pass after one that held types back is over those alone', async () => {
       await vfs.update(ADMIN_ACCESS, ALBUMS_ROOT, { attrs: { mediaScanLast: { at: Date.now(), scanned: 0, emitted: 0, held: ['media.faces.stale'] } } });
       await new Promise((resolve) => setTimeout(resolve, Math.max(0, completedAt + SELF_TRIGGER_GRACE_MS + 100 - Date.now())));
-      assertEquals(await client.execJson<MediaHealAnswer>('media-heal'), { announced: true, reason: 'due', only: ['media.faces.stale'] });
+      assertEquals(await client.execJson<MediaHealAnswer>('media-heal'), { announced: true, reason: 'due', only: ['media.faces.stale'], root: ALBUMS_ROOT });
       const status = await finished(completedAt);
       assertEquals(status.triggerEvent?.data, { only: 'media.faces.stale' });
       assertEquals(status.steps[0].status, 'completed');
-      // Nothing was held back this time, and nothing found: the next is a rest.
-      assertEquals((await client.execJson<MediaHealAnswer>('media-heal')).reason, 'resting');
+      // Nothing was held back this time, and nothing found: the albums rest, and the next pass, if
+      // any, is over a staging area.
+      const next = await client.execJson<MediaHealAnswer>('media-heal -n');
+      assertEquals(next.root === ALBUMS_ROOT ? next.reason : 'resting', 'resting', JSON.stringify(next));
     });
   } finally {
     client.close();

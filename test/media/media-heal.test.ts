@@ -1,7 +1,8 @@
 /**
- * `media-heal` announces a pass of `media-scan` over the albums root only when one is due, and the
- * fact carries the types the last pass held back. `media-scan` records the pass it finishes on
- * the root it walked, which is what `media-heal` reads.
+ * `media-heal` announces a pass of `media-scan` over a root, the albums or a user's staged files,
+ * only when one is due and none runs, and the fact carries the types that root's last pass held
+ * back. `media-scan` records the pass it finishes on the root it walked, which is what `media-heal`
+ * reads.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
@@ -47,9 +48,9 @@ Deno.test({ name: 'media-heal announces a pass when one is due', sanitizeResourc
     await announced();
 
     await t.step('a first pass is due over every type, in the bulk lane', async () => {
-      assertEquals(await heal(' -n'), { announced: false, reason: 'due', only: [] });
+      assertEquals(await heal(' -n'), { announced: false, reason: 'due', only: [], root: ALBUMS_ROOT });
       assertEquals(await announced(), []);
-      assertEquals(await heal(), { announced: true, reason: 'due', only: [] });
+      assertEquals(await heal(), { announced: true, reason: 'due', only: [], root: ALBUMS_ROOT });
       const [fact, ...more] = await announced();
       assertEquals(more, []);
       assertEquals([fact.type, fact.subject, fact.lane, fact.data], ['media.heal.due', ALBUMS_ROOT, 'bulk', { only: '' }]);
@@ -58,7 +59,7 @@ Deno.test({ name: 'media-heal announces a pass when one is due', sanitizeResourc
     await t.step('a pass that found nothing is followed by a rest', async () => {
       const at = Date.now();
       await setRoot({ mediaScanLast: { at, scanned: 4, emitted: 0, held: [] } });
-      assertEquals(await heal(' --rest 60'), { announced: false, reason: 'resting', only: [], until: at + 60_000 });
+      assertEquals(await heal(' --rest 60'), { announced: false, reason: 'resting', only: [], root: ALBUMS_ROOT, until: at + 60_000 });
       assertEquals(await announced(), []);
       assertEquals((await heal(' --rest 0')).announced, true);
       await announced();
@@ -71,16 +72,16 @@ Deno.test({ name: 'media-heal announces a pass when one is due', sanitizeResourc
     await t.step('the pass after one that held types back is over those alone, once their work drains', async () => {
       await setRoot({ mediaScanLast: { at: Date.now(), scanned: 4, emitted: 0, held: ['media.file.discovered'] } });
       await vfs.poolAdd(ADMIN_ACCESS, `${pools}/media`, { kind: 'ingest', params: {} });
-      assertEquals(await heal(), { announced: false, reason: 'waiting', only: ['media.file.discovered'] });
+      assertEquals(await heal(), { announced: false, reason: 'waiting', only: ['media.file.discovered'], root: ALBUMS_ROOT });
       assertEquals(await announced(), []);
       // An unfinished pass goes on regardless: it holds back what waited when it began.
       await setRoot({ mediaScanPass: { cursor: `${ALBUMS_ROOT}/a/b.jpg`, scanned: 1, emitted: 0, held: [] } });
-      assertEquals(await heal(), { announced: true, reason: 'unfinished', only: [] });
+      assertEquals(await heal(), { announced: true, reason: 'unfinished', only: [], root: ALBUMS_ROOT });
       assertEquals((await announced()).map((fact) => fact.data), [{ only: '' }]);
       await setRoot({ mediaScanPass: null });
 
       await vfs.poolCancel(ADMIN_ACCESS, `${pools}/media`, { kind: 'ingest' });
-      assertEquals(await heal(), { announced: true, reason: 'due', only: ['media.file.discovered'] });
+      assertEquals(await heal(), { announced: true, reason: 'due', only: ['media.file.discovered'], root: ALBUMS_ROOT });
       assertEquals((await announced()).map((fact) => fact.data), [{ only: 'media.file.discovered' }]);
     });
 
@@ -95,6 +96,31 @@ Deno.test({ name: 'media-heal announces a pass when one is due', sanitizeResourc
       assertEquals(await announced(), []);
       await vfs.update(ADMIN_ACCESS, instance, { attrs: { status: 'completed' } });
       assertEquals((await heal()).announced, true);
+      await announced();
+    });
+
+    await t.step('a staging area gets a pass of its own once the albums need none, one pass at a time', async () => {
+      const staged = '/home/anna/staging/files';
+      assertEquals((await client.exec(`mkdir -p ${staged}`)).success, true);
+      const at = Date.now();
+      await setRoot({ mediaScanLast: { at, scanned: 4, emitted: 0, held: [] } });
+      assertEquals(await heal(' --rest 60'), { announced: true, reason: 'due', only: [], root: staged });
+      const [fact] = await announced();
+      assertEquals([fact.type, fact.subject], ['media.heal.due', staged]);
+
+      // While it runs, no other pass starts, the albums' included.
+      const stagedId = (await vfs.get(ADMIN_ACCESS, staged)).id;
+      const instance = `${PIPELINE_INSTANCES_PATH}/media-heal/${stagedId}`;
+      assertEquals((await client.exec(`mkdir -p ${instance}`)).success, true);
+      await vfs.update(ADMIN_ACCESS, instance, { attrs: { status: 'running' } });
+      assertEquals(await heal(' --rest 0'), { announced: false, reason: 'running', only: [], root: staged });
+      assertEquals(await announced(), []);
+
+      // Both resting: the albums' reason is told.
+      await vfs.update(ADMIN_ACCESS, instance, { attrs: { status: 'completed' } });
+      await vfs.update(ADMIN_ACCESS, staged, { attrs: { mediaScanLast: { at, scanned: 2, emitted: 0, held: [] } } });
+      assertEquals(await heal(' --rest 60'), { announced: false, reason: 'resting', only: [], root: ALBUMS_ROOT, until: at + 60_000 });
+      assertEquals(await announced(), []);
     });
 
     await t.step('media-scan records the pass it finishes, counted over all its runs', async () => {

@@ -2,27 +2,29 @@
 /**
  * media-heal — announce a pass of `media-scan` over the archive when one is due.
  *
- * A pass is the `media-heal` pipeline: one step that runs `media-scan --if-idle` over the albums
- * root and announces every gap a pipeline missed, so a pass is an instance with its progress while
- * it runs, and a failed pass a failed instance. This says when one is due; the media-heal service
- * runs it every `CFG_MEDIA_HEAL_INTERVAL`. It announces `media.heal.due` on the albums root unless
+ * A pass is the `media-heal` pipeline: one step that runs `media-scan --if-idle` over a root and
+ * announces every gap a pipeline missed, so a pass is an instance with its progress while it runs,
+ * and a failed pass a failed instance. The roots are the albums and each user's staged files,
+ * whose faces the staging organizer reads (ein/core#1008); each keeps its own pass and its own last
+ * pass. This says when one is due; the media-heal service runs it every `CFG_MEDIA_HEAL_INTERVAL`.
+ * It announces `media.heal.due` on the first root, in that order, whose pass is due, and nothing
+ * while a pass over any root runs: one pass at a time. A root's pass is not due when
  *
- * - a pass is running: the engine would drop the fact anyway, as it does every trigger for a
- *   subject whose instance is live;
- * - the last pass failed: `pipeline heal` runs it again, and one that keeps failing is left for a
+ * - its last pass failed: `pipeline heal` runs it again, and one that keeps failing is left for a
  *   person;
- * - the last pass found nothing and held nothing back, less than `--rest` ago: a caught-up archive
+ * - its last pass found nothing and held nothing back, less than `--rest` ago: a caught-up root
  *   gains new gaps only from new files and model changes (ein/core#515);
  * - every fact type the pass would announce has work waiting, which `--if-idle` would hold back
  *   whole (ein/core#546).
  *
- * The fact carries the types the last pass held back (`only`), so the pass after one that held
- * types back is over those alone. A pass stopped before its end is stored on the root and is
+ * The fact carries the types the root's last pass held back (`only`), so the pass after one that
+ * held types back is over those alone. A pass stopped before its end is stored on its root and is
  * announced over every type, and goes on from where it stopped (ein/core#976).
  */
 
-import { PIPELINE_INSTANCES_PATH } from '@ein/paths';
+import { HOMES_PATH, PIPELINE_INSTANCES_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
+import { stagingRoots } from '@archive/staging/paths';
 import type { CmdReturn, Command, DomainEvent } from '@ein/client';
 import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
@@ -44,6 +46,29 @@ const seconds = (value: unknown, fallback: number): number => {
   return value === undefined || value === '' || !Number.isFinite(parsed) || parsed < 0 ? fallback : parsed;
 };
 
+/** A root a pass walks. */
+type Root = { path: string; id: string };
+
+/** Each user's staged files that exist, by user name. */
+const stagedRoots = async (cmd: Command): Promise<Root[]> => {
+  let homes;
+  try {
+    homes = await cmd.sys.vfs.children(cmd.access, HOMES_PATH);
+  } catch {
+    return [];
+  }
+  const roots: Root[] = [];
+  for (const user of homes.map((home) => home.name).sort()) {
+    try {
+      const path = stagingRoots(user).filesPath;
+      roots.push({ path, id: (await cmd.sys.vfs.get(cmd.access, path)).id });
+    } catch {
+      // Not a user name, or no staging area.
+    }
+  }
+  return roots;
+};
+
 const mediaHeal = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
@@ -58,13 +83,14 @@ const mediaHeal = async (cmd: Command): CmdReturn => {
   const rest = seconds(flags.rest, seconds(cmd.env.CFG_MEDIA_HEAL_REST, DEFAULT_REST_S));
   const dry = flags['dry-run'];
 
-  let rootId: string;
+  let albums: Root;
   try {
-    rootId = (await cmd.sys.vfs.get(cmd.access, ALBUMS_ROOT)).id;
+    albums = { path: ALBUMS_ROOT, id: (await cmd.sys.vfs.get(cmd.access, ALBUMS_ROOT)).id };
   } catch {
     await cmd.writeError(`media-heal: no archive at ${ALBUMS_ROOT}\n`);
     return 1;
   }
+  const roots = [albums, ...await stagedRoots(cmd)];
 
   const answer = async (result: MediaHealAnswer, text: string): CmdReturn => {
     if (cmd.json) await cmd.writeJSON(result satisfies MediaHealAnswer);
@@ -72,59 +98,83 @@ const mediaHeal = async (cmd: Command): CmdReturn => {
     return 0;
   };
 
-  let status: string | undefined;
-  try {
-    status = String((await cmd.sys.vfs.get(cmd.access, join(PIPELINE_INSTANCES_PATH, PIPELINE, rootId))).attrs.status);
-  } catch {
-    // No pass has run yet, or the pruner removed the last one.
-  }
-  if (status === 'running' || status === 'queued') return await answer({ announced: false, reason: 'running', only: [] }, 'a pass is running');
-  if (status === 'failed') return await answer({ announced: false, reason: 'failed', only: [] }, 'the last pass failed; pipeline heal runs it again');
-
-  let reason: MediaHealAnswer['reason'] = 'unfinished';
-  let only: string[] = [];
-  if (!await readPass(cmd, ALBUMS_ROOT)) {
-    reason = 'due';
-    const last = await readLastPass(cmd, ALBUMS_ROOT);
-    const until = last ? last.at + rest * 1000 : 0;
-    if (last && last.emitted === 0 && last.held.length === 0 && Date.now() < until) {
-      return await answer({ announced: false, reason: 'resting', only: [], until }, `the last pass found nothing; resting until ${new Date(until).toISOString()}`);
+  /** The status of the root's last instance; undefined when none has run, or the pruner removed it. */
+  const statusOf = async (root: Root): Promise<string | undefined> => {
+    try {
+      return String((await cmd.sys.vfs.get(cmd.access, join(PIPELINE_INSTANCES_PATH, PIPELINE, root.id))).attrs.status);
+    } catch {
+      return undefined;
     }
-    only = last?.held ?? [];
-    if (allWait(await factsWaiting(cmd, 'media-heal'), only.length > 0 ? only : Object.values(MEDIA_EVENTS))) {
-      return await answer({ announced: false, reason: 'waiting', only }, 'media work is waiting, no pass started');
-    }
-  }
-
-  const over = only.length > 0 ? ` over ${only.join(', ')}` : '';
-  const what = reason === 'unfinished' ? 'the stored pass goes on' : `a pass is due${over}`;
-  if (dry) return await answer({ announced: false, reason, only }, `${what} (dry run)`);
-
-  // In the bulk lane: nobody waits on a pass, so it runs behind every step someone does.
-  const event: DomainEvent = {
-    id: ulid(),
-    type: HEAL_DUE,
-    subject: ALBUMS_ROOT,
-    nodeId: rootId,
-    time: Date.now(),
-    source: 'media-heal',
-    lane: 'bulk',
-    data: { only: only.join(',') },
   };
-  const events = await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
-  try {
-    await events.write(new TextEncoder().encode(JSON.stringify(event) + '\n'));
-  } finally {
-    await events.close();
+  const statuses = await Promise.all(roots.map(statusOf));
+  const live = roots.findIndex((_, i) => statuses[i] === 'running' || statuses[i] === 'queued');
+  if (live >= 0) return await answer({ announced: false, reason: 'running', only: [], root: roots[live].path }, `a pass over ${roots[live].path} is running`);
+
+  /** Asked once, at the first root that needs it: what waits is the same for every root. */
+  let waiting: Map<string, boolean> | undefined;
+  /** Why the first root's pass is not due, when no root's is. */
+  let first: { result: MediaHealAnswer; text: string } | undefined;
+
+  for (const [i, root] of roots.entries()) {
+    const skip = (result: Omit<MediaHealAnswer, 'announced' | 'root'>, text: string): void => {
+      first ??= { result: { announced: false, ...result, root: root.path }, text };
+    };
+
+    if (statuses[i] === 'failed') {
+      skip({ reason: 'failed', only: [] }, `the last pass over ${root.path} failed; pipeline heal runs it again`);
+      continue;
+    }
+
+    let reason: MediaHealAnswer['reason'] = 'unfinished';
+    let only: string[] = [];
+    if (!await readPass(cmd, root.path)) {
+      reason = 'due';
+      const last = await readLastPass(cmd, root.path);
+      const until = last ? last.at + rest * 1000 : 0;
+      if (last && last.emitted === 0 && last.held.length === 0 && Date.now() < until) {
+        skip({ reason: 'resting', only: [], until }, `the last pass over ${root.path} found nothing; resting until ${new Date(until).toISOString()}`);
+        continue;
+      }
+      only = last?.held ?? [];
+      waiting ??= await factsWaiting(cmd, 'media-heal');
+      if (allWait(waiting, only.length > 0 ? only : Object.values(MEDIA_EVENTS))) {
+        skip({ reason: 'waiting', only }, 'media work is waiting, no pass started');
+        continue;
+      }
+    }
+
+    const over = only.length > 0 ? ` over ${only.join(', ')}` : '';
+    const what = reason === 'unfinished' ? `the stored pass over ${root.path} goes on` : `a pass over ${root.path} is due${over}`;
+    if (dry) return await answer({ announced: false, reason, only, root: root.path }, `${what} (dry run)`);
+
+    // In the bulk lane: nobody waits on a pass, so it runs behind every step someone does.
+    const event: DomainEvent = {
+      id: ulid(),
+      type: HEAL_DUE,
+      subject: root.path,
+      nodeId: root.id,
+      time: Date.now(),
+      source: 'media-heal',
+      lane: 'bulk',
+      data: { only: only.join(',') },
+    };
+    const events = await cmd.sys.vfs.open(cmd.access, EVENTS_NODE_PATH, { mode: 'a' });
+    try {
+      await events.write(new TextEncoder().encode(JSON.stringify(event) + '\n'));
+    } finally {
+      await events.close();
+    }
+
+    return await answer({ announced: true, reason, only, root: root.path }, `${what}, announced`);
   }
 
-  return await answer({ announced: true, reason, only }, `${what}, announced`);
+  return await answer(first!.result, first!.text);
 };
 
 mediaHeal.spec = {
   name: 'media-heal',
   effect: 'write' as const,
-  description: 'Start a pass of media-scan over the archive when one is due: none is running or failed, the last found something or rested, and not all its media work waits',
+  description: 'Start a pass of media-scan over the albums or a staging area when one is due, and none while a pass runs',
   flags: [
     { name: 'rest', type: 'number' as const, description: `Seconds after a pass that found nothing before the next (default CFG_MEDIA_HEAL_REST, else ${DEFAULT_REST_S})` },
     { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — say whether a pass is due without announcing it' },

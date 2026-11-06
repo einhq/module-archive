@@ -939,12 +939,15 @@ export type ContainerSubjects = {
 };
 
 /**
- * `media-heal`: whether it announced a pass of `media-scan` over the archive, and why or why not.
- * `only` is the fact types the announced pass is over; empty for every type.
+ * `media-heal`: whether it announced a pass of `media-scan` over a root, the albums or a user's
+ * staged files, and why or why not. `root` is the root announced, the one running, or, when none is
+ * due, the first, whose reason it is. `only` is the fact types the announced pass is over; empty
+ * for every type.
  */
 export type MediaHealAnswer = {
   announced: boolean;
   reason: 'due' | 'unfinished' | 'running' | 'failed' | 'resting' | 'waiting';
+  root: string;
   only: string[];
   /** Under `resting`, when the rest ends, epoch ms. */
   until?: number;

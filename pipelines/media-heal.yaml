@@ -2,8 +2,8 @@
 # never taken in, a fingerprint, transcript, voices, picture vectors or extracted text a crash
 # lost, a transcript or vectors from a superseded model or setting. Renditions are the media
 # module's to heal (its `renditions-heal` service). The fact comes from `media-heal`, which the
-# media-heal service runs as a clock; its subject is the albums root, so there is one instance, and
-# a fact arriving while a pass runs is dropped.
+# media-heal service runs as a clock; its subject is the root to walk, the albums or a user's staged
+# files, so each root has one instance, and a fact arriving while its pass runs is dropped.
 #
 # `--if-idle` holds back each fact a pipeline with work ready would take, and `$EVENT_ONLY` is the
 # types the last pass held back, empty for every type. The engine substitutes it quoted, and an
@@ -14,7 +14,7 @@
 # Run by the engine rather than from a pool: a pool job counts as work waiting, and a pass is
 # housekeeping, not backlog. It holds one of the engine's inline permits while it runs.
 name: media-heal
-description: Announce every gap the media pipelines missed, in one pass over the archive
+description: Announce every gap the media pipelines missed, in one pass over the albums or a staging area
 
 trigger:
   on: media.heal.due
