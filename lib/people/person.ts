@@ -24,7 +24,7 @@ import { fileOfSpeaker, longestTurn, type Span } from '@archive/media/speakers';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { moveSources, readSources, SOURCES_DIR } from '@archive/sources';
 import type { AttrCondition, Command } from '@ein/client';
-import { unlistedIds, unlistedRoots } from '@ein/client';
+import { unlistedRoots } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
 import { ulid } from '@std/ulid';
 import { CHILDREN_DIR, createRelationPair, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, removeRelationPair, wouldCreateCycle } from '@archive/people/genealogy';
@@ -212,22 +212,26 @@ export const holdingsByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Pr
  * that names no file.
  */
 export const picturesByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Promise<Map<string, number>> => {
+  const unlisted = await unlistedRoots(cmd.sys.vfs);
+  // A face or voice lies under its file, below where `notWithin` reaches: it is judged by the file it names.
+  const listed = unlisted.length > 0 ? { notWithin: [...unlisted], notWithinBy: 'fileId' } : {};
   const byFile = [
     ...await cmd.sys.vfs.aggregate(cmd.access, {
       types: [REGION_TYPE],
       where: [{ ref: 'personId', op: 'exists' }, { ref: 'fileId', op: 'exists' }],
       group: [{ ref: 'personId' }, { ref: 'fileId' }],
+      ...listed,
     }),
     ...await cmd.sys.vfs.aggregate(cmd.access, {
       types: ['embedding'],
       where: [...VOICE_HOLDINGS, { ref: 'fileId', op: 'exists' }],
       group: [{ ref: 'personId' }, { ref: 'fileId' }],
+      ...listed,
     }),
   ];
-  const hidden = (await unlistedRoots(cmd.sys.vfs)).length > 0 ? await unlistedIds(cmd.sys.vfs, [...new Set(byFile.map((bucket) => bucket.key[1]))]) : new Set<string>();
   const files = new Map<string, Set<string>>();
   for (const { key: [personId, fileId] } of byFile) {
-    if (!personId || !fileId || hidden.has(fileId)) continue;
+    if (!personId || !fileId) continue;
     files.set(personId, (files.get(personId) ?? new Set()).add(fileId));
   }
   return new Map([...files].map(([personId, held]) => [personId, held.size]));
