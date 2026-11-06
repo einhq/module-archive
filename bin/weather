@@ -83,7 +83,7 @@ const weather = async (cmd: Command): CmdReturn => {
 
 weather.spec = {
   name: 'weather',
-  effect: 'write' as const,
+  effect: 'read' as const,
   description: 'The weather at a place and time: temperature, wind and cloud cover from the nearest SMHI station, or from Open-Meteo',
   args: [
     { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
