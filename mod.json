@@ -383,9 +383,9 @@
         "key": "CFG_WEATHER",
         "scope": "system",
         "type": "boolean",
-        "default": "false",
+        "default": "true",
         "label": "Look up the weather",
-        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time. Each lookup sends the coordinates and the date to them, so it is off until you turn it on.",
+        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for the days of a device's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
         "group": "Places"
       },
       {

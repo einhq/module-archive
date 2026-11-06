@@ -1,6 +1,6 @@
 /**
- * track-weather on a device's trips, against a stub Open-Meteo on loopback: it asks nobody unless
- * `CFG_WEATHER` is on; each leg and the whole trip get the weather of the track's hours, the wind's
+ * track-weather on a device's trips, against a stub Open-Meteo on loopback: it asks nobody when
+ * `CFG_WEATHER` is off, and does by default; each leg and the whole trip get the weather of the track's hours, the wind's
  * direction averaged as vectors; the album made of the trip gets it too; a trip that has its
  * weather is not sampled again, and deriving the trips again keeps it; a failed lookup leaves the
  * weather as it was and the next run asks again. The track and its weather are invented.
@@ -109,7 +109,7 @@ Deno.test({
     });
   });
   const settings = `CFG_WEATHER_SMHI_KM=0 OPEN_METEO_ARCHIVE_URL=http://localhost:${(openMeteo.addr as Deno.NetAddr).port}/v1/archive`;
-  const weather = (args = '', on = 'CFG_WEATHER=true') => client.execJson<TrackWeather>(`${on} ${settings} track-weather the-sailboat ${args}`);
+  const weather = (args = '', on = '') => client.execJson<TrackWeather>(`${on} ${settings} track-weather the-sailboat ${args}`);
   const list = () => client.execJson<TripList>('trip-list the-sailboat');
 
   // Four days at a mooring, a morning's sail 10 km north, four days at the next.
@@ -125,8 +125,8 @@ Deno.test({
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
     await cmd.shouldSucceed('trip-album the-sailboat 2025-06-05 --new --name Out');
 
-    await t.step('nothing is asked unless CFG_WEATHER is on', async () => {
-      assertEquals(await weather('', ''), { device: `${DEVICES_ROOT}/the-sailboat`, off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
+    await t.step('nothing is asked when CFG_WEATHER is off', async () => {
+      assertEquals(await weather('', 'CFG_WEATHER=false'), { device: `${DEVICES_ROOT}/the-sailboat`, off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
       assertEquals(asked, []);
     });
 

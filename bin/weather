@@ -11,8 +11,8 @@
  * without an offset is UTC. What the services answered is kept under `/archive/sources/weather`,
  * so an hour is asked of them once.
  *
- * It asks only when `CFG_WEATHER` is `true`, since every lookup sends the place and the date to
- * SMHI or Open-Meteo. `SMHI_METOBS_URL` and `OPEN_METEO_ARCHIVE_URL` say where they are.
+ * It asks nobody when `CFG_WEATHER` is `false`, which keeps the place and the date from being sent
+ * to SMHI and Open-Meteo. `SMHI_METOBS_URL` and `OPEN_METEO_ARCHIVE_URL` say where they are.
  *
  * A western or southern coordinate takes the flag form: parseArgs reads the leading `-` of a
  * positional `-3.5` as a flag (wow/notes/negative-argument-values.md).
@@ -55,7 +55,7 @@ const weather = async (cmd: Command): CmdReturn => {
 
   const lookup = await weatherLookupFor(cmd);
   if (!lookup) {
-    await cmd.writeError('weather: weather lookups are off: set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo\n');
+    await cmd.writeError('weather: weather lookups are turned off: set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo\n');
     return 1;
   }
 

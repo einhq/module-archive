@@ -215,12 +215,12 @@ export class WeatherLookup {
 
 /**
  * A lookup as the installation's settings say: `CFG_WEATHER_SMHI_KM`, and `SMHI_METOBS_URL` and
- * `OPEN_METEO_ARCHIVE_URL` from the environment. Undefined unless `CFG_WEATHER` is `true`, since
- * every lookup sends the place and the date to SMHI or Open-Meteo.
+ * `OPEN_METEO_ARCHIVE_URL` from the environment. Undefined when `CFG_WEATHER` is `false`, which
+ * keeps the places and dates from being sent to SMHI and Open-Meteo; unset is its default, on.
  */
 export const weatherLookupFor = async (cmd: Command): Promise<WeatherLookup | undefined> => {
   const settings = await readSettings(cmd, cmd.access);
-  if (settings.CFG_WEATHER !== 'true') return undefined;
+  if (settings.CFG_WEATHER === 'false') return undefined;
   const km = parseFloat(settings.CFG_WEATHER_SMHI_KM ?? '');
   return new WeatherLookup(cmd, {
     smhi: cmd.env.SMHI_METOBS_URL || SMHI_METOBS_URL,

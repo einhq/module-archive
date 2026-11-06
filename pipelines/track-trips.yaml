@@ -16,7 +16,7 @@ steps:
     description: Put each new stay at the location within 150 m, or at one named after the harbour, island, bay or town there
     dependsOn: [trips]
   weather:
-    # Network lookups too, and only with CFG_WEATHER on; a trip whose lookup fails is asked again on the next run.
+    # Network lookups too, unless CFG_WEATHER is turned off; a trip whose lookup fails is asked again on the next run.
     command: track-weather $NODE_PATH
     description: Sample each trip's track once an hour and write the weather of each day and of the whole trip
     dependsOn: [places]

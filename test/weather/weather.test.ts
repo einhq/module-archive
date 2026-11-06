@@ -1,6 +1,6 @@
 /**
- * weather against stub SMHI and Open-Meteo servers on loopback: it asks nobody unless
- * `CFG_WEATHER` is on; near a station each parameter is that station's observation of the nearest
+ * weather against stub SMHI and Open-Meteo servers on loopback: it asks nobody when
+ * `CFG_WEATHER` is off; near a station each parameter is that station's observation of the nearest
  * hour, and one it did not observe, or that no station near enough measures, comes from
  * Open-Meteo's cell; an old hour is read from SMHI's archive and a recent one from its latest
  * months; what was fetched answers again without asking, other years of the same download too;
@@ -99,7 +99,7 @@ Deno.test({
   });
   const urls = `SMHI_METOBS_URL=http://localhost:${(smhi.addr as Deno.NetAddr).port}/metobs ` +
     `OPEN_METEO_ARCHIVE_URL=http://localhost:${(openMeteo.addr as Deno.NetAddr).port}/v1/archive`;
-  const weather = (args: string, settings = 'CFG_WEATHER=true') => client.execJson<WeatherReading>(`${settings} ${urls} weather ${args}`);
+  const weather = (args: string, settings = '') => client.execJson<WeatherReading>(`${settings} ${urls} weather ${args}`);
   const sources = (reading: WeatherReading) =>
     (['temperature', 'windSpeed', 'windDirection', 'cloudCover'] as const).map((parameter) => {
       const value = reading[parameter];
@@ -107,8 +107,8 @@ Deno.test({
     });
 
   try {
-    await t.step('nothing is asked unless CFG_WEATHER is on', async () => {
-      const off = await client.exec(`${urls} weather 59.31 18.02 2019-07-01T12:20`);
+    await t.step('nothing is asked when CFG_WEATHER is off', async () => {
+      const off = await client.exec(`CFG_WEATHER=false ${urls} weather 59.31 18.02 2019-07-01T12:20`);
       assertEquals(off.success, false);
       assertStringIncludes(off.error ?? '', 'CFG_WEATHER');
       assertEquals(asked, []);
@@ -156,12 +156,12 @@ Deno.test({
       assertEquals(sources(reading), [[48.75, '48.75,-3'], [3.5, '48.75,-3'], [270, '48.75,-3'], [40, '48.75,-3']]);
       assertEquals(reading.windSpeed?.at, '2023-08-02T08:00:00.000Z');
       assertEquals(asked, ['open-meteo 48.75,-3 2023-08-01..2023-08-31']);
-      assertEquals((await client.exec(`CFG_WEATHER=true ${urls} weather 48.85 -3.01 2023-08-02`)).success, false);
+      assertEquals((await client.exec(`${urls} weather 48.85 -3.01 2023-08-02`)).success, false);
     });
 
     await t.step('CFG_WEATHER_SMHI_KM=0 leaves SMHI out', async () => {
       asked.length = 0;
-      const reading = await weather('59.31 18.02 2019-07-01T12:00', 'CFG_WEATHER=true CFG_WEATHER_SMHI_KM=0');
+      const reading = await weather('59.31 18.02 2019-07-01T12:00', 'CFG_WEATHER_SMHI_KM=0');
       assertEquals(reading.temperature?.source.kind, 'open-meteo');
       assertEquals(asked, []);
     });
@@ -174,7 +174,7 @@ Deno.test({
     });
 
     await t.step('a service that fails fails the lookup', async () => {
-      const failed = await client.exec(`CFG_WEATHER=true ${urls} weather 57.7 11.97 2019-07-01T12:00`);
+      const failed = await client.exec(`${urls} weather 57.7 11.97 2019-07-01T12:00`);
       assertEquals(failed.success, false);
       assertStringIncludes(failed.error ?? '', 'returned 500');
     });

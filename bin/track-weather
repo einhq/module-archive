@@ -15,7 +15,7 @@
  * since the last hours may not have been observed yet; `--full` samples every trip again. A lookup
  * that fails leaves its trip as it was, and the rest of the run asks nobody; the next run asks again.
  *
- * It does nothing unless `CFG_WEATHER` is `true`. The `track-trips` pipeline runs it after
+ * It does nothing when `CFG_WEATHER` is `false`. The `track-trips` pipeline runs it after
  * `track-places`.
  */
 
@@ -126,7 +126,7 @@ const trackWeather = async (cmd: Command): CmdReturn => {
       return 0;
     }
     if (result.off) {
-      await cmd.writeLn(`${result.device}: weather lookups are off; set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo`);
+      await cmd.writeLn(`${result.device}: weather lookups are turned off; set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo`);
       return 0;
     }
     await cmd.writeLn(

@@ -299,7 +299,7 @@ export type TrackPlaces = {
 /** `track-weather`: what it sampled, and what it left for the next run. */
 export type TrackWeather = {
   device: string;
-  /** `CFG_WEATHER` is off: nothing was asked or written. */
+  /** `CFG_WEATHER` is turned off: nothing was asked or written. */
   off?: true;
   /** The legs it gave weather, and how many hours it sampled for them. */
   legs: number;
