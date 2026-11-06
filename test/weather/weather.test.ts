@@ -4,7 +4,7 @@
  * hour, and one it did not observe, or that no station near enough measures, comes from
  * Open-Meteo's cell; an old hour is read from SMHI's archive and a recent one from its latest
  * months; what was fetched answers again without asking, other years of the same download too;
- * `--to` answers every hour of a span;
+ * `--to` answers every hour of a span, `--days` those up to now, and `--place` finds a place by name;
  * abroad Open-Meteo answers alone; a time to come has no weather; a failing service fails the
  * lookup. The stations and their values are invented.
  */
@@ -98,7 +98,13 @@ Deno.test({
       hourly: { time: [], temperature_2m: column(Number(lat)), wind_speed_10m: column(3.5), wind_direction_10m: column(270), cloud_cover: column(40) },
     });
   });
-  const urls = `SMHI_METOBS_URL=http://localhost:${(smhi.addr as Deno.NetAddr).port}/metobs ` +
+  const nominatim = Deno.serve({ port: 0, onListen: () => {} }, (req) => {
+    const query = new URL(req.url).searchParams.get('q');
+    asked.push(`nominatim ${query}`);
+    return Response.json(query === 'Exempelby' ? [{ lat: '59.31', lon: '18.02', display_name: 'Exempelby' }] : []);
+  });
+  const urls =
+    `NOMINATIM_SEARCH_URL=http://localhost:${(nominatim.addr as Deno.NetAddr).port}/search SMHI_METOBS_URL=http://localhost:${(smhi.addr as Deno.NetAddr).port}/metobs ` +
     `OPEN_METEO_ARCHIVE_URL=http://localhost:${(openMeteo.addr as Deno.NetAddr).port}/v1/archive`;
   const weather = (args: string, settings = '') => client.execJson<WeatherReading>(`${settings} ${urls} weather ${args}`);
   const sources = (reading: WeatherReading) =>
@@ -165,6 +171,22 @@ Deno.test({
       assertEquals(asked.filter((line) => line.startsWith('smhi')).sort(), [1, 3, 4].map((p) => `smhi /parameter/${p}/station/1001/period/latest-months/data.csv`));
     });
 
+    await t.step('--from is the time as a flag; --days the hours up to now; --place a place by name', async () => {
+      const from = await client.execJson<WeatherReading[]>(`${urls} weather 59.31 18.02 --from=2019-07-01T12:00 --to=2019-07-01T13:00`);
+      assertEquals(from.map((reading) => reading.temperature?.value), [11.2, 59.25]);
+      const lastDay = await client.execJson<WeatherReading[]>(`${urls} weather 59.31 18.02 --days=1`);
+      assertEquals(lastDay.length, 25);
+      assertEquals(Date.parse(lastDay.at(-1)!.time), Math.floor(Date.now() / HOUR) * HOUR);
+      asked.length = 0;
+      const placed = await client.execJson<WeatherReading[]>(`${urls} weather --place=Exempelby --from=2019-07-01T12:00 --to=2019-07-01T13:00`);
+      assertEquals([placed[0].lat, placed[0].lng, placed[0].temperature?.value], [59.31, 18.02, 11.2]);
+      assertEquals(asked, ['nominatim Exempelby']);
+      const nowhere = await client.exec(`${urls} weather --place=Ingenstans --days=7`);
+      assertEquals(nowhere.success, false);
+      assertStringIncludes(nowhere.error ?? '', 'no place called "Ingenstans"');
+      assertEquals((await client.exec(`${urls} weather 59.31 18.02 --days=7 --to=2019-07-01`)).success, false);
+    });
+
     await t.step('abroad, Open-Meteo answers alone, for the cell the place is in; a negative coordinate takes the flag form', async () => {
       asked.length = 0;
       const reading = await weather('--lat=48.85 --lng=-3.01 2023-08-02T09:30+02:00');
@@ -206,6 +228,7 @@ Deno.test({
   } finally {
     await smhi.shutdown();
     await openMeteo.shutdown();
+    await nominatim.shutdown();
     await testCtx.teardown();
   }
 });
