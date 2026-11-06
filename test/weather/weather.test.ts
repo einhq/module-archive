@@ -166,6 +166,16 @@ Deno.test({
       assertEquals(asked, []);
     });
 
+    await t.step("a cloud cover SMHI writes for a sky it could not see is Open-Meteo's", async () => {
+      // Fjärrstation, 55 km north, is near enough at 60 km; its kept hour says 113, the sky obscured.
+      const hour = Date.UTC(2019, 6, 1, 12);
+      const index = (hour - Date.UTC(2019, 0, 1)) / HOUR;
+      const kept = { station: 1002, parameter: 16, year: 2019, covered: [[hour, hour]], values: [...Array(index).fill(null), 113] };
+      await client.exec(`mkdir -p /archive/sources/weather/smhi/1002/16 && echo '${JSON.stringify(kept)}' > /archive/sources/weather/smhi/1002/16/2019.json`);
+      const reading = await weather('59.31 18.02 2019-07-01T12:00', 'CFG_WEATHER_SMHI_KM=60');
+      assertEquals(sources(reading)[3], [40, '59.25,18']);
+    });
+
     await t.step('a time still to come has no weather and asks nobody', async () => {
       asked.length = 0;
       const reading = await weather(`59.31 18.02 ${new Date(now + 2 * DAY).toISOString()}`);

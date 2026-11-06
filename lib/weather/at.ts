@@ -87,6 +87,10 @@ export class WeatherLookup {
     return reading;
   }
 
+  /**
+   * The nearest station's value of a parameter at an hour. SMHI writes a cloud cover above 100 for a
+   * sky it could not see, such as in fog, which is no cover at all: that hour is Open-Meteo's.
+   */
   private async fromSmhi(parameter: WeatherParameter, lat: number, lng: number, hour: number): Promise<WeatherValue | undefined> {
     if (!(this.opts.smhiRadiusM > 0)) return undefined;
     const id = SMHI_PARAMETERS[parameter];
@@ -98,7 +102,7 @@ export class WeatherLookup {
     }
     if (!best) return undefined;
     const value = await this.smhiValue(best.station.id, id, hour);
-    if (value === undefined) return undefined;
+    if (value === undefined || (parameter === 'cloudCover' && value > 100)) return undefined;
     return { value, at: iso(hour), source: { kind: 'smhi', station: best.station.id, name: best.station.name, distanceM: Math.round(best.distance) } };
   }
 
