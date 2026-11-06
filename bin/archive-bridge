@@ -25,15 +25,10 @@
  */
 
 import { QUEUES_PATH } from '@ein/paths';
-import type { CmdReturn, Command, NodeQueryCursor } from '@ein/client';
-import { NodeNotFoundError } from '@ein/client';
+import type { CmdReturn, Command } from '@ein/client';
 import { nodeExists, readNode, runBridge } from '@media/bridge';
 import { ARCHIVE_BRIDGE_ROUTING_KEYS, type ArchiveRuleContext, deriveArchiveEvents } from '@archive/event-rules';
-import type { NodeSnapshot } from '@archive/media/event-rules';
 import { SIDECAR_MIMETYPES } from '@archive/media/paired-sidecar';
-
-/** Rows per page of the subtree query behind `unreadFilesWithin`. */
-const WITHIN_PAGE = 500;
 
 const archiveBridge = async (cmd: Command): CmdReturn => {
   const ctx: ArchiveRuleContext = {
@@ -59,32 +54,6 @@ const archiveBridge = async (cmd: Command): CmdReturn => {
       }
 
       return [...containers];
-    },
-    // An indexed subtree query, a page at a time by id, rather than a walk. A directory moved
-    // and then removed before its event is read carries nothing; the error would otherwise nack
-    // the event until it is dead-lettered.
-    unreadFilesWithin: async (path) => {
-      const files: { path: string; node: NodeSnapshot }[] = [];
-      let after: NodeQueryCursor | undefined;
-      for (;;) {
-        let rows;
-        try {
-          rows = await cmd.sys.vfs.query(cmd.access, {
-            within: path,
-            types: ['file'],
-            where: [{ ref: 'textIndexedAt', op: 'missing' }],
-            after,
-            limit: WITHIN_PAGE,
-          });
-        } catch (error) {
-          if (error instanceof NodeNotFoundError) return files;
-          throw error;
-        }
-        for (const row of rows) files.push({ path: row.absPath, node: { id: row.id, type: row.node.type, attrs: row.node.attrs as Record<string, unknown> } });
-        // Fewer than a page means none are left.
-        if (rows.length < WITHIN_PAGE) return files;
-        after = { value: null, id: rows[rows.length - 1].id };
-      }
     },
     // One indexed lookup of a single row, so a media file landing where no sidecar waits announces nothing.
     unpairedSidecarsIn: async (path) => {

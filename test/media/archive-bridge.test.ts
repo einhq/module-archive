@@ -336,18 +336,7 @@ Deno.test({
       assertEquals(one.paths.includes(deep), true, JSON.stringify(one));
     });
 
-    await t.step('media-scan announces a document or picture never text-indexed, once', async () => {
-      const pdf = `${ALBUMS_ROOT}/holiday/files/menu.pdf`;
-      await client.exec(`echo text > ${pdf}`);
-      await vfs.update(ADMIN_ACCESS, pdf, { attrs: { mimetype: 'application/pdf' } });
-      const scan = () => client.execJson<{ paths: string[] }>(`media-scan -n --restart --only media.text.missing ${ALBUMS_ROOT}/holiday`);
-
-      assertEquals((await scan()).paths.includes(pdf), true);
-      await vfs.update(ADMIN_ACCESS, pdf, { attrs: { textIndexedAt: '2026-10-17T08:00:00Z' } });
-      assertEquals((await scan()).paths.includes(pdf), false);
-    });
-
-    await t.step('a folder moved out of staging whole has its unread files text-indexed', async () => {
+    await t.step('a folder moved out of staging whole has its unread files text-indexed, by the media bridge', async () => {
       const staged = '/home/anna/staging/files/trip';
       assertEquals((await client.exec('staging init --user anna --layout-only')).success, true);
       await client.exec(`mkdir -p ${staged}/day-2`);

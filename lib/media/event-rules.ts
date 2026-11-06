@@ -14,10 +14,8 @@
  * is harmless — the pipeline's `skipIf` and one-instance-per-node absorb it.
  */
 
-import { CHUNK_TARGET_SECONDS } from '@media/transcript';
 import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
-import { parseStagedPath } from '@archive/staging/paths';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
 import {
   deriveForExif as extractedFacts,
@@ -26,13 +24,11 @@ import {
   type FileRuleContext,
   isIndexableMedia,
   isMediaPath,
-  isTextIndexedMimetype,
   type NodeSnapshot,
   type VfsEventInput,
 } from '@media/file-rules';
 import type { DomainEvent } from '@ein/client';
 import { isTrashPath } from '@ein/paths';
-import { authoredHash, textEmbeddingType } from '@ems/text-embedding';
 
 // The media module's, which the archive's rules and the staging rules read as their own.
 export { isIndexableMedia };
@@ -55,14 +51,8 @@ export const MEDIA_EVENTS = {
   fileRemoved: FILE_FACTS.removed,
   fileTurned: FILE_FACTS.turned,
   metadataExtracted: FILE_FACTS.metadataExtracted,
-  // The facts of a file's text, the media module's too (`@media/facts`): the bridge there derives
-  // the first two, and this module's scan finds the others' gaps.
-  textLanguageSet: TEXT_FACTS.languageSet,
+  /** A transcript is written; the media module's bridge announces it (`@media/facts`). */
   transcriptGenerated: TEXT_FACTS.transcriptGenerated,
-  transcriptStale: TEXT_FACTS.transcriptStale,
-  ocrStale: TEXT_FACTS.ocrStale,
-  textEmbeddingStale: TEXT_FACTS.textEmbeddingStale,
-  textMissing: TEXT_FACTS.textMissing,
   /**
    * What a file's metadata means in the archive is read: `exif-interpret` wrote its capture time
    * and place and, last, `interpretedAt`. Only on the write that changed it. Starts the archive's
@@ -147,8 +137,6 @@ export const MEDIA_BRIDGE_ROUTING_KEYS = [
   // left to the reconciling sweep.
   'system.vfs.directory.child-detached',
   'system.vfs.file.moved',
-  // A directory moved whole publishes this event for the directory alone, none for the files in it.
-  'system.vfs.directory.moved',
 ];
 
 /** The lone media child of an imported album; membership there is membership of the album. */
@@ -172,47 +160,19 @@ export type RuleContext = FileRuleContext & {
    */
   containersOf?(filePath: string, nodeId: string): Promise<string[]>;
   /**
-   * Every file within the directory at `path` (`NodeQuery.within`) that has no `textIndexedAt`,
-   * with its absolute path. Bridge only: what a directory moved whole brings along.
-   */
-  unreadFilesWithin?(path: string): Promise<{ path: string; node: NodeSnapshot }[]>;
-  /**
    * Whether a sidecar not yet paired with its file (`@archive/media/sidecars`) lies within the
    * folder at `path`. Bridge only: a media file landing beside one is what it may pair with.
    */
   unpairedSidecarsIn?(path: string): Promise<boolean>;
   /**
-   * The `transcribedWith` value a transcript decoded right now would carry — every whisper
-   * setting that decides the output, as EMS reports it. A transcript stamped with anything else
-   * was made with other settings, and the file is transcribed again, its chunk vectors with it.
-   *
-   * Undefined disables the check, and it is undefined whenever the inference server cannot be
-   * asked: the value has to come from the side that decodes, or a stale literal here would mark
-   * every transcript stale forever and re-transcribing would write the same value back.
-   */
-  transcriptGeneration?: string;
-  /**
-   * The engine EMS reads pictures' text with now (`generations()` in `@ems/client`). A picture
-   * marked read whose `ocrBy` names another engine, or none, is read again; one whose text a
-   * person wrote is not. Derived from EMS like `transcriptGeneration`, and undefined when EMS cannot
-   * be asked, which disables the check.
-   */
-  ocrGeneration?: string;
-  /**
    * The face models EMS runs now (`generations()` in `@ems/client`). A detected file whose
    * `facesBy` names others, or none, has its faces detected again: their vectors are in another
    * space. Only when EMS runs the models recognition is tuned for (`FACE_MODEL`), since a
-   * re-detection with any others stores nothing. Derived from EMS like `transcriptGeneration`, and
-   * undefined when EMS cannot be asked, which disables the check.
+   * re-detection with any others stores nothing. Undefined when EMS cannot be asked, which disables
+   * the check: the value has to come from the side that detects, or a stale literal here would mark
+   * every file stale forever.
    */
   faceGeneration?: string;
-  /**
-   * The text embedder EMS runs now (`generations()` in `@ems/client`). A text under a
-   * file's `metadata/` whose vector carries another `embeddedBy`, or has none, is embedded again
-   * from the stored text. Derived from EMS like `transcriptGeneration`, with no `off`, and undefined
-   * when EMS cannot be asked or runs a model nothing has given a type to, which disables the check.
-   */
-  textGeneration?: string;
 };
 
 const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
@@ -301,48 +261,6 @@ async function deriveForRegion(event: VfsEventInput, ctx: RuleContext, now: numb
   }];
 }
 
-/** The text nodes under a file's `metadata/` that `media-reembed` embeds, by name. */
-const TEXT_NODE_NAMES = ['content', 'transcript'] as const;
-
-/**
- * Which of a file's texts have no current vector from `generation`, as `media-reembed` decides
- * it: the vector beside the text, named for the model's type, has to carry `embeddedBy` equal to
- * it; a transcript's chunk set also has to be cut at CHUNK_TARGET_SECONDS, and a hand-written
- * description's vector has to carry the hash of the text as it is now.
- *
- * A text that gives `media-reembed` nothing to embed is never stale, or the file would be
- * announced on every scan: an empty text node, and a transcript that heard no speech, which
- * keeps no chunk set. A content vector made from the opening of a long text, which
- * `media-reembed` redoes in parts, is not asked about: telling it apart takes the text itself.
- */
-async function staleTexts(
-  filePath: string,
-  file: NodeSnapshot,
-  metadataChildren: string[],
-  generation: string,
-  ctx: RuleContext,
-): Promise<string[]> {
-  const type = textEmbeddingType(generation);
-  if (!type) return [];
-
-  const stale: string[] = [];
-  for (const name of TEXT_NODE_NAMES) {
-    if (!metadataChildren.includes(name)) continue;
-    const vector = await ctx.getNode(`${filePath}/metadata/${name}/${type}`);
-    if (vector?.attrs.embeddedBy === generation && (name !== 'transcript' || vector.attrs.chunkSeconds === CHUNK_TARGET_SECONDS)) continue;
-    const text = await ctx.getNode(`${filePath}/metadata/${name}`);
-    if (!text || num(text.attrs.size) === 0 || (name === 'transcript' && text.attrs.speech === false)) continue;
-    stale.push(name);
-  }
-
-  const authored = str(file.attrs.description)?.trim();
-  if (authored) {
-    const vector = metadataChildren.includes('authored') ? await ctx.getNode(`${filePath}/metadata/authored/${type}`) : undefined;
-    if (vector?.attrs.embeddedBy !== generation || vector.attrs.authoredHash !== await authoredHash(authored)) stale.push('authored');
-  }
-  return stale;
-}
-
 /**
  * Facts for a file the bridge may have missed *after* indexing started — it has
  * EXIF, but some later stage never ran (the bridge was down, or the stage did
@@ -370,8 +288,6 @@ export async function deriveGaps(
   if (!exif?.attrs.indexedAt) return [];
 
   const metadataChildren = (await ctx.childNames?.(`${filePath}/metadata`)) ?? [];
-  // Every audio and video file gets a transcript node, a silent one an empty cue list.
-  const missingTranscript = !metadataChildren.includes('transcript');
   // `detect-faces` writes `facesAt` in both of its exit paths, including on a photo with nobody
   // in it, so its absence means the step never ran — which a `regions/` directory would not say,
   // since the legacy importer writes one at import time. Images only: a video gets the marker
@@ -384,13 +300,14 @@ export async function deriveGaps(
   // A re-emit re-opens a whole fan-out and each pipeline's own `skipIf` drops the stages already
   // done, so this predicate wants a term per pipeline hanging off the fact: the media module's
   // `media.metadata.extracted` for a file whose metadata the archive never read (then interpreting
-  // it starts the rest) or that lacks a transcript, and the archive's `media.metadata.interpreted`
-  // for its own analysis, faces. A stage it does not ask about is a stage nothing ever
-  // re-announces — and a guard like `skipIfAttr: facesAt` cannot rescue a pipeline nobody
-  // announces, it only skips one that is (ein/core#140).
+  // it starts the rest), and the archive's `media.metadata.interpreted` for its own analysis,
+  // faces. A stage it does not ask about is a stage nothing ever re-announces — and a guard like
+  // `skipIfAttr: facesAt` cannot rescue a pipeline nobody announces, it only skips one that is
+  // (ein/core#140).
   //
-  // Renditions, picture vectors and fingerprints have no term here: the media module's scans
-  // compare their markers, in every tree, and announce a gap as a fact only their pipelines take.
+  // What describes the file has no term here: renditions, picture vectors, fingerprints, text,
+  // transcripts and text vectors are found by their markers, in every tree, by the media module's
+  // scans, each gap a fact of its own that only its pipelines take.
   //
   // `media-device` deliberately has no term and must not get one: `device-link` writes nothing
   // when the registry holds no match, so "no `devicePath`" cannot tell a link that never ran
@@ -407,43 +324,18 @@ export async function deriveGaps(
   const isImage = IMAGE_MIMETYPE.test(str(file.attrs.mimetype) ?? '');
   const interpreted = str(file.attrs[INTERPRETED_AT_ATTR]) !== undefined;
 
-  if (!undecodable && (!interpreted || (!isImage && missingTranscript))) {
+  if (!undecodable && !interpreted) {
     events.push(...(await extractedFacts(`${filePath}/metadata/exif`, ctx, now)).map((fact) => ({ ...fact, source: MEDIA_EVENT_SOURCE })));
   } else if (!undecodable && missingFaces) {
     const fact = await interpretedFact(filePath, file, ctx, now);
     if (fact) events.push(fact);
   }
 
-  // A transcript an interrupted run left without `transcribedAt`, or one decoded with other
-  // whisper settings than EMS runs now. Only a transcript that names a model is compared with the
-  // settings: one with `transcribedBy` null was written for a file with no audio track, and
-  // transcribing it again would write the same nulls back on every scan. One a person corrected
-  // (`editedAt`) is never stale: `transcribe-file` keeps it whatever the settings.
-  const transcript = !isImage && !missingTranscript && !undecodable ? await ctx.getNode(`${filePath}/metadata/transcript`) : undefined;
+  // Voices are read off the transcript, which every audio and video file gets, a silent one an
+  // empty cue list.
+  const transcript = !isImage && !undecodable && metadataChildren.includes('transcript') ? await ctx.getNode(`${filePath}/metadata/transcript`) : undefined;
 
-  if (transcript) {
-    const transcribedWith = str(transcript.attrs.transcribedWith);
-    const unfinished = !str(transcript.attrs.transcribedAt);
-    const superseded = ctx.transcriptGeneration !== undefined && str(transcript.attrs.transcribedBy) !== undefined &&
-      transcribedWith !== ctx.transcriptGeneration && !str(transcript.attrs.editedAt);
-
-    if (unfinished || superseded) {
-      events.push({
-        type: MEDIA_EVENTS.transcriptStale,
-        subject: filePath,
-        nodeId: file.id,
-        time: now,
-        source: MEDIA_EVENT_SOURCE,
-        data: {
-          mimetype: str(file.attrs.mimetype) ?? '',
-          transcribedWith: transcribedWith ?? '',
-          ...(ctx.transcriptGeneration ? { expectedTranscribedWith: ctx.transcriptGeneration } : {}),
-        },
-      });
-    }
-  }
-
-  // Voices: a recording whose transcript heard speech and that has no speakers.
+  // A recording whose transcript heard speech and that has no speakers.
   if (transcript?.attrs.speech === true && !str(file.attrs.speakersAt)) {
     events.push({
       type: MEDIA_EVENTS.speakersMissing,
@@ -473,39 +365,6 @@ export async function deriveGaps(
     }
   }
 
-  // Text in a picture read by another engine than EMS reads with now, or marked read with none
-  // named. A picture never read (no `textIndexedAt`) is `media.text.missing`'s, so it is not
-  // announced twice, one whose text a person wrote (`textManual`) is never read again, and a staged
-  // one, which `media-ocr` does not read, is found again once it is filed.
-  const ocrBy = str(file.attrs.ocrBy);
-  const read = Boolean(str(file.attrs.textIndexedAt)) && file.attrs.textManual !== true;
-  if (ctx.ocrGeneration && !undecodable && isImage && read && ocrBy !== ctx.ocrGeneration && !parseStagedPath(filePath)) {
-    events.push({
-      type: MEDIA_EVENTS.ocrStale,
-      subject: filePath,
-      nodeId: file.id,
-      time: now,
-      source: MEDIA_EVENT_SOURCE,
-      data: { mimetype, ocrBy: ocrBy ?? '', expected: ctx.ocrGeneration },
-    });
-  }
-
-  // Text vectors, after the facts above: a new transcript embeds its chunks again, so a file
-  // already announced as `transcriptStale` waits for the next scan for the rest.
-  if (ctx.textGeneration && !events.some((event) => event.type === MEDIA_EVENTS.transcriptStale)) {
-    const stale = await staleTexts(filePath, file, metadataChildren, ctx.textGeneration, ctx);
-    if (stale.length > 0) {
-      events.push({
-        type: MEDIA_EVENTS.textEmbeddingStale,
-        subject: filePath,
-        nodeId: file.id,
-        time: now,
-        source: MEDIA_EVENT_SOURCE,
-        data: { mimetype, stale, expected: ctx.textGeneration },
-      });
-    }
-  }
-
   // A position whose geocode never ran is its own gap: nothing re-emits
   // position.available once the node exists.
   const position = await ctx.getNode(`${filePath}/position`);
@@ -515,41 +374,6 @@ export async function deriveGaps(
   }
 
   return events;
-}
-
-/**
- * The text gap for a file `document-index` reads: no `textIndexedAt`, which `index-document`
- * writes whether it found text or not. Apart from `deriveGaps` because a document is not media
- * and has no exif, and a file with no children can have this gap. Read by the reconciler for every
- * file it walks and by the bridge for the files a directory move carried. None for a file in a
- * node's `metadata/` — extracted text, an album's description — nor for one in a staging area,
- * neither of which the text pipelines read: a staged file is read when it is filed.
- */
-export function deriveTextGap(filePath: string, file: NodeSnapshot, now: number): Omit<DomainEvent, 'id'>[] {
-  const mimetype = str(file.attrs.mimetype) ?? '';
-
-  if (file.type !== 'file' || file.attrs.sourceId || (num(file.attrs.size) ?? 0) === 0) return [];
-  if (filePath.includes('/metadata/') || parseStagedPath(filePath)) return [];
-  if (!isTextIndexedMimetype(mimetype) || str(file.attrs.textIndexedAt)) return [];
-
-  return [{
-    type: MEDIA_EVENTS.textMissing,
-    subject: filePath,
-    nodeId: file.id,
-    time: now,
-    source: MEDIA_EVENT_SOURCE,
-    data: { mimetype },
-  }];
-}
-
-/**
- * The text gap of every file a directory moved whole carried along, `deriveTextGap` per file. The
- * move publishes one event, for the directory, so this is the only fact that reaches those files:
- * a folder filed out of staging is read here.
- */
-async function deriveForDirectoryMove(dirPath: string, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'>[]> {
-  if (!ctx.unreadFilesWithin) return [];
-  return (await ctx.unreadFilesWithin(dirPath)).flatMap(({ path, node }) => deriveTextGap(path, node, now));
 }
 
 /** Facts derivable from an embedding node: a face's. */
@@ -820,8 +644,6 @@ export async function deriveEvents(
       return await deriveForPosition(event.path, ctx, now);
     case 'media-region':
       return await deriveForRegion(event, ctx, now);
-    case 'directory':
-      return event.type === 'moved' ? await deriveForDirectoryMove(event.path, ctx, now) : [];
     default:
       return [];
   }

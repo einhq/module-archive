@@ -41,8 +41,8 @@
  * A run says how far through the subtree its pass is (`Command.progress`), counted against the
  * files under the root, so a pass run as a pipeline step draws its progress where the step shows.
  *
- * The staleness checks compare a file with what EMS runs now, so a run that cannot ask EMS cannot
- * make them. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
+ * The faces check compares a file with what EMS runs now, so a run that cannot ask EMS cannot
+ * make it. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
  * names the types it could not check (`unchecked`) and counts them as held back, which the pass then
  * owes (ein/core#1006).
  */
@@ -53,7 +53,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
-import { deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
+import { deriveGaps, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
 import { deriveForFile, withLanes } from '@media/file-rules';
 import { LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
 import { allWait, factsWaiting } from '@media/waiting';
@@ -227,26 +227,15 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     return 0;
   }
 
-  // What EMS stamps its results with now: a file whose transcript, faces, read text or text
-  // vectors were made by something else is made again. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off`
-  // turns the transcript check off for good: a change of whisper settings re-transcribes every
-  // recording, hours of the card, which an operator may rather schedule than have start itself.
-  const transcriptsOff = cmd.env.CFG_MEDIA_TRANSCRIPTS_CURRENT === 'off';
+  // The face models EMS runs now: a file whose faces were found by others is detected again.
   const ems = gaps ? await generations(cmd) : null;
-  const transcriptGeneration = transcriptsOff ? undefined : ems?.transcribe ?? undefined;
-  const ocrGeneration = ems?.ocr ?? undefined;
   const faceGeneration = ems?.faces ?? undefined;
-  const textGeneration = ems?.textEmbed ?? undefined;
 
   /**
-   * The fact types whose check is off because EMS did not answer, or, for transcripts, because its
-   * model worker is down and cannot say what a decode would be stamped with. A field EMS answers
-   * with null is a model it does not run, which has nothing to compare with and owes nothing.
+   * The fact types whose check is off because EMS did not answer. A field EMS answers with null is
+   * a model it does not run, which has nothing to compare with and owes nothing.
    */
-  const unchecked: string[] = !gaps ? [] : [
-    ...(ems ? [] : [MEDIA_EVENTS.facesStale, MEDIA_EVENTS.ocrStale, MEDIA_EVENTS.textEmbeddingStale]),
-    ...(transcriptsOff || transcriptGeneration ? [] : [MEDIA_EVENTS.transcriptStale]),
-  ].filter((type) => !only || only.has(type));
+  const unchecked: string[] = !gaps || ems ? [] : [MEDIA_EVENTS.facesStale].filter((type) => !only || only.has(type));
 
   // A pass that walked on would store its cursor past files whose gaps it never saw, and media-heal
   // would rest on a pass that announced nothing. A type already held back is owed either way.
@@ -281,10 +270,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
         return [];
       }
     },
-    transcriptGeneration,
-    ocrGeneration,
     faceGeneration,
-    textGeneration,
   };
 
   /**
@@ -323,10 +309,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       childNames: async (path: string): Promise<string[]> => listed(path) === false ? [] : await ctx.childNames(path),
       // Every setting of the full context, not only the listing answers: a field left out here
       // silently turns its check off on the fast path.
-      transcriptGeneration,
-      ocrGeneration,
       faceGeneration,
-      textGeneration,
     };
   };
 
@@ -435,16 +418,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // stages never ran. A file with no children at all cannot have a gap — that check alone
       // skips every un-indexed file's extra reads. It reads `childCount`, the entry's own number
       // of children; `node.props.count` is the *link* count (how many parents the node has) and
-      // is at least 1 for anything reachable, so asking it never skipped a single file. The text
-      // gap is the exception: it reads only the file's own attrs, and a document never indexed
-      // has no children.
+      // is at least 1 for anything reachable, so asking it never skipped a single file.
       const hasChildren = child.childCount > 0;
       // In the lane the bridges would give them: a scan over a bulk category stays in the bulk lane.
       const facts = await withLanes(
         [
           ...await deriveForFile(childPath, fileCtx, Date.now(), snapshot),
           ...(gaps && hasChildren ? await deriveGaps(childPath, fileCtx, Date.now(), snapshot) : []),
-          ...(gaps ? deriveTextGap(childPath, snapshot, Date.now()) : []),
         ].filter((fact) => {
           if (only && !only.has(fact.type)) return false;
           if (!waiting?.get(fact.type)) return true;

@@ -91,8 +91,10 @@ one, so a step that kills its worker every time does run out.
   `ems-link` service): a new build is the likeliest fix. Such a run is out of turn and does not
   count as a heal.
 - **`media-heal`** (an archive pipeline, and the service that says when it is due) closes gaps
-  nothing announced: a file that never got its interpretation, faces, transcript, voices or
-  extracted text, or whose transcript or vectors are from a superseded model or setting. Its one
+  nothing announced in the archive's analysis: a file that never got its interpretation, faces or
+  voices, or whose faces are from superseded models. What describes a file — its renditions,
+  picture vectors, fingerprints, text, transcript and text vectors — is the media module's heals',
+  each over every tree by a marker on the file. Its one
   step, run by the engine on a root — the albums, or a user's staged files
   (`/home/<user>/staging/files`, whose faces the staging organizer reads) — is
   `media-scan --if-idle`, which holds back each gap
@@ -109,10 +111,8 @@ one, so a step that kills its worker every time does run out.
   `pipeline heal`'s), not every type it would scan waiting, and not a last pass, recorded on the
   root, that found and held nothing less than `CFG_MEDIA_HEAL_REST` ago; the fact carries the types
   that root's last pass held, so its next is over those alone. One pass runs at a time, and the
-  engine drops a fact for a subject whose instance is live. A staged file's text is not a gap: it is
-  read when it is filed. This is also how a change of model or setting reaches the
-  whole archive: a new transcript signature transcribes every recording again, as the engine has
-  time (`CFG_MEDIA_TRANSCRIPTS_CURRENT=off` keeps the transcripts there are).
+  engine drops a fact for a subject whose instance is live. This is also how a change of face
+  models reaches the whole archive, as the engine has time.
 
 ## Seeing it
 

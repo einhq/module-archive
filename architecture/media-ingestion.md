@@ -191,12 +191,8 @@ waits for rather than by a shared DAG:
 7. **Search.** The media module's `embed-picture`, `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor) populate the embedding registry.
 
    **Text indexing** is the media module's (its architecture's text.md): `document-index` reads a
-   document's text and `media-ocr` a picture's, each once, and nothing staged. What the archive
-   adds is finding what nothing announced: `media-scan` announces `media.text.missing` for a file
-   whose text was never read (`isTextIndexedMimetype`, `@media/file-rules`) and `media.ocr.stale`
-   for a picture read by another engine than EMS reads with now, and the bridge announces
-   `media.text.missing` for each unread file within a directory moved whole, which publishes a
-   `moved` for the directory alone.
+   document's text and `media-ocr` a picture's, each once, and nothing staged; its `text-heal`
+   finds what nothing announced, and its bridge the unread files of a directory moved whole.
 
    **Picture search.** The media module's `embed-picture` writes a SigLIP2 vector per photo, or per
    video keyframe, under `<file>/metadata/picture/` (`embedding`, or `k0`… with `atSeconds`), typed
@@ -983,13 +979,8 @@ spend the service's time on it as often as they asked. The pipeline runs these a
 administrator, who is never refused.
 
 **The text space** — what a file's texts are embedded into, the transcript's WebVTT and its chunks —
-is the media module's (its architecture's text.md, `@media/transcript`). What the archive keeps is
-finding the gaps: `media-scan` announces `media.transcript.stale` for a transcript decoded with other
-whisper settings than EMS runs now, or left without `transcribedAt` (`CFG_MEDIA_TRANSCRIPTS_CURRENT`
-set to `off` turns that check off), and `media.text-embedding.stale` for a media file whose
-extracted text, transcript (also when cut at another `chunkSeconds`) or hand-written description has
-no vector from the embedder EMS runs now (`generations()` in `@ems/client`), naming which in
-`data.stale`; and search, which reads the vectors. The hand-written `description` is embedded by
+is the media module's (its architecture's text.md, `@media/transcript`), and so is keeping it
+current. What the archive keeps is search, which reads the vectors. The hand-written `description` is embedded by
 the archive's `file-set-description` (`metadata/authored/text_bgem3`, with an `authoredHash`), and
 search ranks it as a channel of its own at the picture channel's weight, from the space's `strict`
 level. Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `devicePath`) are still promoted

@@ -194,7 +194,7 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       const scan = (url: string, flags: string) =>
         client.execJson<Scan>(`POOLS_PATH=${root} CFG_EMS_URL=${url} media-scan ${album} --scan-limit 1 --max-active 0 --limit 0 ${flags}`);
       const stored = async () => ((await vfs.get(ADMIN_ACCESS, album)).attrs.mediaScanPass as { cursor: string; held: string[] }).cursor;
-      const owed = ['media.faces.stale', 'media.ocr.stale', 'media.text-embedding.stale', 'media.transcript.stale'];
+      const owed = ['media.faces.stale'];
 
       const down = answeringEms();
       const first = await scan(down.url, '--if-idle');

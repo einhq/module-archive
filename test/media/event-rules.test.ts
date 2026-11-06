@@ -8,10 +8,8 @@
 
 import { ALBUMS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { deriveEvents, deriveGaps, deriveTextGap, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '../../lib/media/event-rules.ts';
+import { deriveEvents, deriveGaps, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '../../lib/media/event-rules.ts';
 import type { DomainEvent } from '@ein/client';
-import { authoredHash } from '@ems/text-embedding';
-import { CHUNK_TARGET_SECONDS } from '@media/transcript';
 
 const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
 
@@ -456,14 +454,15 @@ Deno.test('gap: a fully indexed file needs nothing', async () => {
   assertEquals(await deriveGaps(IMG, tree(indexed()), 100), []);
 });
 
-Deno.test('gap: a video or a recording without a transcript re-opens the fan-out', async () => {
+Deno.test("gap: a video or a recording without a transcript is not the archive's gap", async () => {
+  // The media module finds it by its marker.
   const video = indexedVideo();
   delete video[`${VID}/metadata/transcript`];
-  assertEquals((await deriveGaps(VID, tree(video), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals(await deriveGaps(VID, tree(video), 100), []);
 
   const audio = indexedAudio();
   delete audio[`${SND}/metadata/transcript`];
-  assertEquals((await deriveGaps(SND, tree(audio), 100)).map((f) => f.type), [MEDIA_EVENTS.metadataExtracted]);
+  assertEquals(await deriveGaps(SND, tree(audio), 100), []);
 });
 
 Deno.test('gap: exif but no face detection re-opens the fan-out', async () => {
@@ -537,96 +536,6 @@ Deno.test('gap: an unindexed file is discovery, not a gap', async () => {
   assertEquals(await deriveGaps(IMG, ctx, 100), []);
 });
 
-// --- transcript staleness --------------------------------------------------------------
-//
-// A transcript decoded with settings EMS no longer uses is transcribed again. What these pin is
-// that the comparison is inert without EMS's own answer and compares only transcripts that were
-// actually decoded, and that a transcript an interrupted run left is redone whatever EMS says.
-
-const DECODE = 'whisper-large-v3:vad=0.2/800/2000,nospeech=0.8,lang=auto,words=0';
-const OLD_DECODE = 'whisper-large-v3:vad=0.5/400/500,nospeech=1.0,lang=auto,words=0';
-
-const transcribedVideo = (attrs: Record<string, unknown>): Record<string, NodeSnapshot> => {
-  const nodes = indexedVideo();
-  nodes[`${VID}/metadata/transcript`] = transcribed(attrs);
-  return nodes;
-};
-
-Deno.test('transcript: no generation configured means transcripts are never stale', async () => {
-  // Undefined is what media-scan passes when EMS cannot be asked, or with
-  // CFG_MEDIA_TRANSCRIPTS_CURRENT=off; a guessed value here would re-transcribe the archive
-  // against a literal nothing writes.
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE });
-
-  assertEquals(await deriveGaps(VID, tree(nodes), 100), []);
-});
-
-Deno.test('transcript: other decode settings are a gap', async () => {
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE });
-
-  const facts = await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100);
-
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.transcriptStale]);
-  assertEquals(facts[0].data?.transcribedWith, OLD_DECODE);
-  assertEquals(facts[0].data?.expectedTranscribedWith, DECODE);
-});
-
-Deno.test('transcript: one written before stamping is a gap', async () => {
-  // A transcript decoded with no record of how.
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3' });
-
-  const facts = await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100);
-
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.transcriptStale]);
-  assertEquals(facts[0].data?.transcribedWith, '');
-});
-
-Deno.test('transcript: the current decode settings are not a gap', async () => {
-  // The termination condition.
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: DECODE });
-
-  assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
-});
-
-Deno.test('transcript: one a person corrected is not a gap, whatever it was decoded with', async () => {
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE, editedAt: '2026-01-01T00:00:00Z' });
-
-  assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
-});
-
-Deno.test('transcript: a file with no audio track is not a gap', async () => {
-  // transcribe-file writes the node with both provenance attrs null when whisper never ran, and
-  // transcribing again writes the same nulls back — so comparing it would re-announce forever.
-  const nodes = transcribedVideo({ transcribedBy: null, transcribedWith: null, segmentCount: 0 });
-
-  assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
-});
-
-Deno.test('transcript: one an interrupted run left without transcribedAt is a gap, whatever EMS says', async () => {
-  const nodes = transcribedVideo({});
-  delete nodes[`${VID}/metadata/transcript`].attrs.transcribedAt;
-
-  for (const ctx of [tree(nodes), tree(nodes, { transcriptGeneration: DECODE })]) {
-    assertEquals((await deriveGaps(VID, ctx, 100)).map((f) => f.type), [MEDIA_EVENTS.transcriptStale]);
-  }
-});
-
-Deno.test('transcript: audio is checked too', async () => {
-  const nodes = indexedAudio();
-  nodes[`${SND}/metadata/transcript`] = transcribed({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE });
-
-  const facts = await deriveGaps(SND, tree(nodes, { transcriptGeneration: DECODE }), 100);
-
-  assertEquals(facts.map((f) => f.type), [MEDIA_EVENTS.transcriptStale]);
-});
-
-Deno.test('transcript: an undecodable source is never transcribed again', async () => {
-  const nodes = transcribedVideo({ transcribedBy: 'whisper-large-v3', transcribedWith: OLD_DECODE });
-  nodes[VID] = { ...nodes[VID], attrs: { ...nodes[VID].attrs, undecodable: 'ffprobe: moov atom not found' } };
-
-  assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
-});
-
 const FACES = 'retinaface-r34+transface';
 const facesFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.facesStale);
 const FOUND_AT = '2026-10-20T08:00:00Z';
@@ -648,163 +557,4 @@ Deno.test('faces: current faces, a file never detected, an undecodable one, anot
   // An EMS running models recognition is not tuned for would store nothing on a re-detection.
   assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT }), { faceGeneration: 'other-detector+other-recogniser' }), 100)), []);
   assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT })), 100)), []);
-});
-
-const PPOCR = 'PP-OCRv6_medium';
-const ocrFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.ocrStale);
-const READ_AT = '2026-10-18T08:00:00Z';
-
-Deno.test('ocr: a picture read by another engine is read again', async () => {
-  const facts = ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, ocrBy: 'PP-OCRv6_small' }), { ocrGeneration: PPOCR }), 100));
-  assertEquals(facts.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', ocrBy: 'PP-OCRv6_small', expected: PPOCR }]]);
-});
-
-Deno.test('ocr: a picture marked read with no engine named is read again', async () => {
-  const facts = ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT }), { ocrGeneration: PPOCR }), 100));
-  assertEquals(facts.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', ocrBy: '', expected: PPOCR }]]);
-});
-
-Deno.test('ocr: a picture read by the current engine, written by hand, never read, undecodable, or with EMS silent asks nothing', async () => {
-  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, ocrBy: PPOCR }), { ocrGeneration: PPOCR }), 100)), []);
-  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, textManual: true, ocrBy: null }), { ocrGeneration: PPOCR }), 100)), []);
-  // Never read is the text gap's, not this one.
-  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed(), { ocrGeneration: PPOCR }), 100)), []);
-  assertEquals(
-    ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, ocrBy: 'PP-OCRv6_small', undecodable: 'no frame table' }), { ocrGeneration: PPOCR }), 100)),
-    [],
-  );
-  assertEquals(ocrFacts(await deriveGaps(IMG, tree(indexed({ textIndexedAt: READ_AT, ocrBy: 'PP-OCRv6_small' })), 100)), []);
-  assertEquals(ocrFacts(await deriveGaps(VID, tree(indexedVideo(), { ocrGeneration: PPOCR }), 100)), []);
-});
-
-Deno.test('ocr: a staged picture read by another engine waits until it is filed', async () => {
-  const staged = '/home/anna/staging/files/inbox/batch/a.jpg';
-  const nodes = indexed({ textIndexedAt: READ_AT, ocrBy: 'PP-OCRv6_small' }, staged);
-  assertEquals(ocrFacts(await deriveGaps(staged, tree(nodes, { ocrGeneration: PPOCR }), 100)), []);
-});
-
-const BGE = 'bge-m3';
-const textFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.textEmbeddingStale);
-const textVector = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id: 'tv', type: 'embedding', attrs: { embeddedBy: BGE, ...attrs } });
-
-/** A video whose extracted text and transcript have current vectors. */
-const embeddedVideo = (): Record<string, NodeSnapshot> => {
-  const nodes = indexedVideo();
-  nodes[`${VID}/metadata/content`] = { id: 'c1', type: 'file', attrs: { size: 120 } };
-  nodes[`${VID}/metadata/content/text_bgem3`] = textVector();
-  nodes[`${VID}/metadata/transcript`] = transcribed({ size: 900, speech: true });
-  nodes[`${VID}/metadata/transcript/text_bgem3`] = { id: 'ts', type: 'directory', attrs: { embeddedBy: BGE, chunkSeconds: CHUNK_TARGET_SECONDS } };
-  return nodes;
-};
-
-Deno.test('text: texts with vectors from the current embedder are not a gap', async () => {
-  assertEquals(textFacts(await deriveGaps(VID, tree(embeddedVideo(), { textGeneration: BGE }), 100)), []);
-});
-
-Deno.test('text: a missing vector, another model and another chunk length are announced, per text', async () => {
-  const nodes = embeddedVideo();
-  nodes[`${VID}/metadata/transcript/text_bgem3`].attrs.chunkSeconds = 30;
-  nodes[`${VID}/metadata/content/text_bgem3`] = textVector({ embeddedBy: 'another-text-model' });
-
-  const facts = textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: BGE }), 100));
-
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].subject, VID);
-  assertEquals(facts[0].data, { mimetype: 'video/mp4', stale: ['content', 'transcript'], expected: BGE });
-});
-
-Deno.test('text: a hand-written description needs a vector of its text as it is now', async () => {
-  const text = 'Anna Andersson on a sailboat';
-  const nodes = embeddedVideo();
-  nodes[VID].attrs.description = `${text} `;
-  const ctx = tree(nodes, { textGeneration: BGE });
-  assertEquals(textFacts(await deriveGaps(VID, ctx, 100)).map((f) => f.data?.stale), [['authored']]);
-
-  nodes[`${VID}/metadata/authored`] = { id: 'a1', type: 'directory', attrs: {} };
-  nodes[`${VID}/metadata/authored/text_bgem3`] = textVector({ authoredHash: await authoredHash('an earlier text') });
-  assertEquals(textFacts(await deriveGaps(VID, ctx, 100)).map((f) => f.data?.stale), [['authored']]);
-
-  nodes[`${VID}/metadata/authored/text_bgem3`] = textVector({ authoredHash: await authoredHash(text) });
-  assertEquals(textFacts(await deriveGaps(VID, ctx, 100)), []);
-});
-
-Deno.test('text: a text with nothing to embed is never a gap', async () => {
-  // A silent recording keeps no chunk set and an empty text node gives no vector, so announcing
-  // either would republish the file on every scan.
-  const nodes = embeddedVideo();
-  delete nodes[`${VID}/metadata/content/text_bgem3`];
-  delete nodes[`${VID}/metadata/transcript/text_bgem3`];
-  nodes[`${VID}/metadata/content`].attrs.size = 0;
-  nodes[`${VID}/metadata/transcript`].attrs.speech = false;
-  assertEquals(textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: BGE }), 100)), []);
-});
-
-Deno.test('text: no answer from EMS, or a model with no type, asks nothing', async () => {
-  const nodes = embeddedVideo();
-  delete nodes[`${VID}/metadata/content/text_bgem3`];
-  assertEquals(textFacts(await deriveGaps(VID, tree(nodes), 100)), []);
-  assertEquals(textFacts(await deriveGaps(VID, tree(nodes, { textGeneration: 'a-model-nothing-knows' }), 100)), []);
-});
-
-Deno.test('text: a file announced for a new transcript is not also announced for its vectors', async () => {
-  // A new transcript embeds its chunks again, and the next scan finds whatever else is left.
-  const nodes = embeddedVideo();
-  nodes[`${VID}/metadata/transcript`].attrs.transcribedBy = 'whisper-large-v3';
-  nodes[`${VID}/metadata/transcript`].attrs.transcribedWith = 'old-settings';
-  delete nodes[`${VID}/metadata/transcript/text_bgem3`];
-  const facts = await deriveGaps(VID, tree(nodes, { textGeneration: BGE, transcriptGeneration: 'new-settings' }), 100);
-  assertEquals(facts.map((f) => f.type).includes(MEDIA_EVENTS.transcriptStale), true);
-  assertEquals(textFacts(facts), []);
-});
-
-Deno.test('gap: a document or picture with no textIndexedAt is a text gap; other media, derivatives and staged files are not', () => {
-  const PDF = `${ALBUMS_ROOT}/x/a.pdf`;
-  const gap = (attrs: Record<string, unknown>) => deriveTextGap(PDF, file('f1', attrs), 100).map((fact) => fact.type);
-
-  assertEquals(gap({ mimetype: 'application/pdf' }), [MEDIA_EVENTS.textMissing]);
-  assertEquals(gap({ mimetype: 'image/jpeg' }), [MEDIA_EVENTS.textMissing]);
-  assertEquals(deriveTextGap(PDF, file('f1', { mimetype: 'text/plain' }), 100)[0].data, { mimetype: 'text/plain' });
-
-  assertEquals(gap({ mimetype: 'application/pdf', textIndexedAt: '2026-10-17T08:00:00Z' }), []);
-  // A camera RAW is read through its preview, like any picture.
-  assertEquals(gap({ mimetype: 'image/x-canon-cr2' }), [MEDIA_EVENTS.textMissing]);
-  assertEquals(gap({ mimetype: 'video/mp4' }), []);
-  assertEquals(gap({ mimetype: 'application/json' }), []);
-  assertEquals(gap({ mimetype: 'image/jpeg', sourceId: 'f0' }), []);
-  assertEquals(gap({ mimetype: 'application/pdf', size: 0 }), []);
-  // A node's own metadata is no document: an album's description, a file's extracted text.
-  assertEquals(deriveTextGap(`${ALBUMS_ROOT}/x/metadata/description`, file('f1', { mimetype: 'text/plain' }), 100), []);
-  assertEquals(deriveTextGap(`${PDF}/metadata/content`, file('f1', { mimetype: 'text/plain' }), 100), []);
-  // A staged file is read when it is filed.
-  assertEquals(deriveTextGap('/home/anna/staging/files/inbox/batch/a.jpg', file('f1', { mimetype: 'image/jpeg' }), 100), []);
-  assertEquals(deriveTextGap('/home/anna/staging/files/inbox/menu.pdf', file('f1', { mimetype: 'application/pdf' }), 100), []);
-});
-
-Deno.test('rule: a directory moved whole announces the text gap of each unread file within it', async () => {
-  const dir = `${ALBUMS_ROOT}/x/files/trip`;
-  const within: Record<string, NodeSnapshot> = {
-    [`${dir}/menu.pdf`]: file('f1', { mimetype: 'application/pdf' }),
-    [`${dir}/day-2/IMG_0001.jpg`]: file('f2'),
-    [`${dir}/IMG_0002.cr2`]: file('f3', { mimetype: 'image/x-canon-cr2' }),
-    [`${dir}/clip.mp4`]: file('f4', { mimetype: 'video/mp4' }),
-  };
-  const asked: string[] = [];
-  const ctx = tree({}, {
-    unreadFilesWithin: (path) => {
-      asked.push(path);
-      return Promise.resolve(Object.entries(within).map(([path, node]) => ({ path, node })));
-    },
-  });
-
-  const facts = await deriveEvents(event('directory', dir, 'moved'), ctx, 100);
-
-  assertEquals(asked, [dir]);
-  assertEquals(facts.map((fact) => [fact.type, fact.subject]), [
-    [MEDIA_EVENTS.textMissing, `${dir}/menu.pdf`],
-    [MEDIA_EVENTS.textMissing, `${dir}/day-2/IMG_0001.jpg`],
-    [MEDIA_EVENTS.textMissing, `${dir}/IMG_0002.cr2`],
-  ]);
-  // Any other change to a directory is not a move.
-  assertEquals(await deriveEvents(event('directory', dir, 'updated'), ctx, 100), []);
-  assertEquals(asked, [dir]);
 });

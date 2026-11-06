@@ -209,15 +209,6 @@
         "group": "Playback"
       },
       {
-        "key": "CFG_MEDIA_TRANSCRIPTS_CURRENT",
-        "scope": "system",
-        "type": "string",
-        "default": "",
-        "label": "Keep transcripts current",
-        "description": "Videos and recordings transcribed with other speech-recognition settings than the media service runs now are transcribed again in the background, behind new media. Set to \"off\" to leave existing transcripts alone. On a large library a change of settings means hours of background work.",
-        "group": "Processing"
-      },
-      {
         "key": "CFG_MEDIA_HEAL_INTERVAL",
         "scope": "system",
         "type": "number",
