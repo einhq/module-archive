@@ -6,6 +6,7 @@ import { useCommand } from '@ein/ui/hooks';
 import { baseName, countOf, parentPath, type SearchFilters, shq } from '@ein/ui/lib';
 import { invalidateListing, type MediaItem, openDialog } from '@ein/ui/signals';
 import { ActionIcon, Anchor, Box, Breadcrumbs, Button, Group, Menu, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
@@ -58,6 +59,8 @@ type Props = {
  */
 export function FilesTab({ category, categories, reloadToken, onChanged }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
+  // A touch screen picks rows by a long press (NodeBrowser), so the hint says that instead of the keys.
+  const touch = useMediaQuery('(pointer: coarse)', false, { getInitialValueInEffect: false });
   const location = useLocation();
   const dir = cleanDir(searchParams.get('dir'));
   const folderView = searchParams.get('view') === 'folder';
@@ -223,7 +226,11 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
                     actions={({ selection }) => (
                       <Stack gap='xs'>
                         <Text size='sm'>
-                          {selection.length > 0 ? `${named(selection)} selected.` : 'Select what to move or discard: click, Ctrl or Shift and click for more, Ctrl+A for all.'}
+                          {selection.length > 0
+                            ? `${named(selection)} selected.`
+                            : touch
+                            ? 'Select what to move or discard: press and hold one, then tap the others.'
+                            : 'Select what to move or discard: click, Ctrl or Shift and click for more, Ctrl+A for all.'}
                         </Text>
                         <Group gap='xs'>
                           <Button
