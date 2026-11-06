@@ -530,6 +530,29 @@ Deno.test('gap: an already-geocoded position is not a gap', async () => {
   assertEquals(await deriveGaps(IMG, ctx, 100), []);
 });
 
+Deno.test('gap: a dated photo with a point is owed its weather while lookups are on', async () => {
+  const geocoded = { id: 'l1', type: 'position', attrs: { geocodedAt: 'yesterday' } };
+  const dated = { ...indexed({ takenAtUtc: '2024-07-14T14:40:00Z' }), [`${IMG}/position`]: geocoded };
+
+  const facts = await deriveGaps(IMG, tree(dated, { weather: true }), 100);
+  assertEquals(facts.map((f) => [f.type, f.subject]), [[MEDIA_EVENTS.weatherOwed, `${IMG}/position`]]);
+
+  // Lookups off, or the setting not known: nothing is owed.
+  assertEquals(await deriveGaps(IMG, tree(dated), 100), []);
+  assertEquals(await deriveGaps(IMG, tree(dated, { weather: false }), 100), []);
+
+  // No capture time: nothing to look up.
+  assertEquals(await deriveGaps(IMG, tree({ ...indexed(), [`${IMG}/position`]: geocoded }, { weather: true }), 100), []);
+});
+
+Deno.test('gap: a photo whose weather is for its capture time is not owed it, one retimed is', async () => {
+  const position = (time: string): NodeSnapshot => ({ id: 'l1', type: 'position', attrs: { geocodedAt: 'yesterday', weather: { lat: 1, lng: 2, time } } });
+  const nodes = (time: string) => ({ ...indexed({ takenAtUtc: '2024-07-14T14:40:00Z' }), [`${IMG}/position`]: position(time) });
+
+  assertEquals(await deriveGaps(IMG, tree(nodes('2024-07-14T14:40:00.000Z'), { weather: true }), 100), []);
+  assertEquals((await deriveGaps(IMG, tree(nodes('2024-07-14T09:05:00.000Z'), { weather: true }), 100)).map((f) => f.type), [MEDIA_EVENTS.weatherOwed]);
+});
+
 Deno.test('gap: an unindexed file is discovery, not a gap', async () => {
   const ctx = tree({ [IMG]: file('f1') });
 

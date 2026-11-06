@@ -50,7 +50,7 @@
 import { POOLS_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, readSettings, reportUnknownFlags } from '@ein/client';
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveGaps, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
@@ -58,6 +58,7 @@ import { deriveForFile, withLanes } from '@media/file-rules';
 import { LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
 import { allWait, factsWaiting } from '@media/waiting';
 import { generations } from '@ems/client';
+import { weatherOn } from '@archive/weather/at';
 
 const encoder = new TextEncoder();
 
@@ -230,6 +231,8 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   // The face models EMS runs now: a file whose faces were found by others is detected again.
   const ems = gaps ? await generations(cmd) : null;
   const faceGeneration = ems?.faces ?? undefined;
+  // Photos are owed their weather only while it may be looked up.
+  const weather = gaps && weatherOn(await readSettings(cmd, cmd.access));
 
   /**
    * The fact types whose check is off because EMS did not answer. A field EMS answers with null is
@@ -271,6 +274,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       }
     },
     faceGeneration,
+    weather,
   };
 
   /**
@@ -310,6 +314,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // Every setting of the full context, not only the listing answers: a field left out here
       // silently turns its check off on the fast path.
       faceGeneration,
+      weather,
     };
   };
 

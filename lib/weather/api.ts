@@ -36,3 +36,13 @@ export type WeatherReading = {
   /** Total cloud cover, percent. */
   cloudCover?: WeatherValue;
 };
+
+/**
+ * `weather-photo`: the weather it wrote on a photo's position, or why it wrote none. `off` is
+ * `CFG_WEATHER` turned off; `current` a position whose weather is for its point and capture time
+ * already; `no point` and `no time` a photo with nothing to look up yet. A photo whose capture time
+ * went away loses its weather (`removed`).
+ */
+export type WeatherPhotoResult =
+  | { position: string; weather: WeatherReading; requests: number }
+  | { position: string; skipped: 'off' | 'current' | 'no point' | 'no time'; removed?: true };

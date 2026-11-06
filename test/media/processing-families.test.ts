@@ -26,6 +26,7 @@ const FAMILIES: Record<string, string[]> = {
   'media-device-cover': ['archive'],
   'media-interpret': ['archive'],
   'media-geocode': ['archive'],
+  'media-weather': ['archive'],
   'media-duplicates': ['archive'],
 };
 

@@ -1,0 +1,19 @@
+name: media-weather
+description: Look up the weather a photo was taken in, at its point and capture time
+
+# Subject is the file's position node. `location.point.changed` comes from archive-bridge when the
+# point is written, a new photo's or one a person moved; `media.weather.owed` from the reconciler,
+# for a photo whose weather is missing or was read for another capture time.
+trigger:
+  on: [location.point.changed, media.weather.owed]
+  wants: archive
+
+steps:
+  weather:
+    # Network lookups, unless CFG_WEATHER is turned off; a position whose weather is current is left alone.
+    command: weather-photo $NODE_PATH
+    description: Write the weather at the photo's point and capture time on its position node
+
+options:
+  maxAttempts: 3
+  priority: 5

@@ -39,6 +39,7 @@ import { FaceCrop } from '../../people/components/FaceCrop.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { StagedDuplicates } from '../../staging/components/StagedDuplicates.tsx';
 import { MediaEditModal } from './MediaEditModal.tsx';
+import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
 import { UserText } from '../../components/UserText.tsx';
 
@@ -509,6 +510,7 @@ export function MediaSidebar(
   };
 
   const position = details?.position ?? null;
+  const weatherLine = position?.weather && readingLine(position.weather);
   const location = details?.location ?? null;
   const albums = details?.albums ?? [];
   const people = details?.people ?? [];
@@ -813,6 +815,13 @@ export function MediaSidebar(
                 )}
               </Box>
             )}
+          </IconRow>
+        )}
+
+        {weatherLine && (
+          <IconRow icon={<TablerIcon name='cloud' size={SECTION_ICON_SIZE} />}>
+            <Text size='sm'>{weatherLine}</Text>
+            <Text size='xs' c='dimmed'>{readingSources(position!.weather!)}</Text>
           </IconRow>
         )}
 

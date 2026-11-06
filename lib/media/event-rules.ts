@@ -17,6 +17,7 @@
 import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
+import { weatherOwed } from '@archive/weather/photo';
 import {
   deriveForExif as extractedFacts,
   deriveForFile as fileFacts,
@@ -64,6 +65,11 @@ export const MEDIA_EVENTS = {
   renditionsStale: RENDITION_FACTS.stale,
   /** `<file>/position` exists. Subject is the position node. */
   positionAvailable: 'media.position.available',
+  /**
+   * A photo with a point and a capture time has no weather, or weather read for another time
+   * (`@archive/weather/photo`). The reconciler's gap. Subject is the position node.
+   */
+  weatherOwed: 'media.weather.owed',
   /** One face. Subject is the face node, so assignment is a per-face unit. */
   faceDetected: 'media.face.detected',
   /**
@@ -173,6 +179,11 @@ export type RuleContext = FileRuleContext & {
    * every file stale forever.
    */
   faceGeneration?: string;
+  /**
+   * Whether `CFG_WEATHER` lets photos be given their weather. Undefined or false disables the
+   * check: a photo is owed nothing while no lookup may be made.
+   */
+  weather?: boolean;
 };
 
 const parentOf = (path: string): string => path.slice(0, path.lastIndexOf('/')) || '/';
@@ -371,6 +382,17 @@ export async function deriveGaps(
 
   if (position && !position.attrs.geocodedAt) {
     events.push(...await deriveForPosition(`${filePath}/position`, ctx, now));
+  }
+
+  if (position && ctx.weather && weatherOwed(file.attrs, position.attrs)) {
+    events.push({
+      type: MEDIA_EVENTS.weatherOwed,
+      subject: `${filePath}/position`,
+      nodeId: position.id,
+      time: now,
+      source: MEDIA_EVENT_SOURCE,
+      data: { filePath },
+    });
   }
 
   return events;

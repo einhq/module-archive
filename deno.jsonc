@@ -134,6 +134,7 @@
     "@archive/weather/cache": "./lib/weather/cache.ts",
     "@archive/weather/fetch": "./lib/weather/fetch.ts",
     "@archive/weather/open-meteo": "./lib/weather/open-meteo.ts",
+    "@archive/weather/photo": "./lib/weather/photo.ts",
     "@archive/weather/smhi": "./lib/weather/smhi.ts",
     "@ein/ui/components": "../../src/builtin/ui/src/client/components/mod.ts",
     "@ein/ui/hooks": "../../src/builtin/ui/src/client/hooks/mod.ts",

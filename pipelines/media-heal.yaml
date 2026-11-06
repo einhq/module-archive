@@ -1,6 +1,6 @@
 # A pass of `media-scan` over the archive, which announces every gap a pipeline missed: a file
 # never taken in or interpreted, faces, a transcript, voices or extracted text a crash lost, a
-# transcript or vectors from a superseded model or setting. Renditions, picture vectors and
+# transcript or vectors from a superseded model or setting, a photo's place or weather. Renditions, picture vectors and
 # fingerprints are the media module's to heal (its `renditions-heal`, `pictures-heal` and
 # `fingerprints-heal` services). The fact comes from `media-heal`, which the media-heal service
 # runs as a clock; its subject is the root to walk, the albums or a user's staged files, so each

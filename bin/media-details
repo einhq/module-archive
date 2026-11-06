@@ -7,7 +7,7 @@
  * and comments.
  *
  * Sources are the file-node children documented in docs/architecture.md:
- * `position` (content = lat/lng, attrs = reverse geocode), `location` and
+ * `position` (content = lat/lng, attrs = reverse geocode and weather), `location` and
  * `photographer` softlinks, `people/<slug>` softlinks, `regions/*`
  * carrying `personId`, `metadata/content` (index-document's extracted text), `metadata/sscd-*` and
  * `metadata/chromaprint` (the media module's compute-fingerprint) and `comments/<slug>` blobs. Every section is
@@ -45,6 +45,7 @@ import type {
   UnknownFace,
 } from '@archive/media/api';
 import { COVER_LINK_NAME } from '@ein/paths';
+import type { WeatherReading } from '@archive/weather/api';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
@@ -288,19 +289,20 @@ const readExif = async (
   return Object.keys(exif).length > 0 ? exif : null;
 };
 
-/** A file's `position` child: its point, and the address the reverse geocoder wrote on it. */
+/** A file's `position` child: its point, the address the reverse geocoder wrote on it, and the weather `weather-photo` did. */
 const readPosition = async (vfs: Vfs, access: Access, path: string): Promise<MediaPosition | null> => {
   try {
     const data = await readJson(vfs, access, path) as { lat?: number; lng?: number };
     if (typeof data?.lat !== 'number' || typeof data?.lng !== 'number') return null;
 
-    const node = await vfs.get<{ displayName?: string; city?: string; country?: string }>(access, path);
+    const node = await vfs.get<{ displayName?: string; city?: string; country?: string; weather?: WeatherReading }>(access, path);
     return {
       lat: data.lat,
       lng: data.lng,
       address: node.attrs.displayName,
       city: node.attrs.city,
       country: node.attrs.country,
+      ...(node.attrs.weather ? { weather: node.attrs.weather } : {}),
     };
   } catch {
     return null;
@@ -886,6 +888,15 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     if (details.chapters) await cmd.writeLn(`chapters: ${details.chapters.map((t) => t.toFixed(2)).join(', ')}`);
     if (details.exif?.model) await cmd.writeLn(`camera: ${[details.exif.make, details.exif.model].filter(Boolean).join(' ')}`);
     if (details.position) await cmd.writeLn(`position: ${details.position.lat},${details.position.lng} ${details.position.address ?? ''}`);
+    const weather = details.position?.weather;
+    if (weather?.temperature || weather?.windSpeed || weather?.cloudCover) {
+      const parts = [
+        weather.temperature && `${weather.temperature.value} °C`,
+        weather.windSpeed && `wind ${weather.windSpeed.value} m/s${weather.windDirection ? ` from ${weather.windDirection.value}°` : ''}`,
+        weather.cloudCover && `${weather.cloudCover.value} % cloud`,
+      ];
+      await cmd.writeLn(`weather: ${parts.filter(Boolean).join(', ')}`);
+    }
     if (details.location) await cmd.writeLn(`location: ${details.location.name}`);
     if (details.photographer) await cmd.writeLn(`photographer: ${details.photographer.name}`);
     if (details.device) {

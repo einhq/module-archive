@@ -7,6 +7,7 @@ import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { TripStay, TripWeather } from '@archive/location/api';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
+import { compassPoint, oneDecimal } from '../../location/lib/weather.ts';
 import type { AlbumTrip } from '@archive/media/api';
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { type AlbumEvent, useAlbumEvents } from '../hooks/useAlbumEvents.ts';
@@ -34,9 +35,6 @@ const formatIn = (timezone: string | undefined, options: Intl.DateTimeFormatOpti
   }
 };
 
-const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-const oneDecimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
-
 /** The weather of a leg or trip in a line: wind, temperature and cloud cover, those it has. */
 const weatherLine = (weather: TripWeather): string | undefined => {
   const parts: string[] = [];
@@ -44,7 +42,7 @@ const weatherLine = (weather: TripWeather): string | undefined => {
     parts.push(
       `Wind ${oneDecimal.format(weather.windSpeed)}\u00a0m/s` +
         (weather.windMax !== undefined && weather.windMax > weather.windSpeed ? `, at most ${oneDecimal.format(weather.windMax)}` : '') +
-        (weather.windDirection !== undefined ? `, from ${COMPASS[Math.round(weather.windDirection / 45) % 8]}` : ''),
+        (weather.windDirection !== undefined ? `, from ${compassPoint(weather.windDirection)}` : ''),
     );
   }
   if (weather.temperatureMin !== undefined && weather.temperatureMax !== undefined) {

@@ -1,0 +1,110 @@
+#!ts
+/**
+ * weather-photo — the weather a photo was taken in.
+ *
+ *   weather-photo <file>/position
+ *
+ * Looks the weather up at the photo's point and capture time (`takenAtUtc` on the file), as
+ * `weather` does, and writes the `WeatherReading` on the position node as `weather`
+ * (`@archive/weather/photo`), where the viewer shows it. A position whose weather is for its point
+ * and capture time already is left as it is, unless `--force`. A photo with no capture time loses
+ * the weather it had.
+ *
+ * The `media-weather` pipeline runs it when a photo's point is written, and for a photo the
+ * reconciler finds owed its weather. It does nothing while `CFG_WEATHER` is `false`.
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import type { WeatherPhotoResult, WeatherReading } from '@archive/weather/api';
+import { weatherLookupFor } from '@archive/weather/at';
+import { captureTime, PHOTO_WEATHER_ATTR } from '@archive/weather/photo';
+
+/** The point a position node holds, or undefined while it holds none. */
+const readPoint = async (cmd: Command, path: string): Promise<{ lat: number; lng: number } | undefined> => {
+  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+  try {
+    const data = await handle.read(4096);
+    if (data.length === 0) return undefined;
+    const point = JSON.parse(new TextDecoder().decode(data)) as { lat?: unknown; lng?: unknown };
+    return typeof point.lat === 'number' && typeof point.lng === 'number' ? { lat: point.lat, lng: point.lng } : undefined;
+  } finally {
+    await handle.close();
+  }
+};
+
+const weatherPhoto = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['force'], alias: { f: 'force' }, unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags._.length !== 1) {
+    await cmd.writeError('weather-photo: usage: weather-photo [--force] <file>/position\n');
+    return 1;
+  }
+  const path = resolve(cmd.cwd, String(flags._[0]));
+
+  let position;
+  let file;
+  try {
+    position = await cmd.sys.vfs.get(cmd.access, path);
+    file = await cmd.sys.vfs.get(cmd.access, dirname(path));
+  } catch (error) {
+    await cmd.writeError(`weather-photo: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (position.type !== 'position' || file.type !== 'file') {
+    await cmd.writeError(`weather-photo: ${path}: not the position of a file\n`);
+    return 1;
+  }
+
+  const answer = async (result: WeatherPhotoResult, text: string): CmdReturn => {
+    if (cmd.json) await cmd.writeJSON(result satisfies WeatherPhotoResult);
+    else await cmd.writeLn(`weather-photo: ${path}: ${text}`);
+    return 0;
+  };
+
+  const held = (position.attrs as Record<string, unknown>)[PHOTO_WEATHER_ATTR] as WeatherReading | undefined;
+  const time = captureTime(file.attrs as Record<string, unknown>);
+  if (time === undefined) {
+    if (held) await cmd.sys.vfs.update(cmd.access, path, { attrs: { [PHOTO_WEATHER_ATTR]: null } });
+    return await answer(
+      { position: path, skipped: 'no time', ...(held ? { removed: true as const } : {}) },
+      held ? 'no capture time, its weather removed' : 'no capture time',
+    );
+  }
+  const point = await readPoint(cmd, path);
+  if (!point) return await answer({ position: path, skipped: 'no point' }, 'no point yet');
+  if (!flags.force && held && Date.parse(held.time) === time && held.lat === point.lat && held.lng === point.lng) {
+    return await answer({ position: path, skipped: 'current' }, 'its weather is current');
+  }
+
+  const lookup = await weatherLookupFor(cmd);
+  if (!lookup) return await answer({ position: path, skipped: 'off' }, 'weather lookups are turned off (CFG_WEATHER)');
+
+  let reading: WeatherReading;
+  try {
+    reading = await lookup.at(point.lat, point.lng, time);
+  } catch (error) {
+    await cmd.writeError(`weather-photo: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  await cmd.sys.vfs.update(cmd.access, path, { attrs: { [PHOTO_WEATHER_ATTR]: reading } });
+  const found = [reading.temperature && `${reading.temperature.value} °C`, reading.windSpeed && `${reading.windSpeed.value} m/s`].filter(Boolean);
+  return await answer({ position: path, weather: reading, requests: lookup.requests }, found.length ? found.join(', ') : 'no weather known for this place and hour');
+};
+
+weatherPhoto.spec = {
+  name: 'weather-photo',
+  effect: 'write' as const,
+  description: 'Look up the weather a photo was taken in, at its point and capture time, and write it on its position node',
+  args: [
+    { name: 'position', type: 'path' as const, description: 'the position node of a file, <file>/position' },
+  ],
+  flags: [
+    { name: 'f', type: 'bool' as const, description: 'Look it up again even when the weather held is for the same point and time' },
+  ],
+  examples: ['weather-photo /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg/position'],
+  returns: 'WeatherPhotoResult: the weather written, or why none was.',
+};
+
+export default weatherPhoto;

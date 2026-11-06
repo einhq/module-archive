@@ -11,6 +11,7 @@ import type { TripLeg, TripPlace, TripStay, TripWeather } from '@archive/locatio
 import type { PersonFace, PersonVoice } from '@archive/people/api';
 import type { StagingGroupDetail, StagingRowInfo } from '@archive/staging/api';
 import type { Storyboard } from '@media/api';
+import type { WeatherReading } from '@archive/weather/api';
 
 export type NodeRef = {
   id: string;
@@ -41,6 +42,8 @@ export type MediaPosition = {
   address?: string;
   city?: string;
   country?: string;
+  /** The weather the file was taken in, which `weather-photo` wrote (`@archive/weather/photo`). */
+  weather?: WeatherReading;
 };
 
 /** A location link, carrying the location's own point when it has one. */
