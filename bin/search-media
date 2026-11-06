@@ -29,10 +29,10 @@ import type { SearchChannel, SearchProviderHit, SearchProviderResponse } from '@
 import { basename, dirname, resolve } from '@std/path';
 import { toText } from '@std/streams/to-text';
 import { embedImage } from '@ems/client';
-import { embedPictureQuery, embedQuery, isContentPartName, isTextVectorName, TEXT_VECTOR_NAMES } from '@ems/text-embedding';
-import { fileOfPictureVector, PICTURE_DIR, PICTURE_FLOOR, pictureEmbeddingType } from '@archive/media/embedding-types';
+import { embedQuery, isContentPartName, isTextVectorName, TEXT_VECTOR_NAMES } from '@ems/text-embedding';
+import { fileOfPictureVector, PICTURE_DIR, PICTURE_FLOOR, pictureEmbeddingType, pictureQuery } from '@media/pictures';
 import { MEDIA_STACKS_ATTR, parseAlbumMediaStacks } from '@archive/media/media-stacks';
-import { pictureSource } from '@archive/media/picture-source';
+import { pictureSource } from '@media/picture-source';
 import { resolveChunkPath } from '@archive/media/transcript';
 import { type LabelLike, labelLike } from '@archive/labels/label-model';
 import { listedRows } from '@archive/search/listed';
@@ -561,13 +561,10 @@ const searchMedia = async (cmd: Command): CmdReturn => {
     (async () => {
       // The same query in the pictures' space, the embed shared with the other providers as the
       // text one is; a host whose EMS has no picture embedder simply answers without this half.
-      let type: string | undefined;
+      let type: string;
       let vectorBytes: Uint8Array;
       try {
-        const { bytes, producer } = await embedPictureQuery(cmd, query);
-        type = pictureEmbeddingType(producer);
-        if (!type) throw new Error(`no embedding type for picture embedder "${producer}"`);
-        vectorBytes = bytes;
+        ({ type, bytes: vectorBytes } = await pictureQuery(cmd, query));
         await trace('query embedded for pictures');
       } catch (error) {
         await cmd.writeError(`search-media: picture match unavailable: ${error instanceof Error ? error.message : String(error)}\n`);

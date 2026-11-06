@@ -19,10 +19,9 @@ import { basename, resolve } from '@std/path';
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { SearchChannel, SearchProviderHit, SearchProviderResponse } from '@ein/api';
-import { embedPictureQuery } from '@ems/text-embedding';
 import { albumsHolding } from '@archive/media/album-members';
 import { nameScore, quality } from '@archive/media/name-quality';
-import { fileOfPictureVector, PICTURE_FLOOR, pictureEmbeddingType } from '@archive/media/embedding-types';
+import { fileOfPictureVector, PICTURE_FLOOR, pictureQuery } from '@media/pictures';
 import { labelLike } from '@archive/labels/label-model';
 import { listedRows } from '@archive/search/listed';
 
@@ -68,12 +67,7 @@ const listAlbums = async (cmd: Command, root: string): Promise<Map<string, Album
 type PictureQuestion = { type: string; bytes: Uint8Array; floor: number };
 
 /** The words through the picture embedder's text tower, from the picture space's own floor. */
-const wordsQuestion = async (cmd: Command, query: string): Promise<PictureQuestion> => {
-  const { bytes, producer } = await embedPictureQuery(cmd, query);
-  const type = pictureEmbeddingType(producer);
-  if (!type) throw new Error(`no embedding type for picture embedder "${producer}"`);
-  return { type, bytes, floor: PICTURE_FLOOR };
-};
+const wordsQuestion = async (cmd: Command, query: string): Promise<PictureQuestion> => ({ ...await pictureQuery(cmd, query), floor: PICTURE_FLOOR });
 
 /**
  * Albums by what their pictures show: the question against every picture, and each album of

@@ -43,7 +43,7 @@ export const FACE_MODEL = 'retinaface-r34+transface';
 
 /**
  * `embeddingType` of a face vector from FACE_MODEL. Named per model, as every vector type is
- * (@archive/media/embedding-types): another recogniser's vectors are in another space, and
+ * (@media/pictures): another recogniser's vectors are in another space, and
  * recognition searches only this one.
  */
 export const FACE_EMBEDDING_TYPE = 'face_transface';

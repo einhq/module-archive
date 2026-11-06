@@ -16,7 +16,7 @@
 
 import type { Command, NodeAttrs } from '@ein/client';
 import { fingerprint, type FingerprintResult } from '@ems/client';
-import { pictureSource } from '@archive/media/picture-source';
+import { pictureSource } from '@media/picture-source';
 
 export type { FingerprintResult };
 

@@ -724,37 +724,6 @@ Deno.test('transcript: an undecodable source is never transcribed again', async 
   assertEquals(await deriveGaps(VID, tree(nodes, { transcriptGeneration: DECODE }), 100), []);
 });
 
-const SIGLIP = 'ViT-SO400M-16-SigLIP2-384__webli';
-const pictureFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.pictureStale);
-
-Deno.test('picture: a photo without picture vectors is announced', async () => {
-  const facts = pictureFacts(await deriveGaps(IMG, tree(indexed(), { pictureGeneration: SIGLIP }), 100));
-  assertEquals(facts.length, 1);
-  assertEquals(facts[0].subject, IMG);
-  assertEquals(facts[0].data, { mimetype: 'image/jpeg', embeddedBy: '', expected: SIGLIP });
-});
-
-Deno.test('picture: vectors from the current embedder are not a gap', async () => {
-  const nodes = indexed();
-  nodes[`${IMG}/metadata/picture`] = { id: 'pic', type: 'directory', attrs: { embeddedBy: SIGLIP } };
-  assertEquals(pictureFacts(await deriveGaps(IMG, tree(nodes, { pictureGeneration: SIGLIP }), 100)), []);
-});
-
-Deno.test('picture: another embedder, or a half-written directory, is re-embedded', async () => {
-  for (const attrs of [{ embeddedBy: 'ViT-B-32__openai' }, {}]) {
-    const nodes = indexedVideo();
-    nodes[`${VID}/metadata/picture`] = { id: 'pic', type: 'directory', attrs };
-    const facts = pictureFacts(await deriveGaps(VID, tree(nodes, { pictureGeneration: SIGLIP }), 100));
-    assertEquals(facts.map((f) => f.data?.embeddedBy), [String((attrs as { embeddedBy?: string }).embeddedBy ?? '')]);
-  }
-});
-
-Deno.test('picture: audio, undecodable sources and an unanswering EMS ask nothing', async () => {
-  assertEquals(pictureFacts(await deriveGaps(SND, tree(indexedAudio(), { pictureGeneration: SIGLIP }), 100)), []);
-  assertEquals(pictureFacts(await deriveGaps(IMG, tree(indexed({ undecodable: 'no frame table' }), { pictureGeneration: SIGLIP }), 100)), []);
-  assertEquals(pictureFacts(await deriveGaps(IMG, tree(indexed()), 100)), []);
-});
-
 const FACES = 'retinaface-r34+transface';
 const facesFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.facesStale);
 const FOUND_AT = '2026-10-20T08:00:00Z';

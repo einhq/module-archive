@@ -107,12 +107,6 @@ export const MEDIA_EVENTS = {
    */
   transcriptStale: 'media.transcript.stale',
   /**
-   * A photo or video has no picture vectors (`<file>/metadata/picture`), or has them from an
-   * image embedder EMS no longer runs. Its own fact because the embed pipeline's ordinary
-   * trigger skips every file that already has the directory.
-   */
-  pictureStale: 'media.picture.stale',
-  /**
    * A photo or video's faces were found by other face models than EMS runs now (`facesBy`). Its
    * own fact because the face pipelines' ordinary trigger skips every file that has `facesAt`.
    */
@@ -194,7 +188,7 @@ const FILES_DIR_NAME = 'files';
 const CAPTURE_TIME_ATTRS = ['takenAt', 'takenAtUtc'];
 /** Only images get a face-detection marker, so only images can be missing one. */
 const IMAGE_MIMETYPE = /^image\//;
-/** What `embed-picture` takes: a photo, or a video's keyframes. */
+/** A photo or a video: what faces are found in. */
 const PICTURE_MIMETYPE = /^(image|video)\//;
 /**
  * What gets extracted text: the documents `document-index` reads (its trigger's `filter` says the
@@ -241,20 +235,9 @@ export type RuleContext = FileRuleContext & {
    */
   transcriptGeneration?: string;
   /**
-   * The image embedder EMS runs now (`generations()` in `@ems/client`). A photo or video
-   * whose `metadata/picture` carries another `embeddedBy`, or none, is re-embedded: vectors from
-   * two models are not comparable and must not be searched side by side.
-   *
-   * Derived from EMS, never configured: a literal that disagreed with what `embed-picture` writes
-   * would mark every file stale forever, and re-embedding would write the same value back.
-   * Re-embedding the archive is cheap, so there is no `off`. Undefined when EMS cannot be asked,
-   * which disables the check.
-   */
-  pictureGeneration?: string;
-  /**
    * The engine EMS reads pictures' text with now (`generations()` in `@ems/client`). A picture
    * marked read whose `ocrBy` names another engine, or none, is read again; one whose text a
-   * person wrote is not. Derived from EMS like `pictureGeneration`, and undefined when EMS cannot
+   * person wrote is not. Derived from EMS like `transcriptGeneration`, and undefined when EMS cannot
    * be asked, which disables the check.
    */
   ocrGeneration?: string;
@@ -262,14 +245,14 @@ export type RuleContext = FileRuleContext & {
    * The face models EMS runs now (`generations()` in `@ems/client`). A detected file whose
    * `facesBy` names others, or none, has its faces detected again: their vectors are in another
    * space. Only when EMS runs the models recognition is tuned for (`FACE_MODEL`), since a
-   * re-detection with any others stores nothing. Derived from EMS like `pictureGeneration`, and
+   * re-detection with any others stores nothing. Derived from EMS like `transcriptGeneration`, and
    * undefined when EMS cannot be asked, which disables the check.
    */
   faceGeneration?: string;
   /**
    * The text embedder EMS runs now (`generations()` in `@ems/client`). A text under a
    * file's `metadata/` whose vector carries another `embeddedBy`, or has none, is embedded again
-   * from the stored text. Derived from EMS like `pictureGeneration`, with no `off`, and undefined
+   * from the stored text. Derived from EMS like `transcriptGeneration`, with no `off`, and undefined
    * when EMS cannot be asked or runs a model nothing has given a type to, which disables the check.
    */
   textGeneration?: string;
@@ -536,24 +519,7 @@ export async function deriveGaps(
     });
   }
 
-  // Picture vectors: missing, half-written (no `embeddedBy`, which is written last) or from another
-  // embedder. One read, and only for a file that has the directory at all.
   const mimetype = str(file.attrs.mimetype) ?? '';
-  if (ctx.pictureGeneration && !undecodable && PICTURE_MIMETYPE.test(mimetype)) {
-    const picture = metadataChildren.includes('picture') ? await ctx.getNode(`${filePath}/metadata/picture`) : undefined;
-    const embeddedBy = picture && str(picture.attrs.embeddedBy);
-
-    if (embeddedBy !== ctx.pictureGeneration) {
-      events.push({
-        type: MEDIA_EVENTS.pictureStale,
-        subject: filePath,
-        nodeId: file.id,
-        time: now,
-        source: MEDIA_EVENT_SOURCE,
-        data: { mimetype, embeddedBy: embeddedBy ?? '', expected: ctx.pictureGeneration },
-      });
-    }
-  }
 
   // Faces found by other models than EMS runs now, on a photo or a video. A file never detected is
   // `missingFaces`'s above, so this asks only one that has `facesAt`.

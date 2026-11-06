@@ -18,7 +18,7 @@ import { resolve } from '@std/path';
 import type { Command, Node, NodeChildEntry } from '@ein/client';
 import { isOriginalMedia } from '@ein/client';
 import type { AlbumProfile } from '@archive/media/api';
-import { PICTURE_DIR } from '@archive/media/embedding-types';
+import { PICTURE_DIR } from '@media/pictures';
 import { NON_MEMBER_LINK_NAMES } from '@archive/media/types';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 import { idsAt, nodesAt } from '@archive/staging/nodes-at';

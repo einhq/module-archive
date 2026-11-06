@@ -46,7 +46,6 @@ waits for rather than by a shared DAG:
    | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
    | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
    | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
-   | `media-embed-picture`  | `metadata.extracted` (image/video) or `picture.stale`                                                  | pool `embed-picture` (1 model slot; priority 50/10)                                                                                  |
    | `media-embed-text`     | `text-embedding.stale`                                                                                 | pool `embed-text` (1 model slot; priority 20)                                                                                        |
    | `media-face-assign`    | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
    | `media-transcribe`     | `metadata.extracted` (video/audio) or `transcript.stale`, not `undecodable`                            | pool `transcribe` (1 model slot; priority 50/10)                                                                                     |
@@ -59,8 +58,8 @@ waits for rather than by a shared DAG:
    | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for)                        | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
    **Families.** Every pipeline here that acts on a file wherever it lies names the family of work
-   it does with `wants` (core's "Which processing a folder wants"): `renditions` (`media-stills`,
-   `media-transcode`), `picture-vectors` (`media-embed-picture`), `text` (`media-ocr`,
+   it does with `wants` (core's "Which processing a folder wants"): `renditions` (the media module's
+   `media-stills` and `media-transcode`), `picture-vectors` (its `media-embed-picture`), `text` (`media-ocr`,
    `document-index`), `transcripts` (`media-transcribe`; `media-embed-text` is either), and
    `archive` for everything that gives a file its people, places, device and copies (faces, voices,
    fingerprints, device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
@@ -115,11 +114,11 @@ waits for rather than by a shared DAG:
    model slot), and staging's own steps. All of it sits in one `/pools/media`, which the media
    module's workers serve, and they differ only in what they offer: `models` (and `models-second`)
    offers `models` slots, `media-worker` offers `cpu` slots. Each takes the kinds the modules name
-   in their drop-ins, and the archive names its own: `etc/media-models.d/kinds` (`faces`,
-   `embed-picture`, `ocr`, `embed-text`, `transcribe`, `diarize`, `shots`) and
-   `etc/media-worker.d/kinds` (`unzip`, `ingest`, `stills`, `fingerprint`, `face-assign`,
-   `speaker-assign`, `dedupe`, `retime`, `organize`, `sidecars`, `transcode`, all but the first two
-   in the share kept for the work after ingest). A `kind` no worker takes does not run slowly — it
+   in their drop-ins, and the archive names its own: `etc/media-models.d/kinds` (`faces`, `ocr`,
+   `embed-text`, `transcribe`, `diarize`) and `etc/media-worker.d/kinds` (`unzip`, `interpret`,
+   `face-assign`, `speaker-assign`, `dedupe`, `retime`, `organize`, `sidecars`, `fingerprint`, all
+   but the first in the share kept for the work after ingest); the media module names the reading,
+   the renditions and the picture vectors. A `kind` no worker takes does not run slowly — it
    never runs at all, so `test/media/model-slots.test.ts` holds every step's kind to a drop-in.
    `assign-faces` also declares `exclusive: person-mint`, so two faces of the same
    new person cannot each mint one — previously only the worker's concurrency
@@ -191,7 +190,7 @@ waits for rather than by a shared DAG:
    own. Leaving unmounts the `<video>`, which is the whole reset: the still underneath is the same
    frame the clip started on. `prefers-reduced-motion` disables it, and a clip that 404s is
    remembered so a not-yet-backfilled video is asked for once and never again.
-7. **Search.** `embed-picture`, `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads) populate the embedding registry.
+7. **Search.** The media module's `embed-picture`, and `transcribe-file`, `index-document`, `read-text` and `compute-fingerprint` (a picture's or a video's keyframes' SSCD copy-detection descriptor, taken from what `embed-picture` reads, `@media/picture-source`) populate the embedding registry.
 
    **Text indexing.** `document-index` runs `index-document` on a file's VFS `updated` and on its
    `moved`, one trigger body shared by both: PDF, plain text, Word and OpenDocument text. JSON and
@@ -228,15 +227,14 @@ waits for rather than by a shared DAG:
    `isTextIndexedMimetype`). The fact is a trigger of both pipelines, each for its mimetypes, with
    the same `unless`, so a directory moved within staging reads nothing. `textIndexedAt` is written whether text was found or not, so a file is read once.
 
-   **Picture search.** `embed-picture` writes a SigLIP2 vector per photo, or per video keyframe,
-   under `<file>/metadata/picture/` (`embedding`, or `k0`… with `atSeconds`), typed by model in
-   [embedding-types.ts](../lib/media/embedding-types.ts) and stamped `embeddedBy` on
-   the directory last. `search-media` embeds the query through SigLIP2's text tower as well and
+   **Picture search.** The media module's `embed-picture` writes a SigLIP2 vector per photo, or per
+   video keyframe, under `<file>/metadata/picture/` (`embedding`, or `k0`… with `atSeconds`), typed
+   by model in `@media/pictures`, and keeps them current (`pictures-scan`, its architecture's
+   pictures.md). `search-media` embeds the query through SigLIP2's text tower as well (`pictureQuery`) and
    answers the matches as the `picture` channel, beside its `content`, `transcript`, `authored` and
    `name` channels; `search` fuses them by rank (below). Picture cosines have their
-   own floor (0.08), since a clear SigLIP2 match is 0.1-0.2. `media-scan` announces `picture.stale` for a
-   photo or video with no vectors or vectors from another embedder (`generations()` in `@ems/client`).
-   The model choice and the weights come from a retrieval eval over the archive.
+   own floor (0.08), since a clear SigLIP2 match is 0.1-0.2. The model choice and the weights come
+   from a retrieval eval over the archive.
    core's `src/lib/search` — core's since ein/core#442, its text from the modules' `search-*` providers — is a faceted **candidate-source pipeline**:
    text, tags, a time window, a map region, a content kind (a file's by its mimetype —
    `photo`, `video`, `audio`, `document` — or else a node's type: `album`, `person`, `location`),

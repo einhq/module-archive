@@ -21,7 +21,7 @@ Deno.test({ name: "the archive's kinds reach the media pool's workers", sanitize
     assertEquals(['stills', 'transcode', 'face-assign'].every((kind) => cpu.reserve.includes(kind)), true);
 
     const models = await client.execJson<PoolKinds>('media-pool-kinds models');
-    assertEquals(models.kinds, ['faces', 'embed-picture', 'ocr', 'embed-text', 'transcribe', 'diarize', 'shots']);
+    assertEquals(models.kinds, ['faces', 'ocr', 'embed-text', 'transcribe', 'diarize', 'shots', 'embed-picture']);
   } finally {
     await testCtx.teardown();
   }

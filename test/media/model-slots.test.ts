@@ -25,7 +25,6 @@ const MODEL_STEPS = [
   { file: 'media-faces.yaml', step: 'detect-faces', kind: 'faces' },
   { file: 'media-video-faces.yaml', step: 'detect-faces', kind: 'faces' },
   { file: 'media-faces-stale.yaml', step: 'detect-faces', kind: 'faces' },
-  { file: 'media-embed-picture.yaml', step: 'embed-picture', kind: 'embed-picture' },
   { file: 'media-embed-text.yaml', step: 'embed-text', kind: 'embed-text' },
   { file: 'media-transcribe.yaml', step: 'transcribe-file', kind: 'transcribe' },
   { file: 'media-voiceprint.yaml', step: 'voiceprint-file', kind: 'diarize' },

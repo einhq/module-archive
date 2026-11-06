@@ -2,7 +2,6 @@
 # rotates between, in this order, and the second worker the other way round. Every kind a pipeline
 # step names with `requires: models` is here, or it never runs (test/media/model-slots.test.ts).
 faces
-embed-picture
 ocr
 embed-text
 transcribe

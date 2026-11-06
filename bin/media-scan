@@ -227,14 +227,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     return 0;
   }
 
-  // What EMS stamps its results with now: a file whose transcript, picture vectors, faces, read
-  // text or text vectors were made by something else is made again. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off`
+  // What EMS stamps its results with now: a file whose transcript, faces, read text or text
+  // vectors were made by something else is made again. `CFG_MEDIA_TRANSCRIPTS_CURRENT=off`
   // turns the transcript check off for good: a change of whisper settings re-transcribes every
   // recording, hours of the card, which an operator may rather schedule than have start itself.
   const transcriptsOff = cmd.env.CFG_MEDIA_TRANSCRIPTS_CURRENT === 'off';
   const ems = gaps ? await generations(cmd) : null;
   const transcriptGeneration = transcriptsOff ? undefined : ems?.transcribe ?? undefined;
-  const pictureGeneration = ems?.imageEmbed ?? undefined;
   const ocrGeneration = ems?.ocr ?? undefined;
   const faceGeneration = ems?.faces ?? undefined;
   const textGeneration = ems?.textEmbed ?? undefined;
@@ -245,7 +244,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
    * with null is a model it does not run, which has nothing to compare with and owes nothing.
    */
   const unchecked: string[] = !gaps ? [] : [
-    ...(ems ? [] : [MEDIA_EVENTS.pictureStale, MEDIA_EVENTS.facesStale, MEDIA_EVENTS.ocrStale, MEDIA_EVENTS.textEmbeddingStale]),
+    ...(ems ? [] : [MEDIA_EVENTS.facesStale, MEDIA_EVENTS.ocrStale, MEDIA_EVENTS.textEmbeddingStale]),
     ...(transcriptsOff || transcriptGeneration ? [] : [MEDIA_EVENTS.transcriptStale]),
   ].filter((type) => !only || only.has(type));
 
@@ -283,7 +282,6 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       }
     },
     transcriptGeneration,
-    pictureGeneration,
     ocrGeneration,
     faceGeneration,
     textGeneration,
@@ -326,7 +324,6 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // Every setting of the full context, not only the listing answers: a field left out here
       // silently turns its check off on the fast path.
       transcriptGeneration,
-      pictureGeneration,
       ocrGeneration,
       faceGeneration,
       textGeneration,
@@ -541,7 +538,7 @@ mediaScan.spec = {
     {
       name: 'only',
       type: 'string' as const,
-      description: 'Emit only these fact types, comma-separated (e.g. media.picture.stale); the cursor still moves, so follow with a --restart pass for the rest',
+      description: 'Emit only these fact types, comma-separated (e.g. media.faces.stale); the cursor still moves, so follow with a --restart pass for the rest',
     },
     { name: 'n', dryRun: true, type: 'bool' as const, description: 'Dry run — report what would be emitted' },
     { name: 'v', type: 'bool' as const, description: 'Verbose output' },
@@ -549,7 +546,7 @@ mediaScan.spec = {
   examples: [
     'media-scan /archive/albums/Exempelalbum_2019',
     'media-scan --limit 500 /archive/albums',
-    'media-scan --only media.picture.stale --scan-limit 0 /archive/albums',
+    'media-scan --only media.faces.stale --scan-limit 0 /archive/albums',
   ],
   returns: 'how many files were announced to the media pipeline.',
 };

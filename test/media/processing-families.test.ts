@@ -15,7 +15,6 @@ const moduleRoot = new URL('../../', import.meta.url);
 
 /** The family each pipeline's triggers name. */
 const FAMILIES: Record<string, string[]> = {
-  'media-embed-picture': ['picture-vectors'],
   'media-ocr': ['text'],
   'document-index': ['text'],
   'media-transcribe': ['transcripts'],

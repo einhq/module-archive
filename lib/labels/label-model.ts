@@ -22,8 +22,7 @@ import { dirname } from '@std/path';
 import type { Command, StepPhase } from '@ein/client';
 import { TAGS_ROOT } from '@ein/paths';
 import { albumMembers, albumsHolding } from '@archive/media/album-members';
-import { fileOfPictureVector, PICTURE_DIR, pictureEmbeddingType } from '@archive/media/embedding-types';
-import { embedPictureQuery } from '@ems/text-embedding';
+import { fileOfPictureVector, PICTURE_DIR, pictureQuery } from '@media/pictures';
 import { crossValidate, dot, floorAt, passingOf, type Sample, seededRandom, train, unit } from '@archive/labels/classifier';
 import type { LabelModel, LabelModelReason, LabelModelSummary } from '@archive/labels/api';
 
@@ -413,9 +412,7 @@ const trainFromWords = async (
   prompt: string,
   known: { pictures: number; groups: number; excluded: Set<string>; signature: string; rejected: string[] },
 ): Promise<{ model: LabelModel; summary: LabelModelSummary }> => {
-  const { bytes, producer } = await embedPictureQuery(cmd, prompt);
-  const type = pictureEmbeddingType(producer);
-  if (!type) throw new Error(`no embedding type for picture embedder "${producer}"`);
+  const { type, bytes } = await pictureQuery(cmd, prompt);
   const weights = Array.from(unit(JSON.parse(new TextDecoder().decode(bytes)) as number[]), (value) => Math.round(value * 1e6) / 1e6);
   const above = await filesAbove(cmd, type, weights, VOCABULARY_FLOOR, MATCH_CAP + known.excluded.size);
   const matches = [...above.files.keys()].filter((path) => !known.excluded.has(path));
