@@ -2,7 +2,8 @@
  * `staging init`: make one user's staging area whole, and keep it so.
  *
  * 1. `staging/` and each of `STAGING_DIRS` are directories owned as the home is, mode 0700, and
- *    `staging/` is unlisted (`UNLISTED_ATTR`), so the library's views leave out what it holds.
+ *    `staging/` is unlisted (`UNLISTED_ATTR`), so the library's views leave out what it holds, and
+ *    wants the processing `STAGING_PROCESSING` names (`PROCESSING_ATTR`).
  * 2. The default category exists with the `inbox` kind, and every other directory under `files/`
  *    is a category: one without settings is adopted with the `generic` kind's. Each category has
  *    its directory of groups under `albums/`, owned and private the same way.
@@ -19,9 +20,9 @@
  */
 import type { StagingInitUser } from '@archive/staging/api';
 import type { Command } from '@ein/client';
-import { UNLISTED_ATTR } from '@ein/client';
+import { PROCESSING_ATTR, UNLISTED_ATTR } from '@ein/client';
 import { CATEGORY_ATTR, presetSettings, readCategories } from '@archive/staging/category';
-import { DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, stagingRoots } from '@archive/staging/paths';
+import { DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, STAGING_PROCESSING, stagingRoots } from '@archive/staging/paths';
 import { basename } from '@std/path';
 
 type Vfs = Command['sys']['vfs'];
@@ -93,14 +94,14 @@ export const initStaging = async (vfs: Vfs, access: Access, user: string, option
     }
     if (node.type !== 'directory') throw new Error(`not a directory: ${path}`);
     const owned = node.props.uid === owner.uid && node.props.gid === owner.gid && (node.props.mode & 0o7777) === STAGING_MODE;
-    const marked = Object.entries(marks).every(([key, value]) => node.attrs[key] === value);
+    const marked = Object.entries(marks).every(([key, value]) => JSON.stringify(node.attrs[key]) === JSON.stringify(value));
     if (!owned || !marked) {
       answer.repaired.push(path);
       if (!dryRun) await vfs.update(access, path, { ...(owned ? {} : { props: owner }), ...(marked ? {} : { attrs: marks }) });
     }
   };
 
-  await ensureDir(roots.homePath, 'staging', undefined, { [UNLISTED_ATTR]: true });
+  await ensureDir(roots.homePath, 'staging', undefined, { [UNLISTED_ATTR]: true, [PROCESSING_ATTR]: STAGING_PROCESSING });
   for (const dir of STAGING_DIRS) await ensureDir(roots.stagingPath, dir);
 
   const categories = await readCategories(vfs, access, user);

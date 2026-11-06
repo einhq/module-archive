@@ -349,6 +349,7 @@ Deno.test({
 
     await t.step('a folder moved out of staging whole has its unread files text-indexed', async () => {
       const staged = '/home/anna/staging/files/trip';
+      assertEquals((await client.exec('staging init --user anna --layout-only')).success, true);
       await client.exec(`mkdir -p ${staged}/day-2`);
       const write = async (path: string, mimetype: string, attrs: Record<string, unknown> = {}) => {
         await client.exec(`echo text > ${path}`);

@@ -4,7 +4,8 @@
  * staged one, a link from the home, and GPX files waiting for a device. Afterwards the files are
  * in the default category's loose batch, the folder is a category, the groups are the default
  * category's, the waiting GPX files are in `routes/`, every link still resolves, and `staging/` is
- * unlisted. A dry run changes nothing; a second run finds nothing to do; a lost mark is reported
+ * unlisted and wants no `text`. A dry run changes nothing; a second run finds nothing to do; a lost
+ * mark is reported
  * by `staging check` and put back by the layout alone; `--idle-minutes` leaves a file changed
  * within them where it is.
  */
@@ -14,7 +15,8 @@ import { type AutoAlbumMeta, isUserEdited, memberKeyOf } from '@archive/staging/
 import type { RelationAttrs } from '@ein/api';
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
-import { UNLISTED_ATTR } from '@ein/client';
+import { PROCESSING_ATTR, UNLISTED_ATTR } from '@ein/client';
+import { STAGING_PROCESSING } from '@archive/staging/paths';
 import { readMembers } from './decisions-fixture.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -144,6 +146,8 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
         assertEquals([props.uid, props.gid, props.mode & 0o7777], [home.props.uid, home.props.gid, 0o700], path);
       }
       assertEquals((await vfs.get(ADMIN_ACCESS, STAGING)).attrs[UNLISTED_ATTR], true);
+      assertEquals((await vfs.get(ADMIN_ACCESS, STAGING)).attrs[PROCESSING_ATTR], STAGING_PROCESSING);
+      assert(!STAGING_PROCESSING.includes('text'), 'a staged file waits to be filed for its text to be read');
       const inbox = await vfs.get<{ stagingCategory?: unknown }>(ADMIN_ACCESS, `${FILES}/inbox`);
       assertEquals(inbox.attrs.stagingCategory, {
         kind: 'inbox',
@@ -191,6 +195,16 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
       const answer = await client.execJson<StagingInitAnswer>('staging init --user anna --layout-only');
       assertEquals(answer.users[0].repaired, [STAGING]);
       assertEquals((await vfs.get(ADMIN_ACCESS, STAGING)).attrs[UNLISTED_ATTR], true);
+      assertEquals((await client.execJson<StagingCheckAnswer>('staging check --user anna')).problems, []);
+    });
+
+    await t.step('another processing is reported, and the layout alone puts staging’s back', async () => {
+      await vfs.update(ADMIN_ACCESS, STAGING, { attrs: { [PROCESSING_ATTR]: [...STAGING_PROCESSING, 'text'] } });
+      const check = await client.execJson<StagingCheckAnswer>('staging check --user anna');
+      assertEquals(check.problems.map((problem) => [problem.code, problem.path]), [['processing', STAGING]]);
+      const answer = await client.execJson<StagingInitAnswer>('staging init --user anna --layout-only');
+      assertEquals(answer.users[0].repaired, [STAGING]);
+      assertEquals((await vfs.get(ADMIN_ACCESS, STAGING)).attrs[PROCESSING_ATTR], STAGING_PROCESSING);
       assertEquals((await client.execJson<StagingCheckAnswer>('staging check --user anna')).problems, []);
     });
 

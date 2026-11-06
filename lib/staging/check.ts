@@ -3,7 +3,8 @@
  * rule it breaks (`StagingCheckProblem`); `staging init` repairs the layout ones.
  *
  * - `staging/`, each of `STAGING_DIRS`, and each category's two directories are directories owned
- *   as the home is, mode 0700; `staging/` is unlisted.
+ *   as the home is, mode 0700; `staging/` is unlisted and wants every family of processing but
+ *   text (`STAGING_PROCESSING`).
  * - `files/` and `albums/` hold directories only, and every directory of groups has its category.
  * - The default category exists, of the `inbox` kind.
  * - Every link in a group points at a file in the group's own category, and at something there.
@@ -11,9 +12,9 @@
  */
 import type { StagingCheckAnswer, StagingCheckProblem } from '@archive/staging/api';
 import type { Command } from '@ein/client';
-import { UNLISTED_ATTR } from '@ein/client';
+import { PROCESSING_ATTR, UNLISTED_ATTR } from '@ein/client';
 import { CATEGORY_ATTR, readCategories } from '@archive/staging/category';
-import { categoryAlbumsPath, DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, stagingRoots } from '@archive/staging/paths';
+import { categoryAlbumsPath, DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, STAGING_PROCESSING, stagingRoots } from '@archive/staging/paths';
 import { basename, dirname } from '@std/path';
 
 type Vfs = Command['sys']['vfs'];
@@ -60,7 +61,7 @@ export const stagingCheck = async (vfs: Vfs, access: Access, user: string): Prom
   const home = await vfs.get(access, roots.homePath);
 
   /** Whether `path` is a directory as the rules want it, carrying `marks`; each way it is not is a problem. */
-  const checkDir = async (path: string, marks: { unlisted?: boolean } = {}): Promise<boolean> => {
+  const checkDir = async (path: string, marks: { unlisted?: boolean; processing?: readonly string[] } = {}): Promise<boolean> => {
     const node = await vfs.get(access, path, { follow: false }).catch(() => undefined);
     if (!node) {
       problems.push({ code: 'missing', path, detail: 'no such directory' });
@@ -73,6 +74,13 @@ export const stagingCheck = async (vfs: Vfs, access: Access, user: string): Prom
     if (marks.unlisted && node.attrs[UNLISTED_ATTR] !== true) {
       problems.push({ code: 'not-unlisted', path, detail: 'the library views list what it holds' });
     }
+    if (marks.processing && JSON.stringify(node.attrs[PROCESSING_ATTR]) !== JSON.stringify(marks.processing)) {
+      problems.push({
+        code: 'processing',
+        path,
+        detail: `wants ${node.attrs[PROCESSING_ATTR] === undefined ? 'every family' : JSON.stringify(node.attrs[PROCESSING_ATTR])}, not ${JSON.stringify(marks.processing)}`,
+      });
+    }
     const mode = node.props.mode & 0o7777;
     if (mode !== STAGING_MODE) problems.push({ code: 'mode', path, detail: `mode ${mode.toString(8).padStart(4, '0')}, not 0700` });
     if (node.props.uid !== home.props.uid || node.props.gid !== home.props.gid) {
@@ -81,7 +89,7 @@ export const stagingCheck = async (vfs: Vfs, access: Access, user: string): Prom
     return true;
   };
 
-  if (!(await checkDir(roots.stagingPath, { unlisted: true }))) return answer();
+  if (!(await checkDir(roots.stagingPath, { unlisted: true, processing: STAGING_PROCESSING }))) return answer();
   const present = new Set<string>();
   for (const dir of STAGING_DIRS) if (await checkDir(`${roots.stagingPath}/${dir}`)) present.add(dir);
 

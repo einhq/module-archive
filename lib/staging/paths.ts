@@ -31,6 +31,13 @@ export const ORGANIZER_CHECKPOINT = '.organizer';
 /** A request for an organizer run of the category, in its directory of groups: written by whoever may write there. */
 export const ORGANIZER_REQUEST = '.request';
 
+/**
+ * The `processing` attr `staging/` carries: every family of pipeline work but `text`, so a staged
+ * file's text is read once it is filed, by the move into a folder that wants it, and an import of
+ * thousands of sidecars costs no extraction.
+ */
+export const STAGING_PROCESSING = ['archive', 'renditions', 'picture-vectors', 'transcripts'];
+
 /** The directories directly under `staging/`, each made by `staging init`. */
 export const STAGING_DIRS = ['files', 'albums', 'journal', 'routes', 'genealogy'] as const;
 

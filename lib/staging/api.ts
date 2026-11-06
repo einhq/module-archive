@@ -482,7 +482,8 @@ export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingIn
 
 /**
  * One way a staging area breaks its rules: a directory `missing`, `not-directory`, or with the
- * wrong `mode` or `owner`; `staging/` `not-unlisted`, so the library's views list what it holds; a
+ * wrong `mode` or `owner`; `staging/` `not-unlisted`, so the library's views list what it holds, or
+ * with another `processing` than staging's, so a staged file's text is read before it is filed; a
  * `loose-entry` in `files/` or `albums/`, which hold categories only;
  * `no-inbox`, the default category missing or of another kind; `orphan-albums`, a directory of
  * groups with no category; `cross-category`, a group's link to a file outside its category;
@@ -490,7 +491,19 @@ export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingIn
  * `routes/`.
  */
 export type StagingCheckProblem = {
-  code: 'missing' | 'not-directory' | 'mode' | 'owner' | 'not-unlisted' | 'loose-entry' | 'no-inbox' | 'orphan-albums' | 'cross-category' | 'dangling-link' | 'waiting-route';
+  code:
+    | 'missing'
+    | 'not-directory'
+    | 'mode'
+    | 'owner'
+    | 'not-unlisted'
+    | 'processing'
+    | 'loose-entry'
+    | 'no-inbox'
+    | 'orphan-albums'
+    | 'cross-category'
+    | 'dangling-link'
+    | 'waiting-route';
   path: string;
   detail: string;
 };
