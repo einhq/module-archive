@@ -7,7 +7,7 @@
  */
 
 import type { CommentEntry, NodeOwnership } from '@ein/api';
-import type { TripLeg, TripPlace, TripStay } from '@archive/location/api';
+import type { TripLeg, TripPlace, TripStay, TripWeather } from '@archive/location/api';
 import type { PersonFace, PersonVoice } from '@archive/people/api';
 import type { StagingGroupDetail, StagingRowInfo } from '@archive/staging/api';
 import type { Storyboard } from '@media/api';
@@ -915,6 +915,8 @@ export type AlbumTrip = {
   legs: TripLeg[];
   /** The length of its track, in metres. */
   distanceM: number;
+  /** `track-weather`: the weather over all its days. */
+  weather?: TripWeather;
 };
 
 /** `trip-album`: the album the trip was made, or the one it was taken from with `--detach`. */

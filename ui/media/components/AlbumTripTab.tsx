@@ -5,7 +5,7 @@ import { canWrite, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { TripStay } from '@archive/location/api';
+import type { TripStay, TripWeather } from '@archive/location/api';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
 import type { AlbumTrip } from '@archive/media/api';
 import { EventModal } from '../../people/components/EventModal.tsx';
@@ -33,6 +33,39 @@ const formatIn = (timezone: string | undefined, options: Intl.DateTimeFormatOpti
     return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' });
   }
 };
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const oneDecimal = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
+/** The weather of a leg or trip in a line: wind, temperature and cloud cover, those it has. */
+const weatherLine = (weather: TripWeather): string | undefined => {
+  const parts: string[] = [];
+  if (weather.windSpeed !== undefined) {
+    parts.push(
+      `Wind ${oneDecimal.format(weather.windSpeed)} m/s` +
+        (weather.windMax !== undefined && weather.windMax > weather.windSpeed ? `, at most ${oneDecimal.format(weather.windMax)}` : '') +
+        (weather.windDirection !== undefined ? `, from ${COMPASS[Math.round(weather.windDirection / 45) % 8]}` : ''),
+    );
+  }
+  if (weather.temperatureMin !== undefined && weather.temperatureMax !== undefined) {
+    const [min, max] = [oneDecimal.format(weather.temperatureMin), oneDecimal.format(weather.temperatureMax)];
+    parts.push(min === max ? `${min} °C` : `${min} to ${max} °C`);
+  }
+  if (weather.cloudCover !== undefined) parts.push(`${weather.cloudCover} % cloud`);
+  return parts.length ? parts.join(' · ') : undefined;
+};
+
+/** A leg's or trip's weather, as `track-weather` gave it; nothing when it has none. */
+function WeatherText({ weather }: { weather?: TripWeather }) {
+  const line = weather && weatherLine(weather);
+  if (!line) return null;
+  return (
+    <Group gap={6} wrap='nowrap' align='flex-start'>
+      <TablerIcon name='cloud' size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+      <Text size='sm'>{line}</Text>
+    </Group>
+  );
+}
 
 const STAY_KINDS: Record<TripStay['kind'], string> = { home: 'Home', rest: 'Long stay', overnight: 'Overnight' };
 
@@ -67,8 +100,8 @@ function useTripNames(trip: AlbumTrip): { deviceName: string; units: 'nautical' 
 }
 
 /**
- * The trip an album was made (`trip-album`): its days, distance and where it went, and a card for
- * each leg with that day's notes, which are the album's events of that day. `editable` offers
+ * The trip an album was made (`trip-album`): its days, distance, where it went and its weather, and
+ * a card for each leg with that day's weather and notes, which are the album's events of that day. `editable` offers
  * adding a note to a day and changing the notes the reader may change. `onChanged` is called when
  * the album changes, as it does when its trip is written anew.
  */
@@ -133,6 +166,7 @@ export function AlbumTripTab(
             From {place(trip.from)} to {place(trip.to)}
             {destination && destination.kind !== 'home' && trip.destination.stay !== trip.to.stay && <>, farthest at {place(trip.destination)}</>}
           </Text>
+          <WeatherText weather={trip.weather} />
         </Stack>
       </Card>
 
@@ -151,6 +185,7 @@ export function AlbumTripTab(
               {clock.format(new Date(leg.start))}–{clock.format(new Date(leg.end))} · {formatDistance(leg.distanceM, units)}
             </Text>
             <Text size='sm'>From {place(leg.from)} to {place(leg.to)}</Text>
+            <WeatherText weather={leg.weather} />
             {eventsOn(leg.day).map((event) => (
               <AlbumEventNote
                 key={event.path}

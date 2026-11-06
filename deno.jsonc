@@ -28,6 +28,7 @@
     "@archive/location/place-name": "./lib/location/place-name.ts",
     "@archive/location/track": "./lib/location/track.ts",
     "@archive/location/track-profile": "./lib/location/track-profile.ts",
+    "@archive/location/trip-weather": "./lib/location/trip-weather.ts",
     "@archive/location/trips": "./lib/location/trips.ts",
     "@archive/location/types": "./types/location/mod.ts",
     "@archive/media/album-devices": "./lib/media/album-devices.ts",

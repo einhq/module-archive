@@ -11,11 +11,11 @@
  * one `WeatherLookup` each file is read once and each SMHI period fetched once, so one lookup can
  * answer many points, as the hours of a track.
  */
-import { type Command, haversineMeters } from '@ein/client';
+import { type Command, haversineMeters, readSettings } from '@ein/client';
 import type { WeatherParameter, WeatherReading, WeatherValue } from '@archive/weather/api';
 import { type OpenMeteoMonth, openMeteoMonthPath, readCache, type SmhiCatalogue, smhiCataloguePath, type SmhiYear, smhiYearPath, writeCache } from '@archive/weather/cache';
-import { cellOf, fetchOpenMeteo, OPEN_METEO_FIRST_DAY } from '@archive/weather/open-meteo';
-import { fetchSmhiSeries, fetchSmhiStations, SMHI_PARAMETERS, type SmhiPeriod, type SmhiSeries, type SmhiStation } from '@archive/weather/smhi';
+import { cellOf, fetchOpenMeteo, OPEN_METEO_ARCHIVE_URL, OPEN_METEO_FIRST_DAY } from '@archive/weather/open-meteo';
+import { fetchSmhiSeries, fetchSmhiStations, SMHI_METOBS_URL, SMHI_PARAMETERS, type SmhiPeriod, type SmhiSeries, type SmhiStation } from '@archive/weather/smhi';
 
 export const WEATHER_PARAMETERS: WeatherParameter[] = ['temperature', 'windSpeed', 'windDirection', 'cloudCover'];
 
@@ -42,6 +42,9 @@ type WeatherLookupOptions = {
   /** How far away an SMHI station may be; 0 asks Open-Meteo alone. */
   smhiRadiusM: number;
 };
+
+/** `CFG_WEATHER_SMHI_KM` when it is not set. */
+const DEFAULT_SMHI_KM = 30;
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
@@ -209,3 +212,19 @@ export class WeatherLookup {
     }
   }
 }
+
+/**
+ * A lookup as the installation's settings say: `CFG_WEATHER_SMHI_KM`, and `SMHI_METOBS_URL` and
+ * `OPEN_METEO_ARCHIVE_URL` from the environment. Undefined unless `CFG_WEATHER` is `true`, since
+ * every lookup sends the place and the date to SMHI or Open-Meteo.
+ */
+export const weatherLookupFor = async (cmd: Command): Promise<WeatherLookup | undefined> => {
+  const settings = await readSettings(cmd, cmd.access);
+  if (settings.CFG_WEATHER !== 'true') return undefined;
+  const km = parseFloat(settings.CFG_WEATHER_SMHI_KM ?? '');
+  return new WeatherLookup(cmd, {
+    smhi: cmd.env.SMHI_METOBS_URL || SMHI_METOBS_URL,
+    openMeteo: cmd.env.OPEN_METEO_ARCHIVE_URL || OPEN_METEO_ARCHIVE_URL,
+    smhiRadiusM: (Number.isFinite(km) ? km : DEFAULT_SMHI_KM) * 1000,
+  });
+};

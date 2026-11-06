@@ -6,7 +6,8 @@
  * `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more or fewer fixes before that point than it had.
- * A stay derived again from the same first fix keeps the location `track-places` gave it.
+ * A stay derived again from the same first fix keeps the location `track-places` gave it, and a
+ * leg or trip derived again with the same first and last fix the weather `track-weather` gave it.
  * Whenever `.trips` is written, the albums made of the device's trips are written anew from it
  * (`@archive/media/trip-album`).
  */
@@ -16,6 +17,7 @@ import type { DeviceTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive
 import { readDeviceHomes } from '@archive/device/homes';
 import { trackOf } from '@archive/location/track';
 import { trackProfile } from '@archive/location/track-profile';
+import { keepTripWeather } from '@archive/location/trip-weather';
 import { numberTrips, segmentTrips, type TripFix, type TripHome, type TripSegmentation, type TripSettings } from '@archive/location/trips';
 import { albumDevices } from '@archive/media/album-devices';
 import { refreshTripAlbums } from '@archive/media/trip-album';
@@ -222,7 +224,7 @@ export const deriveDeviceTrips = async (cmd: Command, target: string, opts: { fu
     lastFix: summary.lastTs,
     ...(settledUntil !== undefined ? { settledUntil: new Date(settledUntil).toISOString(), settledPoints } : {}),
     basis,
-    trips: numberTrips([...keptTrips, ...derived]),
+    trips: numberTrips([...keptTrips, ...keepTripWeather(derived, prior?.trips ?? [])]),
     stays: [...keptStays, ...seg.stays.map((stay) => withPlace(stay, placed))],
   };
   if (!opts.dryRun) await writeDeviceTrips(cmd, device, trips);

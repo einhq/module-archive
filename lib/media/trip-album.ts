@@ -54,6 +54,7 @@ export const albumTripOf = (device: string, timezone: string | undefined, trip: 
     stays: kept.map((index) => stays[index]),
     legs: trip.legs.map((leg) => ({ ...leg, from: place(leg.from), to: place(leg.to) })),
     distanceM: trip.distanceM,
+    ...(trip.weather ? { weather: trip.weather } : {}),
   };
 };
 

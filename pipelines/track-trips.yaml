@@ -1,5 +1,5 @@
 name: track-trips
-description: Derive a device's trips and stays again when its track, kind, timezone or homes change, and put the stays at named locations
+description: Derive a device's trips and stays again when its track, kind, timezone or homes change, put the stays at named locations, and give the trips their weather
 
 # Subject is the device. The fact comes from archive-bridge: points were appended to its
 # track, its kind or timezone changed, or a home was added or taken off.
@@ -15,6 +15,11 @@ steps:
     command: track-places $NODE_PATH
     description: Put each new stay at the location within 150 m, or at one named after the harbour, island, bay or town there
     dependsOn: [trips]
+  weather:
+    # Network lookups too, and only with CFG_WEATHER on; a trip whose lookup fails is asked again on the next run.
+    command: track-weather $NODE_PATH
+    description: Sample each trip's track once an hour and write the weather of each day and of the whole trip
+    dependsOn: [places]
 
 options:
   # A live tracker appends every few seconds. Waiting ten minutes from the first append of a burst

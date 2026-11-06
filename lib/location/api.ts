@@ -166,6 +166,25 @@ export type TripPlace = {
 
 type TripBounds = { north: number; south: number; east: number; west: number };
 
+/**
+ * The weather over a leg or a trip, from `track-weather`: the weather of each hour along its
+ * track (`@archive/weather/at`) at where the device was then. A value no hour had is left out.
+ */
+export type TripWeather = {
+  /** How many hours were sampled. */
+  hours: number;
+  /** The mean of the hours' mean wind speeds, and the strongest of them, m/s. */
+  windSpeed?: number;
+  windMax?: number;
+  /** Where the wind blew from, degrees clockwise from north: the mean of the hours' directions as vectors. */
+  windDirection?: number;
+  /** The coldest and the warmest hour, °C. */
+  temperatureMin?: number;
+  temperatureMax?: number;
+  /** The mean cloud cover, percent. */
+  cloudCover?: number;
+};
+
 /** One local day of a trip. */
 export type TripLeg = {
   /** The day, `YYYY-MM-DD`, in the device's timezone. */
@@ -178,6 +197,8 @@ export type TripLeg = {
   /** The length of the track that day, in metres. */
   distanceM: number;
   bounds: TripBounds;
+  /** `track-weather`: the weather that day. */
+  weather?: TripWeather;
 };
 
 /** A trip derived from a device's track, from one home or long rest to the next. */
@@ -207,6 +228,8 @@ export type Trip = {
   bounds: TripBounds;
   /** The first fixes, ISO, of the trips joined to it by a merge, each of which `trip-edit --split` parts again. */
   joined?: string[];
+  /** `track-weather`: the weather over all its days. */
+  weather?: TripWeather;
   /** Albums whose span overlaps it and whose devices include the device. */
   albums: string[];
   /** `trip-list`: the album it was made (`trip-album`). `.trips` does not keep it. */
@@ -270,6 +293,22 @@ export type TrackPlaces = {
   /** How many lookups failed; their stays are asked about again on the next run. */
   failed: number;
   /** How many requests went to Overpass and Nominatim; every other name came from their kept answers. */
+  requests: number;
+};
+
+/** `track-weather`: what it sampled, and what it left for the next run. */
+export type TrackWeather = {
+  device: string;
+  /** `CFG_WEATHER` is off: nothing was asked or written. */
+  off?: true;
+  /** The legs it gave weather, and how many hours it sampled for them. */
+  legs: number;
+  hours: number;
+  /** The legs a failed lookup left without; the next run asks again. */
+  failed: number;
+  /** Why the lookup failed. */
+  error?: string;
+  /** How many requests went to SMHI and Open-Meteo; every other hour came from their kept answers. */
   requests: number;
 };
 
