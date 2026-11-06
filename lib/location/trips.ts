@@ -11,7 +11,8 @@
  * - A cluster held for two hours or more across a local midnight is an `overnight` stay: it is
  *   kept, but the trip goes on.
  * - A trip is cut into one leg per local day, in the device's timezone. Each leg ends where the
- *   device was at the day's last fix: on the stay it spent the night at, or at that fix.
+ *   device was at the day's last fix: on the stay it spent the night at, or at that fix. A leg's
+ *   length runs from the day before's last fix, so the legs add up to the whole trip.
  * - The destination is the farthest stay from the start, or the farthest fix when the trip
  *   stayed nowhere 500 m or more from it. A trip that never gets 500 m from its start is dropped.
  * - A trip that has not ended at a stay or a gap is ongoing while its last fix is under 48 h old.
@@ -331,7 +332,17 @@ export function segmentTrips(fixes: TripFix[], settings: TripSettings): TripSegm
       // A day starts where the night before was spent, at its first fix.
       const from = d === 0 ? s.start : { ...placeOfNight(byDay.get(days[d - 1])!), ms: pts[0].ms };
       const to = d === days.length - 1 ? s.end : taggedEnd(tagged[tagged.length - 1]);
-      return { day, start: iso(pts[0].ms), end: iso(pts[pts.length - 1].ms), from: place(from), to: place(to), distanceM: lengthOf(pts), bounds: boundsOf(pts) };
+      // Its length runs from the night before's last fix, so a stretch across midnight is counted.
+      const night = d === 0 ? [] : [byDay.get(days[d - 1])!.at(-1)!.fix];
+      return {
+        day,
+        start: iso(pts[0].ms),
+        end: iso(pts[pts.length - 1].ms),
+        from: place(from),
+        to: place(to),
+        distanceM: lengthOf([...night, ...pts]),
+        bounds: boundsOf(pts),
+      };
     });
 
     const all = s.pts.map((t) => t.fix);

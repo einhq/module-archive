@@ -146,6 +146,15 @@ Deno.test('legs follow the local day of the device', () => {
   assertEquals(local.legs[0].end, new Date(fix(4, 21, 0).ms).toISOString());
 });
 
+Deno.test('the stretch across midnight counts towards the trip and the day it ends on', () => {
+  const fixes = [...rest(0, 4, 0), fix(4, 22, 2000), fix(4, 23, 6000), fix(5, 1, 9000), fix(5, 2, 12_000), ...rest(6, 4, 12_000)];
+  const trip = segmentTrips(fixes, SETTINGS).trips[0];
+  assertEquals(trip.days, ['2025-06-05', '2025-06-06']);
+  assertAlmostEquals(trip.legs[0].distanceM, 4000, 20);
+  assertAlmostEquals(trip.legs[1].distanceM, 3000, 20);
+  assertAlmostEquals(trip.distanceM, 7000, 20);
+});
+
 Deno.test('a trip is ongoing while it has not ended and its last fix is recent', () => {
   const fixes = [...rest(0, 4, 0), ...out(4, 0, 10_000)];
   const last = fixes[fixes.length - 1].ms;
