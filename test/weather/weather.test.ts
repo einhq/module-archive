@@ -4,6 +4,7 @@
  * hour, and one it did not observe, or that no station near enough measures, comes from
  * Open-Meteo's cell; an old hour is read from SMHI's archive and a recent one from its latest
  * months; what was fetched answers again without asking, other years of the same download too;
+ * `--to` answers every hour of a span;
  * abroad Open-Meteo answers alone; a time to come has no weather; a failing service fails the
  * lookup. The stations and their values are invented.
  */
@@ -140,6 +141,20 @@ Deno.test({
       assertEquals(asked, []);
       assertEquals(sources(await weather('59.31 18.02 2020-01-15T06:00:00+01:00')).slice(0, 3), [[10.5, 1001], [40.5, 1001], [30.5, 1001]]);
       assertEquals(asked, ['open-meteo 59.25,18 2020-01-01..2020-01-31']);
+    });
+
+    await t.step('--to gives every hour of a span, a line each as cat -t prints a log; more than a month is refused', async () => {
+      const span = await client.execString(`${urls} weather 59.31 18.02 2019-07-01T11:40 --to=2019-07-01T14:10`, { json: false });
+      assertEquals(span.trim().split('\n'), [
+        '2019-07-01T12:00:00.000Z\t{"temperature":11.2,"windSpeed":41.2,"windDirection":31.2,"cloudCover":40}',
+        '2019-07-01T13:00:00.000Z\t{"temperature":59.25,"windSpeed":41.3,"windDirection":31.3,"cloudCover":40}',
+        '2019-07-01T14:00:00.000Z\t{"temperature":11.4,"windSpeed":41.4,"windDirection":31.4,"cloudCover":40}',
+      ]);
+      const readings = await client.execJson<WeatherReading[]>(`${urls} weather 59.31 18.02 2019-07-01T12:00 --to=2019-07-01T13:00`);
+      assertEquals(readings.map((reading) => reading.temperature?.value), [11.2, 59.25]);
+      const long = await client.exec(`${urls} weather 59.31 18.02 2019-07-01 --to=2019-08-02`);
+      assertEquals(long.success, false);
+      assertStringIncludes(long.error ?? '', 'more than 744 hours');
     });
 
     await t.step("a recent hour is read from SMHI's latest months", async () => {

@@ -2,14 +2,18 @@
 /**
  * weather — the weather at a place and time.
  *
- *   weather <lat> <lng> <time>
- *   weather --lat=<lat> --lng=<lng> <time>
+ *   weather <lat> <lng> <time> [--to=<time>]
+ *   weather --lat=<lat> --lng=<lng> <time> [--to=<time>]
  *
  * Answers the air temperature, the wind's speed and direction and the cloud cover of the hour
  * nearest `<time>` (`@archive/weather/at`): each from the nearest SMHI station that measured it,
  * when one is within `CFG_WEATHER_SMHI_KM`, and otherwise from Open-Meteo's reanalysis. A time
  * without an offset is UTC. What the services answered is kept under `/archive/sources/weather`,
  * so an hour is asked of them once.
+ *
+ * With `--to`, every hour from `<time>` to that time, at most `MAX_HOURS` of them, up to now: a
+ * line each as `cat -t` prints a log, `<hour>\t<JSON>` with the values found (`{"temperature":
+ * 4.2, …}`), so a chart draws it as it draws a log; under JSON a `WeatherReading` an hour.
  *
  * It asks nobody when `CFG_WEATHER` is `false`, which keeps the place and the date from being sent
  * to SMHI and Open-Meteo. `SMHI_METOBS_URL` and `OPEN_METEO_ARCHIVE_URL` say where they are.
@@ -22,7 +26,10 @@ import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnk
 import type { WeatherReading, WeatherValue } from '@archive/weather/api';
 import { WEATHER_PARAMETERS, weatherLookupFor } from '@archive/weather/at';
 
-const USAGE = 'weather: usage: weather <lat> <lng> <time>, or weather --lat=<lat> --lng=<lng> <time>\n';
+const USAGE = 'weather: usage: weather <lat> <lng> <time> [--to=<time>], or weather --lat=<lat> --lng=<lng> <time> [--to=<time>]\n';
+const HOUR_MS = 3_600_000;
+/** The hours `--to` may span: a month, as one lookup reads a month of a cell at a time. */
+const MAX_HOURS = 31 * 24;
 
 /** A time as `Date` reads it, a date and time without an offset taken as UTC; NaN when it is none. */
 const parseTime = (text: string): number => Date.parse(/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text) ? `${text.replace(' ', 'T')}Z` : text);
@@ -40,7 +47,7 @@ const sourceText = ({ source, at }: WeatherValue): string =>
 
 const weather = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { string: ['lat', 'lng'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { string: ['lat', 'lng', 'to'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const positionals = flags._.map(String);
   const flagForm = flags.lat !== undefined || flags.lng !== undefined;
@@ -48,8 +55,15 @@ const weather = async (cmd: Command): CmdReturn => {
   const lat = Number(latArg);
   const lng = Number(lngArg);
   const time = parseTime(timeArg ?? '');
-  if (!latArg || !lngArg || positionals.length !== (flagForm ? 1 : 3) || !(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180) || Number.isNaN(time)) {
+  const until = flags.to === undefined ? undefined : parseTime(String(flags.to));
+  if (!latArg || !lngArg || positionals.length !== (flagForm ? 1 : 3) || !(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180) || Number.isNaN(time) || Number.isNaN(until)) {
     await cmd.writeError(USAGE);
+    return 1;
+  }
+  const first = Math.round(time / HOUR_MS) * HOUR_MS;
+  const last = until === undefined ? undefined : Math.min(Math.round(until / HOUR_MS), Math.floor(Date.now() / HOUR_MS)) * HOUR_MS;
+  if (last !== undefined && (last - first) / HOUR_MS >= MAX_HOURS) {
+    await cmd.writeError(`weather: --to spans more than ${MAX_HOURS} hours\n`);
     return 1;
   }
 
@@ -57,6 +71,25 @@ const weather = async (cmd: Command): CmdReturn => {
   if (!lookup) {
     await cmd.writeError('weather: weather lookups are turned off: set CFG_WEATHER to true to let EiN send places and dates to SMHI and Open-Meteo\n');
     return 1;
+  }
+
+  if (last !== undefined) {
+    const readings: WeatherReading[] = [];
+    try {
+      for (let hour = first; hour <= last; hour += HOUR_MS) readings.push(await lookup.at(lat, lng, hour));
+    } catch (error) {
+      await cmd.writeError(`weather: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+    if (cmd.json) {
+      await cmd.writeJSON(readings satisfies WeatherReading[]);
+      return 0;
+    }
+    for (const reading of readings) {
+      const values = Object.fromEntries(WEATHER_PARAMETERS.filter((parameter) => reading[parameter]).map((parameter) => [parameter, reading[parameter]!.value]));
+      if (Object.keys(values).length) await cmd.writeLn(`${reading.time}\t${JSON.stringify(values)}`);
+    }
+    return 0;
   }
 
   let reading: WeatherReading;
@@ -84,7 +117,7 @@ const weather = async (cmd: Command): CmdReturn => {
 weather.spec = {
   name: 'weather',
   effect: 'read' as const,
-  description: 'The weather at a place and time: temperature, wind and cloud cover from the nearest SMHI station, or from Open-Meteo',
+  description: 'The weather at a place and time, or every hour of a span with --to: temperature, wind and cloud cover from the nearest SMHI station, or from Open-Meteo',
   args: [
     { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
     { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
@@ -93,9 +126,15 @@ weather.spec = {
   flags: [
     { name: 'lat', type: 'string' as const, description: 'latitude, as --lat=<n>, the form a negative one needs' },
     { name: 'lng', type: 'string' as const, description: 'longitude, as --lng=<n>, the form a negative one needs' },
+    {
+      name: 'to',
+      type: 'string' as const,
+      description: `every hour from <time> to this one, at most ${MAX_HOURS}: a line each, <hour> TAB {"temperature":…}, as cat -t prints a log`,
+    },
   ],
-  examples: ['weather 59.33 18.07 2024-07-14T15:00', 'weather --lat=48.85 --lng=-3.01 2023-08-02T09:30+02:00'],
-  returns: 'WeatherReading: each parameter with its value, the hour it holds for and where it came from; one neither source has is left out.',
+  examples: ['weather 59.33 18.07 2024-07-14T15:00', 'weather 57.71 11.97 2024-07-08T00:00 --to=2024-07-14T23:00', 'weather --lat=48.85 --lng=-3.01 2023-08-02T09:30+02:00'],
+  returns:
+    'WeatherReading: each parameter with its value, the hour it holds for and where it came from; one neither source has is left out. With --to, a WeatherReading an hour.',
 };
 
 export default weather;
