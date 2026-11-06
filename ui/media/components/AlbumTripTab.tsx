@@ -42,16 +42,16 @@ const weatherLine = (weather: TripWeather): string | undefined => {
   const parts: string[] = [];
   if (weather.windSpeed !== undefined) {
     parts.push(
-      `Wind ${oneDecimal.format(weather.windSpeed)} m/s` +
+      `Wind ${oneDecimal.format(weather.windSpeed)}\u00a0m/s` +
         (weather.windMax !== undefined && weather.windMax > weather.windSpeed ? `, at most ${oneDecimal.format(weather.windMax)}` : '') +
         (weather.windDirection !== undefined ? `, from ${COMPASS[Math.round(weather.windDirection / 45) % 8]}` : ''),
     );
   }
   if (weather.temperatureMin !== undefined && weather.temperatureMax !== undefined) {
     const [min, max] = [oneDecimal.format(weather.temperatureMin), oneDecimal.format(weather.temperatureMax)];
-    parts.push(min === max ? `${min} °C` : `${min} to ${max} °C`);
+    parts.push(min === max ? `${min}\u00a0°C` : `${min} to ${max}\u00a0°C`);
   }
-  if (weather.cloudCover !== undefined) parts.push(`${weather.cloudCover} % cloud`);
+  if (weather.cloudCover !== undefined) parts.push(`${weather.cloudCover}\u00a0% cloud`);
   return parts.length ? parts.join(' · ') : undefined;
 };
 

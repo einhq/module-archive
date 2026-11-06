@@ -38,7 +38,7 @@ const mean = (values: number[]): number => values.reduce((sum, value) => sum + v
 /**
  * The weather over the hours read: mean wind speed and the strongest hour's, where the wind blew
  * from as the mean of the directions taken as vectors (so 350° and 10° make north), the coldest and
- * the warmest hour, and the mean cloud cover.
+ * the warmest hour, and the mean cloud cover; speeds and temperatures to a tenth.
  */
 export const summarizeWeather = (readings: WeatherReading[]): TripWeather => {
   const values = (parameter: 'temperature' | 'windSpeed' | 'windDirection' | 'cloudCover') =>
@@ -48,14 +48,14 @@ export const summarizeWeather = (readings: WeatherReading[]): TripWeather => {
   const temperatures = values('temperature');
   const clouds = values('cloudCover');
   const summary: TripWeather = { hours: readings.length };
-  if (speeds.length) Object.assign(summary, { windSpeed: round(mean(speeds), 1), windMax: Math.max(...speeds) });
+  if (speeds.length) Object.assign(summary, { windSpeed: round(mean(speeds), 1), windMax: round(Math.max(...speeds), 1) });
   if (directions.length) {
     const radians = directions.map((degrees) => (degrees * Math.PI) / 180);
     const x = mean(radians.map(Math.sin));
     const y = mean(radians.map(Math.cos));
     if (x !== 0 || y !== 0) summary.windDirection = Math.round(((Math.atan2(x, y) * 180) / Math.PI + 360) % 360) % 360;
   }
-  if (temperatures.length) Object.assign(summary, { temperatureMin: Math.min(...temperatures), temperatureMax: Math.max(...temperatures) });
+  if (temperatures.length) Object.assign(summary, { temperatureMin: round(Math.min(...temperatures), 1), temperatureMax: round(Math.max(...temperatures), 1) });
   if (clouds.length) summary.cloudCover = Math.round(mean(clouds));
   return summary;
 };

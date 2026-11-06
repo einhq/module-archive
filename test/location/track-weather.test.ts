@@ -32,7 +32,7 @@ Deno.test('summarizeWeather: means, extremes, and the wind direction as the mean
     const value = (v: number) => ({ value: v, at: '', source: { kind: 'open-meteo' as const, lat: 0, lng: 0 } });
     return { lat: 0, lng: 0, time: '', temperature: value(temperature), windSpeed: value(windSpeed), windDirection: value(windDirection) };
   };
-  assertEquals(summarizeWeather([reading(12, 3, 350), reading(15.5, 6, 20), { lat: 0, lng: 0, time: '' }]), {
+  assertEquals(summarizeWeather([reading(12, 3, 350), reading(15.54, 6.04, 20), { lat: 0, lng: 0, time: '' }]), {
     hours: 3,
     windSpeed: 4.5,
     windMax: 6,
