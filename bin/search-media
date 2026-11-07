@@ -66,8 +66,8 @@ const CONTENT_CANDIDATE_CAP = 500;
  * A photo has one picture vector and a video one per keyframe, so the vectors collapse to fewer
  * files; but most are photos, and the archive's 2000 nearest are some 1900 files. The lookup asks
  * for `PICTURE_ROWS_PER_FILE` vectors per file wanted and asks again for twice as many only when
- * they come to fewer files: each vector asked for is a page or more read from the index, which is
- * most of a new query's time (ein/core#1077).
+ * they come to fewer files: each vector asked for is read from its table for its distance, a disk
+ * read when it is not cached, which is most of a new query's time (ein/core#1077).
  */
 const PICTURE_ROWS_PER_FILE = 1.1;
 const PICTURE_CANDIDATE_CAP = 2000;
