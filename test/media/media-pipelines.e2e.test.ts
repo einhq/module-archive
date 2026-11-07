@@ -26,8 +26,8 @@ import { inventScene, moveShape, scenePng } from './invented-images.ts';
  * Pipelines whose failure means the indexing chain itself is broken.
  *
  * Ingest and derivatives run in this image; fingerprints come from EMS, so that pipeline is
- * required only when a service is configured (`make container-test` passes CFG_EMS_URL and puts
- * the file root under /files-tmp, which EMS mounts at the same path). Without one the step
+ * required only when a service is configured (`make container-test` passes CFG_EMS_URL and
+ * CFG_EMS_FILES_ADDRESS, where EMS reaches the booted system's `ems-files`). Without one the step
  * fails as unreachable, which is the expected answer, not a broken chain.
  */
 const REQUIRED_PIPELINES = ['media-ingest', 'media-stills', ...(Deno.env.get('CFG_EMS_URL') ? ['media-fingerprint'] : [])];
@@ -35,7 +35,7 @@ const TERMINAL = ['completed', 'failed', 'skipped', 'cancelled'];
 
 containerTest('media pipeline fan-out E2E', async (t) => {
   const fixtures = await stageMediaFixtures();
-  // Files must live on disk under the shared scratch, which EMS mounts at the same path.
+  // Files live on disk under the scratch beside the image; EMS reaches them through ems-files.
   const fileRoot = await Deno.makeTempDir({ prefix: 'ein-e2e-files-', dir: Deno.env.get('EIN_TEST_FILE_ROOT') || undefined });
   const harness = new SystemTestHarness({ ssh: false, boot: true, fileRoot, modules: ['archive'] });
   const { baseUrl } = await harness.start();
@@ -534,11 +534,15 @@ containerTest('media pipeline fan-out E2E', async (t) => {
      * rendition only once it has bytes.
      */
     await t.step('a rendition that was not created is not reported as created', async () => {
-      const cmd = emsCommand();
+      const { cmd, stop } = await emsCommand();
       const output = `${fixtures.dir}/seek-past-end.avif`;
-      const result = await poster(cmd, fixtures.mp4, { at: 5, targets: [{ output, box: { width: 512, height: 512 }, fit: 'contain' }] });
-      assertEquals(result.targets.length, 1);
-      assertEquals((await Deno.stat(output)).size > 0, true, `a seek past the end left ${output} without a frame`);
+      try {
+        const result = await poster(cmd, fixtures.mp4, { at: 5, targets: [{ output, box: { width: 512, height: 512 }, fit: 'contain' }] });
+        assertEquals(result.targets.length, 1);
+        assertEquals((await Deno.stat(output)).size > 0, true, `a seek past the end left ${output} without a frame`);
+      } finally {
+        await stop();
+      }
 
       // And the invariant a backfill's log rests on: every path counted as created has bytes.
       const report = await client.execJson<{ created: string[]; failed: number }>(`generate-derivatives ${ALBUMS_ROOT}/e2e/clip.mp4 -f --only still`, { timeout: 120_000 });

@@ -8,6 +8,7 @@
  */
 
 import type { Command } from '@ein/client';
+import { serveEmsFiles } from '@ems/testing';
 import { dirname, fromFileUrl, join } from '@std/path';
 
 const FIXTURES_DIR = join(dirname(fromFileUrl(import.meta.url)), 'fixtures');
@@ -130,9 +131,8 @@ const FILES: Record<Exclude<keyof MediaFixtures, 'dir'>, string> = {
 /**
  * Copy the committed fixtures into a fresh directory.
  *
- * Under `EIN_TEST_FILE_ROOT` when set — `make container-test` points that at `/files-tmp`,
- * the scratch EMS mounts at the same path, which is what lets a test hand EMS a fixture's own
- * path as well as upload it.
+ * Under `EIN_TEST_FILE_ROOT` when set — `make container-test` points that at `/files-tmp`, the
+ * scratch it keeps beside the image.
  */
 export async function stageMediaFixtures(): Promise<MediaFixtures> {
   const dir = await Deno.makeTempDir({ prefix: 'ein-media-fixtures-', dir: Deno.env.get('EIN_TEST_FILE_ROOT') || undefined });
@@ -145,18 +145,23 @@ export async function stageMediaFixtures(): Promise<MediaFixtures> {
 }
 
 /**
- * Just enough `Command` for `@ems/client` to reach the EMS `make container-test` points at,
- * with host paths: `withHostPath` passes a path that is no node through unchanged, which is
- * what a staged fixture is. For measuring what EMS makes of a file, not for running commands.
+ * Just enough `Command` for `@ems/client` to reach the EMS `make container-test` points at, with
+ * files on disk: a path that is no node is sent as a file of this host's, which is what a staged
+ * fixture is, and an `ems-files` endpoint of the test's own serves them where
+ * `CFG_EMS_FILES_ADDRESS` says EMS reaches it. For measuring what EMS makes of a file, not for
+ * running commands; `stop` ends the endpoint.
  *
  * Its only node is `/etc/environment`, naming that EMS as the system's own, so the client sends
  * it the key the process was given, as a deployment's does.
  */
-export const emsCommand = (): Command => {
+export const emsCommand = async (): Promise<{ cmd: Command; stop: () => Promise<void> }> => {
   const url = Deno.env.get('CFG_EMS_URL') ?? '';
+  const address = Deno.env.get('CFG_EMS_FILES_ADDRESS') ?? '';
+  const port = Number(Deno.env.get('CFG_EMS_FILES_PORT') || address.slice(address.lastIndexOf(':') + 1) || 2224);
+  const files = address ? await serveEmsFiles(url, address, port) : { stop: () => Promise.resolve() };
   const environment = new TextEncoder().encode(`export CFG_EMS_URL='${url}'\n`);
   const noNode = () => Promise.reject(new Error('not a node'));
-  return ({
+  const cmd = ({
     access: {},
     env: { CFG_EMS_URL: url, CFG_EMS_CONNECT_RETRY: '0' },
     sys: {
@@ -169,4 +174,5 @@ export const emsCommand = (): Command => {
     },
     execute: () => Promise.reject(new Error('emsCommand runs no commands')),
   }) as unknown as Command;
+  return { cmd, stop: files.stop };
 };

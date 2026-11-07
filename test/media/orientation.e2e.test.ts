@@ -26,7 +26,7 @@ import { ANAMORPHIC, emsCommand, ROTATED, stageMediaFixtures } from './media-fix
 
 containerTest('orientation E2E', async (t) => {
   const fixtures = await stageMediaFixtures();
-  const cmd = emsCommand();
+  const { cmd, stop } = await emsCommand();
 
   try {
     await t.step("a video's pixel shape: what each container tells exiftool, and what it does not", async () => {
@@ -104,6 +104,7 @@ containerTest('orientation E2E', async (t) => {
       assertEquals([bounded.targets[0].width, bounded.targets[0].height], [MAX_CROP_DIMENSION / 2, MAX_CROP_DIMENSION]);
     });
   } finally {
+    await stop();
     await Deno.remove(fixtures.dir, { recursive: true });
   }
 });
