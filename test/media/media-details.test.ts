@@ -48,7 +48,7 @@ type Details = {
   people: { id: string; name: string; born?: string; age?: number; ageMonths?: number; ageApprox?: boolean; source: string; faceBox?: Box }[];
   faces: { faceId: string; facePath: string; faceBox: Box; hasFace: boolean; personId?: string; personPath?: string; personName?: string; unnamed?: boolean }[];
   unknownFaces: { faceId: string; facePath: string; personId: string; personPath: string; personName: string; faceBox?: Box }[];
-  comments: { body: string; author: string }[];
+  comments: { body: string; author: string; personPath?: string; personName?: string }[];
   hashes: { sha256?: string; sha1?: string; md5?: string };
   fingerprints: { name: string; computedAt?: string; computedBy?: string }[];
   storyboard?: { name: string; sha256: string; interval: number; count: number; columns: number; tileWidth: number; tileHeight: number };
@@ -257,6 +257,18 @@ Deno.test({
       assertEquals(details.comments.length, 1);
       assertEquals(details.comments[0].body, 'lovely light');
       assertEquals(details.comments[0].author, 'admin');
+      assertEquals(details.comments[0].personName, undefined);
+    });
+
+    await t.step("a comment is named by the full name of the person its author's account is linked to", async () => {
+      await cmd.shouldSucceed(`attrs ${PEOPLE_ROOT}/anna -s 'fullname=Anna Maria Andersson'`);
+      await cmd.shouldSucceed(`ln -s ${PEOPLE_ROOT}/anna /etc/users/admin/person`);
+      try {
+        const details = await client.execJson<Details>(`media-details ${FILE}`);
+        assertEquals(details.comments.map((c) => [c.author, c.personPath, c.personName]), [['admin', `${PEOPLE_ROOT}/anna`, 'Anna Maria Andersson']]);
+      } finally {
+        await cmd.shouldSucceed('rm /etc/users/admin/person');
+      }
     });
 
     await t.step('the extracted text travels separately from the description', async () => {

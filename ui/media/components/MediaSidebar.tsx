@@ -25,7 +25,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
-import type { CommentEntry, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
+import type { MediaComment, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
@@ -47,6 +47,8 @@ import { UserText } from '../../components/UserText.tsx';
 export const SIDEBAR_WIDTH = 400;
 
 const SECTION_ICON_SIZE = 32;
+/** The comment author's picture beside their name, in px. */
+const COMMENT_AVATAR = 20;
 
 function formatTimestamp(ts?: number): string {
   if (!ts) return '';
@@ -287,18 +289,23 @@ function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAct
   );
 }
 
+/** A comment, under its author: the linked person's full name and picture, or the account's username. */
 function CommentRow({ comment, canDelete, onDelete }: {
-  comment: CommentEntry;
+  comment: MediaComment;
   canDelete: boolean;
   onDelete: () => void;
 }) {
+  const author = comment.personName ?? comment.author;
   return (
     <Box>
       <Group justify='space-between' gap='xs' wrap='nowrap'>
-        <Text size='xs' c='dimmed'>
-          {comment.author}
-          {comment.createdAt ? ` · ${formatTimestamp(comment.createdAt)}` : ''}
-        </Text>
+        <Group gap={6} wrap='nowrap' miw={0}>
+          {comment.personPath && comment.personName && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
+          <Text size='xs' c='dimmed' truncate>
+            {author}
+            {comment.createdAt ? ` · ${formatTimestamp(comment.createdAt)}` : ''}
+          </Text>
+        </Group>
         {canDelete && (
           <ActionIcon variant='subtle' color='gray' size='sm' onClick={onDelete} aria-label='Delete comment'>
             <TablerIcon name='trash' size={14} />
