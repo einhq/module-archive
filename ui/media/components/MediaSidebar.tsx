@@ -301,7 +301,7 @@ function CommentRow({ comment, canDelete, onDelete }: {
       <Group justify='space-between' gap='xs' wrap='nowrap'>
         <Group gap={6} wrap='nowrap' miw={0}>
           {comment.personPath && comment.personName && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
-          <Text size='xs' c='dimmed' truncate>
+          <Text size='xs' c='dimmed' miw={0}>
             {author}
             {comment.createdAt ? ` · ${formatTimestamp(comment.createdAt)}` : ''}
           </Text>
