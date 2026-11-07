@@ -62,7 +62,14 @@ const CONTENT_CANDIDATE_CAP = 500;
  * The `picture` channel: the query through SigLIP2's text tower against every picture vector
  * (`embed-picture`), for what is *in* a picture, above the picture space's own floor
  * (`PICTURE_FLOOR`).
+ *
+ * A photo has one picture vector and a video one per keyframe, so the vectors collapse to fewer
+ * files; but most are photos, and the archive's 2000 nearest are some 1900 files. The lookup asks
+ * for `PICTURE_ROWS_PER_FILE` vectors per file wanted and asks again for twice as many only when
+ * they come to fewer files: each vector asked for is a page or more read from the index, which is
+ * most of a new query's time (ein/core#1077).
  */
+const PICTURE_ROWS_PER_FILE = 1.1;
 const PICTURE_CANDIDATE_CAP = 2000;
 
 /**
@@ -370,6 +377,28 @@ const similarListed = async (
 };
 
 /**
+ * The picture vectors nearest a question, enough of them for `files` files where there are that
+ * many: `PICTURE_ROWS_PER_FILE` per file, then twice as many while a video's keyframes leave them
+ * fewer, up to `PICTURE_CANDIDATE_CAP`.
+ */
+const nearestPictures = async (
+  cmd: Command,
+  notWithin: string[],
+  type: string,
+  vector: Uint8Array,
+  files: number,
+  within: string[] | undefined,
+): Promise<Ranked> => {
+  let asked = Math.min(Math.ceil(files * PICTURE_ROWS_PER_FILE), PICTURE_CANDIDATE_CAP);
+  for (;;) {
+    const ranked = await similarListed(cmd, notWithin, type, vector, asked, PICTURE_FLOOR, within);
+    const found = new Set([...ranked.paths.values()].flat().map(fileOfPictureVector).filter((file) => file !== undefined));
+    if (found.size >= files || !ranked.full || asked >= PICTURE_CANDIDATE_CAP) return ranked;
+    asked = Math.min(asked * 2, PICTURE_CANDIDATE_CAP);
+  }
+};
+
+/**
  * Pictures that look like a label (`--like /archive/tags/<label>`): the label's direction against
  * every picture, from its own floor up, without what already carries the label or was rejected
  * for it.
@@ -571,7 +600,7 @@ const searchMedia = async (cmd: Command): CmdReturn => {
         return none;
       }
       try {
-        const similar = await similarListed(cmd, notWithin, type, vectorBytes, pictureCandidates, PICTURE_FLOOR, within?.pictures);
+        const similar = await nearestPictures(cmd, notWithin, type, vectorBytes, limit, within?.pictures);
         await trace(`${similar.matches.length} picture matches ranked`);
         return similar;
       } catch (error) {
