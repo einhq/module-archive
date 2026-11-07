@@ -131,8 +131,8 @@ const FILES: Record<Exclude<keyof MediaFixtures, 'dir'>, string> = {
 /**
  * Copy the committed fixtures into a fresh directory.
  *
- * Under `EIN_TEST_FILE_ROOT` when set — `make container-test` points that at `/files-tmp`, the
- * scratch it keeps beside the image.
+ * Under `EIN_TEST_FILE_ROOT` when set — `make container-test` points that at `/files-test`, the
+ * scratch it mounts beside the image.
  */
 export async function stageMediaFixtures(): Promise<MediaFixtures> {
   const dir = await Deno.makeTempDir({ prefix: 'ein-media-fixtures-', dir: Deno.env.get('EIN_TEST_FILE_ROOT') || undefined });
