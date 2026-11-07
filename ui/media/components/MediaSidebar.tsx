@@ -25,7 +25,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 're
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
-import type { MediaComment, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
+import type { CommentEntry, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
@@ -50,16 +50,11 @@ const SECTION_ICON_SIZE = 32;
 /** The comment author's picture beside their name, in px. */
 const COMMENT_AVATAR = 20;
 
+/** In the viewer's locale on a 24-hour clock, as the lightbox's other times are. */
+const TIMESTAMP = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', hour12: false });
+
 function formatTimestamp(ts?: number): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return ts ? TIMESTAMP.format(ts) : '';
 }
 
 /** Shutter speed reads as a fraction below a second, which is how every camera writes it. */
@@ -289,18 +284,18 @@ function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAct
   );
 }
 
-/** A comment, under its author: the linked person's full name and picture, or the account's username. */
+/** A comment, under its author: the account's full name, or its username, beside the linked person's picture. */
 function CommentRow({ comment, canDelete, onDelete }: {
-  comment: MediaComment;
+  comment: CommentEntry;
   canDelete: boolean;
   onDelete: () => void;
 }) {
-  const author = comment.personName ?? comment.author;
+  const author = comment.authorName ?? comment.author;
   return (
     <Stack gap={6}>
       <Group justify='space-between' gap='xs' wrap='nowrap'>
         <Group gap='xs' wrap='nowrap' miw={0}>
-          {comment.personPath && comment.personName && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
+          {comment.personPath && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
           <Text size='xs' c='dimmed' miw={0}>
             {author}
             {comment.createdAt ? ` · ${formatTimestamp(comment.createdAt)}` : ''}

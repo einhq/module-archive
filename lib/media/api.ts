@@ -158,9 +158,6 @@ export type MediaFace = {
 /** Why a face in the lightbox is in question: who asked, or who it looks like instead. */
 export type MediaFaceDoubt = { markedBy: string } | { likeName: string };
 
-/** A comment, and when its author's account is linked to a person the reader may open, that person's full name. */
-export type MediaComment = CommentEntry & { personName?: string };
-
 export type MediaDetails = {
   path: string;
   name: string;
@@ -233,7 +230,7 @@ export type MediaDetails = {
   speakers: MediaSpeaker[];
   /** Turns spoken by somebody no voice could be told for: a brief voice unlike any heard at length. */
   unattributedTurns: [number, number][];
-  comments: MediaComment[];
+  comments: CommentEntry[];
   fingerprints: FingerprintRef[];
   albumStack?: MediaStackDetails;
 };

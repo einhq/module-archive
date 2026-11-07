@@ -30,7 +30,6 @@ import type {
   DeviceRef,
   FingerprintRef,
   LocationRef,
-  MediaComment,
   MediaDetails,
   MediaExif,
   MediaFace,
@@ -47,7 +46,6 @@ import type {
 } from '@archive/media/api';
 import { COVER_LINK_NAME } from '@ein/paths';
 import type { WeatherReading } from '@archive/weather/api';
-import type { PersonAttrs } from '@archive/people/person';
 
 type Vfs = Command['sys']['vfs'];
 type Access = Command['access'];
@@ -517,25 +515,6 @@ const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise
   }
 };
 
-/**
- * The comments on `path`, each written by an account linked to a person named by that person's
- * full name. A person the reader may not open is left out, and the account's username stands in.
- */
-const readMediaComments = async (cmd: Command, path: string): Promise<MediaComment[]> => {
-  const comments = await readComments(cmd, path);
-  const paths = [...new Set(comments.flatMap((comment) => comment.personPath ? [comment.personPath] : []))];
-  const names = new Map(
-    await Promise.all(paths.map(async (personPath) => {
-      const person = await cmd.sys.vfs.get<Partial<PersonAttrs>>(cmd.access, personPath).catch(() => undefined);
-      return [personPath, person?.attrs.fullname || person?.attrs.name || undefined] as const;
-    })),
-  );
-  return comments.map(({ personPath, ...comment }) => {
-    const personName = personPath ? names.get(personPath) : undefined;
-    return personPath && personName ? { ...comment, personPath, personName } : comment;
-  });
-};
-
 const toPersonTag = async (
   vfs: Vfs,
   access: Access,
@@ -832,7 +811,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     node.attrs.devicePath ? readDevice(vfs, access, node.attrs.devicePath) : Promise.resolve(null),
     readAlbums(vfs, access, path, node.id),
     readPeople(vfs, access, path, takenAt),
-    readMediaComments(cmd, path),
+    readComments(cmd, path),
     childNames.has('metadata') ? readText(vfs, access, `${path}/metadata/content`) : Promise.resolve(null),
     childNames.has('metadata') ? readTextLanguage(vfs, access, `${path}/metadata/content`) : Promise.resolve(null),
     childNames.has('metadata') ? readTranscript(vfs, access, `${path}/metadata/transcript`) : Promise.resolve(null),
@@ -935,7 +914,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
       await cmd.writeLn(`unidentified: ${details.unknownFaces.length} face${details.unknownFaces.length === 1 ? '' : 's'}`);
     }
     for (const c of details.comments) {
-      await cmd.writeLn(`comment ${c.personName ?? c.author}: ${c.body}`);
+      await cmd.writeLn(`comment ${c.authorName ?? c.author}: ${c.body}`);
     }
     for (const [name, value] of Object.entries(details.hashes)) {
       await cmd.writeLn(`${name}: ${value}`);
