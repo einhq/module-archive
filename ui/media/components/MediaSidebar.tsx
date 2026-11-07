@@ -297,9 +297,9 @@ function CommentRow({ comment, canDelete, onDelete }: {
 }) {
   const author = comment.personName ?? comment.author;
   return (
-    <Box>
+    <Stack gap={6}>
       <Group justify='space-between' gap='xs' wrap='nowrap'>
-        <Group gap={6} wrap='nowrap' miw={0}>
+        <Group gap='xs' wrap='nowrap' miw={0}>
           {comment.personPath && comment.personName && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
           <Text size='xs' c='dimmed' miw={0}>
             {author}
@@ -312,8 +312,8 @@ function CommentRow({ comment, canDelete, onDelete }: {
           </ActionIcon>
         )}
       </Group>
-      <Text size='sm' style={{ whiteSpace: 'pre-wrap' }}>{comment.body}</Text>
-    </Box>
+      <Text size='sm' lh={1.5} style={{ whiteSpace: 'pre-wrap' }}>{comment.body}</Text>
+    </Stack>
   );
 }
 
@@ -855,14 +855,18 @@ export function MediaSidebar(
         }
         {(comments.length > 0 || canEdit) && (
           <IconRow icon={<TablerIcon name='messages' size={SECTION_ICON_SIZE} />}>
-            {comments.map((comment) => (
-              <CommentRow
-                key={comment.slug}
-                comment={comment}
-                canDelete={access?.uid === comment.uid}
-                onDelete={() => removeComment(comment.slug)}
-              />
-            ))}
+            {comments.length > 0 && (
+              <Stack gap='lg' mb='xs'>
+                {comments.map((comment) => (
+                  <CommentRow
+                    key={comment.slug}
+                    comment={comment}
+                    canDelete={access?.uid === comment.uid}
+                    onDelete={() => removeComment(comment.slug)}
+                  />
+                ))}
+              </Stack>
+            )}
             {canEdit && (
               <>
                 <Textarea
