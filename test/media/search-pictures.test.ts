@@ -9,7 +9,7 @@
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
+import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
@@ -26,7 +26,6 @@ Deno.test({
 }, async (t) => {
   const { vfs } = await testCtx.setup();
   const client = await testCtx.server.createShellClient();
-  const cmd = testCommands(client);
 
   const files = `${ALBUMS_ROOT}/sea/files`;
   const path = (name: string) => `${files}/${name}`;
