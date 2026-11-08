@@ -64,6 +64,9 @@ export type DeviceRef = NodeRef & { make?: string; model?: string; owners: Owner
 /** A perceptual fingerprint child — provenance only, never the vector. */
 export type FingerprintRef = { name: string; computedAt?: string; computedBy?: string };
 
+/** Another form of the same picture kept under `<file>/versions/`: a camera RAW beside its JPEG, say. */
+export type MediaVersion = { name: string; path: string; mimetype?: string; size?: number };
+
 /**
  * The content hashes the node happens to carry. `file-sync` writes `sha256`;
  * the legacy import brought `md5`/`sha1` and never wrote one.
@@ -232,6 +235,8 @@ export type MediaDetails = {
   unattributedTurns: [number, number][];
   comments: CommentEntry[];
   fingerprints: FingerprintRef[];
+  /** The file's versions, by name; empty for one with none. */
+  versions: MediaVersion[];
   albumStack?: MediaStackDetails;
 };
 

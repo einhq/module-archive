@@ -1,7 +1,7 @@
 /**
  * media-details: one read aggregating description, capture time, location,
  * location, the device with its owners, the albums holding the file, tagged people
- * (with age at capture) and comments.
+ * (with age at capture), comments and versions.
  */
 
 import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
@@ -51,6 +51,7 @@ type Details = {
   comments: { body: string; author: string }[];
   hashes: { sha256?: string; sha1?: string; md5?: string };
   fingerprints: { name: string; computedAt?: string; computedBy?: string }[];
+  versions: { name: string; path: string; mimetype?: string; size?: number }[];
   storyboard?: { name: string; sha256: string; interval: number; count: number; columns: number; tileWidth: number; tileHeight: number };
   chapters?: number[];
   albumStack?: {
@@ -102,6 +103,7 @@ Deno.test({
       assertEquals(details.mirror, false);
       assertEquals(details.device, null);
       assertEquals(details.fingerprints, []);
+      assertEquals(details.versions, []);
       // `/albums/a` is a plain directory here, so there is no album above the file.
       assertEquals(details.albums, []);
     });
@@ -423,6 +425,21 @@ Deno.test({
       assertEquals(details.fingerprints[0].name, 'sscd-image');
       assertEquals(details.fingerprints[0].computedBy, 'sscd_disc_mixup');
       assertEquals(details.fingerprints[0].computedAt, '2026-03-11T09:00:00Z');
+    });
+
+    await t.step('reports the files under versions/, by name, with their type', async () => {
+      const shot = `${ALBUMS_ROOT}/a/files/shot.jpg`;
+      await cmd.shouldSucceed(`mkfile ${shot}`);
+      await cmd.shouldSucceed(`mkdir -p ${shot}/versions`);
+      await cmd.shouldSucceed(`mkfile ${shot}/versions/shot.nef`);
+      await cmd.shouldSucceed(`attrs ${shot}/versions/shot.nef -s mimetype=image/x-nikon-nef`);
+      await cmd.shouldSucceed(`mkfile ${shot}/versions/shot.dng`);
+
+      const versions = (await client.execJson<Details>(`media-details ${shot}`)).versions.map(({ name, path, mimetype }) => ({ name, path, mimetype }));
+      assertEquals(versions, [
+        { name: 'shot.dng', path: `${shot}/versions/shot.dng`, mimetype: versions[0].mimetype },
+        { name: 'shot.nef', path: `${shot}/versions/shot.nef`, mimetype: 'image/x-nikon-nef' },
+      ]);
     });
 
     await t.step("a video's storyboard sheet travels with how to read it; one half-written does not", async () => {

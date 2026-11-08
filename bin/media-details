@@ -10,7 +10,8 @@
  * `position` (content = lat/lng, attrs = reverse geocode and weather), `location` and
  * `photographer` softlinks, `people/<slug>` softlinks, `regions/*`
  * carrying `personId`, `metadata/content` (index-document's extracted text), `metadata/sscd-*` and
- * `metadata/chromaprint` (the media module's compute-fingerprint) and `comments/<slug>` blobs. Every section is
+ * `metadata/chromaprint` (the media module's compute-fingerprint), `versions/*` (other forms of the same
+ * picture, such as the RAW `raw --sort` files under its JPEG) and `comments/<slug>` blobs. Every section is
  * best-effort — a missing or unreadable child yields null/[] instead of an
  * error, so a half-indexed file still renders.
  */
@@ -38,6 +39,7 @@ import type {
   MediaPosition,
   MediaSpeaker,
   MediaStackDetails,
+  MediaVersion,
   NodeRef,
   OwnerRef,
   PersonTag,
@@ -515,6 +517,24 @@ const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise
   }
 };
 
+/** The files under `<path>/versions`, by name. */
+const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<MediaVersion[]> => {
+  try {
+    const entries = await vfs.children<{ mimetype?: string; size?: number }>(access, `${path}/versions`);
+    return entries
+      .filter((entry) => entry.node.type === 'file')
+      .map((entry) => ({
+        name: entry.name,
+        path: `${path}/versions/${entry.name}`,
+        ...(entry.node.attrs.mimetype ? { mimetype: entry.node.attrs.mimetype } : {}),
+        ...(entry.node.attrs.size !== undefined ? { size: entry.node.attrs.size } : {}),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
+};
+
 const toPersonTag = async (
   vfs: Vfs,
   access: Access,
@@ -800,6 +820,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     transcript,
     voices,
     fingerprints,
+    versions,
     albumStack,
     storyboard,
     chapters,
@@ -817,6 +838,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     childNames.has('metadata') ? readTranscript(vfs, access, `${path}/metadata/transcript`) : Promise.resolve(null),
     childNames.has('metadata') ? readSpeakers(vfs, access, path, takenAt) : Promise.resolve({ speakers: [], unattributedTurns: [], heard: [] }),
     childNames.has('metadata') ? readFingerprints(vfs, access, path) : Promise.resolve([]),
+    childNames.has('versions') ? readVersions(vfs, access, path) : Promise.resolve([]),
     albumPath ? readAlbumStack(vfs, access, albumPath, node.id, path).catch(() => undefined) : Promise.resolve(undefined),
     isVideo && childNames.has('thumbnails') ? readStoryboard(vfs, access, path) : Promise.resolve(null),
     isVideo && childNames.has('metadata') ? readChapters(vfs, access, `${path}/metadata/chapters`) : Promise.resolve(null),
@@ -873,6 +895,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     unattributedTurns: voices.unattributedTurns,
     comments,
     fingerprints,
+    versions,
     ...(albumStack ? { albumStack } : {}),
   };
 
@@ -922,6 +945,9 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     for (const f of details.fingerprints) {
       await cmd.writeLn(`fingerprint: ${f.name}${f.computedAt ? ` (${f.computedAt})` : ''}`);
     }
+    for (const v of details.versions) {
+      await cmd.writeLn(`version: ${v.name}${v.mimetype ? ` (${v.mimetype})` : ''}`);
+    }
   }
   return 0;
 };
@@ -929,7 +955,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
 mediaDetails.spec = {
   name: 'media-details',
   effect: 'read' as const,
-  description: 'Read description, time, location, location, device with owners, albums, tagged people (with age) and comments for a media file',
+  description: 'Read description, time, location, device with owners, albums, tagged people (with age), comments and versions for a media file',
   args: [
     { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
   ],
@@ -940,7 +966,7 @@ mediaDetails.spec = {
   examples: [
     'media-details /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
   ],
-  returns: "the file's description, when and where it was taken, its albums, and the people in it with their ages.",
+  returns: "the file's description, when and where it was taken, its albums, the people in it with their ages, and its versions.",
 };
 
 export default mediaDetails;

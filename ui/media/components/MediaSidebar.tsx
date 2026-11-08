@@ -3,12 +3,12 @@
  *
  * The order is the order somebody looks for things in: what the file is, when it
  * was taken, what a person wrote about it, what took it and who owned that, the
- * albums holding it, who is in it, where it was, what was said about it — and
- * only then, folded away under "Details", the machine-written text and the
- * forensics (EXIF, hashes).
+ * albums holding it, who is in it, where it was, its other versions, what was said
+ * about it — and only then, folded by default, "Details" with the machine-written
+ * text and the hashes, and the EXIF dump.
  *
- * Every section is an icon beside a content column, which keeps it readable at a
- * glance.
+ * Every section is an icon beside a content column (`SidebarSection`), which keeps
+ * it readable at a glance; the icon folds the section, and the fold is remembered.
  *
  * The `media-details` answer arrives as `result`: the face overlay draws from the
  * same response, and a read of its own would mean two round trips per photo.
@@ -20,12 +20,12 @@
  */
 
 import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
-import { Accordion, ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
-import type { CommentEntry, MediaDetails, MediaExif, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
+import type { CommentEntry, MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
@@ -42,11 +42,10 @@ import { MediaEditModal } from './MediaEditModal.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { SidebarSection, useSectionOpen } from './SidebarSection.tsx';
 
 /** Wide enough for the iconed rows. */
 export const SIDEBAR_WIDTH = 400;
-
-const SECTION_ICON_SIZE = 32;
 /** The comment author's picture beside their name, in px. */
 const COMMENT_AVATAR = 20;
 
@@ -119,31 +118,6 @@ function formatChannels(channels?: number): string {
 }
 
 /**
- * Whether the Details fold is open. An investigator who opened it wants it open on the next
- * photograph too, and on the next visit, so it is remembered in localStorage until closed by
- * hand. Only the fold: the sidebar itself follows the screen size, not a saved preference.
- */
-const DETAILS_OPEN_KEY = 'ein.lightbox.detailsOpen';
-
-function readDetailsOpen(): boolean {
-  try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem(DETAILS_OPEN_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function writeDetailsOpen(open: boolean): void {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    if (open) localStorage.setItem(DETAILS_OPEN_KEY, '1');
-    else localStorage.removeItem(DETAILS_OPEN_KEY);
-  } catch {
-    // Storage may be full or disabled; the fold still works, it just is not remembered.
-  }
-}
-
-/**
  * The languages offered for a picture's text: those with a handwriting transcriber (Swedish and
  * Finnish, English) and the neighbours an archive like this is likely to hold.
  */
@@ -207,21 +181,6 @@ function InfoRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-/**
- * One section: a fixed icon gutter with the content beside it.
- *
- * The gutter is what makes the sections scannable — the eye runs down a column
- * of icons rather than reading every heading.
- */
-function IconRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
-  return (
-    <Group align='flex-start' gap='sm' wrap='nowrap'>
-      <Box style={{ flex: `0 0 ${SECTION_ICON_SIZE}px`, color: 'var(--mantine-color-dimmed)' }}>{icon}</Box>
-      <Stack gap={6} style={{ flex: 1, minWidth: 0 }}>{children}</Stack>
-    </Group>
-  );
-}
-
 function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAction }: {
   details: NonNullable<MediaDetails['albumStack']>;
   selectedPath: string;
@@ -233,7 +192,7 @@ function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAct
   const selected = details.members.find((member) => member.path === selectedPath) ?? details.members[0];
   if (!selected) return null;
   return (
-    <IconRow icon={<TablerIcon name='stack-2' size={SECTION_ICON_SIZE} />}>
+    <SidebarSection id='stack' label='Stack' icon='stack-2' count={details.members.length}>
       <Group justify='space-between' gap='xs'>
         <Text size='sm' fw={600}>{details.excluded ? 'Kept separate' : `${details.members.length} stacked photos`}</Text>
         {canMutate && (
@@ -280,7 +239,7 @@ function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAct
           })}
         </Box>
       )}
-    </IconRow>
+    </SidebarSection>
   );
 }
 
@@ -315,9 +274,9 @@ function CommentRow({ comment, canDelete, onDelete }: {
 /** The description a person wrote, changed in the file's edit dialog. */
 function DescriptionSection({ description }: { description: string }) {
   return (
-    <IconRow icon={<TablerIcon name='file-description' size={SECTION_ICON_SIZE} />}>
+    <SidebarSection id='description' label='Description' icon='file-description'>
       <UserText text={description} size='sm' />
-    </IconRow>
+    </SidebarSection>
   );
 }
 
@@ -338,7 +297,7 @@ function DeviceSection({ details, exif, onOpen }: {
   if (!device && !camera && !details.photographer) return null;
 
   return (
-    <IconRow icon={<TablerIcon name='camera' size={SECTION_ICON_SIZE} />}>
+    <SidebarSection id='device' label='Camera' icon='camera'>
       {device ? <Anchor size='sm' onClick={() => onOpen(device.path)}>{device.name}</Anchor> : camera ? <Text size='sm'>{camera}</Text> : null}
 
       {device && device.owners.length > 0 && (
@@ -361,7 +320,31 @@ function DeviceSection({ details, exif, onOpen }: {
           </Anchor>
         </Text>
       )}
-    </IconRow>
+    </SidebarSection>
+  );
+}
+
+/**
+ * The file's other versions, such as the camera RAW of a JPEG: each a download, with its type and
+ * size.
+ */
+function VersionsSection({ versions }: { versions: MediaVersion[] }) {
+  return (
+    <SidebarSection id='versions' label='Versions' icon='versions' count={versions.length}>
+      {versions.map((version) => (
+        <Box key={version.path}>
+          <Group gap={6} wrap='nowrap'>
+            <TablerIcon name='download' size={14} style={{ flexShrink: 0, color: 'var(--mantine-color-dimmed)' }} />
+            <Anchor href={fileUrl(version.path)} download={version.name} size='sm' style={{ wordBreak: 'break-word' }}>
+              {version.name}
+            </Anchor>
+          </Group>
+          <Text size='xs' c='dimmed'>
+            {[version.mimetype, version.size !== undefined ? formatBytes(version.size) : ''].filter(Boolean).join(' · ')}
+          </Text>
+        </Box>
+      ))}
+    </SidebarSection>
   );
 }
 
@@ -498,18 +481,13 @@ export function MediaSidebar(
   useEffect(() => {
     if (changed && (changed.path === media.path || media.path.startsWith(`${changed.path}/`))) void result.refetch();
   }, [changed]);
-  const [detailsOpen, setDetailsOpen] = useState(readDetailsOpen);
+  const [exifOpen] = useSectionOpen('exif', false);
   // The exiftool dump is bigger than everything else in the sidebar put together, so it is
-  // fetched only while the fold is open — including when it was open from the start because
+  // fetched only while its section is open — including when it was open from the start because
   // it was remembered, in which case `loadRawExif` has to run on mount and on every new file.
   useEffect(() => {
-    if (detailsOpen) loadRawExif();
-  }, [detailsOpen, loadRawExif]);
-  const toggleDetails = (value: string | null) => {
-    const open = value === 'details';
-    setDetailsOpen(open);
-    writeDetailsOpen(open);
-  };
+    if (exifOpen) loadRawExif();
+  }, [exifOpen, loadRawExif]);
 
   const position = details?.position ?? null;
   const weatherLine = position?.weather && readingLine(position.weather);
@@ -519,6 +497,7 @@ export function MediaSidebar(
   const unknownFaces = details?.unknownFaces ?? [];
   const faces = details?.faces ?? [];
   const comments = details?.comments ?? [];
+  const versions = details?.versions ?? [];
   const exif = details?.exif ?? null;
   const albumStack = details?.albumStack;
   const canMutateStack = !!albumStack && albumStack.membersComplete && canWrite(albumStack.albumOwnership, access) &&
@@ -671,7 +650,7 @@ export function MediaSidebar(
         <StagedDuplicates
           key={media.path}
           path={media.path}
-          row={(children) => <IconRow icon={<TablerIcon name='copy' size={SECTION_ICON_SIZE} />}>{children}</IconRow>}
+          row={(children) => <SidebarSection id='duplicates' label='Copies' icon='copy'>{children}</SidebarSection>}
           onLayer={onLayer}
         />
 
@@ -684,7 +663,7 @@ export function MediaSidebar(
         */
         }
         {details?.hasTranscript && (
-          <IconRow icon={<TablerIcon name='blockquote' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='transcript' label='Transcript' icon='blockquote'>
             <TranscriptPanel
               key={details.path}
               path={details.path}
@@ -694,13 +673,13 @@ export function MediaSidebar(
               onOpenPerson={(personId) => onNavigate(`/people/${personId}`)}
               onSpeakersChanged={result.refetch}
             />
-          </IconRow>
+          </SidebarSection>
         )}
 
         {details && (details.device || details.photographer || exif?.model) && <DeviceSection details={details} exif={exif} onOpen={onNavigate} />}
 
         {albums.length > 0 && (
-          <IconRow icon={<TablerIcon name='books' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='albums' label='Albums' icon='books' count={albums.length}>
             {albums.map((album) => (
               <Group key={album.id} gap='xs' wrap='nowrap'>
                 <CoverAvatar
@@ -715,11 +694,11 @@ export function MediaSidebar(
                 </Anchor>
               </Group>
             ))}
-          </IconRow>
+          </SidebarSection>
         )}
 
         {(people.length > 0 || unknownFaces.length > 0) && (
-          <IconRow icon={<TablerIcon name='users' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='people' label='People' icon='users' count={people.length + unknownFaces.length}>
             {people.map((person) => (
               <FaceRow
                 key={person.path}
@@ -786,11 +765,11 @@ export function MediaSidebar(
                 </Anchor>
               </FaceRow>
             ))}
-          </IconRow>
+          </SidebarSection>
         )}
 
         {(mapPoint || location) && (
-          <IconRow icon={<TablerIcon name='map-pin' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='place' label={location?.name ?? 'Place'} icon='map-pin'>
             {location && (
               <Anchor size='sm' onClick={() => onNavigate(`/locations/${location.id}`)}>
                 {location.name}
@@ -817,14 +796,14 @@ export function MediaSidebar(
                 )}
               </Box>
             )}
-          </IconRow>
+          </SidebarSection>
         )}
 
         {weatherLine && (
-          <IconRow icon={<TablerIcon name='cloud' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='weather' label='Weather' icon='cloud'>
             <Text size='sm'>{weatherLine}</Text>
             <Text size='xs' c='dimmed'>{readingSources(position!.weather!)}</Text>
-          </IconRow>
+          </SidebarSection>
         )}
 
         {albumStack && (
@@ -838,10 +817,12 @@ export function MediaSidebar(
           />
         )}
 
+        {versions.length > 0 && <VersionsSection versions={versions} />}
+
         {similar?.length !== 0 && (
-          <IconRow icon={<TablerIcon name='photo-search' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='similar' label='Similar' icon='photo-search'>
             <SimilarMedia path={media.path} similar={similar} onNavigate={onNavigate} />
-          </IconRow>
+          </SidebarSection>
         )}
 
         {
@@ -849,7 +830,7 @@ export function MediaSidebar(
             picture. Everyone else reads them, and sees no row where there are none. */
         }
         {(comments.length > 0 || canEdit) && (
-          <IconRow icon={<TablerIcon name='messages' size={SECTION_ICON_SIZE} />}>
+          <SidebarSection id='comments' label='Comments' icon='messages' count={comments.length}>
             {comments.length > 0 && (
               <Stack gap='lg' mb='xs'>
                 {comments.map((comment) => (
@@ -878,84 +859,77 @@ export function MediaSidebar(
                 )}
               </>
             )}
-          </IconRow>
+          </SidebarSection>
         )}
 
         {
           /* Everything a reader does not need but an investigator does: what the
-            machines wrote about the file, and what identifies it. Open or closed
-            is remembered across files and visits (see `DETAILS_OPEN_KEY`). */
+            machines wrote about the file, and what identifies it. Folded until opened. */
         }
-        <Accordion variant='filled' chevronPosition='left' value={detailsOpen ? 'details' : null} onChange={toggleDetails}>
-          <Accordion.Item value='details'>
-            <Accordion.Control px={0}>
-              <Text size='xs' c='dimmed'>Details</Text>
-            </Accordion.Control>
-            <Accordion.Panel px={0}>
-              <Stack gap='sm'>
-                {/* The guest has no terminal to open it in. */}
-                {isGuest(access) ? <InfoRow label='Path' value={media.path} /> : (
-                  <Box>
-                    <Group gap={6} wrap='nowrap'>
-                      <TablerIcon name='terminal-2' size={14} style={{ flexShrink: 0, color: 'var(--mantine-color-dimmed)' }} />
-                      <Text size='xs' c='dimmed'>Path</Text>
-                    </Group>
-                    <Anchor
-                      component='button'
-                      type='button'
-                      size='sm'
-                      ta='left'
-                      title='Open a new terminal tab here'
-                      onClick={openPathInTerminal}
-                      style={{ display: 'block', wordBreak: 'break-all' }}
-                    >
-                      {media.path}
-                    </Anchor>
-                  </Box>
-                )}
-                {details?.content && (
-                  <Box>
-                    <Text size='xs' c='dimmed'>Text in image</Text>
-                    {/* A scanned page can run to thousands of characters; keep it in its own scroll. */}
-                    <Text size='sm' c='dimmed' style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto' }}>
-                      {details.content}
-                      {details.contentTruncated ? '…' : ''}
-                    </Text>
-                  </Box>
-                )}
-                {details && details.mimetype?.startsWith('image/') && (details.content || details.contentLanguageManual) && (
-                  <TextLanguage key={details.path} details={details} canEdit={canEdit} onSet={setTextLanguage} />
-                )}
+        <SidebarSection id='details' label='Details' icon='info-circle' defaultOpen={false} gap='sm'>
+          {/* The guest has no terminal to open it in. */}
+          {isGuest(access) ? <InfoRow label='Path' value={media.path} /> : (
+            <Box>
+              <Group gap={6} wrap='nowrap'>
+                <TablerIcon name='terminal-2' size={14} style={{ flexShrink: 0, color: 'var(--mantine-color-dimmed)' }} />
+                <Text size='xs' c='dimmed'>Path</Text>
+              </Group>
+              <Anchor
+                component='button'
+                type='button'
+                size='sm'
+                ta='left'
+                title='Open a new terminal tab here'
+                onClick={openPathInTerminal}
+                style={{ display: 'block', wordBreak: 'break-all' }}
+              >
+                {media.path}
+              </Anchor>
+            </Box>
+          )}
+          {details?.content && (
+            <Box>
+              <Text size='xs' c='dimmed'>Text in image</Text>
+              {/* A scanned page can run to thousands of characters; keep it in its own scroll. */}
+              <Text size='sm' c='dimmed' style={{ whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto' }}>
+                {details.content}
+                {details.contentTruncated ? '…' : ''}
+              </Text>
+            </Box>
+          )}
+          {details && details.mimetype?.startsWith('image/') && (details.content || details.contentLanguageManual) && (
+            <TextLanguage key={details.path} details={details} canEdit={canEdit} onSet={setTextLanguage} />
+          )}
 
-                <InfoRow label='Type' value={details?.mimetype ?? media.mimetype ?? ''} />
-                {
-                  /* The stored capture time verbatim — precision, offset and all — since the
-                    caption above the picture renders it for reading, and this is where one
-                    checks what the record actually says. */
-                }
-                <InfoRow label='Taken at' value={details?.takenAt ?? media.takenAt ?? ''} />
-                <InfoRow label='Taken at (UTC)' value={details?.takenAtUtc ?? ''} />
-                <InfoRow label='Time source' value={[timeSourceLabel(details?.takenAtSource, details?.digitized), details?.takenAtNote].filter(Boolean).join(' · ')} />
-                <InfoRow label='Created' value={formatTimestamp(media.birthtime)} />
-                <InfoRow label='Modified' value={formatTimestamp(media.modtime)} />
-                {
-                  /* Whichever hashes the file has: sha256, md5, sha1. */
-                }
-                {Object.entries(details?.hashes ?? {}).map(([name, value]) => <InfoRow key={name} label={name} value={value} />)}
+          <InfoRow label='Type' value={details?.mimetype ?? media.mimetype ?? ''} />
+          {
+            /* The stored capture time verbatim — precision, offset and all — since the
+              caption above the picture renders it for reading, and this is where one
+              checks what the record actually says. */
+          }
+          <InfoRow label='Taken at' value={details?.takenAt ?? media.takenAt ?? ''} />
+          <InfoRow label='Taken at (UTC)' value={details?.takenAtUtc ?? ''} />
+          <InfoRow label='Time source' value={[timeSourceLabel(details?.takenAtSource, details?.digitized), details?.takenAtNote].filter(Boolean).join(' · ')} />
+          <InfoRow label='Created' value={formatTimestamp(media.birthtime)} />
+          <InfoRow label='Modified' value={formatTimestamp(media.modtime)} />
+          {
+            /* Whichever hashes the file has: sha256, md5, sha1. */
+          }
+          {Object.entries(details?.hashes ?? {}).map(([name, value]) => <InfoRow key={name} label={name} value={value} />)}
+        </SidebarSection>
 
-                {
-                  /* The exiftool dump, one row per tag, in the same shape as the rows above it
-                    rather than under a heading of its own: to the reader they are all just
-                    attributes of the file. */
-                }
-                {rawExifLoading && <Loader size='xs' />}
-                {rawExif && Object.keys(rawExif).length === 0 && !rawExifLoading && <Text size='xs' c='dimmed'>No EXIF recorded</Text>}
-                {rawExif &&
-                  Object.entries(rawExif).map(([key, value]) => <InfoRow key={key} label={key} value={typeof value === 'object' ? JSON.stringify(value) : String(value)} />)}
-              </Stack>
-            </Accordion.Panel>
-          </Accordion.Item>
-        </Accordion>
+        {
+          /* The exiftool dump, one row per tag, in the same shape as the rows in Details.
+            Folded until opened, and fetched only then. */
+        }
+        {details && (
+          <SidebarSection id='exif' label='EXIF' icon='aperture' defaultOpen={false} gap='sm'>
+            {rawExifLoading && <Loader size='xs' />}
+            {rawExif && Object.keys(rawExif).length === 0 && !rawExifLoading && <Text size='xs' c='dimmed'>No EXIF recorded</Text>}
+            {rawExif &&
+              Object.entries(rawExif).map(([key, value]) => <InfoRow key={key} label={key} value={typeof value === 'object' ? JSON.stringify(value) : String(value)} />)}
+          </SidebarSection>
+        )}
       </Stack>
       {details && (
         <MediaEditModal

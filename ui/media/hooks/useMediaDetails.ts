@@ -16,6 +16,7 @@ export type {
   MediaHashes,
   MediaPosition,
   MediaStackDetails,
+  MediaVersion,
   NodeRef,
   OwnerRef,
   PersonTag,
