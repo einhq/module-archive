@@ -12,9 +12,9 @@
  * A file is linked to the device ingest would have chosen for it (`matchDevice` over every
  * registered device): its serial's, or else the first whose make and model it carries — which
  * takes a file whose serial no device has, so a device with a serial is also looked up by its
- * make and model. The serial is a store-side equality served by an index and costs only the rows
- * it matches; make and model are compared in the store too (`deviceinfo.make`,
- * `deviceinfo.model`), but no index serves them, so that half reads every exif node.
+ * make and model. Both are equalities in the store, each served by an index (`device_serial`,
+ * and `device_model` on `deviceinfo.make` and `deviceinfo.model`), so a lookup costs the rows it
+ * matches.
  *
  * `--all` sweeps every registered device with a fingerprint. That is the library-wide answer to
  * an unlinked file, and the reason `media-scan` has no gap term for `media-device`: `device-link`

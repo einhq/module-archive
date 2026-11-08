@@ -548,6 +548,14 @@
       "partial": "deviceSerialNumber"
     },
     {
+      "name": "device_model",
+      "on": [
+        "deviceinfo.make",
+        "deviceinfo.model"
+      ],
+      "partial": "deviceinfo.model"
+    },
+    {
       "name": "taken_utc",
       "on": [
         "takenAtUtc"

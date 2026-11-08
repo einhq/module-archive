@@ -242,8 +242,7 @@ export default function DevicesPage() {
               <Group justify='space-between' wrap='nowrap' align='flex-start'>
                 <Text size='sm' c='dimmed' style={{ maxWidth: '68ch' }}>
                   Cameras found in the indexed media that match nothing in the registry. Registering one lets its photos be linked to it, and its timezone and owners apply.
-                  Adding a fingerprint to a device that already exists also goes and links the files it identifies — quick for a serial, slow for a make and model, which has
-                  no index behind it.
+                  Adding a fingerprint to a device that already exists also goes and links the files it identifies.
                 </Text>
                 <Button
                   size='compact-sm'
