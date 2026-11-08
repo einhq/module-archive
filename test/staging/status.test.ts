@@ -2,7 +2,7 @@
  * `staging status` reads a staging area without writing to it: per category the staged originals
  * by kind from one aggregate (renditions and versions are not originals), with the exact copies
  * among them by where their originals lie, the destination as an
- * album reference, today's upload folder, and the routes waiting for a track.
+ * album reference, today's upload folder, and the routes waiting for a device.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { StagingStatus } from '@archive/staging/api';

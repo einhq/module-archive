@@ -27,7 +27,7 @@ import { initStaging } from '@archive/staging/init';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
 
 /**
- * Where a GPX file waits for its track: `routes/` of the staging area it is staged in, under its
+ * Where a GPX file waits for its device: `routes/` of the staging area it is staged in, under its
  * own name or the first free `name-2.gpx`, … there; `path` itself when it is not staged under
  * `files/`. Moves it there, making `routes/` if it is missing.
  */
