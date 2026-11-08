@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.17.24",
+  "version": "0.18.0",
   "description": "The archive: people and their family tree, locations and tracks, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
   "coreApi": "^0.13.0",
