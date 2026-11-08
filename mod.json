@@ -1,9 +1,9 @@
 {
   "name": "archive",
   "version": "0.18.0",
-  "description": "The archive: people and their family tree, locations and tracks, cameras, photos, videos and documents, and finding things among them",
+  "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.13.0",
+  "coreApi": "^0.14.0",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -59,7 +59,7 @@
     "@archive/media/album-members": "./lib/media/album-members.ts",
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",
-    "@archive/media/album-tracks": "./lib/media/album-tracks.ts",
+    "@archive/media/album-devices": "./lib/media/album-devices.ts",
     "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
@@ -465,7 +465,7 @@
       "root": "/archive/cameras",
       "searchable": true,
       "plural": "Cameras",
-      "description": "A camera or phone, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right. One that also records where it was links to its track as its child track."
+      "description": "A camera or phone, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right. One that is part of a device that records where it was, a phone, links the device as its child device, and its track is the device's."
     },
     {
       "type": "media-region",
@@ -489,11 +489,11 @@
   ],
   "indexes": [
     {
-      "name": "trip_track",
+      "name": "trip_track_id",
       "on": [
-        "trip.track"
+        "trip.trackId"
       ],
-      "partial": "trip.track"
+      "partial": "trip.trackId"
     },
     {
       "name": "event_date",
@@ -636,8 +636,6 @@
       "/cameras": "ui/camera/pages/cameras.tsx",
       "/cameras/:id": "ui/camera/pages/camera.tsx",
       "/cameras/new": "ui/camera/pages/new-camera.tsx",
-      "/tracks": "ui/location/pages/tracks.tsx",
-      "/tracks/:id": "ui/location/pages/track.tsx",
       "/duplicates": "ui/media/pages/duplicates.tsx",
       "/events/anniversary": "ui/pages/events-anniversary.tsx",
       "/explore/people": "ui/pages/explore-people.tsx",
@@ -670,14 +668,14 @@
       "/start/upload": "ui/staging/pages/start-upload.tsx",
       "/stats/life-events": "ui/people/pages/life-events.tsx",
       "/timeline": "ui/pages/timeline.tsx",
+      "/trips": "ui/location/pages/trips.tsx",
       "/year": "ui/pages/year.tsx"
     },
     "open": {
       "person": "/people/{name}",
       "location": "/locations/{name}",
       "album": "/albums/{path}",
-      "camera": "/cameras/{name}",
-      "track": "/tracks/{path}"
+      "camera": "/cameras/{name}"
     }
   }
 }

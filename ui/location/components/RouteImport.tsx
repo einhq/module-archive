@@ -10,7 +10,7 @@ export const isGpx = (path: string): boolean => path.toLowerCase().endsWith('.gp
 
 /**
  * The selected GPX files (`selection`, from the listing in `directory`) imported, one after
- * another, into the one track chosen for them (`track-stage --track`). A file that fails is named
+ * another, into the track of the one device chosen for them (`track-stage --track`). A file that fails is named
  * with why; the listing is read again after, and `onImported` told.
  */
 export function RouteImport({ selection, directory, onImported }: { selection: string[]; directory: string; onImported: () => void }) {
@@ -45,15 +45,15 @@ export function RouteImport({ selection, directory, onImported }: { selection: s
       <Text size='sm'>
         {files.length === 0
           ? touch
-            ? 'Select the files of one track: press and hold one, then tap the others.'
-            : 'Select the files of one track: click one, and Ctrl or Shift and click for more, or Ctrl+A for all.'
+            ? 'Select the files of one device: press and hold one, then tap the others.'
+            : 'Select the files of one device: click one, and Ctrl or Shift and click for more, or Ctrl+A for all.'
           : files.length === 1
           ? '1 GPX file selected.'
           : `${files.length} GPX files selected.`}
       </Text>
       <Select
-        placeholder='Track they belong to'
-        aria-label='Track'
+        placeholder='Device they come from'
+        aria-label='Device'
         searchable
         data={tracks.map((entry) => ({ value: entry.path, label: entry.name }))}
         value={track}

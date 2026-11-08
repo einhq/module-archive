@@ -1,21 +1,22 @@
 /**
- * trip-album: a trip of a track becomes a new album or one that is there, which then holds it as
- * its attr `trip`, lists the track and spans the trip without any photos; a trip is one
- * album's and an album holds one trip; `--detach` takes it off again; and an ongoing trip's album
- * grows with it as `track-trips` runs. The tracks are invented.
+ * trip-album: a trip of a device's track becomes a new album or one that is there, which then holds
+ * it as its attr `trip`, naming the track by its node id, lists the device and spans the trip
+ * without any photos; a trip is one album's and an album holds one trip; `--detach` takes it off
+ * again; the album is the trip's still after the device moves; and an ongoing trip's album grows
+ * with it as `track-trips` runs. The devices are invented.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assert, assertEquals } from '@std/assert';
 import { createTestContext, testCommands } from '@ein/testing';
 import type { TrackTrips, TripList } from '@archive/location/api';
-import type { AlbumTrackList, AlbumTrip, TripAlbumAnswer } from '@archive/media/api';
-import { historyOf, mkTracker } from '../location/tracker.ts';
+import type { AlbumDeviceList, AlbumTrip, TripAlbumAnswer } from '@archive/media/api';
+import { deviceAt, mkTracker, positionOf } from '../location/tracker.ts';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
 
-const BOAT = historyOf('the-sailboat');
-const CAR = historyOf('the-car');
+const BOAT = positionOf('the-sailboat');
+const CAR = positionOf('the-car');
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -39,6 +40,7 @@ Deno.test({
   const cmd = testCommands(client);
   const attrs = (path: string) => client.execJson<AlbumAttrs>(`attrs '${path}'`);
   const list = (track = 'the-sailboat') => client.execJson<TripList>(`trip-list ${track}`);
+  const nodeId = async (path: string) => (await client.execJson<{ id: string }>(`stat ${path}`)).id;
 
   try {
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
@@ -59,13 +61,13 @@ Deno.test({
     assertEquals(derived.trips.map((trip) => trip.id), ['2025-06-05', '2025-06-10']);
 
     let first = '';
-    await t.step('--new makes an album of the trip, which lists the track and spans the trip', async () => {
+    await t.step('--new makes an album of the trip, which lists the device and spans the trip', async () => {
       first = (await client.execJson<TripAlbumAnswer>('trip-album the-sailboat 2025-06-05 --new')).album;
       assertEquals(first, `${ALBUMS_ROOT}/Sailboat`);
       const album = await attrs(first);
       assertEquals(album.name, 'Sailboat');
       const trip = derived.trips[0];
-      assertEquals(album.trip?.track, BOAT);
+      assertEquals(album.trip?.trackId, await nodeId(BOAT));
       assertEquals(album.trip?.day, '2025-06-05');
       assertEquals(album.trip?.timezone, 'Europe/Stockholm');
       assertEquals([album.trip?.start, album.trip?.end], [trip.start, trip.end]);
@@ -75,8 +77,8 @@ Deno.test({
       // The span is the trip's, as the wall clock in Stockholm (two hours ahead in June).
       assertEquals(album.timeStart, new Date(Date.parse(trip.start) + 2 * HOUR).toISOString().slice(0, 19));
       assertEquals(album.timeEnd, new Date(Date.parse(trip.end) + 2 * HOUR).toISOString().slice(0, 19));
-      const tracks = await client.execJson<AlbumTrackList>(`album-track-list '${first}'`);
-      assertEquals(tracks.tracks.map((track) => [track.path, track.source]), [[BOAT, 'added']]);
+      const devices = await client.execJson<AlbumDeviceList>(`album-device-list '${first}'`);
+      assertEquals(devices.devices.map((device) => [device.path, device.source, device.tracks]), [[deviceAt('the-sailboat'), 'added', [BOAT]]]);
       assertEquals((await list()).trips.map((entry) => entry.album), [first, undefined]);
     });
 
@@ -108,6 +110,21 @@ Deno.test({
       assertEquals([album.trip, album.timeStart, album.timeEnd], [undefined, undefined, undefined]);
       assertEquals((await list()).trips[0].album, undefined);
       await cmd.shouldFailWith('trip-album the-sailboat 2025-06-05 --detach', "no album's");
+    });
+
+    await t.step("the device moved, its trips and their albums are still each other's", async () => {
+      await cmd.shouldSucceed(`mv ${deviceAt('the-sailboat')} ${deviceAt('the-yacht')}`);
+      const moved = positionOf('the-yacht');
+      const listed = await list('the-yacht');
+      assertEquals(listed.track, moved);
+      assertEquals(listed.trips.map((entry) => entry.album), [undefined, `${ALBUMS_ROOT}/Archipelago`]);
+      // Written anew from the moved track's trips, and given back to its album there.
+      await cmd.shouldSucceed('track-trips the-yacht --full');
+      assertEquals((await attrs(`${ALBUMS_ROOT}/Archipelago`)).trip?.trackId, await nodeId(moved));
+      await cmd.shouldSucceed(`trip-album the-yacht 2025-06-10 --album=${ALBUMS_ROOT}/Archipelago`);
+      // The album's link to the device followed it.
+      const devices = await client.execJson<AlbumDeviceList>(`album-device-list ${ALBUMS_ROOT}/Archipelago`);
+      assertEquals(devices.devices.map((device) => device.path), [deviceAt('the-yacht')]);
     });
 
     await t.step('the album of an ongoing trip grows with it as track-trips runs', async () => {

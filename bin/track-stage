@@ -1,27 +1,27 @@
 #!ts
 /**
- * track-stage — a GPX file dropped in staging becomes its track's route.
+ * track-stage — a GPX file dropped in staging becomes the route of the device it was recorded on.
  *
  *   track-stage <gpx-file> [--track <track>] [--name <name>]
  *
- * The track is the one the file names: its `creator`, or a `<name>` in it,
- * matching a track's name, or the name, make and model, or serial number of a
- * camera that records into it (`tracksForGpx`). With exactly one such track the
- * fixes are appended to it and the file moves to the track's `routes/`, linked
- * from its `sources/` (`keepRoute`). With none or several the file stays,
- * marked `trackPending`, for someone to say which track it belongs to —
- * `--track` is that answer; one staged in a category waits in its staging
- * area's `routes/`.
+ * The device is the one the file names: its `creator`, or a `<name>` in it, matching the device's
+ * label, its manufacturer and model, or its serial number, or the name, make and model, or serial
+ * number of a camera linked to it (`tracksForGpx`). With exactly one such device the file is
+ * written to it, which its `tracker` driver reads into its track as `cat <file> > /dev/<device>`
+ * does (`appendGpx`), and the file moves to the track's `routes/`, linked from its `sources/`
+ * (`keepRoute`). With none or several the file stays, marked `trackPending`, for someone to say
+ * which device it belongs to — `--track` is that answer; one staged in a category waits in its
+ * staging area's `routes/`.
  *
- * Re-staging the same file adds nothing: a fix is keyed by its timestamp. A point
- * without a time is left out, counted as `untimed`.
+ * Re-staging the same file adds nothing: a fix is keyed by its timestamp. A point without a time is
+ * left out, counted as `untimed`.
  */
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, parseGpx, reportUnknownFlags, timedPoints } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
 import type { TrackStageResult } from '@archive/location/api';
-import { keepRoute, listTracks, openTrack, parseGpx, timedPoints, TRACK_ARG, trackCameras, tracksForGpx } from '@archive/location/track';
+import { appendGpx, keepRoute, listTracks, TRACK_ARG, trackNames, trackOf, tracksForGpx } from '@archive/location/track';
 import { sha256Hex } from '@archive/sources';
 import { initStaging } from '@archive/staging/init';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
@@ -82,30 +82,24 @@ const trackStage = async (cmd: Command): CmdReturn => {
     let target = flags.track as string | undefined;
     if (target === undefined) {
       const tracks = await listTracks(cmd);
-      const cameras = await trackCameras(cmd, tracks.map((track) => track.path));
-      const candidates = tracksForGpx(tracks.map((track) => ({ ...track, cameras: cameras.get(track.path) })), gpx);
+      const names = await trackNames(cmd, tracks.map((track) => track.path));
+      const candidates = tracksForGpx(tracks.map((track) => ({ ...track, names: names.get(track.path) })), gpx);
       if (candidates.length !== 1) {
         await vfs.update(access, gpxPath, { attrs: { trackPending: true } });
         const waiting = await waitInRoutes(cmd, gpxPath);
-        const reason = candidates.length === 0 ? 'no track matches it' : `${candidates.length} tracks match it`;
+        const reason = candidates.length === 0 ? 'no device matches it' : `${candidates.length} devices match it`;
         if (cmd.json) {
           await cmd.writeJSON({ status: 'pending', path: waiting, reason, candidates: candidates.map((candidate) => candidate.path) } satisfies TrackStageResult);
         } else {
-          await cmd.writeLn(`${waiting}: waiting for a track, ${reason}${gpx.creator ? ` (creator "${gpx.creator}")` : ''}`);
+          await cmd.writeLn(`${waiting}: waiting for a device, ${reason}${gpx.creator ? ` (creator "${gpx.creator}")` : ''}`);
         }
         return 0;
       }
       target = candidates[0].path;
     }
 
-    const { path: trackPath, handle: track } = await openTrack(cmd, target, 'a');
-    let imported: number;
-    try {
-      imported = await track.appendPoints(points);
-    } finally {
-      await track.close();
-    }
-
+    const { path: trackPath } = await trackOf(cmd, target);
+    const imported = await appendGpx(cmd, trackPath, bytes, points);
     const source = await keepRoute(cmd, trackPath, gpxPath, await sha256Hex(bytes), { name: flags.name ? basename(flags.name) : undefined });
     // A file that waited for its track is kept without the mark of waiting.
     if (waited) await vfs.update(access, source, { attrs: { trackPending: null } });
@@ -127,12 +121,12 @@ trackStage.spec = {
   name: 'track-stage',
   effect: 'write' as const,
   description:
-    "Import a staged GPX file into the track it names, and move the file to the track's routes/; mark it pending when no single track matches, and keep it in its staging area's routes/",
+    "Import a staged GPX file into the device it names, and move the file to its track's routes/; mark it pending when no single device matches, and keep it in its staging area's routes/",
   args: [
     { name: 'gpx', type: 'path' as const, description: 'VFS path to the GPX file' },
   ],
   flags: [
-    { name: 'track', type: 'path' as const, description: `the track it belongs to, instead of the one it names: ${TRACK_ARG}` },
+    { name: 'track', type: 'path' as const, description: `the track it belongs to, instead of the one of the device it names: ${TRACK_ARG}` },
     { name: 'name', type: 'string' as const, description: "the name to keep the file under in the track's routes/, instead of its own" },
   ],
   examples: ['track-stage /home/anna/staging/files/inbox/upload-2026-10-16/hike.gpx', 'track-stage /home/anna/staging/routes/hike.gpx --track hiking-gps'],

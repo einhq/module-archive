@@ -3,13 +3,13 @@ import { type ComboboxItem, type OptionsFilter, Select, type SelectProps } from 
 import { matchesText } from '@ein/ui/lib';
 
 /** Who or what a picker picks, for its default words. */
-type PickerKind = 'person' | 'location' | 'camera' | 'track';
+type PickerKind = 'person' | 'location' | 'camera' | 'device';
 
 const DEFAULTS: Record<PickerKind, { placeholder: string; nothingFound: string }> = {
   person: { placeholder: 'Pick someone', nothingFound: 'Nobody by that name' },
   location: { placeholder: 'Pick a location', nothingFound: 'No location by that name' },
   camera: { placeholder: 'Pick a camera', nothingFound: 'No camera by that name' },
-  track: { placeholder: 'Pick a track', nothingFound: 'No track by that name' },
+  device: { placeholder: 'Pick a device', nothingFound: 'No device by that name' },
 };
 
 /** Options as `matchesText` reads them: case and accents aside, every word in any order. */
@@ -29,7 +29,7 @@ export const personOptions = (people: readonly { id: string; name: string; fulln
     .sort((a, b) => a.label.localeCompare(b.label, 'sv'));
 
 /**
- * Pick one person, location, camera or track from a list the page already holds.
+ * Pick one person, location, camera or device from a list the page already holds.
  *
  * Every picker the same: typed words match the way the list filters match (`matchesText`), with
  * the same words when nothing does. The options are the caller's, so each picker keeps its own

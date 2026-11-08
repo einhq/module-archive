@@ -4,10 +4,11 @@
  *
  *   track-weather <track> [--full] [--dry-run]
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). For each trip `track-trips` keeps in `<track>/.trips` it samples the track once an
- * hour, looks the weather up where the track was at each of those hours (`@archive/weather/at`), and writes a summary (`TripWeather`) on each leg and
- * one on the whole trip: the mean and the strongest wind and where it blew from, the coldest and the
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). For each trip `track-trips` keeps in `<track>/.trips` it samples the
+ * track once an hour, looks the weather up where the track was at each of those hours
+ * (`@archive/weather/at`), and writes a summary (`TripWeather`) on each leg and one on the whole
+ * trip: the mean and the strongest wind and where it blew from, the coldest and the
  * warmest hour, and the mean cloud cover (`@archive/location/trip-weather`). Writing `.trips` writes
  * the albums made of its trips too, so the album's Trip tab shows them.
  *
@@ -153,7 +154,7 @@ trackWeather.spec = {
     { name: 'full', type: 'bool' as const, description: 'sample every trip again, not only those without weather or with a day in the last week' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'look the weather up and count it without writing .trips' },
   ],
-  examples: ['track-weather sailboat', 'track-weather /archive/devices/sailboat/position/history --full'],
+  examples: ['track-weather sailboat', 'track-weather /dev/sailboat/position --full'],
   returns: 'TrackWeather: how many days and hours it sampled, how many it left for the next run and why, and how many requests it sent.',
 };
 

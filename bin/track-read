@@ -5,8 +5,8 @@
  *   track-read <track> [--from <iso>] [--to <iso>] [--limit <n>] [--still [--max-speed=<m/s>]] [--rejected | --only-rejected]
  *   track-read <track> --bbox=57.8,57.6,12.1,11.8 --tolerance 0.0002 --still
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`).
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`).
  *
  * Output: {"segments":[{day, points:[{lat,lng,ts,...}]}], "points": n, "truncated": bool}.
  *
@@ -29,7 +29,7 @@
  * or `manual`; `--only-rejected` reads them alone, each run of them a segment of
  * its own. A fix a person gave a verdict on carries it as `manual`.
  */
-import { openTrack, parseBounds, TRACK_ARG, type TrackReadOptions } from '@archive/location/track';
+import { openTrack, parseBounds, TRACK_ARG, trackKind, type TrackReadOptions } from '@archive/location/track';
 import { trackProfile } from '@archive/location/track-profile';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
@@ -80,7 +80,7 @@ const trackRead = async (cmd: Command): CmdReturn => {
 
     try {
       if (flags.still) {
-        const profile = trackProfile((await cmd.sys.vfs.get(cmd.access, path)).attrs.kind);
+        const profile = trackProfile(await trackKind(cmd, path, await cmd.sys.vfs.get(cmd.access, path)));
         opts.still = {
           radius: profile.driftRadiusM,
           minMs: profile.stillMinMs,

@@ -6,6 +6,7 @@ import { Link } from 'react-router-dom';
 import type { TimelineEntry, TimelineKind } from '../lib/timeline-entries.ts';
 import { fileUrl, thumbnailUrl } from '@ein/ui/lib';
 import { UserText } from './UserText.tsx';
+import { deviceRoute } from '../location/lib/device-route.ts';
 
 /**
  * Icon and accent colour per kind, so a kind is recognisable before it is read.
@@ -84,8 +85,9 @@ export const entryRoute = (entry: TimelineEntry): string => {
     case 'album':
     case 'auto-album':
       return `/albums/${encodeURIComponent(entry.path)}`;
+    // A track is a device's: its page, on the trips it made.
     case 'track':
-      return `/tracks/${encodeURIComponent(entry.path)}`;
+      return deviceRoute(entry.path, { trips: true }) ?? '/devices';
     // An anniversary is about a couple, which has no page; `path` is already
     // the half of it the entry was read from.
     case 'birth':

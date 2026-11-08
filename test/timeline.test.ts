@@ -9,7 +9,7 @@ import { ALBUMS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext, testCommands } from '@ein/testing';
-import { historyOf, mkTracker } from './location/tracker.ts';
+import { mkTracker, positionOf } from './location/tracker.ts';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
 
@@ -108,10 +108,10 @@ Deno.test({
     await mkperson('hanna', { name: 'Hanna Fjällström', born: '1979-03-13' });
     await mkperson('jonas', { name: 'Jonas Fjällström', born: '1977-01-09' });
 
-    // A track is named by the device whose position history it is.
+    // A track is named by the device whose position it is.
     await cmd.shouldSucceed(mkTracker('hiking-gps', 'Kebnekaise'));
     // Its span is what the track registry knows of its fixes.
-    const track = await vfs.open(ADMIN_ACCESS, historyOf('hiking-gps'), { mode: 'a' });
+    const track = await vfs.open(ADMIN_ACCESS, positionOf('hiking-gps'), { mode: 'a' });
     try {
       await track.write(new TextEncoder().encode(
         '{"lat":67.9,"lng":18.5,"ts":"2015-08-16T06:00:00Z"}\n{"lat":67.91,"lng":18.6,"ts":"2015-08-23T17:00:00Z"}\n',

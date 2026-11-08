@@ -120,7 +120,7 @@ function TripCard(
     busy: boolean;
     onEdit: (name: string, how: 'merge' | 'split') => void;
     onAlbum: OnAlbum;
-    /** Move the trip to the track at `to`; settles when it is done or has failed. */
+    /** Move the trip to the track at `to`, another device's; settles when it is done or has failed. */
     onMove: (trip: Trip, to: string) => Promise<void>;
   },
 ) {
@@ -157,7 +157,7 @@ function TripCard(
                 leftSection={<TablerIcon name='arrows-exchange' size={14} />}
                 onClick={() => setMoving(true)}
               >
-                Move to track…
+                Move to another device…
               </Button>
             </Group>
           )}
@@ -235,7 +235,7 @@ function TripCard(
  * A track's trips, newest first: each with its days, distance, where it went, and its album or the
  * albums it may belong to. `track` is the track's path; `editable` offers making a trip an album and
  * taking it off again, joining a trip to the one before it, parting it again, moving it to another
- * track, and deriving them all again.
+ * device's track, and deriving them all again.
  */
 export function TrackTripsTab({ track, editable }: { track: string; editable: boolean }) {
   const { trips, loading, error, edit, derive, makeAlbum, move } = useTrackTrips(track);

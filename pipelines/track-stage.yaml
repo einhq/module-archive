@@ -1,9 +1,9 @@
 name: track-stage
-description: A GPX file dropped in staging becomes its track's route
+description: A GPX file dropped in staging becomes the route of the device it was recorded on
 
 # Subject is the GPX file. `updated` is the upload's size report, after the bytes
-# have landed; a file left waiting for a track is not tried again — the staging
-# page asks which track it belongs to.
+# have landed; a file left waiting for a device is not tried again — the staging
+# page asks which device it belongs to.
 trigger:
   event: updated
   nodeType: file
@@ -14,7 +14,7 @@ trigger:
 steps:
   import:
     command: track-stage $NODE_PATH
-    description: Append its fixes to the track it names, and move it to that track's routes/
+    description: Write it to the device it names, whose driver reads its fixes into its track, and move it to that track's routes/
 
 options:
   maxAttempts: 2

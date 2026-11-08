@@ -87,13 +87,14 @@ Deno.test('rule: other softlinks are ignored', async () => {
   assertEquals(await types(event('softlink', LINK, 'created'), context), []);
 });
 
-const TRACK = '/archive/devices/the-sailboat/position/history';
+const TRACK = '/dev/the-sailboat/position';
 
-Deno.test('rule: points appended to a track anywhere under the archive are announced for the track', async () => {
+Deno.test("rule: points appended to a device's track under /dev are announced for the track", async () => {
   assertEquals(await types(event('track', TRACK, 'updated', [])), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
-  assertEquals(await types(event('track', '/archive/cameras/the-phone/track', 'updated', [])), [`${LOCATION_EVENTS.trackChanged} /archive/cameras/the-phone/track`]);
-  // A track outside the archive is not, nor one being made.
+  assertEquals(await types(event('track', '/dev/the-phone/route', 'updated', [])), [`${LOCATION_EVENTS.trackChanged} /dev/the-phone/route`]);
+  // A track outside /dev is not, nor one being made.
   assertEquals(await types(event('track', '/home/someone/route', 'updated', [])), []);
+  assertEquals(await types(event('track', '/archive/cameras/the-phone/track', 'updated', [])), []);
   assertEquals(await types(event('track', TRACK, 'created')), []);
 });
 

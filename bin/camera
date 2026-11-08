@@ -1,7 +1,7 @@
 #!bash
 arg --desc "Camera and recording camera management"
 arg --group
-arg '<subcommand>' string "Subcommand: create, info, update, list, match, scan, link, relink, set-owner, remove-owner, cover, timeline, track"
+arg '<subcommand>' string "Subcommand: create, info, update, list, match, scan, link, relink, set-owner, remove-owner, cover, timeline, device"
 arg --rest
 arg --export
 

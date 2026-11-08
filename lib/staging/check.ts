@@ -8,7 +8,7 @@
  * - `files/` and `albums/` hold directories only, and every directory of groups has its category.
  * - The default category exists, of the `inbox` kind.
  * - Every link in a group points at a file in the group's own category, and at something there.
- * - A GPX file waiting for a track is in `routes/`.
+ * - A GPX file waiting for a device is in `routes/`.
  */
 import type { StagingCheckAnswer, StagingCheckProblem } from '@archive/staging/api';
 import type { Command } from '@ein/client';
@@ -107,7 +107,7 @@ export const stagingCheck = async (vfs: Vfs, access: Access, user: string): Prom
       }
     }
     const waiting = await vfs.query(access, { types: ['file'], where: [{ ref: 'trackPending', op: 'eq', value: true }], within: roots.filesPath, limit: 100 });
-    for (const entry of waiting) problems.push({ code: 'waiting-route', path: entry.absPath, detail: `waits for a track outside ${roots.routesPath}` });
+    for (const entry of waiting) problems.push({ code: 'waiting-route', path: entry.absPath, detail: `waits for a device outside ${roots.routesPath}` });
   }
 
   if (!present.has('albums')) return answer();

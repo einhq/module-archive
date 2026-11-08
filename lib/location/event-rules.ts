@@ -14,9 +14,9 @@
  *   photo to the location containing it.
  *
  * - **A track's trips** (`<track>/.trips`) depend on its fixes, on how it travels and in which
- *   timezone (its attrs `kind` and `timezone`), and on its homes. Points appended to a track
- *   anywhere under the archive (a content write), one of those attrs changing, or a home added or
- *   taken off (a link in its `homes/`) is `track.changed`, and `track-trips` derives them again.
+ *   timezone (its attrs `kind` and `timezone`), and on its homes. Points appended to a device's
+ *   track under `/dev` (a content write), one of those attrs changing, or a home added or taken off
+ *   (a link in its `homes/`) is `track.changed`, and `track-trips` derives them again.
  *
  * Rules read fresh state rather than trusting the payload, so a
  * fact is right whichever order messages arrive in. A spurious fact is cheap:
@@ -29,7 +29,7 @@
  * losing a photo is picked up the next time anything else about it changes.
  */
 
-import { ARCHIVE_PATH } from '@ein/paths';
+import { DEV_PATH } from '@ein/paths';
 import { LOCATIONS_ROOT } from '@archive/paths';
 import type { DomainEvent } from '@ein/client';
 import { LOCATION_LINK_NAME, POSITION_CHILD, SHAPE_LINK_SOURCE } from '@archive/location/location-link';
@@ -102,8 +102,8 @@ const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 /** A location is a location node directly under the locations root. */
 const isLocation = (path: string): boolean => parentOf(path) === LOCATIONS_ROOT;
 
-/** Whether `path` lies under the archive, where the tracks whose trips are kept are. */
-const inArchive = (path: string): boolean => path.startsWith(`${ARCHIVE_PATH}/`);
+/** Whether `path` lies under `/dev`, where the devices whose tracks have trips are. */
+const inDevices = (path: string): boolean => path.startsWith(`${DEV_PATH}/`);
 
 export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRuleContext, now: number = Date.now()): Promise<Fact[]> {
   const fact = (type: string, subject: string, nodeId: string | undefined, cause: string): Fact => ({
@@ -143,7 +143,7 @@ export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRu
   }
 
   if (event.nodeType === 'track') {
-    if (event.type !== 'updated' || !inArchive(event.path) || event.changedAttrs === undefined) return [];
+    if (event.type !== 'updated' || !inDevices(event.path) || event.changedAttrs === undefined) return [];
     if (event.changedAttrs.length === 0) return [fact(LOCATION_EVENTS.trackChanged, event.path, event.nodeId, 'points')];
     return event.changedAttrs.some((name) => TRACK_TRIP_ATTRS.has(name)) ? [fact(LOCATION_EVENTS.trackChanged, event.path, event.nodeId, 'attrs')] : [];
   }
@@ -151,7 +151,7 @@ export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRu
   // A person's residences are links in a `homes/` too; only a track's are its home bases.
   if (event.nodeType === 'softlink' && (event.type === 'created' || event.type === 'deleted') && nameOf(parentOf(event.path)) === HOMES_DIR) {
     const track = parentOf(parentOf(event.path));
-    if (!inArchive(track) || (await ctx.getNode(track))?.type !== 'track') return [];
+    if (!inDevices(track) || (await ctx.getNode(track))?.type !== 'track') return [];
     return [fact(LOCATION_EVENTS.trackChanged, track, undefined, 'homes')];
   }
 

@@ -878,25 +878,29 @@ export type AlbumScores = {
 /** One subject a container's media have, and how many of them have it. */
 export type SubjectTally = { path: string; name: string; count: number };
 
-/** One track on an album's list: the track's path and name, and why it is there. */
-export type AlbumTrack = {
+/** One device on an album's list: the device, its name and its tracks, and why it is there. */
+export type AlbumDevice = {
+  /** The device's path, `/dev/<device>`. */
   path: string;
+  /** Its label. */
   name: string;
-  /** `media`: a camera that took some of the album's media records into it. `added`: it was added to the list by hand. */
+  /** The paths of its tracks, which the album's map draws. */
+  tracks: string[];
+  /** `media`: a camera linked to it took some of the album's media. `added`: it was added to the list by hand. */
   source: 'media' | 'added';
-  /** How many of the media the album shows were taken by cameras that record into it. */
+  /** How many of the media the album shows were taken by cameras linked to it. */
   media: number;
 };
 
 /**
- * `album-track-list <album>`: the tracks the album's map draws, the most media first and those
- * added by hand after them; and the tracks of its media that were removed from the list. A folder
- * that is not an album lists the tracks of its media and removes none.
+ * `album-device-list <album>`: the devices whose tracks the album's map draws, the most media first
+ * and those added by hand after them; and the devices of its media that were taken off the list. A
+ * folder that is not an album lists the devices of its media and takes none off.
  */
-export type AlbumTrackList = {
+export type AlbumDeviceList = {
   album: string;
-  tracks: AlbumTrack[];
-  removed: AlbumTrack[];
+  devices: AlbumDevice[];
+  removed: AlbumDevice[];
 };
 
 /**
@@ -905,8 +909,8 @@ export type AlbumTrackList = {
  * them by their index in `stays`. It is written again whenever the track's trips are.
  */
 export type AlbumTrip = {
-  /** The track's path. */
-  track: string;
+  /** The track's node id, which a move of the track or its device keeps (`track-list` gives its path). */
+  trackId: string;
   /** Its first local day, `YYYY-MM-DD`. */
   day: string;
   /** Its first and last fix, ISO. */

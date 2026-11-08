@@ -16,9 +16,9 @@ type Props = {
 };
 
 /**
- * Picks the track a trip recorded into the wrong one is moved to: any other track (`track-list`).
- * Mounted only while open, so the tracks are listed only then; one the reader may not change
- * refuses the move.
+ * Picks the device a trip recorded on the wrong one is moved to: the track of any other device
+ * (`track-list`). Mounted only while open, so the tracks are listed only then; one the reader may
+ * not change refuses the move.
  */
 export function TripMoveDialog({ track, subtitle, busy, error, onClose, onMove }: Props) {
   const { tracks, loading } = useTracks();
@@ -27,20 +27,20 @@ export function TripMoveDialog({ track, subtitle, busy, error, onClose, onMove }
   const options = tracks.filter((entry) => entry.path !== track).map((entry) => ({ value: entry.path, label: entry.name }));
 
   return (
-    <Dialog opened onClose={() => !busy && onClose()} title='Move the trip to another track' subtitle={subtitle} icon='arrows-exchange' size='sm'>
+    <Dialog opened onClose={() => !busy && onClose()} title='Move the trip to another device' subtitle={subtitle} icon='arrows-exchange' size='sm'>
       <Stack gap='sm'>
         <Text size='sm' c='dimmed'>
-          Its positions, first to last, leave this track for the other, and the trips of both are found again.
+          Its positions, first to last, leave this device's track for the other's, and the trips of both are found again.
         </Text>
         <Select
           data-autofocus
-          label='Track'
-          placeholder={loading ? 'Loading tracks…' : 'Pick a track'}
+          label='Device'
+          placeholder={loading ? 'Loading devices…' : 'Pick a device'}
           data={options}
           value={target}
           onChange={setTarget}
           searchable
-          nothingFoundMessage='No other track'
+          nothingFoundMessage='No other device'
           comboboxProps={{ withinPortal: false }}
         />
         {error && <Text size='sm' c='red'>{error}</Text>}

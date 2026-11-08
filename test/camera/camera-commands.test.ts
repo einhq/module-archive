@@ -11,7 +11,7 @@ import type { TrackHomes } from '@archive/location/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import { historyOf, mkTracker } from '../location/tracker.ts';
+import { mkTracker, positionOf } from '../location/tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -328,7 +328,7 @@ Deno.test({
 
     await t.step("track-home lists a track's own home bases, and the homes of its cameras' owners while it has none", async () => {
       const boat = `${CAMERAS_ROOT}/Exempelbaten`;
-      const track = historyOf('exempelbaten');
+      const track = positionOf('exempelbaten');
       await cmd.shouldSucceed(mkTracker('exempelbaten', 'Exempelbaten'));
       await cmd.shouldSucceed('camera-create --name Exempelbaten');
       await cmd.shouldSucceed(`mkdir -p ${LOCATIONS_ROOT}`);
@@ -341,11 +341,11 @@ Deno.test({
       await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/huset --from 2005`);
       await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/torpet --from 1990 --to 2000`);
 
-      // No camera records into the track yet: it has no homes.
+      // No camera is linked to the track's device yet: it has no homes.
       assertEquals((await client.execJson<TrackHomes>(`track-home ${track}`)).homes, []);
 
       // Only the residence that overlaps the ownership counts, and only for the overlap.
-      await cmd.shouldSucceed(`camera-track ${boat} ${track}`);
+      await cmd.shouldSucceed(`camera-device ${boat} exempelbaten`);
       let homes = await client.execJson<TrackHomes>(`track-home ${track}`);
       assertEquals(homes.track, track);
       assertEquals(homes.homes.map((home) => [home.source, home.name, home.from, home.to]), [['owner', 'Huset', '2010', '2020']]);

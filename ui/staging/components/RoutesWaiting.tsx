@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 
 /**
  * The GPX files waiting in the staging area's `routes/` (`count`, from `staging status`) for the
- * track each belongs to, with the way to the page where it is chosen.
+ * device each belongs to, with the way to the page where it is chosen.
  */
 export function RoutesWaiting({ count }: { count: number }) {
   const navigate = useNavigate();
@@ -13,9 +13,9 @@ export function RoutesWaiting({ count }: { count: number }) {
     <Alert color='yellow' icon={<TablerIcon name='route' size={16} />} title='Needs you'>
       <Group justify='space-between' gap='sm'>
         <Text size='sm'>
-          {count === 1 ? '1 GPX file waits for the track it belongs to.' : `${count} GPX files wait for the tracks they belong to.`}
+          {count === 1 ? '1 GPX file waits for the device it belongs to.' : `${count} GPX files wait for the devices they belong to.`}
         </Text>
-        <Button size='xs' variant='light' onClick={() => navigate('/staging/routes')}>Choose track</Button>
+        <Button size='xs' variant='light' onClick={() => navigate('/staging/routes')}>Choose device</Button>
       </Group>
     </Alert>
   );

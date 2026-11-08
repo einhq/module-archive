@@ -11,25 +11,25 @@ import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
 export const handle = { fullBleed: true, signedIn: true };
 
 const SUBTITLE =
-  'These GPX files do not name a track the archive knows. Select the ones of one track, choose that track, and their routes join it. The panel says what the file you are on holds.';
+  'These GPX files do not name a device EiN knows. Select the ones of one device, choose that device, and their routes join its track. The panel says what the file you are on holds.';
 
 /**
  * `/staging/routes`: the GPX files waiting in the reader's staging area (`routes/`, where
- * `track-stage` keeps a staged one that names no single track it knows), whichever category they
+ * `track-stage` keeps a staged one that names no single device it knows), whichever category they
  * were dropped on, in the Nodes page's listing below the header and filling the rest of the page.
- * Its side panel imports the selected files into the track chosen for them (`track-list`), over
- * what the current file says of itself (`gpx-info`).
+ * Its side panel imports the selected files into the track of the device chosen for them
+ * (`track-list`), over what the current file says of itself (`gpx-info`).
  */
 export default function RoutesPage() {
   useSignals();
   const navigate = useNavigate();
   const user = currentUser.value?.username;
-  if (!user) return <Alert color='yellow' m='lg'>Sign in to give routes their track.</Alert>;
+  if (!user) return <Alert color='yellow' m='lg'>Sign in to give routes their device.</Alert>;
   return (
     <Box style={{ height: 'calc(100dvh - var(--app-shell-header-height))', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <EntityDetailHeader
         eyebrow='Staging'
-        title='Routes waiting for a track'
+        title='Routes waiting for a device'
         pattern='mixed'
         subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
         flowContent

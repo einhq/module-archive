@@ -3,7 +3,7 @@
  *
  * A home base is a softlink in the track's `homes/` directory, named by the location's slug:
  * `<track>/homes/<slug>` → `/archive/locations/<slug>`. A track that lists none has the homes of the
- * owners of the cameras that record into it instead: each residence of a person who owned such a
+ * owners of the cameras linked to its device instead: each residence of a person who owned such a
  * camera, for the part of the residence that falls while they did.
  */
 

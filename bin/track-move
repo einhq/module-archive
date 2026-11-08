@@ -4,9 +4,9 @@
  *
  *   track-move <track> <to-track> [--from <iso>] [--to <iso>]
  *
- * For a trip recorded into the wrong track. Each track is its path, or what has one: a device or a
- * camera, by its path or by its name (`trackOf`). The range is half-open, `[from, to)`; either end
- * left out runs to that end of the track. The fixes keep what a person said of them
+ * For a trip recorded into the wrong track. Each track is its path, or what has one: a device, or
+ * a camera linked to one, by its path or by its name (`trackOf`). The range is half-open,
+ * `[from, to)`; either end left out runs to that end of the track. The fixes keep what a person said of them
  * (`track-mark`), and both tracks judge again what the move changes. A fix whose time the other
  * track holds already leaves all the same, and the other keeps its own. The GPX files the fixes
  * were read from stay where they are.

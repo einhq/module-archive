@@ -5,7 +5,7 @@ import type { TrackHome, TrackHomes } from '@archive/location/api';
 
 /**
  * A track's home bases (`track-home`), or, when it lists none, the homes of the owners of the
- * cameras that record into it, and the writes that change them.
+ * cameras linked to its device, and the writes that change them.
  */
 export function useTrackHomes(path: string | undefined): {
   homes: TrackHome[];

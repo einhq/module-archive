@@ -1,7 +1,7 @@
 name: track-trips
 description: Derive a track's trips and stays again when its fixes, kind, timezone or homes change, put the stays at named locations, and give the trips their weather
 
-# Subject is the track, a track node anywhere under /archive. The fact comes from archive-bridge:
+# Subject is the track, a device's track endpoint under /dev. The fact comes from archive-bridge:
 # points were appended to it, its kind or timezone changed, or a home was added or taken off.
 trigger:
   on: track.changed

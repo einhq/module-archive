@@ -2,8 +2,8 @@
  * A track's trips and stays, kept as JSON in its `.trips` child (`@archive/location/track-trips`).
  *
  * `deriveTrackTrips` cuts the track into trips (`@archive/location/trips`) with what the track
- * says of itself: the thresholds of its kind, its timezone, its homes and the edits in its attr
- * `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
+ * says of itself: the thresholds of how it travels (its kind, else its device's class), its
+ * timezone, its homes and the edits in its attr `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more or fewer fixes before that point than it had.
  * A stay derived again from the same first fix keeps the location `track-places` gave it, and a
@@ -14,12 +14,12 @@
 
 import type { Command } from '@ein/client';
 import type { TrackTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api';
-import { trackOf } from '@archive/location/track';
+import { trackKind, trackOf } from '@archive/location/track';
 import { readTrackHomes } from '@archive/location/track-homes';
 import { trackProfile } from '@archive/location/track-profile';
 import { keepTripWeather } from '@archive/location/trip-weather';
 import { numberTrips, segmentTrips, type TripFix, type TripHome, type TripSegmentation, type TripSettings } from '@archive/location/trips';
-import { albumTracks } from '@archive/media/album-tracks';
+import { albumTrackPaths } from '@archive/media/album-devices';
 import { refreshTripAlbums } from '@archive/media/trip-album';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
@@ -76,7 +76,7 @@ export const writeTrackTrips = async (cmd: Command, track: string, trips: TrackT
     await handle.close();
   }
   await cmd.sys.vfs.update(cmd.access, path, { attrs: { size: bytes.length } });
-  await refreshTripAlbums(cmd, trips);
+  await refreshTripAlbums(cmd, track, trips);
 };
 
 /** Every fix at or after `from` (epoch ms), a window at a time, up to the track's last. */
@@ -111,7 +111,7 @@ const candidateAlbums = async (cmd: Command, track: string, trip: Omit<Trip, 'al
     });
     for (const row of rows) {
       if (!tracksOf.has(row.absPath)) {
-        tracksOf.set(row.absPath, albumTracks(cmd, row.absPath).then((list) => list.tracks.map((entry) => entry.path), () => []));
+        tracksOf.set(row.absPath, albumTrackPaths(cmd, row.absPath).catch(() => []));
       }
       if ((await tracksOf.get(row.absPath)!).includes(track)) albums.push(row.absPath);
     }
@@ -138,7 +138,7 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
   const { path: trackPath } = await trackOf(cmd, target);
   const node = await cmd.sys.vfs.get(cmd.access, trackPath);
   const attrs = node.attrs as Record<string, unknown>;
-  const profile = trackProfile(attrs.kind);
+  const profile = trackProfile(await trackKind(cmd, trackPath, node));
   const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
   const edits = tripEditsOf(attrs);
   const homes: TripHome[] = (await readTrackHomes(cmd, trackPath)).homes.flatMap((home) =>
@@ -157,7 +157,7 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
   // What the trips are derived with, besides the track. Anything else reads the whole track.
   const basis = JSON.stringify({ clusterRadiusM: profile.clusterRadiusM, longRestMs: profile.longRestMs, timezone, homes, edits });
 
-  const empty: TrackTrips = { track: trackPath, computedAt: new Date(settings.now!).toISOString(), basis, trips: [], stays: [] };
+  const empty: TrackTrips = { computedAt: new Date(settings.now!).toISOString(), basis, trips: [], stays: [] };
   const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [node.id])).get(node.id);
   if (!summary?.firstTs || !summary.lastTs) return empty;
 
@@ -217,7 +217,6 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
   const settledUntil = seg.settledUntil ?? (previous ? from : undefined);
   const settledPoints = (previous?.settledPoints ?? 0) + (settledUntil === undefined ? 0 : fixes.filter((fix) => fix.ms < settledUntil).length);
   const trips: TrackTrips = {
-    track: trackPath,
     computedAt: new Date(settings.now!).toISOString(),
     lastFix: summary.lastTs,
     ...(settledUntil !== undefined ? { settledUntil: new Date(settledUntil).toISOString(), settledPoints } : {}),

@@ -6,15 +6,15 @@
  *
  * For each file: its size, its own name, description and time, its creator, its tracks' names,
  * how many track points it has and how many carry a time, the earliest and latest of those times,
- * and the archive's tracks it names (`tracksForGpx`, as `track-stage` matches them). A file
+ * and the tracks of the devices it names (`tracksForGpx`, as `track-stage` matches them). A file
  * that cannot be read is answered with why, and the command then exits 1.
  */
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, parseGpx, reportUnknownFlags } from '@ein/client';
 import { resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
 import type { GpxInfo } from '@archive/location/api';
-import { listTracks, parseGpx, trackCameras, tracksForGpx } from '@archive/location/track';
+import { listTracks, trackNames, tracksForGpx } from '@archive/location/track';
 
 /** One line per fact the file gives, under its path. */
 const describe = (info: GpxInfo): string[] => {
@@ -29,7 +29,7 @@ const describe = (info: GpxInfo): string[] => {
     ...(info.tracks.length > 0 ? [`  tracks: ${info.tracks.join(', ')}`] : []),
     `  points: ${info.points}${info.timed < info.points ? ` (${info.timed} with a time)` : ''}${span}`,
     `  size: ${info.size} bytes`,
-    `  matches: ${info.matches.length > 0 ? info.matches.map((track) => track.path).join(', ') : 'no track it names'}`,
+    `  matches: ${info.matches.length > 0 ? info.matches.map((track) => track.path).join(', ') : 'no device it names'}`,
   ];
 };
 
@@ -46,8 +46,8 @@ const gpxInfo = async (cmd: Command): CmdReturn => {
   }
 
   const listed = await listTracks(cmd);
-  const cameras = await trackCameras(cmd, listed.map((track) => track.path));
-  const tracks = listed.map((track) => ({ ...track, cameras: cameras.get(track.path) }));
+  const names = await trackNames(cmd, listed.map((track) => track.path));
+  const tracks = listed.map((track) => ({ ...track, names: names.get(track.path) }));
   const answers: GpxInfo[] = [];
   for (const target of targets) {
     const path = resolve(cmd.cwd, target);
@@ -94,7 +94,7 @@ gpxInfo.spec = {
   name: 'gpx-info',
   effect: 'read' as const,
   description:
-    "Say what GPX files hold without importing them: size, name, description, time, creator, tracks, points and their time span, and the archive's tracks each names",
+    'Say what GPX files hold without importing them: size, name, description, time, creator, tracks, points and their time span, and the tracks of the devices each names',
   args: [
     { name: 'gpx', type: 'path' as const, description: 'VFS paths to GPX files', variadic: true },
   ],

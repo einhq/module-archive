@@ -4,7 +4,7 @@ import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import type { CameraDetail, CameraOwner } from '../hooks/useCamera.ts';
 import { CameraOwners } from './CameraOwners.tsx';
-import { CameraTrack } from './CameraTrack.tsx';
+import { CameraDevice } from './CameraDevice.tsx';
 
 type CameraInfoProps = {
   camera: CameraDetail;
@@ -16,15 +16,15 @@ type CameraInfoProps = {
   /** Links the media it took that were indexed before it matched them; `relinking` while it runs. */
   onRelink: () => void;
   relinking: boolean;
-  /** `useCamera().setTrack`. */
-  setTrack: (track: string | null) => Promise<void>;
+  /** `useCamera().setDevice`. */
+  setDevice: (device: string | null) => Promise<void>;
 };
 
 /**
- * Everything known about a camera beside its timeline: its settings, who has owned it, the track it
- * records into, and what it is.
+ * Everything known about a camera beside its timeline: its settings, who has owned it, the device it
+ * is part of, and what it is.
  */
-export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setTrack }: CameraInfoProps) {
+export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setDevice }: CameraInfoProps) {
   const matchable = Boolean(camera.serial || (camera.make && camera.model));
   const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.digitizer || camera.quicktimeUtc;
 
@@ -66,7 +66,7 @@ export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, on
 
       <CameraOwners camera={camera} owners={owners} editable={editable} setOwner={setOwner} removeOwner={removeOwner} />
 
-      <CameraTrack track={camera.track} editable={editable} setTrack={setTrack} />
+      <CameraDevice device={camera.device} name={camera.deviceName} editable={editable} setDevice={setDevice} />
 
       {camera.description && (
         <InfoSection title='About'>

@@ -14,13 +14,13 @@ import { assertEquals } from '@std/assert';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { TrackPlaces, TrackTrips, TripList } from '@archive/location/api';
 import type { AlbumTrip } from '@archive/media/api';
-import { historyOf, mkTracker } from './tracker.ts';
+import { mkTracker, positionOf } from './tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
 
-const TRACK = historyOf('the-sailboat');
-const DINGHY = historyOf('the-dinghy');
+const TRACK = positionOf('the-sailboat');
+const DINGHY = positionOf('the-dinghy');
 /** Where the first stay is; away from a tile's edge, so the stays 10 km apart are in tiles of their own. */
 const BASE_LAT = 59.02;
 const M2DEG = 1 / 111_320;

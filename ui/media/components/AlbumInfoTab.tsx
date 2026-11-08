@@ -1,19 +1,20 @@
 import { CoverAvatar, formatRange, TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Anchor, Badge, Button, Group, Loader, SimpleGrid, Text, Tooltip } from '@mantine/core';
 import { countOf, paramsFromFilters, type SearchFilters, subjectArg } from '@ein/ui/lib';
-import type { AlbumTrack, SubjectTally } from '@archive/media/api';
+import type { AlbumDevice, SubjectTally } from '@archive/media/api';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EntityPicker } from '../../components/EntityPicker.tsx';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { useTracks } from '../../location/hooks/useTracks.ts';
-import { useAlbumTracks } from '../hooks/useAlbumTracks.ts';
+import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
+import { deviceRoute } from '../../location/lib/device-route.ts';
 import { useContainerSubjects } from '../hooks/useContainerSubjects.ts';
 
 type AlbumInfoTabProps = {
   path: string;
-  /** Whether the reader may change the album's list of tracks: an album they may write. */
+  /** Whether the reader may change the album's list of devices: an album they may write. */
   editable: boolean;
   title: string;
   description?: string;
@@ -77,24 +78,22 @@ function SubjectList({ under, kind, rows, subject }: { under: string; kind: 'per
   );
 }
 
-const trackRoute = (path: string): string => `/tracks/${encodeURIComponent(path)}`;
-
 /**
- * One track on the album's list, or removed from it: its page, then how many of the media its
- * cameras took or how it got there, then the change offered.
+ * One device on the album's list, or taken off it: its page, then how many of the media its cameras
+ * took or how it got there, then the change offered.
  */
-function TrackRow({ track, action }: { track: AlbumTrack; action?: { label: string; icon: string; run: () => void } }) {
+function DeviceRow({ device, action }: { device: AlbumDevice; action?: { label: string; icon: string; run: () => void } }) {
   return (
     <Group gap='sm' wrap='nowrap' justify='space-between'>
       <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
         <TablerIcon name='route' size={16} style={{ flexShrink: 0 }} />
-        <Anchor component={Link} to={trackRoute(track.path)} size='sm' truncate>{track.name}</Anchor>
+        <Anchor component={Link} to={deviceRoute(device.path) ?? '/devices'} size='sm' truncate>{device.name}</Anchor>
       </Group>
       <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
-        <Text size='xs' c='dimmed'>{track.source === 'media' ? track.media.toLocaleString() : 'added'}</Text>
+        <Text size='xs' c='dimmed'>{device.source === 'media' ? device.media.toLocaleString() : 'added'}</Text>
         {action && (
           <Tooltip label={action.label}>
-            <ActionIcon variant='subtle' size='sm' color='gray' aria-label={`${action.label}: ${track.name}`} onClick={action.run}>
+            <ActionIcon variant='subtle' size='sm' color='gray' aria-label={`${action.label}: ${device.name}`} onClick={action.run}>
               <TablerIcon name={action.icon} size={14} />
             </ActionIcon>
           </Tooltip>
@@ -104,37 +103,36 @@ function TrackRow({ track, action }: { track: AlbumTrack; action?: { label: stri
   );
 }
 
-/** Every track not on the list, to add one; the tracks are listed only where this is offered. */
-function AddTrack({ listed, onAdd }: { listed: AlbumTrack[]; onAdd: (track: string) => void }) {
+/** Every device with a track not on the list, to add one; the devices are listed only where this is offered. */
+function AddDevice({ listed, onAdd }: { listed: AlbumDevice[]; onAdd: (device: string) => void }) {
   const { tracks } = useTracks();
   const options = useMemo(() => {
-    const on = new Set(listed.map((track) => track.path));
-    return tracks
-      .filter((track) => !on.has(track.path))
-      .map((track) => ({ value: track.path, label: track.name }))
-      .sort((a, b) => a.label.localeCompare(b.label, 'sv'));
+    const on = new Set(listed.map((device) => device.path));
+    const devices = new Map<string, string>();
+    for (const track of tracks) if (track.device && !on.has(track.device) && !devices.has(track.device)) devices.set(track.device, track.name);
+    return [...devices].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label, 'sv'));
   }, [listed, tracks]);
   return (
     <EntityPicker
-      kind='track'
+      kind='device'
       size='xs'
       mt='xs'
-      placeholder='Add a track to the map'
+      placeholder='Add a device to the map'
       data={options}
       value={null}
-      onChange={(track) => track && onAdd(track)}
+      onChange={(device) => device && onAdd(device)}
     />
   );
 }
 
 /**
- * The tracks the album's map draws (`album-track-list`): those the cameras of its media record
- * into, with how many of the media they took, and those added by hand. Whoever may write the album
- * adds a track to the list, takes one off, and puts back one of its media's tracks that was taken
- * off.
+ * The devices whose tracks the album's map draws (`album-device-list`): those the cameras of its
+ * media are linked to, with how many of the media they took, and those added by hand. Whoever may
+ * write the album adds a device to the list, takes one off, and puts back one of its media's
+ * devices that was taken off.
  */
-function AlbumTracks({ path, editable }: { path: string; editable: boolean }) {
-  const { list, loading, add, remove } = useAlbumTracks(path);
+function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
+  const { list, loading, add, remove } = useAlbumDevices(path);
   const [error, setError] = useState<string | null>(null);
 
   const change = (run: () => Promise<void>) => () => {
@@ -143,31 +141,31 @@ function AlbumTracks({ path, editable }: { path: string; editable: boolean }) {
   };
 
   if (loading || !list) return null;
-  if (!editable && list.tracks.length === 0) return null;
+  if (!editable && list.devices.length === 0) return null;
 
   return (
-    <InfoSection title='Tracks'>
-      {list.tracks.length === 0 && <Text size='sm' c='dimmed'>No tracks: the map shows no routes.</Text>}
-      {list.tracks.map((track) => (
-        <TrackRow
-          key={track.path}
-          track={track}
-          action={editable ? { label: 'Take off the map', icon: 'x', run: change(() => remove(track.path)) } : undefined}
+    <InfoSection title='Devices'>
+      {list.devices.length === 0 && <Text size='sm' c='dimmed'>No devices: the map shows no routes.</Text>}
+      {list.devices.map((device) => (
+        <DeviceRow
+          key={device.path}
+          device={device}
+          action={editable ? { label: 'Take off the map', icon: 'x', run: change(() => remove(device.path)) } : undefined}
         />
       ))}
       {editable && list.removed.length > 0 && (
         <>
           <Text size='xs' c='dimmed' mt='xs'>Taken off the map</Text>
-          {list.removed.map((track) => (
-            <TrackRow
-              key={track.path}
-              track={track}
-              action={{ label: 'Put back on the map', icon: 'plus', run: change(() => add(track.path)) }}
+          {list.removed.map((device) => (
+            <DeviceRow
+              key={device.path}
+              device={device}
+              action={{ label: 'Put back on the map', icon: 'plus', run: change(() => add(device.path)) }}
             />
           ))}
         </>
       )}
-      {editable && <AddTrack listed={list.tracks} onAdd={(track) => change(() => add(track))()} />}
+      {editable && <AddDevice listed={list.devices} onAdd={(device) => change(() => add(device))()} />}
       {error && <Text size='xs' c='red'>{error}</Text>}
     </InfoSection>
   );
@@ -176,8 +174,9 @@ function AlbumTracks({ path, editable }: { path: string; editable: boolean }) {
 /**
  * What an album is and what is in it: its dates, its media by kind and how many have a position,
  * and who and what its media have — the people in them, where they were taken, the cameras that took
- * them, who held the camera and the labels they carry (`subjects-in`) — and the tracks its map
- * draws. Each opens its own page, and its count a search of this album's media that have it.
+ * them, who held the camera and the labels they carry (`subjects-in`) — and the devices whose
+ * tracks its map draws. Each opens its own page, and its count a search of this album's media that
+ * have it.
  */
 export function AlbumInfoTab({ path, editable, title, description, timeStart, timeEnd, facets }: AlbumInfoTabProps) {
   const { subjects, loading } = useContainerSubjects(path);
@@ -230,7 +229,7 @@ export function AlbumInfoTab({ path, editable, title, description, timeStart, ti
         </InfoSection>
       )}
 
-      <AlbumTracks path={path} editable={editable} />
+      <AlbumDevices path={path} editable={editable} />
 
       {subjects && subjects.photographers.length > 0 && (
         <InfoSection title='Photographers'>

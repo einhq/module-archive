@@ -25,20 +25,25 @@ export type LocationEntry = {
 };
 
 /**
- * `track-list`: a track — a `track` node anywhere under the archive — with the track registry's
- * summary of it; no points read.
+ * `track-list`: a track — a device's `track` endpoint under `/dev`, such as a phone's or a boat's
+ * `position` — with the track registry's summary of it; no points read.
  */
 export type TrackEntry = {
-  /** The track's path, which its page's route takes, URI-encoded. */
+  /** The track's path. */
   path: string;
-  /** The track node's id. */
+  /** The track node's id, which a move keeps. */
   nodeId: string;
+  /** The device it is an endpoint of, `/dev/<device>`, whose page shows it. */
+  device?: string;
   /**
-   * What it is called: its own `label`, else the label, name or node name of the nearest node
-   * above it that is neither a track nor an entity, such as the device it is the history of.
+   * What it is called: its device's label (a device's track other than `position` adds its own
+   * label), else its own `label`, else the label, name or node name of the nearest node above it.
    */
   name: string;
-  /** How it travels (`TravelKind`), which sets the units its speed is shown in. */
+  /**
+   * How it travels (`TravelKind`), which sets the units its speed is shown in: its own `kind`, else
+   * its device's `class` when that is a kind.
+   */
   kind?: string;
   description?: string;
   points: number;
@@ -48,10 +53,10 @@ export type TrackEntry = {
 };
 
 /**
- * `track-stage`: the file's fixes joined a track, or it waits at `path` (in its staging area's
- * `routes/` when it was staged) for someone to say which track it belongs to; `candidates` are the
- * tracks it names. `skipped` counts the fixes the track already had, `untimed` the points without a
- * time, which no track takes.
+ * `track-stage`: the file's fixes joined a device's track, or it waits at `path` (in its staging
+ * area's `routes/` when it was staged) for someone to say which device it belongs to; `candidates`
+ * are the tracks of the devices it names. `skipped` counts the fixes the track already had,
+ * `untimed` the points without a time, which no track takes.
  */
 export type TrackStageResult =
   | { status: 'imported'; track: string; imported: number; skipped: number; untimed: number; source: string }
@@ -80,7 +85,7 @@ export type GpxInfo =
     /** The earliest and latest point time. */
     start?: string;
     end?: string;
-    /** The archive's tracks the file names, which `track-stage` would choose from. */
+    /** The tracks of the devices the file names, which `track-stage` would choose from. */
     matches: { path: string; name: string }[];
   }
   | { path: string; error: string };
@@ -234,7 +239,7 @@ export type Trip = {
   joined?: string[];
   /** `track-weather`: the weather over all its days. */
   weather?: TripWeather;
-  /** Albums whose span overlaps it and whose map draws the track (`album-track-list`). */
+  /** Albums whose span overlaps it and whose map draws the track (`album-device-list`). */
   albums: string[];
   /** `trip-list`: the album it was made (`trip-album`). `.trips` does not keep it. */
   album?: string;
@@ -248,10 +253,11 @@ export type TripEdits = {
   split?: string[];
 };
 
-/** `track-trips`: a track's trips and stays, as kept in `<track>/.trips`. */
+/**
+ * `track-trips`: a track's trips and stays, as kept in `<track>/.trips`. It names no track: it is
+ * the child of the one it is of, and moves with it.
+ */
 export type TrackTrips = {
-  /** The track's path. */
-  track: string;
   /** When they were derived, ISO. */
   computedAt: string;
   /** The track's last fix, ISO. */
@@ -319,6 +325,7 @@ export type TrackWeather = {
 
 /** `trip-list`: a track's trips and stays as last derived; none when they never were. */
 export type TripList = {
+  /** The track's path. */
   track: string;
   /** When they were derived, ISO; absent when they never were. */
   computedAt?: string;
@@ -339,7 +346,7 @@ export type TrackHome = {
   name: string;
   /**
    * `track` when the track lists it in its `homes/`; `owner` when it is the residence of an owner
-   * of a camera that records into the track, used because the track lists none.
+   * of a camera linked to the track's device, used because the track lists none.
    */
   source: 'track' | 'owner';
   /** Whose residence it is, for `owner`. */

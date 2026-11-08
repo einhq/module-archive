@@ -8,7 +8,7 @@
  *    is a category: one without settings is adopted with the `generic` kind's. Each category has
  *    its directory of groups under `albums/`, owned and private the same way.
  * 3. Unless only the layout is asked for, what does not belong where it is moves, with every link
- *    to it following (`renameMany`): a GPX file waiting for a track into `routes/`; any other
+ *    to it following (`renameMany`): a GPX file waiting for a device into `routes/`; any other
  *    entry of `files/` that is not a directory into the default category's loose batch; an entry
  *    of `albums/` that is not a directory (a group from before categories) into the default
  *    category's groups. A name taken there gets `-2`, `-3`, … before its extension. With `idleMs`,
@@ -125,7 +125,7 @@ export const initStaging = async (vfs: Vfs, access: Access, user: string, option
   const inboxPath = `${roots.filesPath}/${DEFAULT_CATEGORY}`;
   const moves: { from: string; to: string; kind: 'moved' | 'groups' | 'routes' }[] = [];
 
-  // A GPX file waiting for a track, wherever under files/ it is.
+  // A GPX file waiting for a device, wherever under files/ it is.
   const waiting = new Set<string>();
   if (await vfs.exists(access, roots.filesPath)) {
     let after: string | undefined;

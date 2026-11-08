@@ -13,8 +13,8 @@ import { useTrackHomes } from '../hooks/useTrackHomes.ts';
 const locationRoute = (path: string): string => `/locations/${encodeURIComponent(path.split('/').pop() ?? path)}`;
 
 /**
- * Where arriving ends one of the track's trips, as a section of its Info tab: the locations it
- * lists, or, while it lists none, the homes of the owners of the cameras that record into it, for
+ * Where arriving ends one of the track's trips, as a section of its Travel view: the locations it
+ * lists, or, while it lists none, the homes of the owners of the cameras linked to its device, for
  * the time they owned them. `track` is the track's path; `editable` offers adding and removing its
  * own.
  */
@@ -95,7 +95,7 @@ export function TrackHomes({ track, editable }: { track: string; editable: boole
       ))}
       {own.length === 0 && (
         <Text size='sm' c='dimmed'>
-          {owners.length > 0 ? 'None set, so the homes of the owners of its cameras count:' : 'None set, and no owner of a camera that records into it has a home recorded.'}
+          {owners.length > 0 ? 'None set, so the homes of the owners of its cameras count:' : 'None set, and no owner of a camera linked to the device has a home recorded.'}
         </Text>
       )}
       {owners.map((home) => (

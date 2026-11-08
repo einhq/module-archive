@@ -6,7 +6,7 @@ import type { TrackEntry } from '@archive/location/api';
 
 /** The settings `track-update` writes, as the form holds them: an empty string is none. */
 export type TrackFields = {
-  /** How it travels (`TravelKind`). */
+  /** How it travels (`TravelKind`), its own: none reads its device's class. */
   kind: string;
   /** The IANA timezone its trips are cut into days in. */
   timezone: string;
@@ -15,8 +15,12 @@ export type TrackFields = {
 
 export type TrackDetail = TrackFields & {
   path: string;
-  /** What `track-list` calls it: its own label, or the device or camera it belongs to. */
+  /** What `track-list` calls it: its device's label. */
   name: string;
+  /** The device it is the track of, when it is one's. */
+  device?: string;
+  /** How it travels as `track-list` reads it: its own kind, else its device's class when that is one. */
+  travels?: string;
   points: number;
   firstTs?: string;
   lastTs?: string;
@@ -25,12 +29,16 @@ export type TrackDetail = TrackFields & {
 
 const str = (value: unknown): string => typeof value === 'string' ? value : '';
 
+/** A device's position, or its only track, of the tracks under it. */
+const trackOf = (tracks: TrackEntry[], target: string): TrackEntry | undefined =>
+  tracks.find((entry) => entry.path === target) ?? tracks.find((entry) => entry.path === `${target}/position`) ?? (tracks.length === 1 ? tracks[0] : undefined);
+
 /**
- * One track for its page: what `track-list` says of it, its settings and who may change them, and
- * `save`, which writes the settings that changed through `track-update` (an emptied one is cleared)
- * and reads it again.
+ * The track of a device for its Trips tab, `target` the device's path (or the track's): what
+ * `track-list` says of it, its settings and who may change them, and `save`, which writes the
+ * settings that changed through `track-update` (an emptied one is cleared) and reads it again.
  */
-export function useTrackDetail(path: string | undefined): {
+export function useTrackDetail(target: string | undefined): {
   track: TrackDetail | null;
   loading: boolean;
   error: string | null;
@@ -42,17 +50,19 @@ export function useTrackDetail(path: string | undefined): {
   const [error, setError] = useState<string | null>(null);
 
   const refetch = useCallback(async () => {
-    if (!path) return;
+    if (!target) return;
     try {
-      const [tracks, node] = await Promise.all([execCommand<TrackEntry[]>('track-list'), execCommand<StatNode>(`stat ${shq(path)}`)]);
-      const entry = tracks.find((candidate) => candidate.path === path);
-      if (!entry || node.type !== 'track') {
+      const entry = trackOf(await execCommand<TrackEntry[]>(`track-list ${shq(target)}`), target);
+      const node = entry && await execCommand<StatNode>(`stat ${shq(entry.path)}`);
+      if (!entry || !node || node.type !== 'track') {
         setTrack(null);
         return;
       }
       setTrack({
-        path,
+        path: entry.path,
         name: entry.name,
+        ...(entry.device ? { device: entry.device } : {}),
+        ...(entry.kind ? { travels: entry.kind } : {}),
         points: entry.points,
         firstTs: entry.firstTs,
         lastTs: entry.lastTs,
@@ -68,7 +78,7 @@ export function useTrackDetail(path: string | undefined): {
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [target]);
 
   useEffect(() => {
     setLoading(true);
@@ -76,16 +86,16 @@ export function useTrackDetail(path: string | undefined): {
   }, [refetch]);
 
   const save = useCallback(async (fields: TrackFields) => {
-    if (!path || !track) return;
+    if (!track) return;
     const parts: string[] = [];
     for (const key of ['kind', 'timezone', 'description'] as const) {
       const next = fields[key].trim();
       if (next === track[key].trim()) continue;
       parts.push(next === '' ? `--clear ${key}` : `--${key} ${shq(next)}`);
     }
-    if (parts.length > 0) await execCommand(`track-update ${shq(path)} ${parts.join(' ')}`);
+    if (parts.length > 0) await execCommand(`track-update ${shq(track.path)} ${parts.join(' ')}`);
     await refetch();
-  }, [path, track, refetch]);
+  }, [track, refetch]);
 
   return { track, loading, error, refetch, save };
 }

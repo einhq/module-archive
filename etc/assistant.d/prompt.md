@@ -7,7 +7,7 @@ ITS NODES:
 - person, album and camera are directories with attributes of their own — a person's name, fullname, birthname, born, died, gender, contact, description; an album's name, description, timeStart, timeEnd, mediaCount; a camera's name, serialNumber. stat or person-info reads them.
 - Who is in a picture, a person's parents, children, partners and homes are softlinks to the people and locations.
 - location: a location; its address is in the attributes, cat prints its coordinates as JSON.
-- track: a GPS track; its attributes hold its name, time span and bounding box.
+- track: where a device (a phone, a GPS logger, a boat) was, at /dev/<device>/position; track-list gives its name, time span and bounding box, trip-list its trips.
 - A picture or video is not text: media-details describes it.
 
 NAMES: a person or a file is named by its path. Given only a person's name, find the path with search-people, then use it. search-people takes a name, never a kin word.

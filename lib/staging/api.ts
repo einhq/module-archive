@@ -459,7 +459,7 @@ export type StagingStatus = {
  * `created`, and `repaired` to the home's owner and 0700 or to a category's settings; directories
  * under `files/` `adopted` as categories; `moved` loose entries of `files/` into `movedTo`, the
  * default category's loose batch; `groups` loose groups of `albums/` into the default category's;
- * `routes` GPX files waiting for a track into `routes/`; the links that followed; the moves that
+ * `routes` GPX files waiting for a device into `routes/`; the links that followed; the moves that
  * failed.
  */
 export type StagingInitUser = {
@@ -487,7 +487,7 @@ export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingIn
  * `loose-entry` in `files/` or `albums/`, which hold categories only;
  * `no-inbox`, the default category missing or of another kind; `orphan-albums`, a directory of
  * groups with no category; `cross-category`, a group's link to a file outside its category;
- * `dangling-link`, one to nothing; `waiting-route`, a GPX file waiting for a track outside
+ * `dangling-link`, one to nothing; `waiting-route`, a GPX file waiting for a device outside
  * `routes/`.
  */
 export type StagingCheckProblem = {

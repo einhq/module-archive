@@ -25,7 +25,7 @@ const build = (tripOf: TripOf | null) => (v: FormValues) => {
 /**
  * `/albums/new`, in the dialog from the top bar's Create menu or as a page of its own. With
  * `?track=` (a track's path) and `?trip=` the album is made of that trip of the track
- * (`trip-album --album`), from its card on the track's Trips tab; `?name=` is the name it starts
+ * (`trip-album --album`), from its card on a device's Trips tab; `?name=` is the name it starts
  * with and `?of=` the trip's days as the card shows them.
  */
 export default function NewAlbumPage() {

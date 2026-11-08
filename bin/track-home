@@ -6,10 +6,10 @@
  *   track-home <track> --add <location>...     make locations home bases
  *   track-home <track> --remove <location>...  take them off
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`); a location is its path or its slug under the locations root. Without a change it
- * answers the track's own list, or, while it lists none, the residences of the owners of the
- * cameras that record into it (`@archive/location/track-homes`). A home added or taken off derives
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`); a location is its path or its slug under the locations root. Without a
+ * change it answers the track's own list, or, while it lists none, the residences of the owners of
+ * the cameras linked to its device (`@archive/location/track-homes`). A home added or taken off derives
  * the track's trips again: the bridge announces it (`track.changed`).
  */
 
@@ -83,7 +83,7 @@ trackHome.spec = {
   examples: [
     'track-home sailboat',
     'track-home sailboat --add exempelhamnen',
-    'track-home /archive/devices/sailboat/position/history --remove /archive/locations/exempelhamnen',
+    'track-home /dev/sailboat/position --remove /archive/locations/exempelhamnen',
   ],
   returns: 'without a change: the home bases, each with its location, name, source (track, or owner with the span) and point when it has one.',
 };

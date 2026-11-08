@@ -7,12 +7,12 @@
 import { assert, assertEquals } from '@std/assert';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { TrackTrips, TripList } from '@archive/location/api';
-import { historyOf, mkTracker } from './tracker.ts';
+import { mkTracker, positionOf } from './tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
 
-const TRACK = historyOf('the-sailboat');
+const TRACK = positionOf('the-sailboat');
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

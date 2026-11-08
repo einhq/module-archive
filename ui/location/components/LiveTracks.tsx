@@ -6,6 +6,7 @@ import type { LiveTrack } from '../hooks/useLiveTracks.ts';
 import { formatAge, speedOf } from '../lib/live.ts';
 import { formatSpeed, trackProfile } from '@archive/location/track-profile';
 import { dayColor } from '../lib/track-colors.ts';
+import { deviceRoute } from '../lib/device-route.ts';
 import './live-tracks.css';
 
 /** The color a live track is drawn in: its color for the day of its last fix. */
@@ -94,7 +95,7 @@ export function FollowButton({ entry, following, onFollow }: { entry: LiveTrack;
   );
 }
 
-/** One row per live track: its color, its name linking to its page, its speed and the age of its fix, and a Follow toggle. */
+/** One row per live track: its color, its name linking to its device's page, its speed and the age of its fix, and a Follow toggle. */
 export function LiveTrackList({ live, now, following, onFollow }: {
   live: LiveTrack[];
   now: number;
@@ -107,7 +108,7 @@ export function LiveTrackList({ live, now, following, onFollow }: {
         <Group key={entry.track.path} gap='xs' wrap='nowrap'>
           <Box w={10} h={10} style={{ borderRadius: '50%', background: liveColor(entry), flex: 'none' }} />
           <Box style={{ flex: 1, minWidth: 0 }}>
-            <Anchor component={Link} to={`/tracks/${encodeURIComponent(entry.track.path)}`} size='sm' fw={500} truncate display='block'>
+            <Anchor component={Link} to={deviceRoute(entry.track.path) ?? '/devices'} size='sm' fw={500} truncate display='block'>
               {entry.track.name}
             </Anchor>
             <Text size='xs' c='dimmed' truncate>{liveSummary(entry, now)}</Text>

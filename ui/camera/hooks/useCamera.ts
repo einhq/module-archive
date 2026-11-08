@@ -1,6 +1,7 @@
 import { PEOPLE_ROOT } from '@archive/paths';
 import { useCallback, useEffect, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
+import type { StatNode } from '@ein/ui/hooks';
 import { NodeChildEntry, NodeOwnership, shq } from '@ein/ui/lib';
 import { CAMERAS_ROOT } from './useCameras.ts';
 import type { RelinkResult } from '@archive/camera/api';
@@ -21,8 +22,9 @@ export type CameraDetail = CameraFields & {
   id: string;
   path: string;
   ownership: NodeOwnership;
-  /** The path of the track it records into (its child softlink `track`), when it links to one. */
-  track?: string;
+  /** The path of the device it is part of (its child softlink `device`), when it links one, and its label. */
+  device?: string;
+  deviceName?: string;
 };
 
 export type CameraOwner = {
@@ -47,8 +49,8 @@ type UseCameraResult = {
   removeOwner: (personId: string) => Promise<void>;
   /** Link media this camera produced but was registered too late to claim. */
   relink: () => Promise<RelinkResult>;
-  /** Link the camera to the track at `track` (`camera-track`), or with null take the link away. */
-  setTrack: (track: string | null) => Promise<void>;
+  /** Link the camera to the device at `device` (`camera-device`), or with null take the link away. */
+  setDevice: (device: string | null) => Promise<void>;
 };
 
 type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
@@ -102,8 +104,9 @@ export function useCamera(id: string | undefined): UseCameraResult {
       }
 
       const attrs = entry.node.attrs as Record<string, unknown>;
-      // A camera that records no track has no `track` link, which is not an error.
-      const track = await execCommand<{ softlink?: string }>(`props -L ${shq(`${path}/track`)}`).then((props) => props.softlink, () => undefined);
+      // A camera that is part of no device has no `device` link, which is not an error.
+      const device = await execCommand<{ softlink?: string }>(`props -L ${shq(`${path}/device`)}`).then((props) => props.softlink, () => undefined);
+      const deviceName = device && await execCommand<StatNode>(`stat ${shq(device)}`).then((node) => str(node.attrs.label) || undefined, () => undefined);
       setCamera({
         id,
         path,
@@ -116,7 +119,8 @@ export function useCamera(id: string | undefined): UseCameraResult {
         digitizer: attrs.digitizer === true,
         quicktimeUtc: attrs.quicktimeUtc === true,
         ownership: { mode: entry.node.props.mode, uid: entry.node.props.uid, gid: entry.node.props.gid },
-        ...(track ? { track } : {}),
+        ...(device ? { device } : {}),
+        ...(deviceName ? { deviceName } : {}),
       });
 
       // The camera itself is enough to draw the page, so stop blocking here. What
@@ -220,11 +224,11 @@ export function useCamera(id: string | undefined): UseCameraResult {
     return await execCommand<RelinkResult>(`camera-relink ${shq(path)}`);
   }, [path]);
 
-  const setTrack = useCallback(async (track: string | null) => {
+  const setDevice = useCallback(async (device: string | null) => {
     if (!path) return;
-    await execCommand(`camera-track ${shq(path)} ${track ? shq(track) : '--none'}`);
+    await execCommand(`camera-device ${shq(path)} ${device ? shq(device) : '--off'}`);
     await fetchCamera();
   }, [path, fetchCamera]);
 
-  return { camera, owners, loading, error, refetch: fetchCamera, save, addOwner, removeOwner, relink, setTrack };
+  return { camera, owners, loading, error, refetch: fetchCamera, save, addOwner, removeOwner, relink, setDevice };
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ARCHIVE_PATH } from '@ein/paths';
+import { DEV_PATH } from '@ein/paths';
 import { useNodeEvents } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, shellClientEpoch } from '@ein/ui/signals';
@@ -32,7 +32,7 @@ const RELIST_MS = 10_000;
  * The tracks among `tracks` that are live — their last fix is under four hours old — kept current
  * as they grow.
  *
- * One subscription to `updated` events on the tracks under the archive: an event for a live
+ * One subscription to `updated` events on the devices' tracks under `/dev`: an event for a live
  * track reads it from its last fix on (`track-read --from --still`, which drops a new fix that is a
  * spike) and appends what is new; an event for
  * any other track asks for the list again through `relist`, since that track may just have woken
@@ -104,7 +104,7 @@ export function useLiveTracks(tracks: TrackEntry[], relist: () => void): { live:
     }
   }, [candidates, fixes, read]);
 
-  useNodeEvents({ pathPrefix: ARCHIVE_PATH, nodeTypes: ['track'], eventTypes: ['updated'] }, (event) => {
+  useNodeEvents({ pathPrefix: DEV_PATH, nodeTypes: ['track'], eventTypes: ['updated'] }, (event) => {
     const track = candidatesRef.current.find((candidate) => candidate.path === event.path);
     const from = track && latestTs(track, fixesRef.current);
     if (from) {

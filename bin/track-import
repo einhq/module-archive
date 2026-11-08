@@ -4,20 +4,21 @@
  *
  *   track-import <track> /uploads/trip.gpx
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`).
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`).
  *
- * Reads the GPX from a VFS file node (upload via PUT /file/<path>), parses
- * <trkpt> elements (lat/lon attrs, optional <ele>/<time>) and appends those with a
- * time; a point without one is left out and counted as `untimed`.
+ * Reads the GPX from a VFS file node (upload via PUT /file/<path>), parses <trkpt> elements
+ * (lat/lon attrs, optional <ele>/<time>) and appends those with a time; a point without one is left
+ * out and counted as `untimed`. A device's `position` its `tracker` driver keeps is given the file
+ * as `cat <file> > /dev/<device>` gives it (`appendGpx`).
  * Re-importing the same file appends nothing: a fix is keyed by its timestamp.
  * The file stays where it is, and a copy is kept in the track's `routes/`, linked
  * from its `sources/` (`keepRoute`); `track-stage` moves it there instead.
  */
-import { keepRoute, openTrack, parseGpx, timedPoints, TRACK_ARG } from '@archive/location/track';
+import { appendGpx, keepRoute, TRACK_ARG, trackOf } from '@archive/location/track';
 import { sha256Hex } from '@archive/sources';
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, parseGpx, reportUnknownFlags, timedPoints } from '@ein/client';
 import { resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
 
@@ -56,13 +57,8 @@ const trackImport = async (cmd: Command): CmdReturn => {
       return 1;
     }
 
-    const { path: trackPath, handle } = await openTrack(cmd, target, 'a');
-    let imported: number;
-    try {
-      imported = await handle.appendPoints(points);
-    } finally {
-      await handle.close();
-    }
+    const { path: trackPath } = await trackOf(cmd, target);
+    const imported = await appendGpx(cmd, trackPath, bytes, points);
     const source = await keepRoute(cmd, trackPath, gpxPath, await sha256Hex(bytes), { copy: true });
 
     if (cmd.json) {

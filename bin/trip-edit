@@ -5,8 +5,8 @@
  *   trip-edit <track> <trip> --merge
  *   trip-edit <track> <day> --split
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). `--merge` joins the trip (its id from `trip-list`, or its first day) to the trip
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). `--merge` joins the trip (its id from `trip-list`, or its first day) to the trip
  * before it, whatever ended that one. `--split` parts again a trip joined on that day, or else
  * starts a trip at that day's midnight. The edits are kept in the track's attr `tripEdits`, and the
  * trips are derived again from the whole track.
@@ -21,10 +21,10 @@ import { localDayOf } from '@archive/location/trips';
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The edits after joining the trip `name` names to the one before it, and what to say of it. */
-const merged = (trips: TrackTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
+const merged = (track: string, trips: TrackTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
   const index = trips.trips.findIndex((trip) => trip.id === name);
   const at = index >= 0 ? index : trips.trips.findIndex((trip) => trip.day === name);
-  if (at < 0) throw new Error(`no trip ${name} (trip-list ${trips.track})`);
+  if (at < 0) throw new Error(`no trip ${name} (trip-list ${track})`);
   if (at === 0) throw new Error(`${name} is the first trip: there is none before it to join`);
   const trip = trips.trips[at];
   const before = trips.trips[at - 1].id;
@@ -36,13 +36,13 @@ const merged = (trips: TrackTrips, edits: TripEdits, name: string): { edits: Tri
 };
 
 /** The edits after parting the track on `day`, and what to say of it. */
-const split = (trips: TrackTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
+const split = (track: string, trips: TrackTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
   const joined = (edits.merge ?? []).filter((start) => dayOf(Date.parse(start)) === day);
   if (joined.length > 0) {
     return { edits: { ...edits, merge: edits.merge!.filter((start) => !joined.includes(start)) }, said: `Parted the trip joined on ${day} again` };
   }
   if (!DAY.test(day)) throw new Error(`'${day}' is not a day (YYYY-MM-DD)`);
-  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${trips.track})`);
+  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${track})`);
   return { edits: { ...edits, split: [...edits.split ?? [], day] }, said: `Started a trip on ${day}` };
 };
 
@@ -62,7 +62,7 @@ const tripEdit = async (cmd: Command): CmdReturn => {
     const trips = await readTrackTrips(cmd, track) ?? await deriveTrackTrips(cmd, track, { full: true });
     const edits = tripEditsOf(attrs);
     const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
-    const change = flags.merge ? merged(trips, edits, name) : split(trips, edits, name, localDayOf(timezone));
+    const change = flags.merge ? merged(track, trips, edits, name) : split(track, trips, edits, name, localDayOf(timezone));
 
     const next = { ...change.edits.merge?.length ? { merge: change.edits.merge } : {}, ...change.edits.split?.length ? { split: change.edits.split } : {} };
     await cmd.sys.vfs.update(cmd.access, track, { attrs: { [TRIP_EDITS_ATTR]: Object.keys(next).length > 0 ? next : null } });

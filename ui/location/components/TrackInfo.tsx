@@ -14,16 +14,23 @@ const span = (first: string, last?: string): string => {
   return from === to ? from : `${from} – ${to}`;
 };
 
+/** How the track travels, said: its own kind, else its device's class, else that it reads as a car. */
+const travelsAs = (track: TrackDetail): string => {
+  if (isTravelKind(track.kind)) return TRAVEL_KIND_LABELS[track.kind];
+  if (isTravelKind(track.travels)) return `${TRAVEL_KIND_LABELS[track.travels]} (the device's class)`;
+  return 'Not set (read as a car)';
+};
+
 /**
- * Everything known about a track beside its map and trips: how it travels, the timezone its days
+ * Everything known about a device's track beside its trips: how it travels, the timezone its days
  * are cut in, what it holds, where it belongs (its home bases, which `editable` lets the reader
  * change) and what it is.
  */
 export function TrackInfo({ track, editable }: { track: TrackDetail; editable: boolean }) {
   return (
     <Stack gap='md'>
-      <InfoSection title='Track'>
-        <InfoFact label='Travels as'>{isTravelKind(track.kind) ? TRAVEL_KIND_LABELS[track.kind] : 'Not set (read as a car)'}</InfoFact>
+      <InfoSection title='Travel'>
+        <InfoFact label='Travels as'>{travelsAs(track)}</InfoFact>
         <InfoFact label='Timezone'>{track.timezone || 'UTC'}</InfoFact>
         <InfoFact label='Positions'>{track.points.toLocaleString()}</InfoFact>
         {track.firstTs && <InfoFact label='Recorded'>{span(track.firstTs, track.lastTs)}</InfoFact>}

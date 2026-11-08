@@ -23,9 +23,9 @@ const putInTemp = async (file: File): Promise<string> => {
 };
 
 /**
- * GPX files into one track. The track is the one whose page this is, so the files go straight into
- * it rather than through staging, which would have to guess it from the file. `track` is the
- * track's path. `open` raises a file picker that offers GPX files only; `input`, the picker, has to
+ * GPX files into one device's track. The device is the one whose page this is, so the files go
+ * straight into its track rather than through staging, which would have to guess it from the file.
+ * `track` is the track's path. `open` raises a file picker that offers GPX files only; `input`, the picker, has to
  * be rendered somewhere on the page, and `sending` is true while files go.
  */
 export function useTrackUpload(track: string, onImported?: () => void): { open: () => void; sending: boolean; input: ReactNode } {

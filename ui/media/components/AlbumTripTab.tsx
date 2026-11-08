@@ -9,6 +9,7 @@ import type { TripStay, TripWeather } from '@archive/location/api';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
 import { compassPoint, oneDecimal } from '../../location/lib/weather.ts';
 import { useTracks } from '../../location/hooks/useTracks.ts';
+import { deviceRoute } from '../../location/lib/device-route.ts';
 import type { AlbumTrip } from '@archive/media/api';
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { type AlbumEvent, useAlbumEvents } from '../hooks/useAlbumEvents.ts';
@@ -68,12 +69,15 @@ function WeatherText({ weather }: { weather?: TripWeather }) {
 
 const STAY_KINDS: Record<TripStay['kind'], string> = { home: 'Home', rest: 'Long stay', overnight: 'Overnight' };
 
-/** The track's name and kind (`track-list`), and the names of the locations the stays are at, read once. */
-function useTripNames(trip: AlbumTrip): { trackName: string; units: 'nautical' | 'metric'; names: Map<string, string> } {
+/**
+ * The track's name, kind and path (`track-list`, which finds it by its node id wherever it has moved)
+ * and the names of the locations the stays are at, read once.
+ */
+function useTripNames(trip: AlbumTrip): { trackName: string; trackPath?: string; units: 'nautical' | 'metric'; names: Map<string, string> } {
   const { tracks } = useTracks();
   const [names, setNames] = useState(new Map<string, string>());
   const places = useMemo(() => [...new Set(trip.stays.flatMap((stay) => stay.location ?? stay.home ?? []))], [trip.stays]);
-  const track = tracks.find((entry) => entry.path === trip.track);
+  const track = tracks.find((entry) => entry.nodeId === trip.trackId);
 
   useEffect(() => {
     let cancelled = false;
@@ -87,7 +91,7 @@ function useTripNames(trip: AlbumTrip): { trackName: string; units: 'nautical' |
     };
   }, [places]);
 
-  return { trackName: track?.name ?? 'Track', units: trackProfile(track?.kind).units, names };
+  return { trackName: track?.name ?? 'Track', ...(track ? { trackPath: track.path } : {}), units: trackProfile(track?.kind).units, names };
 }
 
 /**
@@ -99,7 +103,8 @@ function useTripNames(trip: AlbumTrip): { trackName: string; units: 'nautical' |
 export function AlbumTripTab(
   { album, title, trip, editable, onChanged }: { album: string; title: string; trip: AlbumTrip; editable: boolean; onChanged: () => void },
 ) {
-  const { trackName, units, names } = useTripNames(trip);
+  const { trackName, trackPath, units, names } = useTripNames(trip);
+  const tripsRoute = trackPath && deviceRoute(trackPath, { trips: true });
   const { events, reload } = useAlbumEvents(album);
   const access = useAccessIds();
   const { users } = useIdentities();
@@ -143,12 +148,14 @@ export function AlbumTripTab(
               <Text fw={600}>{trip.day === last ? showDay(trip.day) : `${showDay(trip.day)} – ${showDay(last)}`}</Text>
               {trip.ongoing && <Badge color='green' variant='light'>Ongoing</Badge>}
             </Group>
-            <Anchor component={Link} to={`/tracks/${encodeURIComponent(trip.track)}?tab=trips`} size='sm'>
-              <Group gap={4} wrap='nowrap'>
-                <TablerIcon name='map-route' size={14} />
-                {trackName}
-              </Group>
-            </Anchor>
+            {tripsRoute && (
+              <Anchor component={Link} to={tripsRoute} size='sm'>
+                <Group gap={4} wrap='nowrap'>
+                  <TablerIcon name='map-route' size={14} />
+                  {trackName}
+                </Group>
+              </Anchor>
+            )}
           </Group>
           <Text size='sm' c='dimmed'>
             {trip.legs.length} {trip.legs.length === 1 ? 'day' : 'days'} · {formatDistance(trip.distanceM, units)}

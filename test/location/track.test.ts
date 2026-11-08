@@ -1,21 +1,22 @@
 /**
  * Track commands: track-append / track-read / track-import (GPX) / track-list / track-stage /
- * track-mark / track-move / track-update / camera-track. A track is a `track` node anywhere under
- * the archive — here, as a GPS tracker keeps one, the history of a device's position — and every
- * command takes its path, or the device or camera that has one, by its path or its name; a GPX file
- * read into it is kept in its `routes/` and linked from its `sources/`. Runs against the in-memory
- * track registry.
+ * track-mark / track-move / track-update / camera-device. A track is a device's track endpoint under
+ * `/dev` — here, as core's `tracker` driver keeps one, a device's `position` — and every command
+ * takes its path, or the device or a camera linked to one, by its path or its name; a GPX file read
+ * into it goes through its device and is kept in its `routes/`, linked from its `sources/`. Runs
+ * against the in-memory track registry.
  */
 
 import { CAMERAS_ROOT } from '@archive/paths';
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import { parseGpx, tracksForGpx } from '@archive/location/track';
-import type { GpxInfo, TrackEntry, TrackStageResult } from '@archive/location/api';
+import { parseGpx } from '@ein/client';
+import { tracksForGpx } from '@archive/location/track';
+import type { GpxInfo, TrackEntry, TrackStageResult, TripList } from '@archive/location/api';
 import type { StagingStatus } from '@archive/staging/api';
 import type { SourceFile } from '@archive/sources/api';
-import { DEVICES, historyOf, mkTracker } from './tracker.ts';
+import { deviceAt, mkTracker, positionOf } from './tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
@@ -31,7 +32,7 @@ const flat = (result: ReadResult): Point[] => result.segments.flatMap((segment) 
 
 /** What `track-list` says of one device's track. */
 const listed = async (device: string): Promise<TrackEntry | undefined> =>
-  (await client.execJson<TrackEntry[]>('track-list')).find((track) => track.path === historyOf(device));
+  (await client.execJson<TrackEntry[]>('track-list')).find((track) => track.path === positionOf(device));
 
 const GPX = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="test">
@@ -42,6 +43,7 @@ const GPX = `<?xml version="1.0" encoding="UTF-8"?>
   </trkseg></trk>
 </gpx>`;
 
+// Core's reader, as track-stage matches a file by what it reads.
 Deno.test('parseGpx reads the creator and the names outside the points', () => {
   const gpx = parseGpx(`<gpx creator="Exempel Logger 2"><metadata><name>Morning walk</name></metadata>
     <trk><name><![CDATA[Day 1]]></name><trkseg><trkpt lat="1" lon="2"><name>Bench</name></trkpt></trkseg></trk></gpx>`);
@@ -74,14 +76,16 @@ Deno.test('parseGpx keeps speed and course, from GPX 1.0 or a TrackPointExtensio
   assertEquals(gpx.points.map((point) => [point.speed, point.course]), [[4.2, 271.5], [3, 90], [undefined, undefined]]);
 });
 
-Deno.test("tracksForGpx matches a track by its name, or a camera's name, make and model, or serial", () => {
+Deno.test("tracksForGpx matches a track by its device's name, make and model, or serial, or a linked camera's", () => {
   const tracks = [
     { name: 'Hiking GPS' },
-    { name: 'Anna', cameras: [{ name: 'Phone', serialNumber: 'SN12345' }] },
-    { name: 'Sailboat', cameras: [{ name: 'Chart plotter', make: 'Exempel', model: 'Logger 2' }] },
+    { name: 'Anna', names: [{ name: 'Phone', serialNumber: 'SN12345' }] },
+    { name: 'Sailboat', names: [{ name: 'Chart plotter', make: 'Exempel', model: 'Logger 2' }] },
+    { name: 'Old logger', names: [{ make: 'Exempel', model: 'Trail 30' }] },
     { name: 'Go' },
   ];
   assertEquals(tracksForGpx(tracks, { creator: 'Exempel Logger 2', names: [] }).map((track) => track.name), ['Sailboat']);
+  assertEquals(tracksForGpx(tracks, { creator: 'Exempel Trail 30 (firmware 2.1)', names: [] }).map((track) => track.name), ['Old logger']);
   assertEquals(tracksForGpx(tracks, { names: ['export from sn12345'] }).map((track) => track.name), ['Anna']);
   assertEquals(tracksForGpx(tracks, { names: ['Hiking GPS, day 2'] }).map((track) => track.name), ['Hiking GPS']);
   // Whole words: "Phone" is not in "Headphones", and two letters ("Go") say nothing.
@@ -97,7 +101,7 @@ Deno.test({
   client = await testCtx.server.createShellClient();
   const cmd = testCommands(client);
 
-  const tracker = (name: string, extra = '') => cmd.shouldSucceed(`${mkTracker(name)} ${extra}`);
+  const tracker = (name: string) => cmd.shouldSucceed(mkTracker(name));
 
   const write = async (path: string, xml: string) => {
     await cmd.shouldSucceed(`mkfile ${path}`);
@@ -112,24 +116,24 @@ Deno.test({
   try {
     for (const name of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right', 'untimed']) await tracker(name);
 
-    await t.step("track-list finds a device's track anywhere under the archive, named after the device", async () => {
+    await t.step("track-list finds a device's track under /dev, named after the device", async () => {
       const trip1 = await listed('trip1');
-      assertEquals([trip1?.name, trip1?.points], ['trip1', 0]);
+      assertEquals([trip1?.name, trip1?.points, trip1?.device], ['trip1', 0, deviceAt('trip1')]);
 
-      // Its own label wins; the entity between it and the device names nothing.
-      await cmd.shouldSucceed(`attrs ${DEVICES}/trip1 -s label='Trip one'`);
+      // The device's label names it, not the position endpoint's own.
+      await cmd.shouldSucceed(`device-label trip1 'Trip one'`);
       assertEquals((await listed('trip1'))?.name, 'Trip one');
-      await cmd.shouldSucceed(`attrs ${historyOf('trip1')} -s label='The first trip'`);
-      assertEquals((await listed('trip1'))?.name, 'The first trip');
-      await cmd.shouldSucceed(`attrs ${historyOf('trip1')} -d label && attrs ${DEVICES}/trip1 -s label=trip1`);
+      await cmd.shouldSucceed(`attrs ${positionOf('trip1')} -s label='The first trip'`);
+      assertEquals((await listed('trip1'))?.name, 'Trip one');
+      await cmd.shouldSucceed(`attrs ${positionOf('trip1')} -s label=Position && device-label trip1 trip1`);
     });
 
     await t.step('track-append and track-read roundtrip points', async () => {
-      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.7 11.97 --ts 2020-05-01T10:00:00Z`);
-      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.71 11.98 --ts 2020-05-01T10:01:00Z --alt=5`);
-      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} --json '[{"lat":57.72,"lng":11.99,"ts":"2020-05-01T10:02:00Z"}]'`);
+      await cmd.shouldSucceed(`track-append ${positionOf('trip1')} 57.7 11.97 --ts 2020-05-01T10:00:00Z`);
+      await cmd.shouldSucceed(`track-append ${positionOf('trip1')} 57.71 11.98 --ts 2020-05-01T10:01:00Z --alt=5`);
+      await cmd.shouldSucceed(`track-append ${positionOf('trip1')} --json '[{"lat":57.72,"lng":11.99,"ts":"2020-05-01T10:02:00Z"}]'`);
 
-      const all = await client.execJson<ReadResult>(`track-read ${historyOf('trip1')}`);
+      const all = await client.execJson<ReadResult>(`track-read ${positionOf('trip1')}`);
       const points = flat(all);
 
       assertEquals(all.segments.length, 1);
@@ -138,7 +142,7 @@ Deno.test({
       assertEquals(points[0].ts, '2020-05-01T10:00:00.000Z');
       assertEquals(points[1].alt, 5);
 
-      const window = await client.execJson<ReadResult>(`track-read ${historyOf('trip1')} --from 2020-05-01T10:01:00Z`);
+      const window = await client.execJson<ReadResult>(`track-read ${positionOf('trip1')} --from 2020-05-01T10:01:00Z`);
       assertEquals(flat(window).map((p) => p.lat), [57.71, 57.72]);
     });
 
@@ -146,11 +150,11 @@ Deno.test({
       // Cape Town: a negative latitude, and an altitude below sea level. Both start with
       // a dash, which the positional form cannot carry — parseArgs reads it as the next
       // flag. Its own track, so trip1's point count and bbox stay exact.
-      await cmd.shouldFail(`track-append ${historyOf('south')} -33.9249 18.4241 --ts=2020-05-01T10:00:00Z`);
+      await cmd.shouldFail(`track-append ${positionOf('south')} -33.9249 18.4241 --ts=2020-05-01T10:00:00Z`);
 
-      await cmd.shouldSucceed(`track-append ${historyOf('south')} --lat=-33.9249 --lng=18.4241 --ts=2020-05-01T10:00:00Z --alt=-5`);
+      await cmd.shouldSucceed(`track-append ${positionOf('south')} --lat=-33.9249 --lng=18.4241 --ts=2020-05-01T10:00:00Z --alt=-5`);
 
-      const south = await client.execJson<ReadResult>(`track-read ${historyOf('south')}`);
+      const south = await client.execJson<ReadResult>(`track-read ${positionOf('south')}`);
       const pts = south.segments.flatMap((seg) => seg.points);
       assertEquals(pts.length, 1);
       assertEquals(pts[0].lat, -33.9249);
@@ -160,7 +164,7 @@ Deno.test({
 
     await t.step('re-appending the same fix adds nothing', async () => {
       const result = await client.execJson<{ appended: number; skipped: number }>(
-        `track-append ${historyOf('trip1')} --json '[{"lat":57.7,"lng":11.97,"ts":"2020-05-01T10:00:00Z"}]'`,
+        `track-append ${positionOf('trip1')} --json '[{"lat":57.7,"lng":11.97,"ts":"2020-05-01T10:00:00Z"}]'`,
       );
 
       assertEquals(result.appended, 0);
@@ -174,36 +178,32 @@ Deno.test({
       assertEquals(before?.lastTs, '2020-05-01T10:02:00.000Z');
       assertEquals(before?.bbox, { north: 57.72, south: 57.7, east: 11.99, west: 11.97 });
 
-      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.69 12.05 --ts 2020-05-01T10:03:00Z`);
+      await cmd.shouldSucceed(`track-append ${positionOf('trip1')} 57.69 12.05 --ts 2020-05-01T10:03:00Z`);
       const after = await listed('trip1');
       assertEquals(after?.points, 4);
       assertEquals(after?.lastTs, '2020-05-01T10:03:00.000Z');
       assertEquals(after?.bbox, { north: 57.72, south: 57.69, east: 12.05, west: 11.97 });
     });
 
-    await t.step('track-list follows a track fed by its routing key', async () => {
-      await tracker('live', '--al routingKeys=tracker.live');
-      ctx.router.publish('tracker.live', [
+    await t.step('track-list follows a track its device is written to', async () => {
+      await tracker('live');
+      const fixes = [
         { lat: 57.7, lng: 11.97, ts: '2022-02-01T08:00:00Z' },
         { lat: 57.75, lng: 11.9, ts: '2022-02-01T08:01:00Z' },
-      ]);
+      ];
+      await cmd.shouldSucceed(`echo '${JSON.stringify(fixes)}' > ${deviceAt('live')}`);
 
-      // The relay hands the event over on a later turn.
-      let summary: TrackEntry | undefined;
-      for (let tries = 0; tries < 50 && summary?.points !== 2; tries++) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        summary = await listed('live');
-      }
+      const summary = await listed('live');
       assertEquals(summary?.points, 2);
       assertEquals(summary?.lastTs, '2022-02-01T08:01:00.000Z');
       assertEquals(summary?.bbox, { north: 57.75, south: 57.7, east: 11.97, west: 11.9 });
     });
 
     await t.step('an out-of-order append reads back in time order', async () => {
-      await cmd.shouldSucceed(`track-append ${historyOf('backfill')} 57.8 11.5 --ts 2021-03-01T10:05:00Z`);
-      await cmd.shouldSucceed(`track-append ${historyOf('backfill')} 57.7 11.4 --ts 2021-03-01T10:00:00Z`);
+      await cmd.shouldSucceed(`track-append ${positionOf('backfill')} 57.8 11.5 --ts 2021-03-01T10:05:00Z`);
+      await cmd.shouldSucceed(`track-append ${positionOf('backfill')} 57.7 11.4 --ts 2021-03-01T10:00:00Z`);
 
-      const points = flat(await client.execJson<ReadResult>(`track-read ${historyOf('backfill')}`));
+      const points = flat(await client.execJson<ReadResult>(`track-read ${positionOf('backfill')}`));
       assertEquals(points.map((p) => p.ts), ['2021-03-01T10:00:00.000Z', '2021-03-01T10:05:00.000Z']);
     });
 
@@ -214,9 +214,9 @@ Deno.test({
         lng: 11.0 + i * 0.1,
         ts: `2021-01-01T10:0${i}:00Z`,
       }));
-      await cmd.shouldSucceed(`track-append ${historyOf('thin')} --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${positionOf('thin')} --json '${JSON.stringify(points)}'`);
 
-      const boxed = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --bbox=58,57,11.55,11.25`);
+      const boxed = await client.execJson<ReadResult>(`track-read ${positionOf('thin')} --bbox=58,57,11.55,11.25`);
       const lngs = flat(boxed).map((p) => Number(p.lng.toFixed(1)));
 
       // The default margin widens the box by a quarter of its own size, which
@@ -228,7 +228,7 @@ Deno.test({
       assertEquals(lngs.includes(11.0), false);
 
       // margin=0 is the box exactly.
-      const exact = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --bbox=58,57,11.55,11.25 --margin 0`);
+      const exact = await client.execJson<ReadResult>(`track-read ${positionOf('thin')} --bbox=58,57,11.55,11.25 --margin 0`);
       assertEquals(flat(exact).map((p) => Number(p.lng.toFixed(1))), [11.3, 11.4, 11.5]);
     });
 
@@ -239,9 +239,9 @@ Deno.test({
         { lat: 57.7, lng: 11.2, ts: '2021-02-01T14:00:00Z' },
         { lat: 57.7, lng: 11.3, ts: '2021-02-01T14:01:00Z' },
       ];
-      await cmd.shouldSucceed(`track-append ${historyOf('paused')} --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${positionOf('paused')} --json '${JSON.stringify(points)}'`);
 
-      const result = await client.execJson<ReadResult>(`track-read ${historyOf('paused')}`);
+      const result = await client.execJson<ReadResult>(`track-read ${positionOf('paused')}`);
       assertEquals(result.segments.length, 2);
       assertEquals(result.segments.map((segment) => segment.points.length), [2, 2]);
     });
@@ -255,7 +255,7 @@ Deno.test({
         lng: 11.97,
         ts: new Date(Date.parse('2021-04-01T10:00:00Z') + i * 60_000).toISOString(),
       }));
-      await cmd.shouldSucceed(`track-append ${historyOf('moored')} --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${positionOf('moored')} --json '${JSON.stringify(points)}'`);
       const spiked = (read: ReadResult) => flat(read).some((p) => p.lat > 57.7 + 1000 * metre);
 
       // A device's name stands for its track.
@@ -278,12 +278,12 @@ Deno.test({
     });
 
     await t.step('track-update sets how a track travels, refuses what it does not know, and --clear removes it', async () => {
-      await cmd.shouldSucceed(`track-update ${DEVICES}/moored --timezone Europe/Stockholm --description 'Kept at the jetty'`);
-      const attrs = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${historyOf('moored')}`);
+      await cmd.shouldSucceed(`track-update ${deviceAt('moored')} --timezone Europe/Stockholm --description 'Kept at the jetty'`);
+      const attrs = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${positionOf('moored')}`);
       assertEquals([attrs.kind, attrs.timezone, attrs.description], ['boat', 'Europe/Stockholm', 'Kept at the jetty']);
       assertEquals((await listed('moored'))?.kind, 'boat');
       assertEquals(await client.execJson('track-update moored --clear timezone --clear description'), { ok: true });
-      const cleared = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${historyOf('moored')}`);
+      const cleared = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${positionOf('moored')}`);
       assertEquals([cleared.kind, cleared.timezone, cleared.description], ['boat', undefined, undefined]);
 
       await cmd.shouldFailWith('track-update moored --kind submarine', "unknown kind 'submarine'");
@@ -293,12 +293,23 @@ Deno.test({
       await cmd.shouldFailWith('track-update moored', 'nothing to change');
     });
 
+    await t.step("a device's class is how its track travels while the track has no kind of its own", async () => {
+      await cmd.shouldSucceed(mkTracker('ferry', 'Ferry', {}, 'boat'));
+      assertEquals((await listed('ferry'))?.kind, 'boat');
+      assertEquals((await client.execJson<TripList>('trip-list ferry')).units, 'nautical');
+      await cmd.shouldSucceed('track-update ferry --kind foot');
+      assertEquals((await listed('ferry'))?.kind, 'foot');
+      // A class that is no way of travelling says nothing.
+      await cmd.shouldSucceed(mkTracker('pocket', 'Pocket', {}, 'phone'));
+      assertEquals((await listed('pocket'))?.kind, undefined);
+    });
+
     await t.step('--tolerance thins the line, --limit caps it', async () => {
-      const thin = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --tolerance 1`);
+      const thin = await client.execJson<ReadResult>(`track-read ${positionOf('thin')} --tolerance 1`);
       // A straight line collapses to its endpoints.
       assertEquals(thin.points, 2);
 
-      const capped = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --limit 4`);
+      const capped = await client.execJson<ReadResult>(`track-read ${positionOf('thin')} --limit 4`);
       assertEquals(capped.points <= 4, true);
       assertEquals(capped.truncated, true);
     });
@@ -362,27 +373,27 @@ Deno.test({
       await cmd.shouldSucceed(`track-mark wrong --from ${points[5].ts} --to ${points[6].ts} --reject`);
 
       const moved = await client.execJson(`track-move wrong right --from ${points[5].ts} --to ${points[15].ts}`);
-      assertEquals(moved, { moved: 10, to: historyOf('right') });
+      assertEquals(moved, { moved: 10, to: positionOf('right') });
       assertEquals((await listed('wrong'))?.points, 10);
       assertEquals((await listed('right'))?.points, 9);
       const rejected = await client.execJson<ReadResult>('track-read right --only-rejected');
       assertEquals(rejected.segments.flatMap((segment) => segment.points).map((point) => [point.ts, point.manual]), [[points[5].ts, 'reject']]);
 
       await cmd.shouldFailWith('track-move wrong', 'usage');
-      await cmd.shouldFailWith(`track-move wrong ${historyOf('wrong')}`, 'the track the fixes are on');
+      await cmd.shouldFailWith(`track-move wrong ${positionOf('wrong')}`, 'the track the fixes are on');
       await cmd.shouldFailWith('track-move right wrong --to=soon', 'invalid --to');
     });
 
-    await t.step("track-import parses GPX (both attribute orders) and keeps the file in the track's routes/", async () => {
+    await t.step("track-import gives its device a GPX file (both attribute orders) and keeps the file in the track's routes/", async () => {
       await write('/trip.gpx', GPX);
 
       const result = await client.execJson<{ imported: number; track: string; source: string }>(`track-import hike /trip.gpx`);
       assertEquals(result.imported, 3);
-      assertEquals(result.track, historyOf('hike'));
+      assertEquals(result.track, positionOf('hike'));
 
       // The device's name, its path and the track's path all name the same track.
-      assertEquals(await client.execJson<ReadResult>(`track-read ${DEVICES}/hike`), await client.execJson<ReadResult>('track-read hike'));
-      const points = flat(await client.execJson<ReadResult>(`track-read ${historyOf('hike')}`));
+      assertEquals(await client.execJson<ReadResult>(`track-read ${deviceAt('hike')}`), await client.execJson<ReadResult>('track-read hike'));
+      const points = flat(await client.execJson<ReadResult>(`track-read ${positionOf('hike')}`));
       assertEquals(points.map((p) => p.lat), [57.7, 57.71, 57.72]);
       assertEquals(points.map((p) => p.lng), [11.97, 11.98, 11.99]);
       assertEquals(points[0].alt, 12.5);
@@ -394,14 +405,22 @@ Deno.test({
 
       // The file stays where it was, and a copy is kept with the track and linked from it.
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, '/trip.gpx'), true);
-      assertEquals(result.source, `${historyOf('hike')}/routes/trip.gpx`);
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('hike')}`)).map((s) => s.path), [`${historyOf('hike')}/routes/trip.gpx`]);
+      assertEquals(result.source, `${positionOf('hike')}/routes/trip.gpx`);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${positionOf('hike')}`)).map((s) => s.path), [`${positionOf('hike')}/routes/trip.gpx`]);
 
       // Importing the same file twice does not double the track, nor keep the file twice.
-      const again = await client.execJson<{ imported: number; skipped: number }>(`track-import ${historyOf('hike')} /trip.gpx`);
+      const again = await client.execJson<{ imported: number; skipped: number }>(`track-import ${positionOf('hike')} /trip.gpx`);
       assertEquals(again.imported, 0);
       assertEquals(again.skipped, 3);
-      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${historyOf('hike')}/routes`)).map((e) => e.name), ['trip.gpx']);
+      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${positionOf('hike')}/routes`)).map((e) => e.name), ['trip.gpx']);
+    });
+
+    await t.step("a track no tracker drives takes a GPX file's fixes as they are", async () => {
+      await cmd.shouldSucceed(`device-create plotter && mknode -t track ${deviceAt('plotter')}/route`);
+      const result = await client.execJson<{ imported: number; track: string }>('track-import plotter /trip.gpx');
+      assertEquals([result.imported, result.track], [3, `${deviceAt('plotter')}/route`]);
+      // A device's track other than its position is named after both.
+      assertEquals((await client.execJson<TrackEntry[]>(`track-list ${deviceAt('plotter')}`)).map((track) => track.name), ['plotter · route']);
     });
 
     await t.step('track-import leaves out a point without a time, and refuses a file with only those', async () => {
@@ -419,59 +438,63 @@ Deno.test({
       await cmd.shouldFailWith('track-stage /planned.gpx --track untimed', 'none of its 2 track points has a time');
     });
 
-    await t.step('camera-track links a camera to the track it records into, which then stands for it', async () => {
+    await t.step('camera-device links a camera to the device it is part of, whose track then stands for it', async () => {
       const phone = `${CAMERAS_ROOT}/hiking-phone`;
       await cmd.shouldSucceed(`mknode -p -t camera ${phone} --as name='Hiking phone'`);
       await cmd.shouldFailWith('track-read hiking-phone', `${phone} has no track`);
 
-      assertEquals(await client.execJson('camera-track hiking-phone hike'), { ok: true });
-      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/track`)).softlink, historyOf('hike'));
+      assertEquals(await client.execJson('camera-device hiking-phone hike'), { ok: true });
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/device`)).softlink, deviceAt('hike'));
       assertEquals(await client.execJson<ReadResult>('track-read hiking-phone'), await client.execJson<ReadResult>('track-read hike'));
-      // The track is still named after its device, not the camera that links to it.
+      // The track is still named after its device, not the camera linked to it.
       assertEquals((await listed('hike'))?.name, 'hike');
 
-      // Linked again elsewhere, the link moves; --none takes it away.
-      await cmd.shouldSucceed(`camera-track ${phone} ${historyOf('trip1')}`);
-      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/track`)).softlink, historyOf('trip1'));
-      await cmd.shouldSucceed('camera-track hiking-phone --none');
-      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, `${phone}/track`, { follow: false }), false);
+      // Linked again elsewhere, by a track of the device, the link moves; --off takes it away.
+      await cmd.shouldSucceed(`camera-device ${phone} ${positionOf('trip1')}`);
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/device`)).softlink, deviceAt('trip1'));
+      await cmd.shouldSucceed('camera-device hiking-phone --off');
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, `${phone}/device`, { follow: false }), false);
 
-      await cmd.shouldFailWith(`camera-track ${DEVICES}/hike hike`, 'not a camera');
-      await cmd.shouldFailWith('camera-track hiking-phone', 'usage');
-      await cmd.shouldFailWith('camera-track hiking-phone hike --none', 'usage');
+      await cmd.shouldFailWith(`camera-device ${deviceAt('hike')} hike`, 'not a camera');
+      await cmd.shouldFailWith(`camera-device hiking-phone ${CAMERAS_ROOT}`, 'not a device');
+      await cmd.shouldFailWith('camera-device hiking-phone missing', 'no such device');
+      await cmd.shouldFailWith('camera-device hiking-phone', 'usage');
+      await cmd.shouldFailWith('camera-device hiking-phone hike --off', 'usage');
     });
 
     await t.step('rejects invalid input', async () => {
       await cmd.shouldSucceed('mkfile /not-track');
       await cmd.shouldFailWith('track-append /not-track 1 2', '/not-track has no track');
-      await cmd.shouldSucceed(`mknode -p -t device ${DEVICES}/trackless`);
-      await cmd.shouldFailWith('track-read trackless', `${DEVICES}/trackless has no track`);
-      // A device with two tracks says which to name.
-      await cmd.shouldSucceed(`mknode -t track ${DEVICES}/trackless/east && mknode -t track ${DEVICES}/trackless/west`);
+      await cmd.shouldSucceed('device-create trackless');
+      await cmd.shouldFailWith('track-read trackless', `${deviceAt('trackless')} has no track`);
+      // A device with two tracks, neither its position, says which to name; one with a position stands for that.
+      await cmd.shouldSucceed(`mknode -t track ${deviceAt('trackless')}/east && mknode -t track ${deviceAt('trackless')}/west`);
       await cmd.shouldFailWith('track-read trackless', 'has 2 tracks: name one');
-      await cmd.shouldSucceed(`track-read ${DEVICES}/trackless/east`);
-      await cmd.shouldFailWith(`track-append ${historyOf('trip1')} abc 11`, 'numeric lat and lng');
-      await cmd.shouldFailWith(`track-read ${historyOf('thin')} --bbox=1,2,3`, 'invalid --bbox');
-      await cmd.shouldFailWith(`track-read ${historyOf('thin')} --tolerance x`, 'invalid --tolerance');
+      await cmd.shouldSucceed(`track-read ${deviceAt('trackless')}/east`);
+      await cmd.shouldSucceed(`mknode -t track ${deviceAt('trip1')}/route`);
+      assertEquals((await client.execJson<ReadResult>('track-read trip1')).points, (await client.execJson<ReadResult>(`track-read ${positionOf('trip1')}`)).points);
+      await cmd.shouldFailWith(`track-append ${positionOf('trip1')} abc 11`, 'numeric lat and lng');
+      await cmd.shouldFailWith(`track-read ${positionOf('thin')} --bbox=1,2,3`, 'invalid --bbox');
+      await cmd.shouldFailWith(`track-read ${positionOf('thin')} --tolerance x`, 'invalid --tolerance');
       await cmd.shouldFailWith('track-read missing', 'no device or camera of that name');
       const res = await client.exec('track-read missing');
       assertEquals(res.success, false);
       assertStringIncludes(res.error ?? '', 'track-read');
     });
 
-    await t.step("track-stage imports a GPX into the track it names, and moves the file to the track's routes/", async () => {
-      // A logger whose make and model the file's creator names, recording into the tracker's track.
+    await t.step("track-stage gives a GPX file to the device it names, and moves the file to its track's routes/", async () => {
+      // A logger whose make and model the file's creator names, a camera linked to the tracker.
       await tracker('logger');
       await cmd.shouldSucceed(`mknode -p -t camera ${CAMERAS_ROOT}/trail-logger --as name='Trail logger' --as make=Exempel --as model=Trail`);
-      await cmd.shouldSucceed(`camera-track trail-logger ${historyOf('logger')}`);
+      await cmd.shouldSucceed('camera-device trail-logger logger');
       await cmd.shouldSucceed('staging init --user admin && mkdir -p /home/admin/staging/files/inbox/upload-2026-10-16');
 
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
       const staged = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
-      const kept = `${historyOf('logger')}/routes/walk.gpx`;
-      assertEquals(staged, { status: 'imported', track: historyOf('logger'), imported: 3, skipped: 0, untimed: 0, source: kept });
+      const kept = `${positionOf('logger')}/routes/walk.gpx`;
+      assertEquals(staged, { status: 'imported', track: positionOf('logger'), imported: 3, skipped: 0, untimed: 0, source: kept });
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('logger')}`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${positionOf('logger')}`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
 
       // Staged again, nothing is added: a fix is keyed by its time, and the same bytes are kept once.
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/again.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
@@ -480,7 +503,17 @@ Deno.test({
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/again.gpx');
     });
 
-    await t.step('track-stage leaves a GPX naming no known track waiting in routes/, until told which', async () => {
+    await t.step("track-stage matches a device's own manufacturer and model", async () => {
+      await cmd.shouldSucceed("device-create 'Old etrex' --driver tracker --manufacturer Exempel --model 'Hiker 30'");
+      await write(
+        '/home/admin/staging/files/inbox/upload-2026-10-16/hiker.gpx',
+        GPX.replace('creator="test"', 'creator="Exempel Hiker 30"').replaceAll('2020-06-01', '2020-08-01'),
+      );
+      const staged = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/hiker.gpx');
+      assertEquals(staged.status === 'imported' && [staged.track, staged.imported], [positionOf('old-etrex'), 3]);
+    });
+
+    await t.step('track-stage leaves a GPX naming no known device waiting in routes/, until told which', async () => {
       const staged = '/home/admin/staging/files/inbox/upload-2026-10-16/odd.gpx';
       await write(staged, GPX.replace('creator="test"', 'creator="Unknown Thing"').replaceAll('2020-06-01', '2020-07-01'));
 
@@ -493,10 +526,10 @@ Deno.test({
 
       // Told which track, and under which name to keep it (as the track page's upload says).
       const told = await client.execJson<TrackStageResult>(`track-stage ${waiting} --track logger --name 'July walk.gpx'`);
-      assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${historyOf('logger')}/routes/July walk.gpx`]);
+      assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${positionOf('logger')}/routes/July walk.gpx`]);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, waiting), false);
-      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, `${historyOf('logger')}/routes/July walk.gpx`)).attrs.trackPending, undefined);
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('logger')}`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
+      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, `${positionOf('logger')}/routes/July walk.gpx`)).attrs.trackPending, undefined);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${positionOf('logger')}`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
     });
 
     await t.step('gpx-info says what GPX files hold and which tracks they name, without importing them', async () => {
@@ -514,7 +547,7 @@ Deno.test({
         timed: 3,
         start: '2020-06-01T10:00:00.000Z',
         end: '2020-06-01T10:02:00.000Z',
-        matches: [{ path: historyOf('logger'), name: 'logger' }],
+        matches: [{ path: positionOf('logger'), name: 'logger' }],
       });
       assertEquals(plain.path === '/trip.gpx' && !('error' in plain) && [plain.creator, plain.matches], ['test', []]);
       // Nothing was imported: the file stays, the track as it was.
@@ -526,17 +559,20 @@ Deno.test({
       await cmd.shouldSucceed('gpx-info /trip.gpx');
     });
 
-    await t.step('track-list lists every track under the archive, or under a path given', async () => {
+    await t.step("track-list lists every device's track under /dev, or the tracks under a path given", async () => {
       const tracks = await client.execJson<TrackEntry[]>('track-list');
-      assertEquals(tracks.map((track) => track.path).filter((path) => path.endsWith('/position/history')).map((path) => path.split('/')[3]).sort(), [
+      assertEquals(tracks.map((track) => track.path).filter((path) => path.endsWith('/position')).map((path) => path.split('/')[2]).sort(), [
         'backfill',
         'cluster',
+        'ferry',
         'glitch',
         'hike',
         'live',
         'logger',
         'moored',
+        'old-etrex',
         'paused',
+        'pocket',
         'right',
         'south',
         'thin',
@@ -544,9 +580,9 @@ Deno.test({
         'untimed',
         'wrong',
       ]);
-      const hike = tracks.find((track) => track.path === historyOf('hike'))!;
+      const hike = tracks.find((track) => track.path === positionOf('hike'))!;
       assertEquals([hike.name, hike.points], ['hike', 3]);
-      assertEquals((await client.execJson<TrackEntry[]>(`track-list ${DEVICES}/hike`)).map((track) => track.path), [historyOf('hike')]);
+      assertEquals((await client.execJson<TrackEntry[]>(`track-list ${deviceAt('hike')}`)).map((track) => track.path), [positionOf('hike')]);
     });
   } finally {
     client.close();

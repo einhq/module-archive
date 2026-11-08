@@ -1,20 +1,22 @@
 /**
- * A GPS tracker as the archive finds one, made of plain nodes: a device under `/archive/devices`,
- * its `position` entity, and the track that is that position's history.
+ * A GPS tracker as core makes one: a device under `/dev` driven by core's `tracker`, whose
+ * `position` endpoint is its track.
  */
 
-import { ARCHIVE_PATH } from '@ein/paths';
+import { DEV_PATH } from '@ein/paths';
 import { shq } from '@ein/client';
 
-export const DEVICES = `${ARCHIVE_PATH}/devices`;
+/** The device `name`. */
+export const deviceAt = (name: string): string => `${DEV_PATH}/${name}`;
 
-/** The track the tracker `name` keeps: the history of its device's position. */
-export const historyOf = (name: string): string => `${DEVICES}/${name}/position/history`;
+/** The track the tracker `name` keeps: its device's position. */
+export const positionOf = (name: string): string => `${deviceAt(name)}/position`;
 
 /**
- * The shell command that makes the tracker `name`: its device labelled `label`, and its track with
- * the string attrs `attrs` (`kind`, `timezone`, …).
+ * The shell command that makes the tracker `name` (`device-create --driver tracker`): its device
+ * labelled `label`, of `deviceClass` when given, and its track with the string attrs `attrs`
+ * (`kind`, `timezone`, …). Boot makes `/dev`; a test that does not boot has it made here.
  */
-export const mkTracker = (name: string, label = name, attrs: Record<string, string> = {}): string =>
-  `mknode -p -t device ${DEVICES}/${name} --as label=${shq(label)} && mknode -t entity ${DEVICES}/${name}/position && ` +
-  `mknode -t track ${historyOf(name)}${Object.entries(attrs).map(([key, value]) => ` --as ${shq(`${key}=${value}`)}`).join('')}`;
+export const mkTracker = (name: string, label = name, attrs: Record<string, string> = {}, deviceClass?: string): string =>
+  `mkdir -p ${DEV_PATH} && device-create ${shq(name)} --driver tracker --label ${shq(label)}${deviceClass ? ` --class ${shq(deviceClass)}` : ''}` +
+  Object.entries(attrs).map(([key, value]) => ` && attrs ${positionOf(name)} -s ${shq(`${key}=${value}`)}`).join('');

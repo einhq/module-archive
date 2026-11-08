@@ -63,14 +63,6 @@
       "order": 50
     },
     {
-      "id": "archive.tracks",
-      "section": "browse",
-      "label": "Tracks",
-      "icon": "route",
-      "to": "/tracks",
-      "order": 60
-    },
-    {
       "id": "archive.albums",
       "section": "browse",
       "label": "Albums",
@@ -161,6 +153,16 @@
     }
   ],
   "panels": [
+    {
+      "id": "archive.trips",
+      "slot": "device.tabs",
+      "label": "Trips",
+      "icon": "map-route",
+      "route": "/trips?device={path}",
+      "when": {
+        "has": "track"
+      }
+    },
     {
       "id": "archive.duplicates",
       "slot": "nodes.tools",

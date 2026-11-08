@@ -5,9 +5,9 @@
  *   track-mark <track> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
  *              --reject | --accept | --clear
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). The range is half-open, `[from, to)`; either end left out runs to that end of the
- * track. `--near` keeps the fixes within `--within` metres (40 by default) of a point, and
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). The range is half-open, `[from, to)`; either end left out runs to that
+ * end of the track. `--near` keeps the fixes within `--within` metres (40 by default) of a point, and
  * `--marked` those a person rejected or accepted, so `--marked reject --clear` brings back what was
  * rejected by hand and leaves what was accepted.
  *

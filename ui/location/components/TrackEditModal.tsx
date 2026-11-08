@@ -1,6 +1,6 @@
 import { Alert, Button, Select, Stack } from '@mantine/core';
 import { useEffect, useState } from 'react';
-import { TRAVEL_KIND_LABELS, TRAVEL_KINDS } from '@archive/location/track-profile';
+import { isTravelKind, TRAVEL_KIND_LABELS, TRAVEL_KINDS } from '@archive/location/track-profile';
 import { Dialog, DialogActions, MarkdownEditor, TablerIcon } from '@ein/ui/components';
 import type { TrackDetail, TrackFields } from '../hooks/useTrackDetail.ts';
 
@@ -23,7 +23,7 @@ type TrackEditModalProps = {
   save: (fields: TrackFields) => Promise<void>;
 };
 
-/** How a track travels: its kind, the timezone its trips are cut into days in, and its description. */
+/** How a device's track travels: its kind, the timezone its trips are cut into days in, and its description. */
 export function TrackEditModal({ opened, onClose, track, save }: TrackEditModalProps) {
   const [draft, setDraft] = useState<TrackFields>({ kind: track.kind, timezone: track.timezone, description: track.description });
   const [busy, setBusy] = useState(false);
@@ -52,13 +52,13 @@ export function TrackEditModal({ opened, onClose, track, save }: TrackEditModalP
   };
 
   return (
-    <Dialog opened={opened} onClose={() => !busy && onClose()} title='Edit track' subtitle={track.name} icon='pencil' pattern='track' size='lg' onSubmit={submit}>
+    <Dialog opened={opened} onClose={() => !busy && onClose()} title='How it travels' subtitle={track.name} icon='pencil' pattern='track' size='lg' onSubmit={submit}>
       <Stack gap='sm'>
         <Select
           data-autofocus
           label='Travels as'
-          placeholder='Not set'
-          description='How it travels, which tells its stops from drift and its trips from rests. A boat’s track is shown in knots and nautical miles, the others’ in km/h and km.'
+          placeholder={isTravelKind(track.travels) ? `As its class: ${TRAVEL_KIND_LABELS[track.travels]}` : 'Not set'}
+          description='How it travels, which tells its stops from drift and its trips from rests. A boat’s track is shown in knots and nautical miles, the others’ in km/h and km. Without one, the device’s class says it.'
           data={KIND_OPTIONS}
           value={draft.kind || null}
           onChange={(value) => set('kind', value ?? '')}

@@ -8,14 +8,14 @@
  * channel (the track's name) and the `description` channel.
  *
  * The same substring ladder `search-people` and `search-camera` use, over a scan of the tracks
- * (`track-list`): a track is usually named by the device or camera it belongs to, which is not an
+ * (`track-list`): a track is named by the device it belongs to, which is not an
  * attr of its own a query can match.
  *
  * A track *does* have a time (`firstTs`), unlike the other timeless kinds, so it
  * is reported: it is the one field that tells apart two tracks along the same
  * route, and it lets a result card date itself without a second lookup.
  */
-import { ARCHIVE_PATH } from '@ein/paths';
+import { DEV_PATH } from '@ein/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
 import { nameScore } from '@archive/media/name-quality';
@@ -38,13 +38,13 @@ const searchTrack = async (cmd: Command): CmdReturn => {
 
   const queryParts: string[] = [];
   let limit = 10;
-  let root = ARCHIVE_PATH;
+  let root = DEV_PATH;
   let i = 0;
 
   while (i < cmd.args.length) {
     const arg = cmd.args[i];
     if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
-    else if (arg === '--root') root = cmd.args[++i] || ARCHIVE_PATH;
+    else if (arg === '--root') root = cmd.args[++i] || DEV_PATH;
     else queryParts.push(arg);
     i++;
   }
@@ -98,14 +98,14 @@ const searchTrack = async (cmd: Command): CmdReturn => {
 searchTrack.spec = {
   name: 'search-track',
   effect: 'read' as const,
-  description: 'Search tracks by their name, or the device or camera they belong to, or their description',
+  description: 'Search tracks by the device they belong to, or their description',
   args: [
     { name: 'query', type: 'string' as const, description: 'Search query text' },
   ],
   flags: [
     { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
     { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
-    { name: 'root', type: 'string' as const, description: `where to look for tracks (default: ${ARCHIVE_PATH})` },
+    { name: 'root', type: 'string' as const, description: `where to look for tracks (default: ${DEV_PATH})` },
   ],
   examples: [
     "search-track 'exempeltur' -l 10",

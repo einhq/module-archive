@@ -1,0 +1,76 @@
+#!ts
+/**
+ * camera-device — the device a camera is part of: a phone's camera, its phone.
+ *
+ *   camera-device <camera> <device>   link the camera to the device
+ *   camera-device <camera> --off      take the link away
+ *
+ * The link is the camera's child softlink `device`, pointing at the device under `/dev`. Through it
+ * the camera's track is its device's: the owners of the camera are the track's owners when its
+ * homes are looked for, an album with the camera's pictures draws the device's track on its map,
+ * and a GPX file naming the camera's make and model is the device's. `<camera>` is its path or its
+ * slug under the cameras root; `<device>` is the device's name, its path, or a track of it.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { CAMERAS_ROOT, NODE_TYPE_CAMERA } from '@archive/camera/camera';
+import { CAMERA_DEVICE_LINK, deviceOf } from '@archive/location/track';
+
+const cameraDevice = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['off'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [cameraArg, target, ...rest] = flags._.map(String);
+  if (!cameraArg || rest.length > 0 || (target === undefined) === !flags.off) {
+    await cmd.writeError('camera-device: usage: camera-device <camera> <device> | camera-device <camera> --off\n');
+    return 1;
+  }
+
+  try {
+    const camera = cameraArg.includes('/') ? resolve(cmd.cwd, cameraArg) : `${CAMERAS_ROOT}/${cameraArg}`;
+    const node = await cmd.sys.vfs.get(cmd.access, camera).catch(() => {
+      throw new Error(`${camera}: not found`);
+    });
+    if (node.type !== NODE_TYPE_CAMERA) throw new Error(`${camera}: not a camera (${node.type})`);
+
+    const link = `${camera}/${CAMERA_DEVICE_LINK}`;
+    const held = await cmd.sys.vfs.get(cmd.access, link, { follow: false, readlink: true }).catch(() => undefined);
+    if (held && !held.props.softlink) throw new Error(`${link} is a ${held.type}, not a link to a device`);
+
+    const device = target === undefined ? undefined : (await deviceOf(cmd, target)).path;
+    if (held && held.props.softlink !== device) await cmd.sys.vfs.unlink(cmd.access, link, camera, { readlink: true });
+    if (device && held?.props.softlink !== device) {
+      await cmd.sys.vfs.create(cmd.access, 'softlink', camera, CAMERA_DEVICE_LINK, {
+        props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: device },
+      });
+    }
+
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    else await cmd.writeLn(device ? `${camera} is part of ${device}` : `${camera} is part of no device`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`camera-device: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+cameraDevice.spec = {
+  name: 'camera-device',
+  effect: 'write' as const,
+  description: "Link a camera to the device it is part of, such as a phone's camera to the phone whose track says where it was, or take the link away",
+  args: [
+    { name: 'camera', type: 'path' as const, description: 'the camera, by its path or its slug' },
+    { name: 'device', type: 'path' as const, description: 'the device, by its name, its path, or a track of it' },
+  ],
+  flags: [
+    { name: 'off', type: 'bool' as const, description: 'take the link away' },
+  ],
+  examples: [
+    'camera-device anna-phone anna-phone',
+    'camera-device /archive/cameras/anna-phone /dev/anna-phone',
+    'camera-device anna-phone --off',
+  ],
+};
+
+export default cameraDevice;

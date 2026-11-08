@@ -6,8 +6,8 @@
  *   track-append <track> 57.7 11.97 [--ts <iso>]
  *   track-append <track> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`).
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`).
  *
  * The flag form is the one that works everywhere. A western or southern
  * coordinate cannot be a positional — parseArgs reads the leading `-` of

@@ -5,10 +5,10 @@
  *   track-update <track> [--kind boat|car|bike|foot] [--timezone <IANA>] [--description <text>]
  *                [--clear kind|timezone|description]
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). `--kind` sets the thresholds its stops and trips are told by and the units it is
- * shown in (`@archive/location/track-profile`); `--timezone` the days its trips are cut in, checked
- * against ICU before it is stored. A changed kind or timezone derives its trips again: the bridge
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). `--kind` sets the thresholds its stops and trips are told by and the
+ * units it is shown in (`@archive/location/track-profile`), in place of its device's class;
+ * `--timezone` the days its trips are cut in, checked against ICU before it is stored. A changed kind or timezone derives its trips again: the bridge
  * announces it (`track.changed`). Clearing is explicit, as in `camera-update`: `--clear timezone`
  * removes the attr, an empty `--timezone ''` is refused.
  */
@@ -82,7 +82,7 @@ trackUpdate.spec = {
     { name: 'description', type: 'string' as const, description: 'free-text note' },
     { name: 'clear', type: 'string' as const, description: 'remove a field: kind, timezone or description (repeatable)' },
   ],
-  examples: ['track-update sailboat --kind boat --timezone Europe/Stockholm', 'track-update /archive/devices/sailboat/position/history --clear timezone'],
+  examples: ['track-update sailboat --kind boat --timezone Europe/Stockholm', 'track-update /dev/sailboat/position --clear timezone'],
 };
 
 export default trackUpdate;

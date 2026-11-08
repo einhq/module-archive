@@ -32,7 +32,7 @@ export default function CameraDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { camera, owners, loading, save, addOwner, removeOwner, relink, setTrack } = useCamera(id);
+  const { camera, owners, loading, save, addOwner, removeOwner, relink, setDevice } = useCamera(id);
   const access = useAccessIds();
 
   // What is known about the camera, its history beside it, is what the page opens on; the media
@@ -188,7 +188,7 @@ export default function CameraDetailPage() {
                   removeOwner={dropOwner}
                   onRelink={runRelink}
                   relinking={busy}
-                  setTrack={setTrack}
+                  setDevice={setDevice}
                 />
               </Grid.Col>
             </Grid>

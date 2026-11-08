@@ -1,17 +1,17 @@
 #!ts
 /**
- * track-list — the tracks under the archive (or under a path given), with what the track registry
- * says of each: point count, span and extent, read for all of them at once, so no track is opened.
- * A track is named as `trackName` says: its own label, or the device or camera it belongs to.
+ * track-list — the devices' tracks under `/dev` (or the tracks under a path given), with what the
+ * track registry says of each: point count, span and extent, read for all of them at once, so no
+ * track is opened. A track is named as `trackName` says: by its device.
  */
-import { ARCHIVE_PATH } from '@ein/paths';
+import { DEV_PATH } from '@ein/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { TrackEntry } from '@archive/location/api';
 import { listTracks } from '@archive/location/track';
 import { resolve } from '@std/path';
 
 const trackList = async (cmd: Command): CmdReturn => {
-  const within = typeof cmd.args[0] === 'string' ? resolve(cmd.cwd, cmd.args[0]) : ARCHIVE_PATH;
+  const within = typeof cmd.args[0] === 'string' ? resolve(cmd.cwd, cmd.args[0]) : DEV_PATH;
 
   let tracks: TrackEntry[];
   try {
@@ -36,10 +36,10 @@ const trackList = async (cmd: Command): CmdReturn => {
 trackList.spec = {
   name: 'track-list',
   effect: 'read' as const,
-  description: 'List the tracks, with their name, kind, point count, span and extent',
-  args: [{ name: 'within', type: 'path' as const, description: `where to look for tracks (default: ${ARCHIVE_PATH})` }],
+  description: "List the devices' tracks, with their name, device, kind, point count, span and extent",
+  args: [{ name: 'within', type: 'path' as const, description: `where to look for tracks (default: ${DEV_PATH})` }],
   flags: [],
-  examples: ['track-list', 'track-list /archive/devices'],
+  examples: ['track-list', 'track-list /dev/sailboat'],
   returns: 'one row per track.',
 };
 

@@ -4,8 +4,8 @@
  *
  *   trip-list <track>
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). Nothing is derived here: a track whose trips never were has none. A stay
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). Nothing is derived here: a track whose trips never were has none. A stay
  * `track-places` put at a location carries that location's name as it is now. A trip made an album
  * (`trip-album`) names it, and an album holding one of the track's trips is no other trip's
  * candidate.
@@ -14,14 +14,17 @@
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackTrips, TripList, TripStay } from '@archive/location/api';
 import { basename } from '@std/path';
-import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { TRACK_ARG, trackKind, trackOf } from '@archive/location/track';
 import { readTrackTrips } from '@archive/location/track-trips';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
 import { matchTrip, tripAlbums } from '@archive/media/trip-album';
 
-/** The trips with the album each was made, and only the albums holding no trip as candidates. */
-const withAlbums = async (cmd: Command, kept: TrackTrips): Promise<TrackTrips['trips']> => {
-  const held = await tripAlbums(cmd, kept.track);
+/**
+ * The trips with the album each was made, and only the albums holding no trip as candidates.
+ * `trackId` is the track's node id.
+ */
+const withAlbums = async (cmd: Command, trackId: string, kept: TrackTrips): Promise<TrackTrips['trips']> => {
+  const held = await tripAlbums(cmd, trackId);
   if (held.length === 0) return kept.trips;
   const albumOf = new Map<string, string>();
   for (const album of held) {
@@ -63,8 +66,9 @@ const tripList = async (cmd: Command): CmdReturn => {
 
   try {
     const { path: track } = await trackOf(cmd, target);
-    const attrs = (await cmd.sys.vfs.get(cmd.access, track)).attrs;
-    const { units } = trackProfile(attrs.kind);
+    const node = await cmd.sys.vfs.get(cmd.access, track);
+    const attrs = node.attrs;
+    const { units } = trackProfile(await trackKind(cmd, track, node));
     const zone = typeof attrs.timezone === 'string' && attrs.timezone ? { timezone: attrs.timezone } : {};
     const kept = await readTrackTrips(cmd, track);
     const list: TripList = kept
@@ -74,7 +78,7 @@ const tripList = async (cmd: Command): CmdReturn => {
         ...(kept.lastFix ? { lastFix: kept.lastFix } : {}),
         units,
         ...zone,
-        trips: await withAlbums(cmd, kept),
+        trips: await withAlbums(cmd, node.id, kept),
         stays: await withNames(cmd, kept.stays),
       }
       : { track, units, ...zone, trips: [], stays: [] };

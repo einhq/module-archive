@@ -4,8 +4,8 @@
  *
  *   track-trips <track> [--full] [--dry-run]
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). A run reads the track from where its trips are settled, the last stay or gap that
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). A run reads the track from where its trips are settled, the last stay or gap that
  * ended one for good, and keeps what came before; `--full` reads all of it. How the track is cut is
  * `@archive/location/trips`; what it is cut with (the track's kind, timezone, homes and
  * `tripEdits`) is `@archive/location/track-trips`.
@@ -15,7 +15,7 @@
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackTrips } from '@archive/location/api';
-import { TRACK_ARG } from '@archive/location/track';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
 import { deriveTrackTrips } from '@archive/location/track-trips';
 
 const trackTrips = async (cmd: Command): CmdReturn => {
@@ -29,13 +29,14 @@ const trackTrips = async (cmd: Command): CmdReturn => {
   }
 
   try {
-    const derived = await deriveTrackTrips(cmd, target, { full: flags.full, dryRun: flags['dry-run'] });
+    const { path } = await trackOf(cmd, target);
+    const derived = await deriveTrackTrips(cmd, path, { full: flags.full, dryRun: flags['dry-run'] });
     if (cmd.json) {
       await cmd.writeJSON(derived satisfies TrackTrips);
     } else {
       const ongoing = derived.trips.filter((trip) => trip.ongoing).length;
       await cmd.writeLn(
-        `${derived.track}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'}${ongoing ? ` (${ongoing} ongoing)` : ''}, ` +
+        `${path}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'}${ongoing ? ` (${ongoing} ongoing)` : ''}, ` +
           `${derived.stays.length} stay${derived.stays.length === 1 ? '' : 's'}` +
           (derived.settledUntil ? `, settled until ${derived.settledUntil}` : '') +
           (flags['dry-run'] ? ' (dry run, nothing written)' : ''),
@@ -59,7 +60,7 @@ trackTrips.spec = {
     { name: 'full', type: 'bool' as const, description: 'read the whole track, not only from where its trips are settled' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'derive and show them without writing .trips' },
   ],
-  examples: ['track-trips sailboat', 'track-trips /archive/devices/sailboat/position/history --full --dry-run'],
+  examples: ['track-trips sailboat', 'track-trips /dev/sailboat/position --full --dry-run'],
 };
 
 export default trackTrips;

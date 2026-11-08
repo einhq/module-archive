@@ -13,7 +13,7 @@ import type { TrackWeather, Trip, TripLeg, TripList } from '@archive/location/ap
 import { hourlyFixes, keepTripWeather, summarizeWeather } from '@archive/location/trip-weather';
 import type { AlbumTrip } from '@archive/media/api';
 import type { WeatherReading } from '@archive/weather/api';
-import { historyOf, mkTracker } from './tracker.ts';
+import { mkTracker, positionOf } from './tracker.ts';
 
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
@@ -126,7 +126,7 @@ Deno.test({
     await cmd.shouldSucceed('trip-album the-sailboat 2025-06-05 --new --name Out');
 
     await t.step('nothing is asked when CFG_WEATHER is off', async () => {
-      assertEquals(await weather('', 'CFG_WEATHER=false'), { track: historyOf('the-sailboat'), off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
+      assertEquals(await weather('', 'CFG_WEATHER=false'), { track: positionOf('the-sailboat'), off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
       assertEquals(asked, []);
     });
 

@@ -4,9 +4,9 @@
  *
  *   track-places <track> [--rename] [--dry-run]
  *
- * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
- * (`trackOf`). It reads the stays `track-trips` keeps in `<track>/.trips` and gives each one not
- * placed yet a `location`:
+ * `<track>` is a track's path, or what has one: a device, or a camera linked to one, by its path or
+ * by its name (`trackOf`). It reads the stays `track-trips` keeps in `<track>/.trips` and gives
+ * each one not placed yet a `location`:
  *
  * - a stay at one of the track's homes, that home;
  * - else the location whose position is within `SNAP_M` of the stay, the nearest;
@@ -280,7 +280,7 @@ trackPlaces.spec = {
     { name: 'rename', type: 'bool' as const, description: "ask Overpass and Nominatim again for the names of the stays' locations, except names changed by hand" },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'look the places up and show them without making locations or writing .trips' },
   ],
-  examples: ['track-places sailboat', 'track-places /archive/devices/sailboat/position/history --dry-run'],
+  examples: ['track-places sailboat', 'track-places /dev/sailboat/position --dry-run'],
 };
 
 export default trackPlaces;
