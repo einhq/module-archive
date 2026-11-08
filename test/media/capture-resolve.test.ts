@@ -305,6 +305,12 @@ Deno.test("a digitized copy is dated by a person only, never by the digitizing's
   assertEquals(resolveTime({ ...sources })!.takenAtSource, 'gps');
 });
 
+Deno.test("a digitizer's file name is when it made the file, as its clock is", () => {
+  const sources = { name: '2021-03-04T10:00:00', archiveZone: STOCKHOLM };
+  assertEquals(resolveTime({ ...sources, digitizer: true }), null);
+  assertEquals(resolveTime(sources)!.takenAtSource, 'name');
+});
+
 Deno.test('the stamps on a file are read as sources, and nothing else there is', () => {
   assertEquals(stampedSources({ digitized: true, whenName: '2019-06-01' }), { digitized: true, name: '2019-06-01' });
   assertEquals(stampedSources({ digitized: 'yes', whenName: 'June' }), {});

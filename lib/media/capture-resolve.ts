@@ -109,7 +109,8 @@ type TimeSources = {
    *
    * Some scanners write the scan time into `DateTimeOriginal` itself, which no
    * EXIF rule can catch — the registry's `digitizer` flag is the only thing that knows. The
-   * device source is dropped entirely; a GPS date, if there is one, still stands.
+   * device source is dropped entirely, and so is the name, which it gave the file when it made
+   * it; a GPS date, if there is one, still stands.
    */
   digitizer?: boolean;
   /**
@@ -304,7 +305,8 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
     if (takenAtUtc) return { takenAt, takenAtUtc, takenAtSource: 'device' };
   }
 
-  if (sources.name !== undefined && !sources.digitized) {
+  // A digitizer named the file when it made it, as its clock dated it.
+  if (sources.name !== undefined && !sources.digitizer && !sources.digitized) {
     const named = resolveName(sources.name, sources.deviceOffsetAt, archiveZone);
     if (named) return { ...named, takenAtSource: 'name' };
   }
