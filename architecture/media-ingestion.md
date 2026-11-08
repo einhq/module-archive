@@ -109,7 +109,7 @@ waits for rather than by a shared DAG:
    Pooled work is the work a crawl must not start all at once: the model requests (slow calls
    into EMS), metadata ingestion, the stills, fingerprints and transcodes EMS makes while the step
    waits, `assign-faces` (a kNN over every known face, kept out of `detect-faces` so it holds no
-   model slot), and staging's own steps. All of it sits in one `/pools/media`, which the media
+   model slot), and staging's own steps. All of it sits in one `/var/pools/media`, which the media
    module's workers serve, and they differ only in what they offer: `models` (and `models-second`)
    offers `models` slots, `media-worker` offers `cpu` slots. Each takes the kinds the modules name
    in their drop-ins, and the archive names its own: `etc/media-models.d/kinds` (`faces`, `ocr`,
