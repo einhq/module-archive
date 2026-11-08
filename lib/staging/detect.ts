@@ -52,8 +52,8 @@ const ARRIVAL_LISTING = 2_000;
 /** A kind a folder can be detected as: every kind but the default category's and `generic`. */
 type SourceKind = Exclude<StagingCategoryKind, 'inbox' | 'generic'>;
 
-/** The device a medium's EXIF names, or null for an EXIF that names none. */
-type Device = { make?: string; model?: string } | null;
+/** The camera a medium's EXIF names, or null for an EXIF that names none. */
+type Camera = { make?: string; model?: string } | null;
 
 /** What was read of a folder, which the rules decide on. */
 type Seen = {
@@ -70,8 +70,8 @@ type Seen = {
   json: string[];
   /** JSON files (or paired sidecars) read, and how many of them Google Photos wrote. */
   bodies: { read: number; google: number };
-  /** The devices the EXIF of the indexed media read name. */
-  devices: Device[];
+  /** The cameras the EXIF of the indexed media read name. */
+  cameras: Camera[];
   /** The sampled indexed images' sizes, `<long>x<short>`. */
   sizes: string[];
 };
@@ -146,12 +146,12 @@ const PHONE_MAKE = /^(?:apple|samsung|google|huawei|honor|xiaomi|redmi|oneplus|m
 const CAMERA_MAKE =
   /^(?:nikon|canon|sony|fujifilm|olympus|om digital|panasonic|pentax|ricoh|leica|sigma|hasselblad|gopro|dji|kodak|minolta|konica minolta|casio|samsung techwin|insta360)\b/i;
 
-/** What made a device's pictures: a scanner, a phone, a camera, or none that is known. */
-const deviceKind = (device: NonNullable<Device>): 'scans' | 'phone' | 'camera' | undefined => {
-  const both = `${device.make ?? ''} ${device.model ?? ''}`;
+/** What made a camera's pictures: a scanner, a phone, a camera, or none that is known. */
+const cameraKind = (camera: NonNullable<Camera>): 'scans' | 'phone' | 'camera' | undefined => {
+  const both = `${camera.make ?? ''} ${camera.model ?? ''}`;
   if (SCANNER.test(both)) return 'scans';
-  if (PHONE_MAKE.test(device.make ?? '')) return 'phone';
-  if (CAMERA_MAKE.test(device.make ?? '')) return 'camera';
+  if (PHONE_MAKE.test(camera.make ?? '')) return 'phone';
+  if (CAMERA_MAKE.test(camera.make ?? '')) return 'camera';
   return undefined;
 };
 
@@ -185,22 +185,22 @@ const signsOf = (seen: Seen): Sign[] => {
   if (images >= 3 && heic / images >= 0.2) signs.push({ kind: 'phone', weight: 2, text: `${percent(heic, images)} of ${images} images are HEIC` });
   if (images >= 3 && png / images >= 0.8) signs.push({ kind: 'screenshots', weight: 1, text: `${percent(png, images)} of ${images} images are PNG` });
 
-  // The devices the EXIF names.
-  const named = seen.devices.filter((device): device is NonNullable<Device> => device !== null);
-  const byKind = new Map<string, NonNullable<Device>[]>();
-  for (const device of named) {
-    const kind = deviceKind(device);
-    if (kind) byKind.set(kind, [...byKind.get(kind) ?? [], device]);
+  // The cameras the EXIF names.
+  const named = seen.cameras.filter((camera): camera is NonNullable<Camera> => camera !== null);
+  const byKind = new Map<string, NonNullable<Camera>[]>();
+  for (const camera of named) {
+    const kind = cameraKind(camera);
+    if (kind) byKind.set(kind, [...byKind.get(kind) ?? [], camera]);
   }
-  const deviceName = (device: NonNullable<Device>) => [device.make, device.model].filter(Boolean).join(' ');
-  for (const [kind, devices] of byKind) {
-    if (devices.length * 2 < named.length) continue;
+  const cameraName = (camera: NonNullable<Camera>) => [camera.make, camera.model].filter(Boolean).join(' ');
+  for (const [kind, cameras] of byKind) {
+    if (cameras.length * 2 < named.length) continue;
     const weight: Weight = kind === 'scans' ? 3 : 2;
     const what = kind === 'scans' ? 'a scanner' : kind === 'phone' ? 'a phone' : 'a camera';
-    signs.push({ kind: kind as SourceKind, weight, text: `${what} in the EXIF of ${devices.length} of ${seen.devices.length} files read (${deviceName(devices[0])})` });
+    signs.push({ kind: kind as SourceKind, weight, text: `${what} in the EXIF of ${cameras.length} of ${seen.cameras.length} files read (${cameraName(cameras[0])})` });
   }
-  const noDevice = seen.devices.length >= 3 && named.length === 0;
-  if (noDevice) signs.push({ kind: 'scans', weight: 1, text: `no device in the EXIF of ${seen.devices.length} files read` });
+  const noCamera = seen.cameras.length >= 3 && named.length === 0;
+  if (noCamera) signs.push({ kind: 'scans', weight: 1, text: `no camera in the EXIF of ${seen.cameras.length} files read` });
   if (seen.sizes.length >= 5) {
     const counts = new Map<string, number>();
     for (const size of seen.sizes) counts.set(size, (counts.get(size) ?? 0) + 1);
@@ -218,7 +218,7 @@ const signsOf = (seen: Seen): Sign[] => {
     }
     const raw = seen.media.filter((name) => RAW_EXT.test(name));
     if (raw.length / of >= 0.1) signs.push({ kind: 'camera', weight: 2, text: `${raw.length} of ${of} files are camera RAW, such as ${raw[0]}` });
-    // A running number is a camera's or an iPhone's: the device, or else HEIC, says which.
+    // A running number is a camera's or an iPhone's: the camera, or else HEIC, says which.
     const running = seen.media.filter((name) => RUNNING_NUMBER.test(name));
     const weight = shareWeight(running.length, of);
     const owner = (byKind.get('camera')?.length ?? 0) * 2 >= named.length && named.length > 0
@@ -353,14 +353,14 @@ export const gather = async (vfs: Vfs, access: Access, root: string): Promise<Se
     }
   }
 
-  const devices: Device[] = [];
+  const cameras: Camera[] = [];
   for (const file of spread(media.filter((each) => typeof each.attrs.indexedAt === 'string'), EXIF_READS)) {
     const exif = await vfs.get(access, `${file.path}/metadata/exif`).catch(() => undefined);
     if (!exif) continue;
     const info = (exif.attrs as Record<string, unknown>).deviceinfo;
     const make = isObject(info) && typeof info.make === 'string' && info.make.trim() ? info.make.trim() : undefined;
     const model = isObject(info) && typeof info.model === 'string' && info.model.trim() ? info.model.trim() : undefined;
-    devices.push(make || model ? { ...(make ? { make } : {}), ...(model ? { model } : {}) } : null);
+    cameras.push(make || model ? { ...(make ? { make } : {}), ...(model ? { model } : {}) } : null);
   }
 
   const sizes: string[] = [];
@@ -384,7 +384,7 @@ export const gather = async (vfs: Vfs, access: Access, root: string): Promise<Se
     media: media.map((file) => file.name),
     json: json.map((file) => file.name),
     bodies,
-    devices,
+    cameras,
     sizes,
   };
 };

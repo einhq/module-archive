@@ -1,9 +1,9 @@
 #!ts
 /**
- * track-create — give a device a track: the route it recorded, kept as the
- * device's child `track`.
+ * track-create — give a camera a track: the route it recorded, kept as the
+ * camera's child `track`.
  *
- *   track-create <device> [--description <text>] [--routing-key <key>]
+ *   track-create <camera> [--description <text>] [--routing-key <key>]
  *
  * A track holds coordinate points {lat, lng, ts, alt?, speed?} in the track
  * registry, indexed spatially and by time. Points are appended via
@@ -22,7 +22,7 @@ const trackCreate = async (cmd: Command): CmdReturn => {
   const target = flags._[0] as string | undefined;
 
   if (!target) {
-    await cmd.writeError('track-create: usage: track-create <device> [--description <text>] [--routing-key <key>]\n');
+    await cmd.writeError('track-create: usage: track-create <camera> [--description <text>] [--routing-key <key>]\n');
     return 1;
   }
 
@@ -40,7 +40,7 @@ const trackCreate = async (cmd: Command): CmdReturn => {
     if (flags.description) attrs.description = flags.description;
     if (flags['routing-key']) attrs.routingKeys = [flags['routing-key']];
 
-    await cmd.sys.vfs.create(cmd.access, 'track', track.device, 'track', { attrs });
+    await cmd.sys.vfs.create(cmd.access, 'track', track.camera, 'track', { attrs });
   } catch (error) {
     await cmd.writeError(`track-create: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -57,9 +57,9 @@ const trackCreate = async (cmd: Command): CmdReturn => {
 trackCreate.spec = {
   name: 'track-create',
   effect: 'write' as const,
-  description: "Give a device a track for the coordinate points it recorded (the device's child track)",
+  description: "Give a camera a track for the coordinate points it recorded (the camera's child track)",
   args: [
-    { name: 'device', type: 'string' as const, description: 'the device: its slug under the devices root, or its path' },
+    { name: 'camera', type: 'string' as const, description: 'the camera: its slug under the cameras root, or its path' },
   ],
   flags: [
     { name: 'description', type: 'string' as const, description: 'track description' },

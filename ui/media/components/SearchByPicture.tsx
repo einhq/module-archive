@@ -48,7 +48,7 @@ const putInTemp = async (file: File): Promise<string> => {
 };
 
 /**
- * Search with a picture that is not in the archive: one picked from the device, or on a phone one
+ * Search with a picture that is not in the archive: one picked from the camera, or on a phone one
  * taken with its camera — an old print, a place. `onPicked` gets the path to search `--like`.
  */
 export function SearchByPicture({ onPicked }: { onPicked: (path: string) => void }) {

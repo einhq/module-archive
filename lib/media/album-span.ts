@@ -77,7 +77,7 @@ const wallClock = (iso: string, timezone: string): string | undefined => {
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
 };
 
-/** The first and last fix of the album's trip, as wall clocks where its device was; none without a trip. */
+/** The first and last fix of the album's trip, as wall clocks where its camera was; none without a trip. */
 const tripSpan = (attr: unknown): { start: string; end: string } | undefined => {
   const trip = attr as Partial<AlbumTrip> | null | undefined;
   if (!trip || typeof trip.start !== 'string' || typeof trip.end !== 'string') return undefined;

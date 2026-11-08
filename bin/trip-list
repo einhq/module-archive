@@ -1,26 +1,26 @@
 #!ts
 /**
- * trip-list — a device's trips and stays, as `track-trips` last derived them.
+ * trip-list — a camera's trips and stays, as `track-trips` last derived them.
  *
- *   trip-list <device>
+ *   trip-list <camera>
  *
- * `<device>` is a device's slug or path, or its track's path. Nothing is derived here: a device
+ * `<camera>` is a camera's slug or path, or its track's path. Nothing is derived here: a camera
  * whose trips never were has none. A stay `track-places` put at a location carries that
  * location's name as it is now. A trip made an album (`trip-album`) names it, and an album holding
- * one of the device's trips is no other trip's candidate.
+ * one of the camera's trips is no other trip's candidate.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { DeviceTrips, TripList, TripStay } from '@archive/location/api';
+import type { CameraTrips, TripList, TripStay } from '@archive/location/api';
 import { basename } from '@std/path';
-import { readDeviceTrips } from '@archive/location/device-trips';
+import { readCameraTrips } from '@archive/location/camera-trips';
 import { trackOf } from '@archive/location/track';
 import { formatDistance, trackProfile } from '@archive/location/track-profile';
 import { matchTrip, tripAlbums } from '@archive/media/trip-album';
 
 /** The trips with the album each was made, and only the albums holding no trip as candidates. */
-const withAlbums = async (cmd: Command, kept: DeviceTrips): Promise<DeviceTrips['trips']> => {
-  const held = await tripAlbums(cmd, kept.device);
+const withAlbums = async (cmd: Command, kept: CameraTrips): Promise<CameraTrips['trips']> => {
+  const held = await tripAlbums(cmd, kept.camera);
   if (held.length === 0) return kept.trips;
   const albumOf = new Map<string, string>();
   for (const album of held) {
@@ -56,19 +56,19 @@ const tripList = async (cmd: Command): CmdReturn => {
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const target = flags._[0] === undefined ? undefined : String(flags._[0]);
   if (!target) {
-    await cmd.writeError('trip-list: usage: trip-list <device>\n');
+    await cmd.writeError('trip-list: usage: trip-list <camera>\n');
     return 1;
   }
 
   try {
-    const { device } = await trackOf(cmd, target);
-    const attrs = (await cmd.sys.vfs.get(cmd.access, device)).attrs;
+    const { camera } = await trackOf(cmd, target);
+    const attrs = (await cmd.sys.vfs.get(cmd.access, camera)).attrs;
     const { units } = trackProfile(attrs.kind);
     const zone = typeof attrs.timezone === 'string' && attrs.timezone ? { timezone: attrs.timezone } : {};
-    const kept = await readDeviceTrips(cmd, device);
+    const kept = await readCameraTrips(cmd, camera);
     const list: TripList = kept
       ? {
-        device,
+        camera,
         computedAt: kept.computedAt,
         ...(kept.lastFix ? { lastFix: kept.lastFix } : {}),
         units,
@@ -76,11 +76,11 @@ const tripList = async (cmd: Command): CmdReturn => {
         trips: await withAlbums(cmd, kept),
         stays: await withNames(cmd, kept.stays),
       }
-      : { device, units, ...zone, trips: [], stays: [] };
+      : { camera, units, ...zone, trips: [], stays: [] };
     if (cmd.json) {
       await cmd.writeJSON(list satisfies TripList);
     } else if (!kept) {
-      await cmd.writeLn(`${device}: no trips derived yet (track-trips ${device})`);
+      await cmd.writeLn(`${camera}: no trips derived yet (track-trips ${camera})`);
     } else {
       for (const trip of list.trips) {
         const days = trip.days.length === 1 ? '1 day' : `${trip.days.length} days`;
@@ -102,9 +102,9 @@ const tripList = async (cmd: Command): CmdReturn => {
 tripList.spec = {
   name: 'trip-list',
   effect: 'read' as const,
-  description: "A device's trips and stays, as track-trips last derived them",
+  description: "A camera's trips and stays, as track-trips last derived them",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
   ],
   flags: [],
   examples: ['trip-list the-sailboat'],

@@ -142,7 +142,7 @@ export type NearRuleFile = RuleFile & {
   height?: number;
   takenAtUtc?: string;
   takenAtSource?: string;
-  device?: string;
+  camera?: string;
   /** The files of the set it is alike to, by its own finding (none for a library file). */
   alike: string[];
 };
@@ -167,7 +167,7 @@ const formatRank = (mimetype: string | undefined): number => {
 };
 
 /** A capture time's source's rank: typed by a person, GPS, the camera, a sidecar, the file's name, none. */
-const CAPTURE_RANK: Record<string, number> = { manual: 5, gps: 4, device: 3, sidecar: 2, name: 1 };
+const CAPTURE_RANK: Record<string, number> = { manual: 5, gps: 4, camera: 3, sidecar: 2, name: 1 };
 
 /** A name a copy is given: `(2)`, a trailing `-1`, or `copy`. */
 const COPY_NAME = /\(\d+\)|[-_ ]\d$|\bcopy\b|kopia/i;
@@ -202,7 +202,7 @@ const preferred = (a: NearRuleFile, b: NearRuleFile): { keep: NearRuleFile; rule
 
 /** Whether two files could be two frames of a burst: one size, one camera, the same second. */
 const burstPair = (a: NearRuleFile, b: NearRuleFile): boolean =>
-  a.width !== undefined && a.width === b.width && a.height === b.height && a.device !== undefined && a.device === b.device &&
+  a.width !== undefined && a.width === b.width && a.height === b.height && a.camera !== undefined && a.camera === b.camera &&
   a.takenAtUtc !== undefined && a.takenAtUtc.slice(0, 19) === b.takenAtUtc?.slice(0, 19);
 
 /** What the rules decide about a near set. */

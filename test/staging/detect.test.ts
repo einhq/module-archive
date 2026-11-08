@@ -27,9 +27,9 @@ const MIMETYPES: Record<string, string> = {
 type Spec = { type: 'file' | 'directory' | 'exif'; name: string; attrs?: Record<string, unknown>; children?: Spec[] };
 
 /** One invented file: its path below the tree, and what an index would have read of it. */
-type Entry = { path: string; attrs?: Record<string, unknown>; device?: { make?: string; model?: string } | null };
+type Entry = { path: string; attrs?: Record<string, unknown>; camera?: { make?: string; model?: string } | null };
 
-/** `entries` as nested specs: folders made from the paths, files with a mimetype by extension and, with `device`, an EXIF record. */
+/** `entries` as nested specs: folders made from the paths, files with a mimetype by extension and, with `camera`, an EXIF record. */
 const specs = (entries: Entry[]): Spec[] => {
   const root: Spec[] = [];
   for (const entry of entries) {
@@ -42,17 +42,17 @@ const specs = (entries: Entry[]): Spec[] => {
     }
     const name = segments[segments.length - 1];
     const extension = name.split('.').pop()!.toLowerCase();
-    const indexed = entry.device !== undefined ? { indexedAt: '2026-10-18T00:00:00Z' } : {};
+    const indexed = entry.camera !== undefined ? { indexedAt: '2026-10-18T00:00:00Z' } : {};
     level.push({
       type: 'file',
       name,
       attrs: { mimetype: MIMETYPES[extension] ?? 'application/octet-stream', size: 10, ...indexed, ...entry.attrs },
-      ...(entry.device !== undefined
+      ...(entry.camera !== undefined
         ? {
           children: [{
             type: 'directory',
             name: 'metadata',
-            children: [{ type: 'exif', name: 'exif', attrs: { indexedAt: '2026-10-18T00:00:00Z', deviceinfo: entry.device } }],
+            children: [{ type: 'exif', name: 'exif', attrs: { indexedAt: '2026-10-18T00:00:00Z', deviceinfo: entry.camera } }],
           }],
         }
         : {}),
@@ -130,13 +130,13 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
     });
 
     await t.step('TIFFs named by a scanner with no camera in their EXIF are scans; so is what a scanner names', async () => {
-      const box = await tree('Box 3', run(8, (n) => `scan${pad(n)}.tif`, { attrs: { width: 3000, height: 2000 }, device: null }));
+      const box = await tree('Box 3', run(8, (n) => `scan${pad(n)}.tif`, { attrs: { width: 3000, height: 2000 }, camera: null }));
       const found = await detect(box);
       assertEquals([found.kind, found.confidence], ['scans', 'high']);
       assert(found.evidence.some((line) => line.includes('TIFF')), found.evidence.join('; '));
-      assert(found.evidence.some((line) => line.startsWith('no device in the EXIF')), found.evidence.join('; '));
+      assert(found.evidence.some((line) => line.startsWith('no camera in the EXIF')), found.evidence.join('; '));
 
-      const epson = await tree('prints', run(6, (n) => `IMG_20190601_${pad(n)}.jpg`, { device: { make: 'EPSON', model: 'Perfection V600' } }));
+      const epson = await tree('prints', run(6, (n) => `IMG_20190601_${pad(n)}.jpg`, { camera: { make: 'EPSON', model: 'Perfection V600' } }));
       assertEquals(await kindOf(epson), ['scans', 'high']);
       // A folder whose name only holds the letters is no scans.
       assertEquals((await detect(await tree('Scandinavia 2019', run(6, (n) => `holiday-${n}.jpg`)))).kind, 'generic');
@@ -159,7 +159,7 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
 
     await t.step("a camera's card is a camera; a running number alone says nothing", async () => {
       assertEquals(await kindOf(await tree('card', run(6, (n) => `DCIM/100NIKON/DSC_${pad(n)}.JPG`))), ['camera', 'high']);
-      const canon = await tree('canon', run(6, (n) => `IMG_${pad(n)}.JPG`, { device: { make: 'Canon', model: 'Canon EOS 80D' } }));
+      const canon = await tree('canon', run(6, (n) => `IMG_${pad(n)}.JPG`, { camera: { make: 'Canon', model: 'Canon EOS 80D' } }));
       const found = await detect(canon);
       assertEquals([found.kind, found.confidence], ['camera', 'high']);
       assertEquals(found.category, null);
@@ -218,7 +218,7 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
       const entries: Entry[] = [];
       for (let a = 0; a < 10; a++) {
         for (let b = 0; b < 10; b++) {
-          entries.push(...run(30, (n) => `a${a}/b${b}/c${n % 3}/IMG_${pad(a * 1000 + b * 100 + n)}.JPG`, { device: { make: 'NIKON', model: 'D750' } }));
+          entries.push(...run(30, (n) => `a${a}/b${b}/c${n % 3}/IMG_${pad(a * 1000 + b * 100 + n)}.JPG`, { camera: { make: 'NIKON', model: 'D750' } }));
         }
       }
       const big = await tree('big', entries);
@@ -246,7 +246,7 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
       for (const listing of listings) assertEquals((listing.args[2] as { page?: { limit: number } }).page?.limit, LISTING_PAGE);
       // The folder itself, the paired sidecars asked of a few photos, and their EXIF.
       assert(of('get').length <= 1 + BODY_READS + EXIF_READS, `${of('get').length} reads`);
-      assertEquals(seen.devices.length, EXIF_READS);
+      assertEquals(seen.cameras.length, EXIF_READS);
       assertEquals(of('open').length, 0);
     });
   } finally {

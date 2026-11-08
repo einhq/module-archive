@@ -1,12 +1,12 @@
 /**
- * The trip of a device's track an album was made (`@archive/media/trip-album`): its attr `trip`
- * (`AlbumTrip`), written from the trips `track-trips` derived, found again by device through the
- * `trip_device` index, and written anew whenever the device's trips are.
+ * The trip of a camera's track an album was made (`@archive/media/trip-album`): its attr `trip`
+ * (`AlbumTrip`), written from the trips `track-trips` derived, found again by camera through the
+ * `trip_camera` index, and written anew whenever the camera's trips are.
  */
 
 import type { Command } from '@ein/client';
 import { shq } from '@ein/client';
-import type { DeviceTrips, Trip, TripStay } from '@archive/location/api';
+import type { CameraTrips, Trip, TripStay } from '@archive/location/api';
 import type { AlbumTrip } from '@archive/media/api';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 
@@ -16,14 +16,14 @@ export const TRIP_ATTR = 'trip';
 /** Albums per query page. */
 const ALBUM_PAGE = 200;
 
-/** An album holding a trip of the device, and the trip as it holds it. */
+/** An album holding a trip of the camera, and the trip as it holds it. */
 type TripAlbum = { path: string; trip: AlbumTrip };
 
 /**
  * The trip as an album keeps it: with the stays it names (where it and its legs start and end, and
  * where it got farthest) and the stays along the way, numbered anew in the order they came.
  */
-export const albumTripOf = (device: string, timezone: string | undefined, trip: Trip, stays: TripStay[]): AlbumTrip => {
+export const albumTripOf = (camera: string, timezone: string | undefined, trip: Trip, stays: TripStay[]): AlbumTrip => {
   const start = Date.parse(trip.start);
   const end = Date.parse(trip.end);
   const named = new Set<number>();
@@ -42,7 +42,7 @@ export const albumTripOf = (device: string, timezone: string | undefined, trip: 
     return (index === undefined ? rest : { ...rest, stay: index }) as T;
   };
   return {
-    device,
+    camera,
     day: trip.day,
     start: trip.start,
     end: trip.end,
@@ -82,14 +82,14 @@ export const matchTrip = (trips: Trip[], held: Pick<AlbumTrip, 'start' | 'end'>)
   return best;
 };
 
-/** The albums holding a trip of `device`. */
-export const tripAlbums = async (cmd: Command, device: string): Promise<TripAlbum[]> => {
+/** The albums holding a trip of `camera`. */
+export const tripAlbums = async (cmd: Command, camera: string): Promise<TripAlbum[]> => {
   const albums: TripAlbum[] = [];
   let after: { value: string | null; id: string } | undefined;
   for (;;) {
     const rows = await cmd.sys.vfs.query(cmd.access, {
       types: [NODE_TYPE_ALBUM],
-      where: [{ ref: { path: [TRIP_ATTR, 'device'] }, op: 'eq', value: device }],
+      where: [{ ref: { path: [TRIP_ATTR, 'camera'] }, op: 'eq', value: camera }],
       after,
       limit: ALBUM_PAGE,
     });
@@ -107,19 +107,19 @@ export const writeAlbumTrip = async (cmd: Command, album: string, trip: AlbumTri
 };
 
 /**
- * Write anew the trip of each album holding one of the device's trips, from its trips as they are
+ * Write anew the trip of each album holding one of the camera's trips, from its trips as they are
  * now: the album grows with an ongoing trip and learns when it ended, follows a trip joined or
  * parted, and gets the locations its stays were put at. An album whose trip is no longer found keeps
  * it as it was. What could not be written is said on stderr.
  */
-export const refreshTripAlbums = async (cmd: Command, trips: DeviceTrips): Promise<void> => {
-  const albums = await tripAlbums(cmd, trips.device);
+export const refreshTripAlbums = async (cmd: Command, trips: CameraTrips): Promise<void> => {
+  const albums = await tripAlbums(cmd, trips.camera);
   if (albums.length === 0) return;
-  const timezone = (await cmd.sys.vfs.get(cmd.access, trips.device)).attrs.timezone;
+  const timezone = (await cmd.sys.vfs.get(cmd.access, trips.camera)).attrs.timezone;
   for (const album of albums) {
     const trip = matchTrip(trips.trips, album.trip);
     if (!trip) continue;
-    const next = albumTripOf(trips.device, typeof timezone === 'string' && timezone ? timezone : undefined, trip, trips.stays);
+    const next = albumTripOf(trips.camera, typeof timezone === 'string' && timezone ? timezone : undefined, trip, trips.stays);
     if (JSON.stringify(next) === JSON.stringify(album.trip)) continue;
     try {
       await writeAlbumTrip(cmd, album.path, next);

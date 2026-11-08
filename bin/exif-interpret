@@ -3,27 +3,27 @@
  * exif-interpret — what a file's metadata means in the archive: when it was taken, and where.
  *
  * The media module's `exif-extract` reads a file and keeps what its metadata says under
- * `<file>/metadata/exif`: the camera's clock readings (`when`), its GPS fix (`where`), the device.
+ * `<file>/metadata/exif`: the camera's clock readings (`when`), its GPS fix (`where`), the camera.
  * This turns that into the archive's answers, written on the file:
  *
  * - its capture time, `takenAt`, `takenAtUtc` and `takenAtSource` — a *resolution*
  *   (`@archive/media/capture-resolve`) of everything the archive knows: the file's own manual time
  *   first, then a paired sidecar's, the GPS fix, the camera clock and the name, each turned into a
- *   wall clock and an instant, with the device's clock settings from the registry;
+ *   wall clock and an instant, with the camera's clock settings from the registry;
  * - a staged file's stamps from its category's time rules (`digitized`, `whenName`): a scan's
  *   clocks are the scan's, and a name may spell the date;
  * - its `position` child, from the GPS fix or else the sidecar's place where that is believed,
  *   unless a person set it (`positionManual`).
  *
  * `interpretedAt` is written last, and the archive's bridge announces that write as
- * `media.metadata.interpreted`, which starts the archive's analysis: faces and the device link.
+ * `media.metadata.interpreted`, which starts the archive's analysis: faces and the camera link.
  */
 
 import { basename, resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
 import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
-import { clockForFile, offsetAt } from '@archive/device/device-zone';
+import { clockForFile, offsetAt } from '@archive/camera/camera-zone';
 import { reportUnwritable } from '@media/writable';
 import type { ExifInterpretAnswer } from '@archive/media/api';
 import { inboxOf } from '@archive/staging/duplicates';
@@ -67,11 +67,11 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
   const gps = (exifAttrs.where as { gps?: { latitude?: number; longitude?: number } } | null | undefined)?.gps;
 
   const fileAttrs: Record<string, unknown> = {};
-  // The device's clock settings come from the registry, which is why this reads the node's
-  // `devicePath` rather than a match not made yet: on a first reading there is no link and the
-  // offset is unknown, and `device-link` resolves again the moment there is one.
-  const devicePath = typeof attrs.devicePath === 'string' ? attrs.devicePath : undefined;
-  const deviceClock = await clockForFile(cmd, devicePath);
+  // The camera's clock settings come from the registry, which is why this reads the node's
+  // `cameraPath` rather than a match not made yet: on a first reading there is no link and the
+  // offset is unknown, and `camera-link` resolves again the moment there is one.
+  const cameraPath = typeof attrs.cameraPath === 'string' ? attrs.cameraPath : undefined;
+  const cameraClock = await clockForFile(cmd, cameraPath);
   // A staged file is dated by its category's time rules, stamped on it in this same write. Anywhere
   // else the stamps it already carries stand, so a file filed from staging keeps them.
   const staged = inboxOf(inputPath) !== undefined;
@@ -83,10 +83,10 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
   const resolved = resolveTime({
     manual: typeof attrs.whenManual === 'string' ? attrs.whenManual : undefined,
     gps: when?.gps,
-    device: when?.device,
-    digitizer: deviceClock.digitizer,
-    quicktimeUtc: deviceClock.quicktimeUtc,
-    deviceOffsetAt: (wallClock) => offsetAt(deviceClock, wallClock, SYSTEM_TIME_ZONE),
+    camera: when?.device,
+    digitizer: cameraClock.digitizer,
+    quicktimeUtc: cameraClock.quicktimeUtc,
+    cameraOffsetAt: (wallClock) => offsetAt(cameraClock, wallClock, SYSTEM_TIME_ZONE),
     archiveZone: SYSTEM_TIME_ZONE,
     ...stampedSources(stamps ?? attrs),
     ...(sidecarTimes ? { sidecar: sidecarTimes } : {}),
@@ -133,7 +133,7 @@ exifInterpret.spec = {
   name: 'exif-interpret',
   effect: 'write' as const,
   description:
-    "Read what a file's metadata means in the archive: its capture time, resolved from its clocks, its device, a paired sidecar and its name (a staged file by its category's time rules), and its position node from the GPS fix or the sidecar",
+    "Read what a file's metadata means in the archive: its capture time, resolved from its clocks, its camera, a paired sidecar and its name (a staged file by its category's time rules), and its position node from the GPS fix or the sidecar",
   args: [
     { name: 'input', type: 'path' as const, description: 'VFS path to a file whose metadata is read (exif-extract)' },
   ],

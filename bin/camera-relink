@@ -1,0 +1,312 @@
+#!ts
+/**
+ * camera-relink — link a registered camera's existing media to it.
+ *
+ * The pipeline links a file to its camera once, when the file is indexed
+ * (`media-camera` → `camera-link`). Registering a camera afterwards therefore
+ * leaves every photo it ever took unlinked, and re-running the pipeline over
+ * the whole corpus to fix that would re-do far more work than the question
+ * needs. This walks the other way: from the camera's fingerprint to the exif
+ * nodes carrying it.
+ *
+ * A file is linked to the camera ingest would have chosen for it (`matchCamera` over every
+ * registered camera): its serial's, or else the first whose make and model it carries — which
+ * takes a file whose serial no camera has, so a camera with a serial is also looked up by its
+ * make and model. Both are equalities in the store, each served by an index (`device_serial`,
+ * and `camera_model` on `deviceinfo.make` and `deviceinfo.model`), so a lookup costs the rows it
+ * matches.
+ *
+ * `--all` sweeps every registered camera with a fingerprint. That is the library-wide answer to
+ * an unlinked file, and the reason `media-scan` has no gap term for `media-camera`: `camera-link`
+ * writes nothing when nothing matches, so from the file side a link that never ran and one that
+ * ran and found nothing are the same thing. See `deriveGaps` in `@archive/media/event-rules`.
+ *
+ * It is a long pass, and it does more than link. Linking a file changes its capture time, so
+ * after linking each camera's files are re-dated (media's `media-resolve-time --camera`), which
+ * reapplies the date policy to every file of that camera — in production on 2026-08-30, 1 287
+ * files to link but 15 454 to retime. Use `--dry-run` first and read both numbers; the retime
+ * half is the one that can surprise, and under `--dry-run` it counts only the files already
+ * linked.
+ */
+import type { CmdReturn, Command, NodeAttrs, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
+import { parseArgs, shq } from '@ein/client';
+import { dirname, resolve } from '@std/path';
+import { type CameraEntry, listCameras, matchCamera, NODE_TYPE_CAMERA, readCamera } from '@archive/camera/camera';
+import type { RelinkResult } from '@archive/camera/api';
+import type { MediaResolveTimeResult } from '@archive/media/api';
+
+const NODE_TYPE_EXIF = 'exif';
+const METADATA_DIR = 'metadata';
+const PAGE = 200;
+
+type CameraInfoAttr = { make?: string; model?: string };
+
+const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
+
+/** `/albums/x/files/y.jpg/metadata/exif` → `/albums/x/files/y.jpg`. */
+const fileOf = (exifPath: string): string => dirname(dirname(exifPath));
+
+/** The file each exif node of `exifIds` describes (`<file>/metadata/exif`): two batched parent lookups. */
+const filesOfExif = async (cmd: Command, exifIds: string[]): Promise<Map<string, string>> => {
+  const found = new Map<string, string>();
+  if (exifIds.length === 0) return found;
+  const vfs = cmd.sys.vfs;
+  const up = await vfs.getParentLinksByIds(cmd.access, exifIds);
+  const metadataOf = new Map<string, string>();
+  for (const [id, links] of up) {
+    const link = links.find((each) => each.name === NODE_TYPE_EXIF);
+    if (link) metadataOf.set(id, link.parentId);
+  }
+  const files = await vfs.getParentLinksByIds(cmd.access, [...new Set(metadataOf.values())]);
+  for (const [exif, metadata] of metadataOf) {
+    const link = files.get(metadata)?.find((each) => each.name === METADATA_DIR);
+    if (link) found.set(exif, link.parentId);
+  }
+  return found;
+};
+
+/**
+ * Re-date this camera's files, which is media's to do: both halves of a link change a capture
+ * time — the camera carries the timezone its clock was set to, and a digitizer's camera date is
+ * when it scanned the file rather than when the photograph was taken — but the rules are media's
+ * (`@archive/media/capture-resolve`), and media depends on this module, not the other way round. So this
+ * runs `media-resolve-time --camera`, which walks the camera's files by the indexed
+ * `cameraPath` (media is an optional dependency: without it there is nothing to re-date).
+ *
+ * Under `--dry-run` nothing was linked, so the count is of the files already linked to it: a
+ * lower bound on what a real run would re-date.
+ */
+const retimeCamera = async (cmd: Command, cameraPath: string, dryRun: boolean): Promise<number> => {
+  const ran = await cmd.execute(`JSON_OUTPUT=1 media-resolve-time --camera ${shq(cameraPath)}${dryRun ? ' --dry-run' : ''}`);
+  if (ran.code !== 0) {
+    if (!/not found/.test(`${ran.stderr ?? ''}`)) await cmd.writeError(`camera-relink: ${cameraPath}: re-dating failed: ${`${ran.stderr ?? ''}`.trim()}\n`);
+    return 0;
+  }
+  return (JSON.parse(`${ran.stdout ?? ''}`) as MediaResolveTimeResult).changed;
+};
+
+type RelinkFlags = { force: boolean; dryRun: boolean; reapply: boolean };
+
+/** Point the camera's cover at its newest picture, which linking or re-dating may have changed. */
+const coverCamera = async (cmd: Command, cameraPath: string, dryRun: boolean): Promise<void> => {
+  if (dryRun) return;
+  const ran = await cmd.execute(`camera-cover ${shq(cameraPath)}`);
+  if (ran.code !== 0) await cmd.writeError(`camera-relink: ${cameraPath}: cover not updated: ${`${ran.stderr ?? ''}`.trim()}\n`);
+};
+
+/**
+ * Relink one camera, deciding each file among `cameras`, every registered one. Returns
+ * `undefined` having written its own diagnosis, which is what lets the sweep below carry on past
+ * a camera that cannot be matched on.
+ */
+const relinkCamera = async (cmd: Command, cameraPath: string, flags: RelinkFlags, cameras: CameraEntry[]): Promise<RelinkResult | undefined> => {
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  let node;
+  try {
+    node = await vfs.get(access, cameraPath);
+  } catch {
+    await cmd.writeError(`camera-relink: ${cameraPath}: not found\n`);
+    return undefined;
+  }
+  if (node.type !== NODE_TYPE_CAMERA) {
+    await cmd.writeError(`camera-relink: ${cameraPath}: not a camera (${node.type})\n`);
+    return undefined;
+  }
+
+  const attrs = await readCamera(cmd, cameraPath);
+  const serialNumber = str(attrs.serialNumber);
+  const make = str(attrs.make);
+  const model = str(attrs.model);
+
+  if (!flags.reapply && !serialNumber && !(make && model)) {
+    await cmd.writeError(`camera-relink: ${cameraPath}: nothing to match on (set a serial, or both make and model)\n`);
+    return undefined;
+  }
+
+  // A setting change only needs the files already pointing at this camera: nothing to link.
+  if (flags.reapply) {
+    const retimed = await retimeCamera(cmd, cameraPath, flags.dryRun);
+    await coverCamera(cmd, cameraPath, flags.dryRun);
+    return { camera: cameraPath, scanned: 0, linked: 0, retimed, skipped: 0 };
+  }
+
+  // A camera outside the registry's folder is still decided as if it were in it, after the rest.
+  const pool = cameras.some((camera) => camera.path === cameraPath) ? cameras : [...cameras, { path: cameraPath, serialNumber, make, model }];
+  const lookups = [
+    ...(serialNumber ? [[{ ref: 'deviceSerialNumber', op: 'eq' as const, value: serialNumber }]] : []),
+    ...(make && model
+      ? [[{ ref: { path: ['deviceinfo', 'make'] }, op: 'eq' as const, value: make }, { ref: { path: ['deviceinfo', 'model'] }, op: 'eq' as const, value: model }]]
+      : []),
+  ];
+
+  const seen = new Set<string>();
+  let scanned = 0;
+  let linked = 0;
+  let skipped = 0;
+
+  for (const where of lookups) {
+    let after: NodeQueryCursor | undefined;
+    for (;;) {
+      const rows: NodeQueryEntry[] = await vfs.query(access, { types: [NODE_TYPE_EXIF], where, after, limit: PAGE });
+      if (rows.length === 0) break;
+      after = { value: null, id: rows[rows.length - 1].id };
+
+      // This camera's rows, as ingest would decide them.
+      const mine: NodeQueryEntry[] = [];
+      for (const row of rows) {
+        // A file carrying both the serial and the make and model comes back from each lookup.
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        scanned++;
+
+        const attrs = row.node.attrs as NodeAttrs;
+        const info = attrs.deviceinfo as CameraInfoAttr | undefined;
+        const fingerprint = { serialNumber: str(attrs.deviceSerialNumber), make: str(info?.make), model: str(info?.model) };
+        // Ingest's choice: a serial another camera has, or a model line an earlier camera has, is not this camera's.
+        if (matchCamera(pool, fingerprint)?.path === cameraPath) mine.push(row);
+      }
+
+      // Their files, read in one batch per page rather than a `get` per file.
+      const fileIds = await filesOfExif(cmd, mine.map((row) => row.id));
+      const files = await vfs.getNodesByIds(access, [...new Set(fileIds.values())]);
+
+      for (const row of mine) {
+        const fileId = fileIds.get(row.id);
+        const file = fileId ? files.get(fileId) : undefined;
+        if (!file) continue;
+        const filePath = fileOf(row.absPath);
+
+        const current = str((file.attrs as NodeAttrs).cameraPath);
+        // Another camera already owns this file, linked by hand or before a fingerprint changed.
+        // Overwriting that is a decision (`--force`), not a repair.
+        if (current && current !== cameraPath && !flags.force) {
+          skipped++;
+          continue;
+        }
+
+        if (current === cameraPath) {
+          skipped++;
+          continue;
+        }
+
+        if (!flags.dryRun) {
+          await vfs.update(access, filePath, { attrs: { cameraPath } });
+          // ln handles VFS softlink creation; there is no direct method for it.
+          await cmd.execute(`ln -sf ${shq(cameraPath)} ${shq(`${filePath}/camera`)}`);
+        }
+        linked++;
+      }
+    }
+  }
+
+  const retimed = await retimeCamera(cmd, cameraPath, flags.dryRun);
+  await coverCamera(cmd, cameraPath, flags.dryRun);
+  return { camera: cameraPath, scanned, linked, retimed, skipped };
+};
+
+/** A camera the sweep can key on at all. The rest have nothing to match files against. */
+const hasFingerprint = (camera: CameraEntry): boolean => Boolean(camera.serialNumber || (camera.make && camera.model));
+
+const cameraRelink = async (cmd: Command): CmdReturn => {
+  const parsed = parseArgs(cmd.args, { boolean: ['force', 'dry-run', 'reapply', 'all'] });
+  const target = parsed._[0] as string | undefined;
+  const flags: RelinkFlags = { force: Boolean(parsed.force), dryRun: Boolean(parsed['dry-run']), reapply: Boolean(parsed.reapply) };
+
+  // The library-wide sweep. This is the answer to "a file whose camera was registered after it
+  // was indexed", and to a `media-camera` that never ran because the bridge was down — the case
+  // `media-scan` cannot cover, because an unmatched file and a file nothing ever asked about
+  // look identical from the file side. Going from the registry instead makes each camera an
+  // indexed equality over the exif nodes carrying its fingerprint, so the sweep costs the rows
+  // it matches rather than a walk of the corpus.
+  //
+  // A camera with neither a serial nor a make+model pair is counted, not reported as an error:
+  // one unfingerprinted camera must not fail a sweep over all the others.
+  if (parsed.all) {
+    if (target) {
+      await cmd.writeError('camera-relink: --all takes no camera argument\n');
+      return 1;
+    }
+
+    const cameras = await listCameras(cmd);
+    // `--reapply` works off `cameraPath`, which every camera has, so it applies to all of them.
+    const candidates = flags.reapply ? cameras : cameras.filter(hasFingerprint);
+    const unmatchable = cameras.length - candidates.length;
+    const results: RelinkResult[] = [];
+    let failed = 0;
+
+    for (const camera of candidates) {
+      const result = await relinkCamera(cmd, camera.path, flags, cameras);
+      if (result) results.push(result);
+      else failed++;
+    }
+
+    const total = results.reduce(
+      (sum, one) => ({
+        scanned: sum.scanned + one.scanned,
+        linked: sum.linked + one.linked,
+        retimed: sum.retimed + one.retimed,
+        skipped: sum.skipped + one.skipped,
+      }),
+      { scanned: 0, linked: 0, retimed: 0, skipped: 0 },
+    );
+
+    if (cmd.json) {
+      await cmd.writeJSON({ ok: true, cameras: results, ...total, unmatchable, failed, dryRun: flags.dryRun });
+    } else {
+      for (const one of results) {
+        if (one.linked === 0 && one.retimed === 0) continue;
+        await cmd.writeLn(`  ${one.camera}: ${one.linked} linked, ${one.retimed} retimed`);
+      }
+      await cmd.writeLn(
+        `${flags.dryRun ? 'Would link' : 'Linked'} ${total.linked} file(s) and ${flags.dryRun ? 'retime' : 'retimed'} ${total.retimed} ` +
+          `across ${candidates.length} camera(s) (${total.scanned} examined, ${total.skipped} left alone` +
+          `${unmatchable ? `, ${unmatchable} camera(s) with nothing to match on` : ''})`,
+      );
+    }
+
+    return failed > 0 ? 1 : 0;
+  }
+
+  if (!target) {
+    await cmd.writeError('camera-relink: usage: camera-relink <camera> [--force] [--dry-run] | camera-relink --all\n');
+    return 1;
+  }
+
+  const result = await relinkCamera(cmd, resolve(cmd.cwd, target), flags, await listCameras(cmd));
+  if (!result) return 1;
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, ...(result satisfies RelinkResult), dryRun: flags.dryRun });
+  } else if (flags.reapply) {
+    await cmd.writeLn(
+      `${flags.dryRun ? 'Would retime' : 'Retimed'} ${result.retimed} file(s) for ${result.camera} ` +
+        `(${result.scanned} examined, ${result.skipped} left alone)`,
+    );
+  } else {
+    await cmd.writeLn(
+      `${flags.dryRun ? 'Would link' : 'Linked'} ${result.linked} file(s) and ${flags.dryRun ? 'retime' : 'retimed'} ${result.retimed} ` +
+        `for ${result.camera} (${result.scanned} examined, ${result.skipped} left alone)`,
+    );
+  }
+
+  return 0;
+};
+
+cameraRelink.spec = {
+  name: 'camera-relink',
+  effect: 'write' as const,
+  description: 'Link existing media to a registered camera by its fingerprint',
+  args: [
+    { name: 'camera', type: 'path' as const, description: 'VFS path to camera node (omit with --all)' },
+  ],
+  flags: [
+    { name: 'all', type: 'bool' as const, description: 'sweep every registered camera that has a fingerprint' },
+    { name: 'force', type: 'bool' as const, description: 'relink files already claimed by another camera' },
+    { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would change without writing' },
+    { name: 'reapply', type: 'bool' as const, description: 'link nothing; only re-date the files already linked (after a clock setting changed)' },
+  ],
+};
+
+export default cameraRelink;

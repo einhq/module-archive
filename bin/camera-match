@@ -1,0 +1,57 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { CAMERAS_ROOT, listCameras, matchCamera } from '@archive/camera/camera';
+
+const cameraMatch = async (cmd: Command): CmdReturn => {
+  // Command has no `flags` — the same TypeError camera-correct-time already hit. It was
+  // invisible here because the only caller (media/bin/camera-link) reads a non-zero exit as
+  // "no camera matched", so every file silently went unlinked.
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['serial', 'make', 'model', 'root'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const serialNumber = flags.serial;
+  const make = flags.make;
+  const model = flags.model;
+  const root = flags.root || CAMERAS_ROOT;
+
+  if (!serialNumber && !(make && model)) {
+    await cmd.writeError('camera-match: need --serial or both --make and --model\n');
+    return 1;
+  }
+
+  let cameras;
+  try {
+    cameras = await listCameras(cmd, root);
+  } catch {
+    return 1;
+  }
+
+  const match = matchCamera(cameras, { serialNumber, make, model });
+  if (!match) return 1;
+
+  if (cmd.json) {
+    await cmd.writeJSON(match);
+  } else {
+    await cmd.writeLn(`${match.path} (${match.matchType})`);
+  }
+
+  return 0;
+};
+
+cameraMatch.spec = {
+  name: 'camera-match',
+  effect: 'read' as const,
+  description: 'Match a camera by serial number or make/model',
+  args: [],
+  flags: [
+    { name: 'serial', type: 'string' as const, description: 'Camera serial number' },
+    { name: 'make', type: 'string' as const, description: 'Camera manufacturer' },
+    { name: 'model', type: 'string' as const, description: 'Camera model' },
+    { name: 'root', type: 'string' as const, description: `Camera directory (default: ${CAMERAS_ROOT})` },
+  ],
+};
+
+export default cameraMatch;

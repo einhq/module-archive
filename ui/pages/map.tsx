@@ -7,7 +7,7 @@ import { cellFor, clusterMarkers } from '../lib/map-clusters.ts';
 import { type MapCluster, useMapMedia } from '../hooks/useMapMedia.ts';
 import { useMapTracks } from '../location/hooks/useTracks.ts';
 import { useLiveTracks } from '../location/hooks/useLiveTracks.ts';
-import { LiveDeviceList, LiveTrackLayers } from '../location/components/LiveTracks.tsx';
+import { LiveCameraList, LiveTrackLayers } from '../location/components/LiveTracks.tsx';
 import { useSearchFacets } from '../hooks/useSearchFacets.ts';
 import { kindFill, type Mention, type MentionKind, naturalSearchDetails, subjectRefs, textFromFilters } from '@ein/ui/lib';
 import { subjectsOf } from '../lib/subjects.ts';
@@ -19,9 +19,9 @@ import { type MapFilters, type MapLayers, mapStateFromParams, paramsFromMapState
 /**
  * What an `@` may resolve to here.
  *
- * No album and no device: an album is a place in the tree rather than a location on
+ * No album and no camera: an album is a place in the tree rather than a location on
  * the ground, and both would narrow the map to a handful of pins that the album
- * and device pages already show better.
+ * and camera pages already show better.
  */
 const MENTION_KINDS: readonly MentionKind[] = ['person', 'location', 'label'];
 
@@ -119,7 +119,7 @@ export default function MapPage() {
   // What the map shows now, for listing every picture in it.
   const [viewBounds, setViewBounds] = useState<GeoBounds | null>(null);
   const { tracks, refetchTracks, segments, loading: tracksLoading, query: queryTracks } = useMapTracks(layers.tracks);
-  // The devices recording now, drawn with the tracks. Following one keeps it in view until the map is dragged.
+  // The cameras recording now, drawn with the tracks. Following one keeps it in view until the map is dragged.
   const { live: liveTracks, now } = useLiveTracks(tracks, refetchTracks);
   const live = layers.tracks ? liveTracks : [];
   const [following, setFollowing] = useState<string | null>(null);
@@ -237,10 +237,10 @@ export default function MapPage() {
           <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
         </MapView>
 
-        {/* Zoom is by wheel and pinch, so the top-left corner is free for the live devices. */}
+        {/* Zoom is by wheel and pinch, so the top-left corner is free for the live cameras. */}
         {live.length > 0 && (
           <Box className='mrx-map-live' w={240} maw='calc(100% - 84px)' style={{ position: 'absolute', top: 10, left: 10, zIndex: MAP_CONTROL_Z }}>
-            <LiveDeviceList live={live} now={now} following={following} onFollow={setFollowing} />
+            <LiveCameraList live={live} now={now} following={following} onFollow={setFollowing} />
           </Box>
         )}
 
@@ -275,7 +275,7 @@ export default function MapPage() {
           )}
           {
             /* What the map is reading for where it was moved to, under the buttons, where it moves
-              nothing; a search shows its own in the box. Following a device moves the map at every
+              nothing; a search shows its own in the box. Following a camera moves the map at every
               fix, which is not worth a spinner. */
           }
           {(loading === 'view' || tracksLoading) && !following && (

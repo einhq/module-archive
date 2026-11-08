@@ -28,7 +28,7 @@ import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
 import { isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MIMETYPES } from '@ein/client';
 import { basename, dirname, extname, join } from '@std/path';
 
-type FileAttrsView = { mimetype?: string; takenAt?: string; devicePath?: string; sourceId?: string };
+type FileAttrsView = { mimetype?: string; takenAt?: string; cameraPath?: string; sourceId?: string };
 
 type FileMeta = { path: string; name: string } & FileAttrsView;
 
@@ -61,7 +61,7 @@ function metaFrom(path: string, attrs: FileAttrsView): FileMeta {
     name: basename(path),
     mimetype: attrs.mimetype,
     takenAt: attrs.takenAt,
-    devicePath: attrs.devicePath,
+    cameraPath: attrs.cameraPath,
     sourceId: attrs.sourceId,
   };
 }
@@ -124,9 +124,9 @@ async function findPartners(cmd: Command, target: FileMeta, limit: number): Prom
       score += 40;
       reasons.push('time');
     }
-    if (c.devicePath && target.devicePath && c.devicePath === target.devicePath) {
+    if (c.cameraPath && target.cameraPath && c.cameraPath === target.cameraPath) {
       score += 20;
-      reasons.push('device');
+      reasons.push('camera');
     }
     partners.push({ path: c.path, score, reasons });
   }

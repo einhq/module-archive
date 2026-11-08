@@ -1,10 +1,10 @@
 import type { TrackPoint } from '@archive/location/api';
 import { trackDistance } from './track-segments.ts';
 
-/** A track whose last fix is younger than this is live: the device is taken to be where it last said. */
+/** A track whose last fix is younger than this is live: the camera is taken to be where it last said. */
 export const LIVE_FOR_MS = 4 * 60 * 60 * 1000;
 
-/** Two fixes further apart than this say nothing about how fast the device is going now. */
+/** Two fixes further apart than this say nothing about how fast the camera is going now. */
 const SPEED_GAP_MS = 10 * 60 * 1000;
 
 /** Whether a fix taken at `ts` is recent enough at `now` for its track to count as live. */
@@ -29,7 +29,7 @@ export function appendFixes(points: TrackPoint[], incoming: TrackPoint[]): Track
 }
 
 /**
- * The device's speed at its last fix, in metres per second: what it reported, else the distance
+ * The camera's speed at its last fix, in metres per second: what it reported, else the distance
  * from the fix before over the time between them. Undefined when neither is known.
  */
 export function speedOf(points: TrackPoint[]): number | undefined {

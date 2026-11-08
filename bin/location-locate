@@ -23,7 +23,7 @@
  * its photos change. It re-derives instead of skipping a placed location, but
  * writes only what moved, so a location's own writes announcing it again cost one
  * run that changes nothing. Coordinates set by hand are never touched, and a
- * location `track-places` made where a device stayed keeps that point until its
+ * location `track-places` made where a camera stayed keeps that point until its
  * photos give it a centroid.
  */
 import { LOCATIONS_ROOT } from '@archive/paths';

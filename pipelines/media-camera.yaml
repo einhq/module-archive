@@ -1,0 +1,21 @@
+name: media-camera
+description: Link a file to the camera that produced it
+
+# Re-runnable on its own: registering a camera later re-links its photos without
+# re-running exiftool over them.
+trigger:
+  on: media.metadata.interpreted
+  wants: archive
+  match:
+    # Any camera information at all, not the serial alone: most phones write no
+    # serial, and matching on it left every one of them unlinked.
+    cameraKey: '?*'
+
+steps:
+  camera-link:
+    command: camera-link $NODE_PATH
+    description: Match exif camera info against the camera registry
+
+options:
+  maxAttempts: 2
+  priority: 5

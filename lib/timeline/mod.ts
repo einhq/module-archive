@@ -243,9 +243,9 @@ const moveSource = (cmd: Command, end: 'in' | 'out', opts: SourceOpts): Timeline
   });
 
 /**
- * Every device's track, dated by its first fix. The span is the track registry's, not the
+ * Every camera's track, dated by its first fix. The span is the track registry's, not the
  * node's, so the tracks are listed (`listTracks`, one registry read for all of them) and paged
- * here — a device has one track, so there are few. Like a spanning album, a track is in a
+ * here — a camera has one track, so there are few. Like a spanning album, a track is in a
  * period when it ends inside or after it.
  */
 const trackSource = async (cmd: Command, opts: SourceOpts): Promise<TimelineSource> => {

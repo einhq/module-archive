@@ -1,25 +1,25 @@
 /**
- * track-places on a device's stays, against stub Overpass and Nominatim servers on loopback: a
+ * track-places on a camera's stays, against stub Overpass and Nominatim servers on loopback: a
  * stay near a location is at it, past the photos nearer to it, one near a named harbour gets a
  * location named after it, one with none gets the town; a failed lookup is asked again on the next
  * run, a place with no name is not,
  * a placed stay is never looked up again, the album of a trip gets the locations of its stays, and
  * `--rename` leaves a name given by hand alone. What the services answered is kept: Overpass is
- * asked once per tile, and another device at the same places asks nobody. The track and the
+ * asked once per tile, and another camera at the same places asks nobody. The track and the
  * places are invented.
  */
 
-import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, CAMERAS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import type { DeviceTrips, TrackPlaces, TripList } from '@archive/location/api';
+import type { CameraTrips, TrackPlaces, TripList } from '@archive/location/api';
 import type { AlbumTrip } from '@archive/media/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
 
-const DEVICE = `${DEVICES_ROOT}/the-sailboat`;
-const DINGHY = `${DEVICES_ROOT}/the-dinghy`;
+const CAMERA = `${CAMERAS_ROOT}/the-sailboat`;
+const DINGHY = `${CAMERAS_ROOT}/the-dinghy`;
 /** Where the first stay is; away from a tile's edge, so the stays 10 km apart are in tiles of their own. */
 const BASE_LAT = 59.02;
 const M2DEG = 1 / 111_320;
@@ -75,11 +75,11 @@ Deno.test({
     `NOMINATIM_REVERSE_URL=http://localhost:${(nominatim.addr as Deno.NetAddr).port}/reverse`;
   const places = (args = '') => client.execJson<TrackPlaces>(`${env} track-places the-sailboat ${args}`);
   const list = () => client.execJson<TripList>('trip-list the-sailboat');
-  const append = (points: Point[]) => cmd.shouldSucceed(`track-append ${DEVICE} --json '${JSON.stringify(points)}'`);
+  const append = (points: Point[]) => cmd.shouldSucceed(`track-append ${CAMERA} --json '${JSON.stringify(points)}'`);
 
   try {
     await cmd.shouldSucceed(`mkdir -p ${LOCATIONS_ROOT}`);
-    await cmd.shouldSucceed(`mknode -p -t device ${DEVICE} --as name=the-sailboat --as kind=boat`);
+    await cmd.shouldSucceed(`mknode -p -t camera ${CAMERA} --as name=the-sailboat --as kind=boat`);
     await cmd.shouldSucceed('track-create the-sailboat');
     // A jetty 80 m from where the second stay is.
     await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/the-jetty --as name='The jetty'`);
@@ -142,7 +142,7 @@ Deno.test({
     await t.step('a placed stay is not looked up again, and deriving the trips again keeps its place', async () => {
       asked.length = 0;
       assertEquals((await places()).stays, []);
-      const derived = await client.execJson<DeviceTrips>('track-trips the-sailboat --full');
+      const derived = await client.execJson<CameraTrips>('track-trips the-sailboat --full');
       assertEquals(derived.stays.map((stay) => stay.location?.slice(LOCATIONS_ROOT.length + 1)), ['exempelhamnen', 'the-jetty', 'exempelby']);
       assertEquals((await places()).stays, []);
       assertEquals(asked, []);
@@ -167,10 +167,10 @@ Deno.test({
       assertEquals((await places()).stays, []);
     });
 
-    await t.step('another device at the same places asks nobody', async () => {
+    await t.step('another camera at the same places asks nobody', async () => {
       // 200 m from where the sailboat found no name, and 300 m from its town: no location within
       // 150 m of either, but the answers there are kept.
-      await cmd.shouldSucceed(`mknode -p -t device ${DINGHY} --as name=the-dinghy --as kind=boat`);
+      await cmd.shouldSucceed(`mknode -p -t camera ${DINGHY} --as name=the-dinghy --as kind=boat`);
       await cmd.shouldSucceed('track-create the-dinghy');
       await cmd.shouldSucceed(`track-append ${DINGHY} --json '${JSON.stringify([...rest(30, 4, 30_200), ...out(34, 30_200, 19_700), ...rest(35, 4, 19_700)])}'`);
       await cmd.shouldSucceed('track-trips the-dinghy');

@@ -26,8 +26,8 @@ const photo = (id: string, facts: Partial<NearFacts> = {}): NearFacts => ({
   width: 4000,
   height: 3000,
   takenAtUtc: '2021-07-04T10:15:30Z',
-  takenAtSource: 'device',
-  device: '/devices/camera-a',
+  takenAtSource: 'camera',
+  camera: '/cameras/camera-a',
   ...facts,
 });
 
@@ -72,7 +72,7 @@ Deno.test('frames of one size from one camera in one second are two shots unless
   assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '21' }), 0.86), true, 'so does an edit, black and white or mirrored');
   assertEquals(nearPictures(photo('a', { subSecond: '21' }), photo('b', { subSecond: '21' }), 0.74), false, 'one capture still needs the likeness floor');
   assertEquals(nearPictures(photo('a', { subSecond: '00' }), photo('b', { subSecond: '00' }), 0.9), false, 'zeros may be written for every frame');
-  assertEquals(nearPictures(photo('a'), photo('b', { device: '/devices/camera-b' }), 0.9), true, 'two cameras: no burst');
+  assertEquals(nearPictures(photo('a'), photo('b', { camera: '/cameras/camera-b' }), 0.9), true, 'two cameras: no burst');
 });
 
 Deno.test('a video is alike another when most keyframes match and the lengths agree', () => {
@@ -95,7 +95,7 @@ Deno.test('a recording is alike another when the chromaprints match and the leng
   assertEquals(nearRecordings(memo('a'), memo('b'), NEAR.audio), true, 'the floor is inclusive');
   assertEquals(nearRecordings(memo('a'), memo('b'), 0.69), false);
   assertEquals(nearRecordings(memo('a'), memo('b', { duration: 42 }), 0.95), false, 'five seconds more is another recording');
-  const timed = { takenAtSource: 'device', takenAtUtc: '2021-07-04T10:15:30Z' };
+  const timed = { takenAtSource: 'camera', takenAtUtc: '2021-07-04T10:15:30Z' };
   assertEquals(nearRecordings(memo('a', timed), memo('b', { ...timed, takenAtUtc: '2021-07-04T10:20:00Z' }), 0.95), false, 'recorded at two moments');
 });
 

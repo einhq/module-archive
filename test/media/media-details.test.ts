@@ -1,10 +1,10 @@
 /**
  * media-details: one read aggregating description, capture time, location,
- * location, the device with its owners, the albums holding the file, tagged people
+ * location, the camera with its owners, the albums holding the file, tagged people
  * (with age at capture), comments and versions.
  */
 
-import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, CAMERAS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, modeUnder, testCommands } from '@ein/testing';
 
@@ -43,7 +43,7 @@ type Details = {
   position: { lat: number; lng: number; address?: string } | null;
   location: (NodeRef & { lat?: number; lng?: number; radius?: number }) | null;
   photographer: NodeRef | null;
-  device: (NodeRef & { make?: string; model?: string; owners: (NodeRef & { from?: string; to?: string })[] }) | null;
+  camera: (NodeRef & { make?: string; model?: string; owners: (NodeRef & { from?: string; to?: string })[] }) | null;
   albums: (NodeRef & { memberPath?: string })[];
   people: { id: string; name: string; born?: string; age?: number; ageMonths?: number; ageApprox?: boolean; source: string; faceBox?: Box }[];
   faces: { faceId: string; facePath: string; faceBox: Box; hasFace: boolean; personId?: string; personPath?: string; personName?: string; unnamed?: boolean }[];
@@ -101,7 +101,7 @@ Deno.test({
       assertEquals(details.exif, null);
       assertEquals(details.angle, 0);
       assertEquals(details.mirror, false);
-      assertEquals(details.device, null);
+      assertEquals(details.camera, null);
       assertEquals(details.fingerprints, []);
       assertEquals(details.versions, []);
       // `/albums/a` is a plain directory here, so there is no album above the file.
@@ -387,20 +387,20 @@ Deno.test({
       assertEquals(details.albums.map((a) => a.name), ['Automatic', 'Summer']);
     });
 
-    await t.step('reports the device with its owners and their ownership span', async () => {
-      await cmd.shouldSucceed(`mkdir -p ${DEVICES_ROOT}`);
-      await cmd.shouldSucceed(`device-create ${DEVICES_ROOT}/eos --name "Canon EOS 40D" --make Canon --model "EOS 40D"`);
-      await cmd.shouldSucceed(`device-set-owner ${DEVICES_ROOT}/eos ${PEOPLE_ROOT}/anna --from 2008 --to 2014`);
-      await cmd.shouldSucceed(`device-set-owner ${DEVICES_ROOT}/eos ${PEOPLE_ROOT}/bo`);
-      await cmd.shouldSucceed(`attrs ${FILE} -s devicePath=${DEVICES_ROOT}/eos`);
+    await t.step('reports the camera with its owners and their ownership span', async () => {
+      await cmd.shouldSucceed(`mkdir -p ${CAMERAS_ROOT}`);
+      await cmd.shouldSucceed(`camera-create ${CAMERAS_ROOT}/eos --name "Canon EOS 40D" --make Canon --model "EOS 40D"`);
+      await cmd.shouldSucceed(`camera-set-owner ${CAMERAS_ROOT}/eos ${PEOPLE_ROOT}/anna --from 2008 --to 2014`);
+      await cmd.shouldSucceed(`camera-set-owner ${CAMERAS_ROOT}/eos ${PEOPLE_ROOT}/bo`);
+      await cmd.shouldSucceed(`attrs ${FILE} -s cameraPath=${CAMERAS_ROOT}/eos`);
 
       const details = await client.execJson<Details>(`media-details ${FILE}`);
-      assertEquals(details.device?.path, `${DEVICES_ROOT}/eos`);
-      assertEquals(details.device?.name, 'Canon EOS 40D');
-      assertEquals(details.device?.owners.map((o) => o.name), ['Anna', 'Bo']);
-      assertEquals(details.device?.owners[0].from, '2008');
-      assertEquals(details.device?.owners[0].to, '2014');
-      assertEquals(details.device?.owners[1].from, undefined);
+      assertEquals(details.camera?.path, `${CAMERAS_ROOT}/eos`);
+      assertEquals(details.camera?.name, 'Canon EOS 40D');
+      assertEquals(details.camera?.owners.map((o) => o.name), ['Anna', 'Bo']);
+      assertEquals(details.camera?.owners[0].from, '2008');
+      assertEquals(details.camera?.owners[0].to, '2014');
+      assertEquals(details.camera?.owners[1].from, undefined);
     });
 
     await t.step('reports whatever content hashes the node carries', async () => {

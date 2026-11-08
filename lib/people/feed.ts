@@ -1,6 +1,6 @@
 /**
- * What `person-timeline`, `location-timeline` and the device area's
- * `device-timeline` build their feeds from.
+ * What `person-timeline`, `location-timeline` and the camera area's
+ * `camera-timeline` build their feeds from.
  *
  * Each answers "what happened here" for one subject, unpaged, in the core feed's
  * wire shape — so the UI draws them with the same card as the corpus-wide
@@ -134,7 +134,7 @@ export async function albumEntries(cmd: Command, subject: string): Promise<Timel
 }
 
 /**
- * The dated stories under a location's or a device's own `events/`, written there with Add event
+ * The dated stories under a location's or a camera's own `events/`, written there with Add event
  * (`person-add-event`) or by the importer. Undated ones are dropped: a feed cannot place them.
  */
 export async function ownEventEntries(cmd: Command, owner: string): Promise<TimelineEntry[]> {

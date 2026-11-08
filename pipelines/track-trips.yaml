@@ -1,7 +1,7 @@
 name: track-trips
-description: Derive a device's trips and stays again when its track, kind, timezone or homes change, put the stays at named locations, and give the trips their weather
+description: Derive a camera's trips and stays again when its track, kind, timezone or homes change, put the stays at named locations, and give the trips their weather
 
-# Subject is the device. The fact comes from archive-bridge: points were appended to its
+# Subject is the camera. The fact comes from archive-bridge: points were appended to its
 # track, its kind or timezone changed, or a home was added or taken off.
 trigger:
   on: track.changed
@@ -9,7 +9,7 @@ trigger:
 steps:
   trips:
     command: track-trips $NODE_PATH
-    description: Read the track from where its trips are settled, and write them to the device's .trips
+    description: Read the track from where its trips are settled, and write them to the camera's .trips
   places:
     # Network lookups for the stays not placed yet; one that fails is asked again on the next run.
     command: track-places $NODE_PATH

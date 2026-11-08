@@ -94,7 +94,7 @@ export const STAGING_BRIDGE_ROUTING_KEYS = [
 ];
 
 /** The attrs of a staged file grouping reads: an update of any of them may change its group. */
-const GROUPING_ATTRS = new Set(['takenAt', 'takenAtUtc', 'takenAtSource', 'indexedAt', 'facesAt', 'faceCount', 'devicePath', 'mimetype', 'width', 'height', 'sourceId']);
+const GROUPING_ATTRS = new Set(['takenAt', 'takenAtUtc', 'takenAtSource', 'indexedAt', 'facesAt', 'faceCount', 'cameraPath', 'mimetype', 'width', 'height', 'sourceId']);
 
 /** How long a category's settings are believed once read, in ms. */
 const SETTINGS_TTL_MS = 60_000;

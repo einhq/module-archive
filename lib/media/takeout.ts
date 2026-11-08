@@ -5,7 +5,7 @@
  * **Reading** (`parseTakeoutJson`). A photo's JSON holds `photoTakenTime` and `creationTime` (epoch
  * seconds, as strings), `geoData` (where Google shows it) beside `geoDataExif` (where the file's
  * own tags put it), `description`, `people`, `favorited`, `archived`, `trashed`, and the phone
- * folder it was uploaded from (`googlePhotosOrigin.mobileUpload.deviceFolder.localFolderName`). An
+ * folder it was uploaded from (`googlePhotosOrigin.mobileUpload.cameraFolder.localFolderName`). An
  * album's holds its `title`, `description` and `date`, at the top or, in older exports, under
  * `albumData`. A point at 0,0 is no point, and a time of 0 is no time.
  *
@@ -68,7 +68,7 @@ const mediaSidecar = (json: Json): TakeoutSidecar => {
   const where = shown ?? own;
   const people = Array.isArray(json.people) ? json.people.flatMap((person) => isObject(person) && text(person.name) ? [text(person.name)!] : []) : [];
   const origin = isObject(json.googlePhotosOrigin) && isObject(json.googlePhotosOrigin.mobileUpload) ? json.googlePhotosOrigin.mobileUpload : undefined;
-  const localFolder = origin && isObject(origin.deviceFolder) ? text(origin.deviceFolder.localFolderName) : undefined;
+  const localFolder = origin && isObject(origin.cameraFolder) ? text(origin.cameraFolder.localFolderName) : undefined;
   const sidecar: TakeoutSidecar = { kind: 'takeout' };
   const title = text(json.title);
   const takenAt = timeOf(json.photoTakenTime);

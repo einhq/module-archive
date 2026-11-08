@@ -1,19 +1,19 @@
 import { CoverAvatar, formatRange, TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Anchor, Badge, Button, Group, Loader, SimpleGrid, Text, Tooltip } from '@mantine/core';
 import { countOf, paramsFromFilters, type SearchFilters, subjectArg } from '@ein/ui/lib';
-import type { AlbumDevice, SubjectTally } from '@archive/media/api';
+import type { AlbumCamera, SubjectTally } from '@archive/media/api';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { EntityPicker } from '../../components/EntityPicker.tsx';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
-import { useDevices } from '../../device/hooks/useDevices.ts';
-import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
+import { useCameras } from '../../camera/hooks/useCameras.ts';
+import { useAlbumCameras } from '../hooks/useAlbumCameras.ts';
 import { useContainerSubjects } from '../hooks/useContainerSubjects.ts';
 
 type AlbumInfoTabProps = {
   path: string;
-  /** Whether the reader may change the album's list of devices: an album they may write. */
+  /** Whether the reader may change the album's list of cameras: an album they may write. */
   editable: boolean;
   title: string;
   description?: string;
@@ -35,9 +35,9 @@ const KIND_WORDS: Record<string, [string, string]> = {
 const SHOWN = 10;
 
 /** Where a subject's own page is, by the root it is under. */
-const ROUTES: Record<string, string> = { person: '/people', location: '/locations', device: '/devices' };
+const ROUTES: Record<string, string> = { person: '/people', location: '/locations', camera: '/cameras' };
 
-const ICONS: Record<string, string> = { person: 'user', location: 'map-pin', device: 'device-camera-phone' };
+const ICONS: Record<string, string> = { person: 'user', location: 'map-pin', camera: 'device-camera-phone' };
 
 const slugOf = (path: string): string => encodeURIComponent(path.split('/').pop() ?? path);
 
@@ -77,25 +77,25 @@ function SubjectList({ under, kind, rows, subject }: { under: string; kind: 'per
   );
 }
 
-/** One device on the album's list, or removed from it: its page, then its media or how it got there, then the change offered. */
-function DeviceRow({ under, device, action }: { under: string; device: AlbumDevice; action?: { label: string; icon: string; run: () => void } }) {
+/** One camera on the album's list, or removed from it: its page, then its media or how it got there, then the change offered. */
+function CameraRow({ under, camera, action }: { under: string; camera: AlbumCamera; action?: { label: string; icon: string; run: () => void } }) {
   return (
     <Group gap='sm' wrap='nowrap' justify='space-between'>
       <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
-        <CoverAvatar path={device.path} size={28} radius='xl' alt='' fallback={<TablerIcon name={ICONS.device} size={16} />} />
-        <Anchor component={Link} to={`${ROUTES.device}/${slugOf(device.path)}`} size='sm' truncate>{device.name}</Anchor>
+        <CoverAvatar path={camera.path} size={28} radius='xl' alt='' fallback={<TablerIcon name={ICONS.camera} size={16} />} />
+        <Anchor component={Link} to={`${ROUTES.camera}/${slugOf(camera.path)}`} size='sm' truncate>{camera.name}</Anchor>
       </Group>
       <Group gap='xs' wrap='nowrap' style={{ flexShrink: 0 }}>
-        {device.source === 'media'
+        {camera.source === 'media'
           ? (
-            <Anchor component={Link} to={searchIn(under, { subjects: [subjectArg('device', device.path)] })} size='xs' c='dimmed'>
-              {device.media.toLocaleString()}
+            <Anchor component={Link} to={searchIn(under, { subjects: [subjectArg('camera', camera.path)] })} size='xs' c='dimmed'>
+              {camera.media.toLocaleString()}
             </Anchor>
           )
           : <Text size='xs' c='dimmed'>added</Text>}
         {action && (
           <Tooltip label={action.label}>
-            <ActionIcon variant='subtle' size='sm' color='gray' aria-label={`${action.label}: ${device.name}`} onClick={action.run}>
+            <ActionIcon variant='subtle' size='sm' color='gray' aria-label={`${action.label}: ${camera.name}`} onClick={action.run}>
               <TablerIcon name={action.icon} size={14} />
             </ActionIcon>
           </Tooltip>
@@ -105,36 +105,36 @@ function DeviceRow({ under, device, action }: { under: string; device: AlbumDevi
   );
 }
 
-/** Every registered device not on the list, to add one; the registry is read only where this is offered. */
-function AddDevice({ listed, onAdd }: { listed: AlbumDevice[]; onAdd: (device: string) => void }) {
-  const { devices } = useDevices();
+/** Every registered camera not on the list, to add one; the registry is read only where this is offered. */
+function AddCamera({ listed, onAdd }: { listed: AlbumCamera[]; onAdd: (camera: string) => void }) {
+  const { cameras } = useCameras();
   const options = useMemo(() => {
-    const on = new Set(listed.map((device) => device.path));
-    return devices
-      .filter((device) => !on.has(device.path))
-      .map((device) => ({ value: device.path, label: device.name }))
+    const on = new Set(listed.map((camera) => camera.path));
+    return cameras
+      .filter((camera) => !on.has(camera.path))
+      .map((camera) => ({ value: camera.path, label: camera.name }))
       .sort((a, b) => a.label.localeCompare(b.label, 'sv'));
-  }, [listed, devices]);
+  }, [listed, cameras]);
   return (
     <EntityPicker
-      kind='device'
+      kind='camera'
       size='xs'
       mt='xs'
-      placeholder='Add a device to the map'
+      placeholder='Add a camera to the map'
       data={options}
       value={null}
-      onChange={(device) => device && onAdd(device)}
+      onChange={(camera) => camera && onAdd(camera)}
     />
   );
 }
 
 /**
- * The devices whose routes the album's map draws (`album-device-list`): those that took its media,
- * with how many, and those added by hand. Whoever may write the album adds a device to the list,
- * takes one off, and puts back one of its media's devices that was taken off.
+ * The cameras whose routes the album's map draws (`album-camera-list`): those that took its media,
+ * with how many, and those added by hand. Whoever may write the album adds a camera to the list,
+ * takes one off, and puts back one of its media's cameras that was taken off.
  */
-function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
-  const { list, loading, add, remove } = useAlbumDevices(path);
+function AlbumCameras({ path, editable }: { path: string; editable: boolean }) {
+  const { list, loading, add, remove } = useAlbumCameras(path);
   const [error, setError] = useState<string | null>(null);
 
   const change = (run: () => Promise<void>) => () => {
@@ -143,33 +143,33 @@ function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
   };
 
   if (loading || !list) return null;
-  if (!editable && list.devices.length === 0) return null;
+  if (!editable && list.cameras.length === 0) return null;
 
   return (
-    <InfoSection title='Devices'>
-      {list.devices.length === 0 && <Text size='sm' c='dimmed'>No devices: the map shows no routes.</Text>}
-      {list.devices.map((device) => (
-        <DeviceRow
-          key={device.path}
+    <InfoSection title='Cameras'>
+      {list.cameras.length === 0 && <Text size='sm' c='dimmed'>No cameras: the map shows no routes.</Text>}
+      {list.cameras.map((camera) => (
+        <CameraRow
+          key={camera.path}
           under={path}
-          device={device}
-          action={editable ? { label: 'Take off the map', icon: 'x', run: change(() => remove(device.path)) } : undefined}
+          camera={camera}
+          action={editable ? { label: 'Take off the map', icon: 'x', run: change(() => remove(camera.path)) } : undefined}
         />
       ))}
       {editable && list.removed.length > 0 && (
         <>
           <Text size='xs' c='dimmed' mt='xs'>Taken off the map</Text>
-          {list.removed.map((device) => (
-            <DeviceRow
-              key={device.path}
+          {list.removed.map((camera) => (
+            <CameraRow
+              key={camera.path}
               under={path}
-              device={device}
-              action={{ label: 'Put back on the map', icon: 'plus', run: change(() => add(device.path)) }}
+              camera={camera}
+              action={{ label: 'Put back on the map', icon: 'plus', run: change(() => add(camera.path)) }}
             />
           ))}
         </>
       )}
-      {editable && <AddDevice listed={list.devices} onAdd={(device) => change(() => add(device))()} />}
+      {editable && <AddCamera listed={list.cameras} onAdd={(camera) => change(() => add(camera))()} />}
       {error && <Text size='xs' c='red'>{error}</Text>}
     </InfoSection>
   );
@@ -178,7 +178,7 @@ function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
 /**
  * What an album is and what is in it: its dates, its media by kind and how many have a position,
  * and who and what its media have — the people in them, where they were taken, who held the camera
- * and the labels they carry (`subjects-in`) — and the devices whose routes its map draws. Each opens
+ * and the labels they carry (`subjects-in`) — and the cameras whose routes its map draws. Each opens
  * its own page, and its count a search of this album's media that have it.
  */
 export function AlbumInfoTab({ path, editable, title, description, timeStart, timeEnd, facets }: AlbumInfoTabProps) {
@@ -226,7 +226,7 @@ export function AlbumInfoTab({ path, editable, title, description, timeStart, ti
         </InfoSection>
       )}
 
-      <AlbumDevices path={path} editable={editable} />
+      <AlbumCameras path={path} editable={editable} />
 
       {subjects && subjects.photographers.length > 0 && (
         <InfoSection title='Photographers'>
@@ -248,9 +248,9 @@ export function AlbumInfoTab({ path, editable, title, description, timeStart, ti
         </InfoSection>
       )}
 
-      {subjects && !loading && subjects.people.length + subjects.locations.length + subjects.devices.length + subjects.photographers.length === 0 && (
+      {subjects && !loading && subjects.people.length + subjects.locations.length + subjects.cameras.length + subjects.photographers.length === 0 && (
         <InfoSection title='People and places'>
-          <Text size='sm' c='dimmed'>Nobody is tagged in this album's media yet, and none of it is linked to a location or a device.</Text>
+          <Text size='sm' c='dimmed'>Nobody is tagged in this album's media yet, and none of it is linked to a location or a camera.</Text>
         </InfoSection>
       )}
     </SimpleGrid>

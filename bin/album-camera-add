@@ -1,0 +1,53 @@
+#!ts
+/**
+ * album-camera-add — put cameras on the list of an album, whose tracks its map draws: a GPS
+ * tracker carried on the trip, say, which took none of its pictures. A camera removed from the list
+ * comes back; one that took some of its media and was never removed is on it already.
+ *
+ * A camera is its path, or its slug under the cameras root.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { CAMERAS_ROOT } from '@archive/paths';
+import { addAlbumCamera } from '@archive/media/album-cameras';
+
+const cameraPath = (cwd: string, arg: string): string => arg.includes('/') ? resolve(cwd, arg) : `${CAMERAS_ROOT}/${arg}`;
+
+const albumCameraAdd = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [album, ...cameras] = flags._.map(String);
+  if (!album || cameras.length === 0) {
+    await cmd.writeError('album-camera-add: expected an album and at least one camera\n');
+    return 1;
+  }
+
+  try {
+    const albumPath = resolve(cmd.cwd, album);
+    for (const camera of cameras.map((arg) => cameraPath(cmd.cwd, arg))) {
+      const changed = await addAlbumCamera(cmd, albumPath, camera);
+      if (!cmd.json) await cmd.writeLn(changed ? `Added ${camera}` : `${camera}: already listed`);
+    }
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`album-camera-add: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+albumCameraAdd.spec = {
+  name: 'album-camera-add',
+  effect: 'write' as const,
+  description: "Put cameras on an album's list, whose tracks its map draws",
+  args: [
+    { name: 'album', type: 'path' as const, description: 'the album' },
+    { name: 'camera', type: 'path' as const, variadic: true, description: 'cameras, by their path or their slug' },
+  ],
+  flags: [],
+  examples: ['album-camera-add /archive/albums/Exempelalbum_2019 gps-tracker', 'album-camera-add /archive/albums/Exempelalbum_2019 /archive/cameras/exempelkamera'],
+};
+
+export default albumCameraAdd;

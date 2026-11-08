@@ -49,8 +49,8 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
     await cmd.shouldSucceed('staging category phone --create --kind phone && staging category scans --create --kind scans');
     const home = await vfs.get(ADMIN_ACCESS, '/home/admin');
     const props = { uid: home.props.uid, gid: home.props.gid, mode: 0o600 };
-    /** A photo indexed with the camera clock `device` (none: its tags hold no date). */
-    const photo = (name: string, device?: string) => ({
+    /** A photo indexed with the camera clock `camera` (none: its tags hold no date). */
+    const photo = (name: string, camera?: string) => ({
       type: 'file',
       name,
       props,
@@ -58,7 +58,7 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
         mimetype: 'image/jpeg',
         size: 10,
         indexedAt: '2026-10-18T00:00:00Z',
-        ...(device ? { takenAt: device, takenAtUtc: `${device}Z`, takenAtSource: 'device' } : {}),
+        ...(camera ? { takenAt: camera, takenAtUtc: `${camera}Z`, takenAtSource: 'camera' } : {}),
       },
       children: [{
         type: 'directory',
@@ -70,15 +70,15 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
           props,
           attrs: {
             indexedAt: '2026-10-18T00:00:00Z',
-            when: device
+            when: camera
               ? {
-                device: {
-                  year: device.slice(0, 4),
-                  month: device.slice(5, 7),
-                  day: device.slice(8, 10),
-                  hour: device.slice(11, 13),
-                  minute: device.slice(14, 16),
-                  second: device.slice(17, 19),
+                camera: {
+                  year: camera.slice(0, 4),
+                  month: camera.slice(5, 7),
+                  day: camera.slice(8, 10),
+                  hour: camera.slice(11, 13),
+                  minute: camera.slice(14, 16),
+                  second: camera.slice(17, 19),
                 },
               }
               : {},
@@ -119,7 +119,7 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
       assertEquals([answer.scanned, answer.policyChanged, answer.retimed, answer.bySource], [3, 1, 1, { name: 1 }]);
       const named = await attrsOf(`${PHONE}/IMG_20190601_123456.jpg`);
       assertEquals([named.whenName, named.takenAt, named.takenAtSource], ['2019-06-01T12:34:56', '2019-06-01T12:34:56', 'name']);
-      assertEquals((await attrsOf(`${PHONE}/DSC_0001.jpg`)).takenAtSource, 'device');
+      assertEquals((await attrsOf(`${PHONE}/DSC_0001.jpg`)).takenAtSource, 'camera');
 
       const modtime = (await vfs.get(ADMIN_ACCESS, `${PHONE}/IMG_20190601_123456.jpg`)).props.modtime;
       const again = await retime(PHONE);
@@ -143,7 +143,7 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
       await cmd.shouldSucceed(`mv ${SCANS} ${FILES}/phone/`);
       assertEquals(await announced(SCANS, PHONE), [PHONE]);
       const answer = await retime(PHONE);
-      assertEquals([answer.retimed, answer.bySource], [2, { name: 1, device: 1 }]);
+      assertEquals([answer.retimed, answer.bySource], [2, { name: 1, camera: 1 }]);
       assertEquals((await attrsOf(`${PHONE}/DSC_0001.jpg`)).takenAt, '2018-05-01T10:00:00');
       assertEquals((await attrsOf(`${PHONE}/IMG_20190601_123456.jpg`)).digitized, undefined);
     });

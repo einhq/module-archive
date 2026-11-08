@@ -238,7 +238,7 @@ export const memberFacts = (member: DuplicateSet['staged'][number], formatBytes:
     member.width && member.height ? `${member.width}×${member.height}` : null,
     member.size !== undefined ? formatBytes(member.size) : null,
     member.takenAt ? member.takenAt.replace('T', ' ').slice(0, 19) : null,
-    member.device ? member.device.split('/').pop() ?? null : null,
+    member.camera ? member.camera.split('/').pop() ?? null : null,
     scoreLine(member.score),
   ].filter((line): line is string => line !== null);
 

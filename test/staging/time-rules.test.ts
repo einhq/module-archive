@@ -1,6 +1,6 @@
 /**
  * Time trust per category: for every kind's preset and every combination of the sources a file can
- * have (a person's date, a GPS fix, the device's clock, a date in its name), the source that dates
+ * have (a person's date, a GPS fix, the camera's clock, a date in its name), the source that dates
  * it, through the stamps the kind gives it (`timeStamps`) and the resolver.
  */
 import { assertEquals } from '@std/assert';
@@ -16,14 +16,14 @@ const parts = (iso: string): CaptureDateParts => {
   return { year, month, day, hour, minute, second };
 };
 
-const SOURCES = ['manual', 'gps', 'device', 'name'] as const;
+const SOURCES = ['manual', 'gps', 'camera', 'name'] as const;
 type Source = typeof SOURCES[number];
 
 /** Which source dates a file of a category with `digitized` and `filenameDates`, holding `held`. */
 const expected = (held: Set<Source>, rules: { digitized: boolean; filenameDates: boolean }): Source | null => {
   if (held.has('manual')) return 'manual';
   if (rules.digitized) return null;
-  for (const source of ['gps', 'device'] as const) if (held.has(source)) return source;
+  for (const source of ['gps', 'camera'] as const) if (held.has(source)) return source;
   return held.has('name') && rules.filenameDates ? 'name' : null;
 };
 
@@ -38,7 +38,7 @@ Deno.test('every kind dates every combination of sources by its rules', () => {
       const resolved = resolveTime({
         ...(held.has('manual') ? { manual: '1968-07' } : {}),
         ...(held.has('gps') ? { gps: parts('2021-03-04T09:00:00') } : {}),
-        ...(held.has('device') ? { device: parts('2021-03-04T10:00:00') } : {}),
+        ...(held.has('camera') ? { camera: parts('2021-03-04T10:00:00') } : {}),
         archiveZone: STOCKHOLM,
         ...stampedSources(stamps),
       });
@@ -55,7 +55,7 @@ Deno.test('a scan never takes a date from the scanner: its clock, a GPS fix or i
   const stamps = timeStamps(rules, 'IMG_20210304_100000.jpg');
   assertEquals(stamps, { digitized: true, whenName: null });
   // DateTimeOriginal written on the scan day, a scanning app's GPS fix: no capture time.
-  const scanDay = { gps: parts('2021-03-04T09:00:00'), device: parts('2021-03-04T10:00:00'), archiveZone: STOCKHOLM };
+  const scanDay = { gps: parts('2021-03-04T09:00:00'), camera: parts('2021-03-04T10:00:00'), archiveZone: STOCKHOLM };
   assertEquals(resolveTime({ ...scanDay, ...stampedSources(stamps) }), null);
   // The same file in a camera's category is dated by its clock.
   assertEquals(resolveTime({ ...scanDay, ...stampedSources(timeStamps(presetSettings('camera', 'camera').time, 'IMG_0001.jpg')) })?.takenAtSource, 'gps');

@@ -30,25 +30,25 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 type TrackViewProps = {
-  /** The device's slug. */
-  device: string;
+  /** The camera's slug. */
+  camera: string;
   /** How it travels, which says the units: knots and nautical miles for a boat, km/h and km otherwise. */
   kind?: string;
-  /** What a device with no track yet offers to start one: uploading GPX files, live tracking. */
+  /** What a camera with no track yet offers to start one: uploading GPX files, live tracking. */
   emptyActions?: ReactNode;
   /** Whether the reader may change the track, which rejecting and accepting its fixes needs. */
   editable?: boolean;
 };
 
 /**
- * A device's track: its route on a map that fills the window, and over the map's foot what the
+ * A camera's track: its route on a map that fills the window, and over the map's foot what the
  * route adds up to. While its last fix is recent, the panel says how fast it is going and how old
  * the fix is, and the map draws where it is now and can follow it. The fixes the track left out
  * are drawn faintly; a click picks the fix nearest it, and the panel says what the track made of
  * it and offers to overrule that.
  */
-export function TrackView({ device, kind, emptyActions, editable = false }: TrackViewProps) {
-  const { track, segments, loading, refetch, reread, revision } = useTrack(device);
+export function TrackView({ camera, kind, emptyActions, editable = false }: TrackViewProps) {
+  const { track, segments, loading, refetch, reread, revision } = useTrack(camera);
   const rejected = useRejectedRuns(track?.path, revision);
   const [picked, setPicked] = useState<TrackPoint | null>(null);
   const marked = useCallback(() => {
@@ -75,7 +75,7 @@ export function TrackView({ device, kind, emptyActions, editable = false }: Trac
   if (!track || track.points === 0) {
     return (
       <Container size='xl' p='md'>
-        <EmptyState title='This device has recorded no track' actions={emptyActions}>
+        <EmptyState title='This camera has recorded no track' actions={emptyActions}>
           Its route appears here once a GPX file it recorded is uploaded, or a phone tracks it live.
         </EmptyState>
       </Container>

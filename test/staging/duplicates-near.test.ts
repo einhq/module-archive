@@ -107,8 +107,8 @@ Deno.test({ name: 'staged near findings', sanitizeResources: false, sanitizeOps:
         width: 4000,
         height: 3000,
         takenAtUtc: '2021-07-04T10:15:30Z',
-        takenAtSource: 'device',
-        devicePath: '/devices/camera-a',
+        takenAtSource: 'camera',
+        cameraPath: '/cameras/camera-a',
         ...attrs,
       },
     }]);

@@ -24,11 +24,11 @@ waits for rather than by a shared DAG:
    `metadata/exif` and the file's own facts on it, and the bridge announces the filled exif node as
    `media.metadata.extracted`. Nothing under `/tmp` is ever read, nor anything in a trash.
 3. **Interpret it.** The archive's only pipeline on that fact, `media-interpret` (`wants:
-   archive`), runs `exif-interpret`: the capture time resolved from the clocks, the device, a
+   archive`), runs `exif-interpret`: the capture time resolved from the clocks, the camera, a
    paired sidecar and the name (a staged file by its category's time rules, stamped on it), and
    the `position` node from the GPS fix or the sidecar, unless a person set one. Its last write,
    `interpretedAt`, is what `archive-bridge` announces as `media.metadata.interpreted`, with the
-   device key and whether there is a GPS fix, and the album fact of every album holding the file.
+   camera key and whether there is a GPS fix, and the album fact of every album holding the file.
    Thumbnails do not wait for it: the media module's pipelines start on the reading.
 4. **Fan out.** Each pipeline binds one or more facts. Alternative triggers keep
    their own guards and run overrides, so a stale-transcript fact can bypass the
@@ -37,11 +37,11 @@ waits for rather than by a shared DAG:
    | pipeline               | fact                                                                                                   | resource                                                                                                                             |
    | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
    | `media-interpret`      | `metadata.extracted`                                                                                   | pool `interpret` (1 cpu, priority 100)                                                                                               |
-   | `media-device`         | `metadata.interpreted` (has device info)                                                               | inline                                                                                                                               |
+   | `media-camera`         | `metadata.interpreted` (has camera info)                                                               | inline                                                                                                                               |
    | `media-geocode`        | `position.available`                                                                                   | inline                                                                                                                               |
    | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
    | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
-   | `media-device-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
+   | `media-camera-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
    | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
    | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
    | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
@@ -59,8 +59,8 @@ waits for rather than by a shared DAG:
    `media-stills` and `media-transcode`), `picture-vectors` (its `media-embed-picture`), `text` (its
    `media-ocr` and `document-index`), `transcripts` (its `media-transcribe`; `media-embed-text` is
    either), `fingerprints` (its `media-fingerprint`), and
-   `archive` for everything that gives a file its people, places, device and copies (faces, voices,
-   device links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
+   `archive` for everything that gives a file its people, places, camera and copies (faces, voices,
+   camera links, geocoding, duplicates). `media-ingest` and `media-reindex` name none,
    since every family needs the file read, and nor do the pipelines that act only on the archive's
    own trees (albums, staging, tracks, locations). A folder whose `processing` attr names some
    families gets only those: one that wants `[renditions]` has its pictures read and rendered, and
@@ -134,8 +134,8 @@ waits for rather than by a shared DAG:
 5. **Derivatives.** The media module makes a file's renditions, and its `architecture/renditions.md`
    says how: `media-stills` and `media-transcode` start on `media.metadata.extracted`, which this
    bridge announces until the media module reads files itself, and the marker they write is
-   announced as `media.renditions.made`, on which `media-device-cover` offers a video's poster
-   frame to its device.
+   announced as `media.renditions.made`, on which `media-camera-cover` offers a video's poster
+   frame to its camera.
 
    **Face crops are the archive's own renditions.** A face crop (`regions/<region>/image.avif`)
    is a rendition like any other — it carries the source's `sourceId` and routes to the volatile
@@ -205,7 +205,7 @@ waits for rather than by a shared DAG:
    core's `src/lib/search` — core's since ein/core#442, its text from the modules' `search-*` providers — is a faceted **candidate-source pipeline**:
    text, tags, a time window, a map region, a content kind (a file's by its mimetype —
    `photo`, `video`, `audio`, `document` — or else a node's type: `album`, `person`, `location`),
-   a subject (`--subject <kind>:<ref>` — a person, a location, a device), a container (`--under <album>`) and a creator (`--creator <user>`,
+   a subject (`--subject <kind>:<ref>` — a person, a location, a camera), a container (`--under <album>`) and a creator (`--creator <user>`,
    the node's birth uid) are independent facets and **any subset is a valid query** — a year range alone needs no
    text, and no facet at all is the newest-first browse of everything with a capture time.
    `--within <dir>` is the media in the tree under a directory, however deep (`NodeQuery.within`): a
@@ -284,7 +284,7 @@ waits for rather than by a shared DAG:
    `mediaStacks`) are left out. Image-to-image cosines in SigLIP2's space run high (in production
    the 2000th nearest picture to a photo still scores 0.75), so no floor is applied: the answer is
    the nearest files in order, and inside a set every member is ranked rather than cut. The Media
-   page sends a picture from the device to `/tmp` (drawn upright and at most 1024 px in the browser,
+   page sends a picture from the camera to `/tmp` (drawn upright and at most 1024 px in the browser,
    since EMS never applies EXIF orientation itself) and searches `--like` it; the lightbox's Similar
    strip is the same search's first dozen, and its Show all opens the Media page on it. The core
    `tmp-sweeper` service removes a file left in `/tmp` after `CFG_TMP_RETENTION_HOURS` (24).
@@ -309,7 +309,7 @@ waits for rather than by a shared DAG:
    In production "segelbåt" within one person's 8 879 pictures answers in 1.6–2 s warm: 0.4 s to find
    their 9 176 embeddings, 0.1 s to rank them, the rest resolving the person.
 
-   Kinds are `photo video audio document person location album device track`. The last five are
+   Kinds are `photo video audio document person location album camera track`. The last five are
    **timeless** — they carry no `takenAt`, and `orderBy` drops rows missing the ordering attr, so a
    kind set made only of those defaults to `--sort name`, and under a time sort pages on the store's
    default id order. A name sort on the timeline orders the store query by `name` and then, as a
@@ -433,7 +433,7 @@ waits for rather than by a shared DAG:
    answer ids, the **reverse** of the file-node link conventions below: `vfs.findLinks` finds the
    `location` / `people/<slug>` softlinks pointing at a subject, the `personId` attr index finds its
    assigned faces, and batched parent-link rounds walk those up to the files that hold them. Its
-   `subject-device` answers the match `devicePath = <device>`, which `search` pushes into the
+   `subject-camera` answers the match `cameraPath = <camera>`, which `search` pushes into the
    timeline query like any other condition, so a camera with 20k photos pages and counts in the
    store; elsewhere it is tested per candidate. An id set is joined to `takenAt` in core, ordered
    (undated media sort last rather than vanishing, as they do from a store-ordered timeline) and
@@ -476,7 +476,7 @@ waits for rather than by a shared DAG:
    layout), softlink members followed (so a file added to an album, or a staging suggestion's members,
    answer like held ones), the
    `coverPhoto` link and the `previous`/`next` links to the albums beside it in a series left out
-   (`NON_MEMBER_LINK_NAMES`), stacks folded; an album's `events/` and `devices/` directories are
+   (`NON_MEMBER_LINK_NAMES`), stacks folded; an album's `events/` and `cameras/` directories are
    not members either. `album-span`, `album-cover` and `album-stack` call
    the same library directly. Core's `members <path>` answers with either listing, for anyone else
    who asks. **This is what the album page browses** — it is why an album has an order and dates, none
@@ -618,7 +618,7 @@ waits for rather than by a shared DAG:
    every album through `@archive/media/album-members`, auto albums included: the clusterer's
    `attrs.autoAlbum` span records what it grouped and goes stale when a member is retimed. A span
    reaches out to the days set by hand with `album set <album> spanStart|spanEnd <day>` — a trip
-   starts before its first photo, and the album's map draws its devices' routes over its span —
+   starts before its first photo, and the album's map draws its cameras' routes over its span —
    which may widen it but never narrow it: `album set` refuses a day inside the media, and
    `album-span` drops one once a capture reaches it (`@archive/media/album-span`). Spans ignore capture
    dates before 1826, the floor `@archive/media/exif-date` and the assistant's search parse also use: one member dated
@@ -657,13 +657,13 @@ waits for rather than by a shared DAG:
    cannot see (a hard link into `files/`, a fact lost while the bridge was down, and for a profile
    a face named or a position arriving, which reach it once a week).
 
-   An album's **devices**, whose tracks its Map tab draws over its span, are not kept by the
-   pipeline: `album-device-list` reads the devices of its members' `devicePath` each time it is
-   asked, so a member linked to its device after joining needs no fact. Beside them it lists the
-   devices added by hand, softlinks in the album's `devices/` directory (`album-device-add`), and
-   leaves out the devices of its media named in the album's `devicesRemoved` attr
-   (`album-device-rm`), which keeps a removal as more of that device's media joins
-   (`lib/media/album-devices.ts`).
+   An album's **cameras**, whose tracks its Map tab draws over its span, are not kept by the
+   pipeline: `album-camera-list` reads the cameras of its members' `cameraPath` each time it is
+   asked, so a member linked to its camera after joining needs no fact. Beside them it lists the
+   cameras added by hand, softlinks in the album's `cameras/` directory (`album-camera-add`), and
+   leaves out the cameras of its media named in the album's `camerasRemoved` attr
+   (`album-camera-rm`), which keeps a removal as more of that camera's media joins
+   (`lib/media/album-cameras.ts`).
 
    `timeline` also **filters**: `--q` over an entry's title and description, and `--person`,
    `--location`, `--tag`. A subject matches two ways — an entry _about_ them (`ownerPath`, `people`)
@@ -983,7 +983,7 @@ is the media module's (its architecture's text.md, `@media/transcript`), and so 
 current. What the archive keeps is search, which reads the vectors. The hand-written `description` is embedded by
 the archive's `file-set-description` (`metadata/authored/text_bgem3`, with an `authoredHash`), and
 search ranks it as a channel of its own at the picture channel's weight, from the space's `strict`
-level. Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `devicePath`) are still promoted
+level. Hot queryable scalars (`width`, `height`, `duration`, `angle`, `sar`, `cameraPath`) are still promoted
 onto the file node's attrs by `exif-extract`; the raw exiftool output stays on `metadata/exif` so it
 doesn't bloat every file-node read. A video's duration is ffprobe's container duration from the
 same `media.probe`, and exiftool's only when ffprobe has none: exiftool reads a DV AVI's length from
@@ -1003,16 +1003,16 @@ are the exception: with `angleManual` the file's `angle` is not written at all, 
 (`file-set-position` owns it). **Capture time.** A file carries one capture time, resolved from four sources and promoted onto
 the node; the sources stay sources and nothing queries them. `whenManual` is what somebody typed
 (the precedent is `angleManual`), `metadata/exif.when.{device,gps}` is what the camera and the
-receiver said, `whenName` is the date the file's name spells, and a device's clock comes from its IANA `timezone` or, failing that, the
+receiver said, `whenName` is the date the file's name spells, and a camera's clock comes from its IANA `timezone` or, failing that, the
 `configuration` log the legacy importer backdates to the epoch — so an offset is time-varying by
-construction, which a single attr cannot be (`@archive/device/device-zone`). Media's `resolveTime`
-(`@archive/media/capture-resolve`) weighs them, `manual > gps > device > name`, and writes three attrs:
+construction, which a single attr cannot be (`@archive/camera/camera-zone`). Media's `resolveTime`
+(`@archive/media/capture-resolve`) weighs them, `manual > gps > camera > name`, and writes three attrs:
 
 | attr            | meaning                                                                                                                                                                                                                    |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `takenAt`       | the **wall clock**. Its length is its precision — `1975`, `2004-03`, `2003-04-30`, `…T14:03`, `…T14:03:11`, the last two optionally carrying `±HH:MM`. Never padded: 1,023 files in this archive are known only to a year. |
 | `takenAtUtc`    | the **instant**, always a complete `YYYY-MM-DDTHH:MM:SSZ`.                                                                                                                                                                 |
-| `takenAtSource` | `manual`, `gps`, `device` or `name`.                                                                                                                                                                                       |
+| `takenAtSource` | `manual`, `gps`, `camera` or `name`.                                                                                                                                                                                       |
 
 The split between the two is what makes both questions answerable. `--from`/`--to`, the year facet
 and every rendered caption read `takenAt`, because "which year is this photograph from" is a
@@ -1029,7 +1029,7 @@ against the camera clock and disbelieved beyond 26 hours (14h of real offset plu
 error). The failure that check exists for is a **stale fix**, not a wild one: 18 of the 22,192
 legacy files carrying both dates fail it, and five files shot on 2014-11-21/22 all carry the same
 `2014-11-19T11:41:01Z`, the receiver's last lock. Where both dates exist the pair also recovers the
-offset the photographer was standing in, from `device − gps` rounded to the hour — +1h on 12,561
+offset the photographer was standing in, from `camera − gps` rounded to the hour — +1h on 12,561
 files and +2h on 7,537, while the sub-hour residue (1,478 files at exactly +1h15m) is camera drift
 and is deliberately left in the wall clock rather than promoted to a timezone nobody keeps.
 
@@ -1052,43 +1052,43 @@ full chain unconditionally: a container's `CreateDate` is written by the recorde
 and is usually the only date such a file has. The QuickTime format keeps that tag in UTC, and
 phones (Apple, or a file carrying Android's `com.android.*` keys) and ffmpeg (`Encoder: Lavf…`) do;
 from them it is written with timezone `Z`, and `resolveTime` places it on the wall clock of the
-device's registry zone, else the archive zone. Every other recorder's `CreateDate` is read as its
-local clock, which is what most cameras write there, unless its registered device carries
+camera's registry zone, else the archive zone. Every other recorder's `CreateDate` is read as its
+local clock, which is what most cameras write there, unless its registered camera carries
 `quicktimeUtc=true`: every container `CreateDate` reading is marked `quicktime` in `when.device`, and
-`resolveTime` reads a marked reading without a timezone as UTC for such a device. A phone that writes
-no make, model or serial cannot be matched, so `device-link --device <device> <file|dir>…` links its
+`resolveTime` reads a marked reading without a timezone as UTC for such a camera. A phone that writes
+no make, model or serial cannot be matched, so `camera-link --camera <camera> <file|dir>…` links its
 files by hand. Two scanners (`ENVY Inspire 7200`, `HP ScanJet 3500`)
 defeat this by writing the scan time into `DateTimeOriginal` itself, which no EXIF rule can catch.
-Their registered device nodes carry `digitizer=true`; `device-link` then suppresses
-`metadata/exif.when.device` while retaining a valid GPS date, if one exists. `device-update`
-reapplies a changed flag over the files already carrying that `devicePath`, using the indexed
+Their registered camera nodes carry `digitizer=true`; `camera-link` then suppresses
+`metadata/exif.when.device` while retaining a valid GPS date, if one exists. `camera-update`
+reapplies a changed flag over the files already carrying that `cameraPath`, using the indexed
 reverse lookup and the normalized `metadata/exif.when` to clear or restore `takenAt` without
 exiftool. `whenManual` is a source and is never touched by any of this. Keeping the exception at
 link time preserves the file-local capture-time query and its PostgreSQL indexes — there is no
-device join on the media read path.
+camera join on the media read path.
 A staged file's trust in its clocks is its staging category's (`time: {digitized, filenameDates}`
 on the category, `@archive/staging/category`), stamped onto the file by `exif-extract` in the
-same write as its time: `digitized: true` drops every clock recorded while digitizing (device,
+same write as its time: `digitized: true` drops every clock recorded while digitizing (camera,
 GPS and name; a person's date stands), and `whenName` is the date `@archive/media/filename-date`
 reads off the name where the category's names are dates. The stamps are inputs like `whenManual`:
 every resolver reads them off the node, so they keep a scan undated after it is filed into the
 library. A move into a category with other rules is announced by the bridge
 (`staging.retime.requested`, `@archive/staging/facts`) and `staging retime` restamps and
 re-resolves what changed, a page of 500 files in a fixed number of store calls.
-Consumers: `device-link` re-resolves through `@archive/media/resolve-time`; `device-relink` links and
-then runs `media-resolve-time --device` over the device's files (a command rather than an import,
-from when device and media were separate modules and media depended on device), and
-`device-update` does the same through `device-relink` whenever `make`, `model` or `serialNumber`
-changes and leaves a fingerprint, and through `device-relink --reapply` whenever `digitizer`, `timezone`
+Consumers: `camera-link` re-resolves through `@archive/media/resolve-time`; `camera-relink` links and
+then runs `media-resolve-time --camera` over the camera's files (a command rather than an import,
+from when camera and media were separate modules and media depended on camera), and
+`camera-update` does the same through `camera-relink` whenever `make`, `model` or `serialNumber`
+changes and leaves a fingerprint, and through `camera-relink --reapply` whenever `digitizer`, `timezone`
 or `quicktimeUtc` changes; `media-resolve-time` re-resolves a whole corpus from the stored `when` blocks, with no exiftool
 and no file reads, which is the repair pass for rules that changed under an already-indexed
-archive; and `device-link` and `device-relink` both end with `device-cover <device>`, which points
-the device's `coverPhoto` at its newest image (by `takenAtUtc`, on the `device_taken_utc` index),
-or, for a device with no image, at its newest video that has `thumbnails/`, unless somebody chose
+archive; and `camera-link` and `camera-relink` both end with `camera-cover <camera>`, which points
+the camera's `coverPhoto` at its newest image (by `takenAtUtc`, on the `camera_taken_utc` index),
+or, for a camera with no image, at its newest video that has `thumbnails/`, unless somebody chose
 the cover — a link it writes carries `autoCover: true` and is picked again
-on the next run. A video's poster frame usually lands after its `device-link`, so
-`media-device-cover` runs `device-cover --media <file>` once a video's renditions are made
-(`media.renditions.made`), which offers the new poster to the device it is linked to;
+on the next run. A video's poster frame usually lands after its `camera-link`, so
+`media-camera-cover` runs `camera-cover --media <file>` once a video's renditions are made
+(`media.renditions.made`), which offers the new poster to the camera it is linked to;
 the archive bridge treats `metadata/exif` existence as the boundary between `media.file.discovered` and `media.metadata.extracted`, and stores the `sourceSha256` it indexed so a changed file is detected by content, not timestamp.
 
 **File-node children (conventions).** Besides the `thumbnails/` (renditions, posters and a video's
@@ -1141,8 +1141,8 @@ legacy `tags/<faceId> -> /people/<slug>` links and not by the box's detector
 (`resolveFaceTags` in `@importer/legacy`): a machine-drawn box a human named carries exactly as
 much identity as a hand-drawn one. Also `people/<slug>` softlinks
 (a tagged person with no box — never written beside a box for the same person, since
-`media-details` resolves a link ahead of a face), `photographer` softlink (`file-set-photographer` / import), `device`
-softlink (+ `devicePath` attr), `location` softlink (manual link to a `/locations` node — distinct from the
+`media-details` resolves a link ahead of a face), `photographer` softlink (`file-set-photographer` / import), `camera`
+softlink (+ `cameraPath` attr), `location` softlink (manual link to a `/locations` node — distinct from the
 lat/lng `position` child), and `versions/<name>` (related originals, e.g. RAW; frozen + `derived=true`
 so the pipeline skips them). Every one of these points _outwards_ only; `vfs.findLinks(target)` is the
 backlink lookup that answers "what refers to this person/location?", served by an index on the softlink
@@ -1286,7 +1286,7 @@ aggregators such as `media-details`. Owners are typically files
 and albums (the legacy importer writes the same shape).
 
 **Read aggregator.** `media-details <file>` returns everything the UI lightbox sidebar shows in one
-call — description, capture time, `location` + `location`, `photographer`, the device with its owners,
+call — description, capture time, `location` + `location`, `photographer`, the camera with its owners,
 the albums holding the file, the people tagged via `people/<slug>` links and `regions/*` `personId`
 (each with their age at capture time, computed by `ageAt` in `@archive/people/genealogy`), the comments, and
 `hashes` + fingerprint provenance for the sidebar's "More" section. `hashes` is a map rather than one

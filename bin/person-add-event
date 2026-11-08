@@ -1,6 +1,6 @@
 #!ts
 /**
- * person-add-event — add an event (blob) to a person, or to an album, location or device.
+ * person-add-event — add an event (blob) to a person, or to an album, location or camera.
  *
  * An event is a blob under <owner>/events/<name>: the body (markdown) is the
  * blob content, metadata lives in attrs {name, eventType, date}, and geo is a
@@ -109,9 +109,9 @@ const personAddEvent = async (cmd: Command): CmdReturn => {
 personAddEvent.spec = {
   name: 'person-add-event',
   effect: 'write' as const,
-  description: 'Add an event (blob) to a person, album, location or device',
+  description: 'Add an event (blob) to a person, album, location or camera',
   args: [
-    { name: 'target', type: 'path' as const, description: 'VFS path to the person, album, location or device' },
+    { name: 'target', type: 'path' as const, description: 'VFS path to the person, album, location or camera' },
     { name: 'name', type: 'string' as const, description: 'optional event name (e.g. birth, wedding); without one, it is made from the type and date', optional: true },
   ],
   flags: [

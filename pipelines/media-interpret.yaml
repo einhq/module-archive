@@ -3,8 +3,8 @@ description: Read what a file's metadata means in the archive - its capture time
 
 # The media module reads a file and keeps its metadata (`exif-extract`); this is the archive's
 # only pipeline on that fact. `exif-interpret` resolves the capture time from the clocks, the
-# device, a sidecar and the name, and writes the position; its last write is announced as
-# `media.metadata.interpreted`, which starts faces and the device link. Read again
+# camera, a sidecar and the name, and writes the position; its last write is announced as
+# `media.metadata.interpreted`, which starts faces and the camera link. Read again
 # whenever the file is: a file whose bytes changed is read again, and so is its meaning.
 trigger:
   on: media.metadata.extracted

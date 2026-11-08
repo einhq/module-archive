@@ -1,6 +1,6 @@
 /**
- * The media a person, a location or a device has: what `subject-person`, `subject-location` and
- * `subject-device` answer `search --subject` with (`SubjectListing`), and what `find-within`
+ * The media a person, a location or a camera has: what `subject-person`, `subject-location` and
+ * `subject-camera` answer `search --subject` with (`SubjectListing`), and what `find-within`
  * narrows the map to.
  *
  * Person and location are reverse lookups. A media file points *out* at its subjects — a `location`
@@ -11,7 +11,7 @@
  * ids onto every file: a few batched round trips, no write path to keep in sync, and nothing to
  * reindex when a person is renamed or merged (ids are what is matched, not slugs).
  *
- * A device needs no lookup: `device-link` writes its path onto each file as `devicePath`, so its
+ * A camera needs no lookup: `camera-link` writes its path onto each file as `cameraPath`, so its
  * media is an attr equality the store answers and pages by itself, however many there are.
  *
  * The other way round, `subject-<kind> --of <file>` answers which subjects each of a set of media
@@ -22,7 +22,7 @@
 import { basename, dirname } from '@std/path';
 import { toText } from '@std/streams/to-text';
 import { type Command, type NodeId, parseArgs, type SubjectEntry, type SubjectListing, type SubjectsOf } from '@ein/client';
-import { DEVICES_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import { CAMERAS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { REGION_TYPE } from '@archive/media/regions';
 import { VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { readSignals } from '@archive/staging/signals';
@@ -40,15 +40,15 @@ const REGIONS_DIR_NAME = 'regions';
  */
 const SUBJECT_SCAN_LIMIT = 20000;
 
-type SubjectKind = 'person' | 'location' | 'device';
+type SubjectKind = 'person' | 'location' | 'camera';
 
-const ROOTS: Record<SubjectKind, string> = { person: PEOPLE_ROOT, location: LOCATIONS_ROOT, device: DEVICES_ROOT };
+const ROOTS: Record<SubjectKind, string> = { person: PEOPLE_ROOT, location: LOCATIONS_ROOT, camera: CAMERAS_ROOT };
 
 /** What to try instead, when a ref names nothing: "no such location" alone sends a caller retrying spellings. */
 const ADVICE: Record<SubjectKind, (ref: string) => string> = {
   person: (ref) => `find people by name with \`search --subject-name 'person:${ref}'\``,
   location: (ref) => `for a town, region or country use --bbox from \`location-region '${ref}'\``,
-  device: () => 'list the devices with `device-list`',
+  camera: () => 'list the cameras with `camera-list`',
 };
 
 /** A slug or name (`anna`) under the kind's root, or a full path (`/archive/people/anna`). */
@@ -163,7 +163,7 @@ const subjectEntry = async (cmd: Command, kind: SubjectKind, ref: string): Promi
   } catch {
     return { ref, error: `no such ${kind}: ${ref}; ${ADVICE[kind](ref)}` };
   }
-  if (kind === 'device') return { ref, path: subject.path, match: { attr: 'devicePath', value: subject.path } };
+  if (kind === 'camera') return { ref, path: subject.path, match: { attr: 'cameraPath', value: subject.path } };
 
   const { ids, truncated } = await subjectMediaIds(cmd, kind, subject);
   return { ref, path: subject.path, ids: [...ids], ...(truncated ? { truncated } : {}) };
@@ -206,7 +206,7 @@ const voicesOf = async (cmd: Command, ids: NodeId[]): Promise<Map<NodeId, NodeId
 
 /**
  * The subjects of `kind` each of `ids` (media files) has: the people its faces, tags and voices
- * name, the location it is linked to, the device that took it. A person is named only directly
+ * name, the location it is linked to, the camera that took it. A person is named only directly
  * under the people root; one further down is a group of faces nobody has named yet, and comes
  * without a name. Subjects the reader cannot read are left out.
  */
@@ -218,10 +218,10 @@ const subjectsOfMedia = async (cmd: Command, kind: SubjectKind, ids: NodeId[]): 
   /** Subject path -> its name, or undefined for one nobody has named. */
   const names = new Map<string, string | undefined>();
 
-  if (kind === 'device') {
+  if (kind === 'camera') {
     for (const page of chunks(ids)) {
       for (const node of (await vfs.getNodesByIds(cmd.access, page)).values()) {
-        if (typeof node.attrs.devicePath === 'string') add(node.id, node.attrs.devicePath);
+        if (typeof node.attrs.cameraPath === 'string') add(node.id, node.attrs.cameraPath);
       }
     }
   } else if (kind === 'location') {
@@ -250,7 +250,7 @@ const subjectsOfMedia = async (cmd: Command, kind: SubjectKind, ids: NodeId[]): 
     }
   }
 
-  // A location or a device is named by its node, read once each.
+  // A location or a camera is named by its node, read once each.
   const unread = [...new Set([...has.values()].flatMap((paths) => [...paths]))].filter((path) => !names.has(path));
   const read = await Promise.all(unread.map((path) => vfs.get(cmd.access, path).then((node) => node.attrs as Record<string, unknown>, () => null)));
   const unreadable = new Set<string>();

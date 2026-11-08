@@ -69,7 +69,7 @@ Deno.test({
     // missing path while the path is sitting right there in the command line.
     await t.step('an undeclared flag is named, not silently swallowed', async () => {
       await cmd.shouldFailWith(`transcribe-file --bogus ${DIR}`, 'unknown flag --bogus');
-      await cmd.shouldFailWith(`device-link -f ${DIR}`, 'unknown flag -f');
+      await cmd.shouldFailWith(`camera-link -f ${DIR}`, 'unknown flag -f');
       await cmd.shouldFailWith(`generate-derivatives -z ${DIR}`, 'unknown flag -z');
     });
 
@@ -108,7 +108,7 @@ Deno.test({
           `album --bogus ${ALBUMS_ROOT}`,
           `person-name --bogus ${PEOPLE_ROOT}/x`,
           `location-locate --bogus ${LOCATIONS_ROOT}/x`,
-          'device-match --bogus',
+          'camera-match --bogus',
           `index-document --bogus ${ALBUMS_ROOT}`,
         ]
       ) {

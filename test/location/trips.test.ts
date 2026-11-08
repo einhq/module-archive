@@ -80,7 +80,7 @@ Deno.test('a trip that never gets 500 m from its start is dropped', () => {
   assertEquals(seg.trips.length, 0);
 });
 
-Deno.test('a long gap without fixes ends a trip where the device was last seen', () => {
+Deno.test('a long gap without fixes ends a trip where the camera was last seen', () => {
   const seg = segmentTrips([...rest(0, 4, 0), ...out(4, 0, 10_000), ...out(20, 10_000, 20_000)], SETTINGS);
   assertEquals(seg.trips.length, 2);
   assertAlmostEquals(northOf(seg.trips[0].to), 10_000, 1);
@@ -135,7 +135,7 @@ Deno.test('passing a home on the way does not end a trip', () => {
   assert(seg.stays.every((stay) => stay.kind !== 'home'));
 });
 
-Deno.test('legs follow the local day of the device', () => {
+Deno.test('legs follow the local day of the camera', () => {
   // At UTC+2, 21:00 UTC is still 2025-06-05 and 23:00 UTC already the 6th.
   const fixes = [...rest(0, 4, 0), fix(4, 21, 2000), fix(4, 23, 6000), fix(5, 1, 9000), fix(5, 3, 12_000), ...rest(6, 4, 12_000)];
   const utc = segmentTrips(fixes, SETTINGS).trips[0];

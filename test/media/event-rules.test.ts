@@ -111,14 +111,14 @@ Deno.test("rule: the archive's reading of a file's metadata is a fact, on the wr
     interpretedAt: 'now',
     takenAt: '2020-01-01T00:00:00Z',
     hasGps: true,
-    deviceSerial: 'SER1',
-    deviceKey: 'SER1',
+    cameraSerial: 'SER1',
+    cameraKey: 'SER1',
   }]]);
   assertEquals((await deriveEvents(updated(['description']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted), []);
 });
 
-Deno.test('rule: a camera with no serial still carries a device key', async () => {
-  // What `media-device` triggers on: a serial, or make and model for a phone that writes no serial.
+Deno.test('rule: a camera with no serial still carries a camera key', async () => {
+  // What `media-camera` triggers on: a serial, or make and model for a phone that writes no serial.
   const ctx = tree({
     [IMG]: file('f1', { takenAt: '2020-01-01T00:00:00Z', interpretedAt: 'now' }),
     [`${IMG}/metadata/exif`]: { id: 'e1', type: 'exif', attrs: { indexedAt: 'now', deviceinfo: { make: 'Apple', model: 'iPhone 12' } } },
@@ -126,7 +126,7 @@ Deno.test('rule: a camera with no serial still carries a device key', async () =
 
   const facts = (await deriveEvents({ ...event('file', IMG, 'updated'), changedAttrs: ['interpretedAt'] }, ctx, 100))
     .filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted);
-  assertEquals(facts.map((f) => [f.data?.deviceSerial, f.data?.deviceKey]), [['', 'iPhone 12']]);
+  assertEquals(facts.map((f) => [f.data?.cameraSerial, f.data?.cameraKey]), [['', 'iPhone 12']]);
 });
 
 Deno.test('rule: a position node reports availability without reading coordinates', async () => {

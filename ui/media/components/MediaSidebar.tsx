@@ -283,26 +283,26 @@ function DescriptionSection({ description }: { description: string }) {
 /**
  * What took the picture, and whose it was.
  *
- * The device over `Owned by …`, with the photographer folded in — who pressed
+ * The camera over `Owned by …`, with the photographer folded in — who pressed
  * the button belongs with what they pressed it on, not among
  * the people who happen to be *in* the frame.
  */
-function DeviceSection({ details, exif, onOpen }: {
+function CameraSection({ details, exif, onOpen }: {
   details: MediaDetails;
   exif: MediaExif | null;
   onOpen: (path: string) => void;
 }) {
-  const device = details.device;
-  const camera = [exif?.make, exif?.model].filter(Boolean).join(' ');
-  if (!device && !camera && !details.photographer) return null;
+  const camera = details.camera;
+  const exifCamera = [exif?.make, exif?.model].filter(Boolean).join(' ');
+  if (!camera && !exifCamera && !details.photographer) return null;
 
   return (
-    <SidebarSection id='device' label='Camera' icon='camera'>
-      {device ? <Anchor size='sm' onClick={() => onOpen(device.path)}>{device.name}</Anchor> : camera ? <Text size='sm'>{camera}</Text> : null}
+    <SidebarSection id='camera' label='Camera' icon='camera'>
+      {camera ? <Anchor size='sm' onClick={() => onOpen(camera.path)}>{camera.name}</Anchor> : exifCamera ? <Text size='sm'>{exifCamera}</Text> : null}
 
-      {device && device.owners.length > 0 && (
+      {camera && camera.owners.length > 0 && (
         <Text size='xs' c='dimmed'>
-          Owned by {device.owners.map((owner, index) => (
+          Owned by {camera.owners.map((owner, index) => (
             <span key={owner.path}>
               {index > 0 && ', '}
               <Anchor size='xs' inherit onClick={() => onOpen(`/people/${owner.id}`)}>{owner.name}</Anchor>
@@ -675,7 +675,7 @@ export function MediaSidebar(
 
         {
           /*
-          Above the device and below the description, not folded into "Details" with the other
+          Above the camera and below the description, not folded into "Details" with the other
           machine-written text. For an audio file the transcript *is* the content of the
           file, and for a video it is the half the poster cannot show — which puts it with
           the things someone came here to read rather than with the forensics.
@@ -695,7 +695,7 @@ export function MediaSidebar(
           </SidebarSection>
         )}
 
-        {details && (details.device || details.photographer || exif?.model) && <DeviceSection details={details} exif={exif} onOpen={onNavigate} />}
+        {details && (details.camera || details.photographer || exif?.model) && <CameraSection details={details} exif={exif} onOpen={onNavigate} />}
 
         {albums.length > 0 && (
           <SidebarSection id='albums' label='Albums' icon='books' count={albums.length}>

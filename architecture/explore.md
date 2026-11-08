@@ -3,7 +3,7 @@
 The archive module's pages for finding things: Search, Timeline, Map and Media, the lightbox, albums and the staging page.
 
 `Search`, `Timeline`, `Map` and `Media` are the same faceted query pointed at different axes.
-**Search** finds the things that _hold_ media — albums, people, locations, devices, tracks — and
+**Search** finds the things that _hold_ media — albums, people, locations, cameras, tracks — and
 **Media** finds the files themselves; **Timeline** asks it of when and **Map** of where. Splitting
 Search and Media is what lets each have controls that suit it, rather than one page whose filters are
 half-irrelevant whatever you came for.
@@ -27,7 +27,7 @@ own controls (kind, order, year) are left out of it.
 
 All four share one box. **`components/Search/SearchInput.tsx`** is a plain Mantine `TextInput` whose
 value may contain `@Label` runs, with the entities those runs resolved to held beside it. Typing `@`
-opens a completion list backed by one `search --kind person,location,album,device,track` per settled
+opens a completion list backed by one `search --kind person,location,album,camera,track` per settled
 keystroke — affordable only because providers declare their kinds and the fan-out is narrowed to
 them. Committing splits text from mentions and turns the mentions into filters.
 
@@ -63,13 +63,13 @@ passes — `--rules` for years and kinds, searched at once, then the model
 for people and locations, re-applied only when it changed a filter. Whatever the box understood, an
 `@` pick or a parsed name or year, leaves the box as a removable chip (**`SearchPills`**): an exact
 person, a partial name (`@Anna…`, everyone whose name contains it), a location, an area, the years, a
-label, a device, an album. The box keeps only the words still searched as a description, and a
+label, a camera, an album. The box keeps only the words still searched as a description, and a
 new commit adds to the chips rather than replacing them. The Map and the year view keep `@`
 completion alone: their filters take one person, location and label each.
 
 Every other text field that narrows a list uses one rule, **`lib/text-match.ts`** (`matchesText`:
 case and accents aside, every word in any order): the list pages' **`ListFilterInput`** (people,
-albums, labels, locations, devices, tracks), the settings search, label completion, and
+albums, labels, locations, cameras, tracks), the settings search, label completion, and
 **`EntityPicker`** (archive's `ui/components/`), the searchable picker for a person or a location in the
 relation, residence, homes, face and merge dialogs, whose options come from `personOptions`.
 
@@ -252,7 +252,7 @@ The details carry a "Similar" strip (`SimilarMedia`): the first dozen of `search
 keyframe; a click opens one and the lightbox then walks those pictures. Show all opens the Media page
 on the same search (`/media?like=<path>`), where the other filters narrow it. Nothing shows for a
 picture that cannot be compared. The Media page's picture button beside the search box asks with a
-picture from the device instead: it is drawn upright and small in the browser, posted to `/tmp`, and
+picture from the camera instead: it is drawn upright and small in the browser, posted to `/tmp`, and
 searched `--like` (the `like` chip shows it).
 A page whose list is loaded a window at a time (the media page) sets `lightboxCountHidden`, since its
 `n / total` would only count what has loaded. Slideshow preloads the next
@@ -278,7 +278,7 @@ because the sidebar's `people` list intentionally remains one row per person.
 
 `MediaSidebar` is ordered the way somebody looks for things: filename (with size and a one-line
 `resolution · MP · ISO · exposure` summary) → capture time → the hand-written description, editable
-in place through `file-set-description` and omitted while empty → the device with its owners and the photographer → the
+in place through `file-set-description` and omitted while empty → the camera with its owners and the photographer → the
 albums holding it, each with its cover → the people in it with their age, **unidentified faces
 included as named crops** so it is visible where in the frame they are → location and map → comments
 (written under the file as their author, so the box to add one is for whoever may change the file,

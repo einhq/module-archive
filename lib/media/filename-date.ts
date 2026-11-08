@@ -15,7 +15,7 @@
 
 import { parseCaptureTime } from '@ein/client';
 
-/** The earliest year a name is believed for: before it no device wrote dates into names. */
+/** The earliest year a name is believed for: before it no camera wrote dates into names. */
 const MIN_NAME_YEAR = 1995;
 
 type Pattern = {

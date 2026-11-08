@@ -49,7 +49,7 @@ export type ClusterItem = {
   /** The file's node id, which orders items taken at the same instant. */
   id?: string;
   /** The camera, for telling one shot from another taken a second later by someone else. */
-  device?: string;
+  camera?: string;
   /** Capture time in epoch ms. */
   timeMs: number;
   lat?: number;
@@ -749,7 +749,7 @@ export const shotsOf = (items: ClusterItem[]): number => {
   let shots = 0;
   for (let i = 0; i < items.length; i++) {
     const prev = items[i - 1];
-    if (!prev || items[i].timeMs - prev.timeMs > SHOT_GAP_MS || items[i].device !== prev.device) shots++;
+    if (!prev || items[i].timeMs - prev.timeMs > SHOT_GAP_MS || items[i].camera !== prev.camera) shots++;
   }
   return shots;
 };

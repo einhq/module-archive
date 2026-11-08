@@ -505,7 +505,7 @@ Deno.test('home days: joined with evidence within 36 h and 4 days, never without
 });
 
 Deno.test('shots: a burst from one camera is one shot; another camera a second later is another', () => {
-  const at = (s: number, device?: string): ClusterItem => ({ path: `/${s}${device ?? ''}`, timeMs: t(1) + s * 1000, ...(device ? { device } : {}) });
+  const at = (s: number, camera?: string): ClusterItem => ({ path: `/${s}${camera ?? ''}`, timeMs: t(1) + s * 1000, ...(camera ? { camera } : {}) });
   assertEquals(shotsOf([at(0, 'cam'), at(3, 'cam'), at(8, 'cam'), at(30, 'cam')]), 2);
   assertEquals(shotsOf([at(0, 'cam'), at(1, 'phone')]), 2);
   assertEquals(shotsOf([at(0), at(2), at(4)]), 1);

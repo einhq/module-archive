@@ -114,7 +114,7 @@ Deno.test("the viewer's own time is offered only when it says something", async 
 
 Deno.test("a time's source is named in words, and a scan says its scanner's clocks were set aside", () => {
   assertEquals(timeSourceLabel('name'), 'from the file name');
-  assertEquals(timeSourceLabel('device'), 'from the camera clock');
+  assertEquals(timeSourceLabel('camera'), 'from the camera clock');
   assertEquals(timeSourceLabel('sidecar'), 'from Google Photos or a sidecar');
   assertEquals(timeSourceLabel('manual', true), 'entered by hand · a scan: its scanner’s clocks are not when it was taken');
   assertEquals(timeSourceLabel(undefined, true), 'a scan: its scanner’s clocks are not when it was taken');

@@ -1,7 +1,7 @@
 #!ts
 /**
  * source-list — the files a node was read from: the links in its `sources/`, with what each
- * file is. A device's track lists the GPX files of its route, a person the GEDCOM files that
+ * file is. A camera's track lists the GPX files of its route, a person the GEDCOM files that
  * describe them.
  *
  *   source-list <node>
@@ -47,10 +47,10 @@ sourceList.spec = {
   effect: 'read' as const,
   description: "List the files a node was read from: the links in its sources/, such as a track's GPX files or a person's GEDCOM files",
   args: [
-    { name: 'node', type: 'path' as const, description: 'the node, such as /archive/devices/<slug>/track or /archive/people/<slug>' },
+    { name: 'node', type: 'path' as const, description: 'the node, such as /archive/cameras/<slug>/track or /archive/people/<slug>' },
   ],
   flags: [],
-  examples: ['source-list /archive/devices/ruby-iphone/track', 'source-list /archive/people/ruby-wrenfield'],
+  examples: ['source-list /archive/cameras/ruby-iphone/track', 'source-list /archive/people/ruby-wrenfield'],
   returns: 'one row per kept file: its link name, path, size, type, when written, and the GEDCOM record for a person.',
 };
 

@@ -2,10 +2,10 @@
 /**
  * track-mark — overrule the track's rules on the fixes of a time range.
  *
- *   track-mark <device> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
+ *   track-mark <camera> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
  *              --reject | --accept | --clear
  *
- * `<device>` is a device's slug or path, standing for its track, or a track's path. The range
+ * `<camera>` is a camera's slug or path, standing for its track, or a track's path. The range
  * is half-open, `[from, to)`; either end left out runs to that end of the track. `--near` keeps
  * the fixes within `--within` metres (40 by default) of a point, and `--marked` those a person
  * rejected or accepted, so `--marked reject --clear` brings back what was rejected by hand and
@@ -23,7 +23,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackMark } from '@archive/location/api';
 
-const USAGE = 'track-mark: usage: track-mark <device> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept] --reject | --accept | --clear\n';
+const USAGE = 'track-mark: usage: track-mark <camera> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept] --reject | --accept | --clear\n';
 
 /** How far from `--near`, in metres, a fix is kept when `--within` is not given. */
 const DEFAULT_WITHIN_M = 40;
@@ -99,9 +99,9 @@ const trackMark = async (cmd: Command): CmdReturn => {
 trackMark.spec = {
   name: 'track-mark',
   effect: 'write' as const,
-  description: "Reject or accept the fixes of a time range of a device's track by hand, overruling its rules, or clear that",
+  description: "Reject or accept the fixes of a time range of a camera's track by hand, overruling its rules, or clear that",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path) whose track to mark, or a track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path) whose track to mark, or a track's path" },
   ],
   flags: [
     { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },

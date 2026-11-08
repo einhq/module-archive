@@ -2,7 +2,7 @@
  * Resolving one media file's capture time from everything the archive knows about it.
  *
  * The rules themselves are `./capture-resolve.ts`; what lives here is the part that is about a
- * *media file*: where its exif sits, its paired sidecar, which device it is linked to, and
+ * *media file*: where its exif sits, its paired sidecar, which camera it is linked to, and
  * writing the answer back.
  */
 
@@ -10,7 +10,7 @@ import type { Command } from '@ein/client';
 import { SYSTEM_TIME_ZONE } from '@ein/client';
 import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 import type { CaptureWhen, ResolvedTime } from '@archive/media/capture-resolve';
-import { clockForFile, type DeviceClock, offsetAt } from '@archive/device/device-zone';
+import { type CameraClock, clockForFile, offsetAt } from '@archive/camera/camera-zone';
 import { readSidecar, sidecarTime } from '@archive/media/paired-sidecar';
 
 /* ------------------------------------------------------------------ */
@@ -45,8 +45,8 @@ type FileTimeOverrides = {
   manual?: string | null;
 };
 
-/** The clocks of the devices read so far, so files of one device read its clock once. */
-type DeviceClocks = Map<string, Promise<DeviceClock>>;
+/** The clocks of the cameras read so far, so files of one camera read its clock once. */
+type CameraClocks = Map<string, Promise<CameraClock>>;
 
 /**
  * Resolve one existing file's capture time from everything the archive knows about it.
@@ -58,7 +58,7 @@ const resolveFileTime = async (
   cmd: Command,
   filePath: string,
   overrides: FileTimeOverrides = {},
-  clocks: DeviceClocks = new Map(),
+  clocks: CameraClocks = new Map(),
 ): Promise<ResolvedTime | null> => {
   const node = await cmd.sys.vfs.get(cmd.access, filePath);
   const attrs = node.attrs as Record<string, unknown>;
@@ -66,19 +66,19 @@ const resolveFileTime = async (
   const stored = typeof attrs.whenManual === 'string' ? attrs.whenManual : undefined;
   const manual = overrides.manual === null ? undefined : overrides.manual ?? stored;
 
-  const devicePath = typeof attrs.devicePath === 'string' ? attrs.devicePath : undefined;
-  if (devicePath !== undefined && !clocks.has(devicePath)) clocks.set(devicePath, clockForFile(cmd, devicePath));
-  const clock = devicePath === undefined ? await clockForFile(cmd, undefined) : await clocks.get(devicePath)!;
+  const cameraPath = typeof attrs.cameraPath === 'string' ? attrs.cameraPath : undefined;
+  if (cameraPath !== undefined && !clocks.has(cameraPath)) clocks.set(cameraPath, clockForFile(cmd, cameraPath));
+  const clock = cameraPath === undefined ? await clockForFile(cmd, undefined) : await clocks.get(cameraPath)!;
   const when = await readExifWhen(cmd, filePath);
   const sidecar = sidecarTime(await readSidecar(cmd.sys.vfs, cmd.access, filePath));
 
   return resolveTime({
     manual,
     gps: when?.gps,
-    device: when?.device,
+    camera: when?.device,
     digitizer: clock.digitizer,
     quicktimeUtc: clock.quicktimeUtc,
-    deviceOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
+    cameraOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
     archiveZone: SYSTEM_TIME_ZONE,
     ...stampedSources(attrs),
     ...(sidecar ? { sidecar } : {}),
@@ -111,7 +111,7 @@ type FileTimeChange = { path: string; manual: string | null; attrs?: Record<stri
  * @returns per change, in order, what was written or why the write was refused.
  */
 export const applyFileTimes = async (cmd: Command, changes: FileTimeChange[]): Promise<PromiseSettledResult<ResolvedTime | null>[]> => {
-  const clocks: DeviceClocks = new Map();
+  const clocks: CameraClocks = new Map();
   const resolved: (ResolvedTime | null)[] = [];
   for (const change of changes) {
     try {

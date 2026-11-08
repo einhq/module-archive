@@ -5,7 +5,7 @@ import type { TimelineEntry, TimelineGroup } from '../lib/timeline-entries.ts';
 
 /**
  * A command that answers with one subject's history as feed entries — people's
- * `person-timeline` and `location-timeline`, device's `device-timeline` — taking the subject's
+ * `person-timeline` and `location-timeline`, camera's `camera-timeline` — taking the subject's
  * path and `--no-albums`. The hook reads only `entries`, so it names no module's answer type.
  */
 type SubjectTimelineCommand = string;
@@ -24,7 +24,7 @@ type UseSubjectTimelineResult = {
 /**
  * One subject's history as a feed: a person's life (births, deaths, events,
  * moves, partnerships, their children's births), a location's residents coming and
- * going, a device's owners — and, for each, the albums they appear in.
+ * going, a camera's owners — and, for each, the albums they appear in.
  *
  * Unpaged, unlike the global timeline — a subject has tens to low hundreds of
  * entries, so there is no cursor, no anchor and no scrubber. The entries are the

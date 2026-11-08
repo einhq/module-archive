@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEVICES_ROOT } from '@archive/paths';
+import { CAMERAS_ROOT } from '@archive/paths';
 import { useNodeEvents } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, shellClientEpoch } from '@ein/ui/signals';
 import type { TrackEntry, TrackPoint, TrackRead } from '@archive/location/api';
 import { appendFixes, isLive } from '../lib/live.ts';
 
-/** A device whose track is live, and where it has been since the page opened. */
+/** A camera whose track is live, and where it has been since the page opened. */
 export type LiveTrack = {
   track: TrackEntry;
   /** The last fix known when the track was first read here, then every fix since, oldest first. */
   points: TrackPoint[];
-  /** The newest of `points`: where the device is now. */
+  /** The newest of `points`: where the camera is now. */
   last: TrackPoint;
 };
 
@@ -32,7 +32,7 @@ const RELIST_MS = 10_000;
  * The tracks among `tracks` that are live — their last fix is under four hours old — kept current
  * as they grow.
  *
- * One subscription to `updated` events on the tracks under the devices root: an event for a live
+ * One subscription to `updated` events on the tracks under the cameras root: an event for a live
  * track reads it from its last fix on (`track-read --from --still`, which drops a new fix that is a
  * spike) and appends what is new; an event for
  * any other track asks for the list again through `relist`, since that track may just have woken
@@ -104,7 +104,7 @@ export function useLiveTracks(tracks: TrackEntry[], relist: () => void): { live:
     }
   }, [candidates, fixes, read]);
 
-  useNodeEvents({ pathPrefix: DEVICES_ROOT, nodeTypes: ['track'], eventTypes: ['updated'] }, (event) => {
+  useNodeEvents({ pathPrefix: CAMERAS_ROOT, nodeTypes: ['track'], eventTypes: ['updated'] }, (event) => {
     const track = candidatesRef.current.find((candidate) => candidate.path === event.path);
     const from = track && latestTs(track, fixesRef.current);
     if (from) {

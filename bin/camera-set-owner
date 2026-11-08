@@ -1,0 +1,97 @@
+#!ts
+/**
+ * camera-set-owner — link a person as owner of a camera (dated relation pair).
+ *
+ * Creates both halves: camera/owners/<person> ↔ person/cameras/<camera>, each
+ * carrying relation.peerLink so the relations-guard removes the peer on delete.
+ * Ownership can change over time, so optional --from/--to dates are supported;
+ * `--update` rewrites them on an existing pair, where an omitted end clears.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { basename, resolve } from '@std/path';
+import { createRelationPair, updateRelationSpan, validDate } from '@archive/people/genealogy';
+
+const cameraSetOwner = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from', 'to'], boolean: ['update'], unknown: collectUnknownFlags(unknown) });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const cameraArg = flags._[0] as string | undefined;
+  const personArg = flags._[1] as string | undefined;
+
+  if (!cameraArg || !personArg) {
+    await cmd.writeError('camera-set-owner: usage: camera-set-owner <camera> <person> [--from <date>] [--to <date>] [--update]\n');
+    return 1;
+  }
+
+  for (const [name, value] of [['from', flags.from], ['to', flags.to]] as const) {
+    if (value !== undefined && !validDate(value)) {
+      await cmd.writeError(`camera-set-owner: --${name} '${value}' is not a date (YYYY[-MM[-DD]])\n`);
+      return 1;
+    }
+  }
+  const camera = resolve(cmd.cwd, cameraArg);
+  const person = resolve(cmd.cwd, personArg);
+  const vfs = cmd.sys.vfs;
+  const access = cmd.access;
+
+  try {
+    await vfs.get(access, camera);
+    await vfs.get(access, person);
+  } catch {
+    await cmd.writeError(`camera-set-owner: ${camera} or ${person} not found\n`);
+    return 1;
+  }
+
+  const ownerLink = `${camera}/owners/${basename(person)}`;
+  if (flags.update) {
+    if (!(await vfs.exists(access, ownerLink, { follow: false }))) {
+      await cmd.writeError(`camera-set-owner: ${ownerLink} does not exist; add the owner first\n`);
+      return 1;
+    }
+    await updateRelationSpan(vfs, access, ownerLink, { from: flags.from, to: flags.to });
+    if (cmd.json) await cmd.writeJSON({ ok: true, link: ownerLink, updated: true });
+    else await cmd.writeLn(`Updated owner ${basename(person)} of camera ${basename(camera)}`);
+    return 0;
+  }
+  if (await vfs.exists(access, ownerLink, { follow: false })) {
+    await cmd.writeError(`camera-set-owner: ${ownerLink} already exists\n`);
+    return 1;
+  }
+
+  await createRelationPair(vfs, access, {
+    aLink: ownerLink,
+    aTarget: person,
+    bLink: `${person}/cameras/${basename(camera)}`,
+    bTarget: camera,
+    from: flags.from,
+    to: flags.to,
+  });
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, link: ownerLink });
+  } else {
+    await cmd.writeLn(`Linked owner ${basename(person)} to camera ${basename(camera)}`);
+  }
+
+  return 0;
+};
+
+cameraSetOwner.spec = {
+  name: 'camera-set-owner',
+  effect: 'write' as const,
+  description: 'Link a person as owner of a camera (dated relation pair)',
+  args: [
+    { name: 'camera', type: 'path' as const, description: 'VFS path to camera node' },
+    { name: 'person', type: 'path' as const, description: 'VFS path to person node' },
+  ],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'ownership start date (YYYY[-MM[-DD]])' },
+    { name: 'to', type: 'string' as const, description: 'ownership end date (YYYY[-MM[-DD]])' },
+    { name: 'update', type: 'bool' as const, description: 'rewrite the dates of an existing owner; an omitted date is cleared' },
+  ],
+};
+
+export default cameraSetOwner;

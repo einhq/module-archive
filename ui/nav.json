@@ -55,11 +55,11 @@
       "shortcut": "alt+L"
     },
     {
-      "id": "archive.devices",
+      "id": "archive.cameras",
       "section": "browse",
-      "label": "Devices",
+      "label": "Cameras",
       "icon": "device-camera-phone",
-      "to": "/devices",
+      "to": "/cameras",
       "order": 50
     },
     {
@@ -108,13 +108,13 @@
       "order": 30
     },
     {
-      "id": "archive.create-device",
+      "id": "archive.create-camera",
       "parent": "ui.create",
-      "title": "Device",
+      "title": "Camera",
       "icon": "device-camera-phone",
       "color": "orange",
       "action": {
-        "dialog": "/devices/new"
+        "dialog": "/cameras/new"
       },
       "order": 40
     },

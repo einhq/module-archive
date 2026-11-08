@@ -121,7 +121,7 @@ Deno.test('a set of look-alikes says how alike, why, and what to look out for', 
   assertEquals(flagLines(near), ['perhaps two shots of a burst: same size, same camera, same second', 'files in other folders stay']);
   assertEquals(blockedLine(set('near:a', { blocked: 'needs-review' })), 'look-alikes are for you to look at: Remove all leaves them');
   assertEquals(
-    memberFacts(member('d', { width: 2048, height: 1536, size: 1_000, takenAt: '2021-07-04T12:15:30', device: '/devices/camera-a', score: 0.97 }), (bytes) => `${bytes} B`),
+    memberFacts(member('d', { width: 2048, height: 1536, size: 1_000, takenAt: '2021-07-04T12:15:30', camera: '/cameras/camera-a', score: 0.97 }), (bytes) => `${bytes} B`),
     ['2048×1536', '1000 B', '2021-07-04 12:15:30', 'camera-a', '97% alike'],
   );
 });

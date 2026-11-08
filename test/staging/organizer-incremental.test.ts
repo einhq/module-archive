@@ -39,7 +39,7 @@ const random = (seed: number) => () => {
   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 };
 
-type Photo = { name: string; at?: number; wall?: string; mimetype?: string; indexed?: boolean; device?: string };
+type Photo = { name: string; at?: number; wall?: string; mimetype?: string; indexed?: boolean; camera?: string };
 
 const iso = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z');
 
@@ -56,7 +56,7 @@ const stage = async (vfs: NodeVFS, dir: string, photos: Photo[], owner: { uid: n
         mimetype: photo.mimetype ?? 'image/jpeg',
         size: 1000,
         ...(photo.at !== undefined ? { takenAtUtc: iso(photo.at), takenAt: photo.wall ?? iso(photo.at).replace('Z', '') } : {}),
-        ...(photo.device ? { devicePath: photo.device } : {}),
+        ...(photo.camera ? { cameraPath: photo.camera } : {}),
         ...(photo.indexed === false ? {} : { indexedAt: '2026-10-18T00:00:00Z', facesAt: '2026-10-18T00:00:00Z' }),
       },
     })),
@@ -156,7 +156,7 @@ Deno.test({ name: 'the incremental organizer gives the groups a full build would
     const owner = { uid: home.props.uid, gid: home.props.gid };
     const next = random(Number(Deno.env.get('ORGANIZER_SEED') ?? 20261018));
     const pick = <T>(list: T[]): T => list[Math.floor(next() * list.length)];
-    const devices = ['/dcim/a', '/dcim/b'];
+    const cameras = ['/dcim/a', '/dcim/b'];
     let counter = 0;
     const name = (prefix = 'IMG') => `${prefix}_${String(++counter).padStart(5, '0')}.jpg`;
     const files: string[] = [];
@@ -169,10 +169,10 @@ Deno.test({ name: 'the incremental organizer gives the groups a full build would
     const session = (at: number): Photo[] => {
       const kind = next();
       if (kind < 0.4) {
-        return Array.from({ length: 4 + Math.floor(next() * 10) }, (_, i) => ({ name: name(), at: at + i * 9 * 60_000 + Math.floor(next() * 60_000), device: pick(devices) }));
+        return Array.from({ length: 4 + Math.floor(next() * 10) }, (_, i) => ({ name: name(), at: at + i * 9 * 60_000 + Math.floor(next() * 60_000), camera: pick(cameras) }));
       }
-      if (kind < 0.85) return Array.from({ length: 1 + Math.floor(next() * 2) }, (_, i) => ({ name: name(), at: at + i * HOUR, device: pick(devices) }));
-      return Array.from({ length: 3 * 4 }, (_, i) => ({ name: name('TRIP'), at: at + Math.floor(i / 4) * DAY + (i % 4) * HOUR, device: devices[0] }));
+      if (kind < 0.85) return Array.from({ length: 1 + Math.floor(next() * 2) }, (_, i) => ({ name: name(), at: at + i * HOUR, camera: pick(cameras) }));
+      return Array.from({ length: 3 * 4 }, (_, i) => ({ name: name('TRIP'), at: at + Math.floor(i / 4) * DAY + (i % 4) * HOUR, camera: cameras[0] }));
     };
 
     await t.step('a full build of a random category', async () => {

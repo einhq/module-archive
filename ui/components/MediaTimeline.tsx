@@ -49,8 +49,8 @@ type MediaTimelineProps = {
   album?: string;
   /** Directory path — every file in the tree under it, however deep. */
   within?: string;
-  /** Device path (`/devices/<name>`) — the media that camera produced. */
-  device?: string;
+  /** Camera path (`/cameras/<name>`) — the media that camera produced. */
+  camera?: string;
   /** Restrict to these kinds, e.g. from the media-type filter. */
   kinds?: SearchKind[];
   /**
@@ -136,7 +136,7 @@ export function MediaTimeline(
     location,
     album,
     within,
-    device,
+    camera,
     kinds,
     filters,
     rankByRelevance = false,
@@ -166,7 +166,7 @@ export function MediaTimeline(
 
   // What the list is *of*. Changing it starts a new list, so the seek has to let
   // go — an anchor into the old one means nothing in the new one.
-  const subject = person ?? location ?? album ?? within ?? device;
+  const subject = person ?? location ?? album ?? within ?? camera;
   const filterKey = JSON.stringify(filters ?? {});
   useEffect(() => {
     setAnchor(null);
@@ -179,7 +179,7 @@ export function MediaTimeline(
       location,
       under: album,
       within,
-      device,
+      camera,
       kinds,
       filters,
       rankByRelevance,
@@ -263,7 +263,7 @@ export function MediaTimeline(
   const { facets } = useSubjectFacets(
     {
       ...filters,
-      subjects: person ? [subjectArg('person', person)] : location ? [subjectArg('location', location)] : device ? [subjectArg('device', device)] : filters?.subjects,
+      subjects: person ? [subjectArg('person', person)] : location ? [subjectArg('location', location)] : camera ? [subjectArg('camera', camera)] : filters?.subjects,
       under: album ?? filters?.under,
       within: within ?? filters?.within,
       kinds: kinds?.length ? kinds : filters?.kinds,
@@ -310,7 +310,7 @@ export function MediaTimeline(
       const rect = section.getBoundingClientRect();
       return [{ key, offset: scrolled + rect.top - edge, size: rect.height }];
     });
-    // Albums, people and devices can put arbitrary content before their first
+    // Albums, people and cameras can put arbitrary content before their first
     // media section (an album title, description, folder grid, and so on). The
     // rail's top half-bucket, from the page top down to the first divider, is
     // what scrolls through it; the dates themselves stay exact.

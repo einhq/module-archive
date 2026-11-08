@@ -1,29 +1,29 @@
 #!ts
 /**
- * trip-edit — change where a device's track is cut into trips, and derive them again.
+ * trip-edit — change where a camera's track is cut into trips, and derive them again.
  *
- *   trip-edit <device> <trip> --merge
- *   trip-edit <device> <day> --split
+ *   trip-edit <camera> <trip> --merge
+ *   trip-edit <camera> <day> --split
  *
  * `--merge` joins the trip (its id from `trip-list`, or its first day) to the trip before it,
  * whatever ended that one. `--split` parts again a trip joined on that day, or else starts a trip
- * at that day's midnight. The edits are kept in the device's attr `tripEdits`, and the trips are
+ * at that day's midnight. The edits are kept in the camera's attr `tripEdits`, and the trips are
  * derived again from the whole track.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { DeviceTrips, TripEdits } from '@archive/location/api';
-import { deriveDeviceTrips, readDeviceTrips, TRIP_EDITS_ATTR, tripEditsOf } from '@archive/location/device-trips';
+import type { CameraTrips, TripEdits } from '@archive/location/api';
+import { deriveCameraTrips, readCameraTrips, TRIP_EDITS_ATTR, tripEditsOf } from '@archive/location/camera-trips';
 import { trackOf } from '@archive/location/track';
 import { localDayOf } from '@archive/location/trips';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The edits after joining the trip `name` names to the one before it, and what to say of it. */
-const merged = (trips: DeviceTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
+const merged = (trips: CameraTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
   const index = trips.trips.findIndex((trip) => trip.id === name);
   const at = index >= 0 ? index : trips.trips.findIndex((trip) => trip.day === name);
-  if (at < 0) throw new Error(`no trip ${name} (trip-list ${trips.device})`);
+  if (at < 0) throw new Error(`no trip ${name} (trip-list ${trips.camera})`);
   if (at === 0) throw new Error(`${name} is the first trip: there is none before it to join`);
   const trip = trips.trips[at];
   const before = trips.trips[at - 1].id;
@@ -35,13 +35,13 @@ const merged = (trips: DeviceTrips, edits: TripEdits, name: string): { edits: Tr
 };
 
 /** The edits after parting the track on `day`, and what to say of it. */
-const split = (trips: DeviceTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
+const split = (trips: CameraTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
   const joined = (edits.merge ?? []).filter((start) => dayOf(Date.parse(start)) === day);
   if (joined.length > 0) {
     return { edits: { ...edits, merge: edits.merge!.filter((start) => !joined.includes(start)) }, said: `Parted the trip joined on ${day} again` };
   }
   if (!DAY.test(day)) throw new Error(`'${day}' is not a day (YYYY-MM-DD)`);
-  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${trips.device})`);
+  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${trips.camera})`);
   return { edits: { ...edits, split: [...edits.split ?? [], day] }, said: `Started a trip on ${day}` };
 };
 
@@ -51,21 +51,21 @@ const tripEdit = async (cmd: Command): CmdReturn => {
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const [target, name] = flags._.map(String);
   if (!target || !name || flags.merge === flags.split) {
-    await cmd.writeError('trip-edit: usage: trip-edit <device> <trip|day> --merge|--split\n');
+    await cmd.writeError('trip-edit: usage: trip-edit <camera> <trip|day> --merge|--split\n');
     return 1;
   }
 
   try {
-    const { device } = await trackOf(cmd, target);
-    const attrs = (await cmd.sys.vfs.get(cmd.access, device)).attrs as Record<string, unknown>;
-    const trips = await readDeviceTrips(cmd, device) ?? await deriveDeviceTrips(cmd, device, { full: true });
+    const { camera } = await trackOf(cmd, target);
+    const attrs = (await cmd.sys.vfs.get(cmd.access, camera)).attrs as Record<string, unknown>;
+    const trips = await readCameraTrips(cmd, camera) ?? await deriveCameraTrips(cmd, camera, { full: true });
     const edits = tripEditsOf(attrs);
     const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
     const change = flags.merge ? merged(trips, edits, name) : split(trips, edits, name, localDayOf(timezone));
 
     const next = { ...change.edits.merge?.length ? { merge: change.edits.merge } : {}, ...change.edits.split?.length ? { split: change.edits.split } : {} };
-    await cmd.sys.vfs.update(cmd.access, device, { attrs: { [TRIP_EDITS_ATTR]: Object.keys(next).length > 0 ? next : null } });
-    const derived = await deriveDeviceTrips(cmd, device, { full: true });
+    await cmd.sys.vfs.update(cmd.access, camera, { attrs: { [TRIP_EDITS_ATTR]: Object.keys(next).length > 0 ? next : null } });
+    const derived = await deriveCameraTrips(cmd, camera, { full: true });
 
     if (cmd.json) await cmd.writeJSON({ ok: true });
     else await cmd.writeLn(`${change.said}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'} now.`);
@@ -79,9 +79,9 @@ const tripEdit = async (cmd: Command): CmdReturn => {
 tripEdit.spec = {
   name: 'trip-edit',
   effect: 'write' as const,
-  description: "Join a device's trip to the one before it, or part its track on a day, and derive its trips again",
+  description: "Join a camera's trip to the one before it, or part its track on a day, and derive its trips again",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
     { name: 'trip', type: 'string' as const, description: 'the trip (its id, or its first day) to join, or the day to part on' },
   ],
   flags: [

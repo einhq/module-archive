@@ -2,11 +2,11 @@
 /**
  * track-append — append coordinate points to a track.
  *
- *   track-append <device> --lat=57.7 --lng=11.97 [--ts <iso>] [--alt=<m>] [--speed=<m/s>]
- *   track-append <device> 57.7 11.97 [--ts <iso>]
- *   track-append <device> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
+ *   track-append <camera> --lat=57.7 --lng=11.97 [--ts <iso>] [--alt=<m>] [--speed=<m/s>]
+ *   track-append <camera> 57.7 11.97 [--ts <iso>]
+ *   track-append <camera> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
  *
- * `<device>` is a device's slug or path, standing for its track, or a track's path.
+ * `<camera>` is a camera's slug or path, standing for its track, or a track's path.
  *
  * The flag form is the one that works everywhere. A western or southern
  * coordinate cannot be a positional — parseArgs reads the leading `-` of
@@ -33,7 +33,7 @@ const trackAppend = async (cmd: Command): CmdReturn => {
   const target = flags._[0] as string | undefined;
 
   if (!target) {
-    await cmd.writeError('track-append: usage: track-append <device> <lat> <lng> [--ts <iso>] | --json <points>\n');
+    await cmd.writeError('track-append: usage: track-append <camera> <lat> <lng> [--ts <iso>] | --json <points>\n');
     return 1;
   }
 
@@ -84,9 +84,9 @@ const trackAppend = async (cmd: Command): CmdReturn => {
 trackAppend.spec = {
   name: 'track-append',
   effect: 'write' as const,
-  description: "Append coordinate points to a device's track",
+  description: "Append coordinate points to a camera's track",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path) whose track takes the points, or a track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path) whose track takes the points, or a track's path" },
     { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
     { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
   ],

@@ -1,0 +1,49 @@
+#!ts
+import type { CmdReturn, Command } from '@ein/client';
+import { CAMERAS_ROOT, listCameras } from '@archive/camera/camera';
+
+const cameraList = async (cmd: Command): CmdReturn => {
+  const root = cmd.args[0] || CAMERAS_ROOT;
+
+  let cameras;
+  try {
+    cameras = await listCameras(cmd, root);
+  } catch (error) {
+    await cmd.writeError(`camera-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON(cameras);
+    return 0;
+  }
+
+  if (cameras.length === 0) {
+    await cmd.writeLn('No cameras found');
+    return 0;
+  }
+
+  for (const camera of cameras) {
+    let line = camera.name;
+    if (camera.make || camera.model) line += ` (${[camera.make, camera.model].filter(Boolean).join(' ')})`;
+    if (camera.serialNumber) line += ` [${camera.serialNumber}]`;
+    if (camera.timezone) line += ` ${camera.timezone}`;
+    if (camera.digitizer) line += ' [digitizer]';
+    if (camera.quicktimeUtc) line += ' [video UTC]';
+    await cmd.writeLn(line);
+  }
+
+  return 0;
+};
+
+cameraList.spec = {
+  name: 'camera-list',
+  effect: 'read' as const,
+  description: 'List all cameras',
+  args: [
+    { name: 'root', type: 'path' as const, description: `Camera directory (default: ${CAMERAS_ROOT})` },
+  ],
+  flags: [],
+};
+
+export default cameraList;

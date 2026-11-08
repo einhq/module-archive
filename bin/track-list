@@ -1,16 +1,16 @@
 #!ts
 /**
- * track-list — the devices that have a track, with what the track registry says
+ * track-list — the cameras that have a track, with what the track registry says
  * of each: point count, span and extent, read for all of them at once, so no
  * track is opened.
  */
-import { DEVICES_ROOT } from '@archive/paths';
+import { CAMERAS_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { TrackEntry } from '@archive/location/api';
 import { listTracks } from '@archive/location/track';
 
 const trackList = async (cmd: Command): CmdReturn => {
-  const root = typeof cmd.args[0] === 'string' ? cmd.args[0] : DEVICES_ROOT;
+  const root = typeof cmd.args[0] === 'string' ? cmd.args[0] : CAMERAS_ROOT;
 
   let tracks: TrackEntry[];
   try {
@@ -33,10 +33,10 @@ const trackList = async (cmd: Command): CmdReturn => {
 trackList.spec = {
   name: 'track-list',
   effect: 'read' as const,
-  description: 'List the devices that have a track, with its point count, span and extent',
-  args: [{ name: 'root', type: 'path' as const, description: `Device directory (default: ${DEVICES_ROOT})` }],
+  description: 'List the cameras that have a track, with its point count, span and extent',
+  args: [{ name: 'root', type: 'path' as const, description: `Camera directory (default: ${CAMERAS_ROOT})` }],
   flags: [],
-  returns: 'one row per device with a track.',
+  returns: 'one row per camera with a track.',
 };
 
 export default trackList;

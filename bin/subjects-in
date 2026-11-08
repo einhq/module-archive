@@ -1,12 +1,12 @@
 #!ts
 /**
  * subjects-in — who and what the media in a container have: the people in them, the locations they
- * are linked to, the devices that took them and who held the camera, each counted.
+ * are linked to, the cameras that took them and who held the camera, each counted.
  *
  * People are the named ones, directly under the people root, not the groups of faces nobody has
  * named yet. The container is whatever `members` lists — an album by its own rules, any other folder as its
  * media — and the media counted are the members it shows, so a stack of similar photos counts once.
- * The signals are read in batches by id (`readSignals`, the files' nodes for `devicePath`, their
+ * The signals are read in batches by id (`readSignals`, the files' nodes for `cameraPath`, their
  * `photographer` links); only the distinct subjects are resolved to a path and a name.
  */
 
@@ -73,7 +73,7 @@ const subjectsIn = async (cmd: Command): CmdReturn => {
     const signals = await readSignals(vfs, cmd.access, ids);
     const people = new Map<string, number>();
     const locations = new Map<string, number>();
-    const devices = new Map<string, number>();
+    const cameras = new Map<string, number>();
     const photographers = new Map<string, number>();
     let positioned = 0;
 
@@ -87,7 +87,7 @@ const subjectsIn = async (cmd: Command): CmdReturn => {
     for (const page of chunks(ids)) {
       const [nodes, children] = await Promise.all([vfs.getNodesByIds(cmd.access, page), vfs.getChildLinksByIds(cmd.access, page)]);
       for (const node of nodes.values()) {
-        if (typeof node.attrs.devicePath === 'string') bump(devices, node.attrs.devicePath);
+        if (typeof node.attrs.cameraPath === 'string') bump(cameras, node.attrs.cameraPath);
       }
       const links = [...children.values()].flatMap((entries) => entries.filter((entry) => entry.name === PHOTOGRAPHER_LINK).map((entry) => entry.id));
       if (links.length === 0) continue;
@@ -110,7 +110,7 @@ const subjectsIn = async (cmd: Command): CmdReturn => {
       positioned,
       people: await tallies(cmd, people),
       locations: await tallies(cmd, locations),
-      devices: await tallies(cmd, devices),
+      cameras: await tallies(cmd, cameras),
       photographers: await tallies(cmd, photographers),
       truncated: listing.truncated,
     } satisfies ContainerSubjects;
@@ -120,7 +120,7 @@ const subjectsIn = async (cmd: Command): CmdReturn => {
       return 0;
     }
     await cmd.writeLn(`${answer.total} media, ${answer.positioned} with a position${answer.truncated ? ' (more exist than were listed)' : ''}`);
-    for (const [label, rows] of [['People', answer.people], ['Locations', answer.locations], ['Devices', answer.devices], ['Photographers', answer.photographers]] as const) {
+    for (const [label, rows] of [['People', answer.people], ['Locations', answer.locations], ['Cameras', answer.cameras], ['Photographers', answer.photographers]] as const) {
       if (rows.length === 0) continue;
       await cmd.writeLn(`${label}:`);
       for (const row of rows) await cmd.writeLn(`  ${String(row.count).padStart(5)}  ${row.name}  ${row.path}`);
@@ -135,12 +135,12 @@ const subjectsIn = async (cmd: Command): CmdReturn => {
 subjectsIn.spec = {
   name: 'subjects-in',
   effect: 'read' as const,
-  description: 'Who and what the media in an album or folder have: the people in them, their locations, the devices that took them and the photographers, counted',
+  description: 'Who and what the media in an album or folder have: the people in them, their locations, the cameras that took them and the photographers, counted',
   args: [{ name: 'path', type: 'path' as const, description: 'the album or folder' }],
   flags: [],
   examples: ['subjects-in /archive/albums/Exempelalbum_2019', 'JSON_OUTPUT=1 subjects-in /archive/albums/Exempelalbum_2019'],
   returns:
-    'how many media the container shows and how many carry a position; its people, locations, devices and photographers, each with its path, name and how many of the media have it, the most first.',
+    'how many media the container shows and how many carry a position; its people, locations, cameras and photographers, each with its path, name and how many of the media have it, the most first.',
 };
 
 export default subjectsIn;

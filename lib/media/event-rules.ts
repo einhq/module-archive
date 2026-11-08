@@ -57,7 +57,7 @@ export const MEDIA_EVENTS = {
   /**
    * What a file's metadata means in the archive is read: `exif-interpret` wrote its capture time
    * and place and, last, `interpretedAt`. Only on the write that changed it. Starts the archive's
-   * analysis: faces and the device link.
+   * analysis: faces and the camera link.
    */
   metadataInterpreted: 'media.metadata.interpreted',
   renditionsMade: FILE_FACTS.renditionsMade,
@@ -320,12 +320,12 @@ export async function deriveGaps(
   // transcripts and text vectors are found by their markers, in every tree, by the media module's
   // scans, each gap a fact of its own that only its pipelines take.
   //
-  // `media-device` deliberately has no term and must not get one: `device-link` writes nothing
-  // when the registry holds no match, so "no `devicePath`" cannot tell a link that never ran
+  // `media-camera` deliberately has no term and must not get one: `camera-link` writes nothing
+  // when the registry holds no match, so "no `cameraPath`" cannot tell a link that never ran
   // from one that ran and found nothing. Most files in an archive come from cameras nobody has
   // registered, so a term here would republish most of the corpus on every scan and starve the
   // real gaps. That pipeline is swept from the other side instead, where the registry is what
-  // changed and an indexed equality answers it: `device-relink <device>`, or `--all` over the
+  // changed and an indexed equality answers it: `camera-relink <camera>`, or `--all` over the
   // whole registry.
   //
   // A source nothing can decode is excluded: `exif-extract` records why on the file node and
@@ -580,14 +580,14 @@ async function deriveInterpreted(event: VfsEventInput, file: NodeSnapshot, ctx: 
   return fact ? [fact, ...await deriveForMemberChange(event.path, file, 'member-indexed', ctx, now)] : [];
 }
 
-/** `media.metadata.interpreted` for a file whose metadata the archive has read: when, where, the device. */
+/** `media.metadata.interpreted` for a file whose metadata the archive has read: when, where, the camera. */
 async function interpretedFact(filePath: string, file: NodeSnapshot, ctx: RuleContext, now: number): Promise<Omit<DomainEvent, 'id'> | undefined> {
   const interpretedAt = str(file.attrs[INTERPRETED_AT_ATTR]);
   if (!interpretedAt || !isIndexableMedia(file)) return undefined;
   const exif = await ctx.getNode(`${filePath}/metadata/exif`);
   const where = exif?.attrs.where as { gps?: Record<string, unknown> } | undefined;
   const deviceinfo = exif?.attrs.deviceinfo as { make?: string; model?: string } | undefined;
-  const deviceSerial = str(exif?.attrs.deviceSerialNumber) ?? '';
+  const cameraSerial = str(exif?.attrs.deviceSerialNumber) ?? '';
   return {
     type: MEDIA_EVENTS.metadataInterpreted,
     subject: filePath,
@@ -599,10 +599,10 @@ async function interpretedFact(filePath: string, file: NodeSnapshot, ctx: RuleCo
       interpretedAt,
       takenAt: str(file.attrs.takenAt) ?? null,
       hasGps: Boolean(where?.gps),
-      deviceSerial,
-      // Whether there is *anything* to match a device on: a serial, or make and model, since most
+      cameraSerial,
+      // Whether there is *anything* to match a camera on: a serial, or make and model, since most
       // phones write no serial.
-      deviceKey: deviceSerial || str(deviceinfo?.model) || str(deviceinfo?.make) || '',
+      cameraKey: cameraSerial || str(deviceinfo?.model) || str(deviceinfo?.make) || '',
     },
   };
 }

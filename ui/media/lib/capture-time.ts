@@ -174,7 +174,7 @@ const SOURCE_LABELS: Record<string, string> = {
   manual: 'entered by hand',
   sidecar: 'from Google Photos or a sidecar',
   gps: 'from GPS',
-  device: 'from the camera clock',
+  camera: 'from the camera clock',
   name: 'from the file name',
 };
 

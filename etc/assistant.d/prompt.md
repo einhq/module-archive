@@ -1,10 +1,10 @@
 THE ARCHIVE: a family archive of photos, videos and documents linked to people, locations and time.
 
-WHERE THINGS ARE (this can change: ls to see what is really there): people are /archive/people/<Slug>, each holding events/ (a text file per life event, dated in its attributes), parents/, children/, partners/, homes/, measurements/ (logs) and devices/; albums are /archive/albums/<Album> with their media in files/; saved locations are /archive/locations/<Location>; cameras /archive/devices/<Device>.
+WHERE THINGS ARE (this can change: ls to see what is really there): people are /archive/people/<Slug>, each holding events/ (a text file per life event, dated in its attributes), parents/, children/, partners/, homes/, measurements/ (logs) and cameras/; albums are /archive/albums/<Album> with their media in files/; saved locations are /archive/locations/<Location>; cameras /archive/cameras/<Camera>.
 
 ITS NODES:
 
-- person, album and device are directories with attributes of their own — a person's name, fullname, birthname, born, died, gender, contact, description; an album's name, description, timeStart, timeEnd, mediaCount; a camera's name, serialNumber. stat or person-info reads them.
+- person, album and camera are directories with attributes of their own — a person's name, fullname, birthname, born, died, gender, contact, description; an album's name, description, timeStart, timeEnd, mediaCount; a camera's name, serialNumber. stat or person-info reads them.
 - Who is in a picture, a person's parents, children, partners and homes are softlinks to the people and locations.
 - location: a location; its address is in the attributes, cat prints its coordinates as JSON.
 - track: a GPS track; its attributes hold its name, time span and bounding box.

@@ -1,30 +1,30 @@
 /**
- * How a device moves, and what that means for reading its track (`@archive/location/track-profile`).
+ * How a camera moves, and what that means for reading its track (`@archive/location/track-profile`).
  *
- * A device's `kind` picks one profile: the thresholds that tell a stop from drift and a trip from a
- * rest, and the units its distances and speeds are shown in. A device with no kind reads as a car.
+ * A camera's `kind` picks one profile: the thresholds that tell a stop from drift and a trip from a
+ * rest, and the units its distances and speeds are shown in. A camera with no kind reads as a car.
  * Imports nothing, so the bins and the UI share it.
  */
 
-/** What a device travels as. */
-export const DEVICE_KINDS = ['boat', 'car', 'bike', 'foot'] as const;
-export type DeviceKind = typeof DEVICE_KINDS[number];
+/** What a camera travels as. */
+export const TRAVEL_KINDS = ['boat', 'car', 'bike', 'foot'] as const;
+export type TravelKind = typeof TRAVEL_KINDS[number];
 
 /** How each kind is named to a person. */
-export const DEVICE_KIND_LABELS: Record<DeviceKind, string> = { boat: 'Boat', car: 'Car', bike: 'Bike', foot: 'On foot' };
+export const TRAVEL_KIND_LABELS: Record<TravelKind, string> = { boat: 'Boat', car: 'Car', bike: 'Bike', foot: 'On foot' };
 
-export const isDeviceKind = (value: unknown): value is DeviceKind => (DEVICE_KINDS as readonly unknown[]).includes(value);
+export const isTravelKind = (value: unknown): value is TravelKind => (TRAVEL_KINDS as readonly unknown[]).includes(value);
 
 /** Nautical (knots and nautical miles) or metric (km/h and km). */
 type TrackUnits = 'nautical' | 'metric';
 
 type TrackProfile = {
-  kind: DeviceKind;
+  kind: TravelKind;
   /** A stop's fixes stay within this many metres of where it began; wider is GPS drift no more. */
   driftRadiusM: number;
-  /** How long the device has to stay within the drift radius before it counts as stopped. */
+  /** How long the camera has to stay within the drift radius before it counts as stopped. */
   stillMinMs: number;
-  /** At or under this speed, in m/s, the device counts as lying still. */
+  /** At or under this speed, in m/s, the camera counts as lying still. */
   stillMaxSpeedMps: number;
   /** A jump implying more than this speed, in m/s, is a GPS glitch. */
   maxSpeedMps: number;
@@ -40,7 +40,7 @@ const DAY = 24 * 60 * MINUTE;
 const KNOT_MPS = 1852 / 3600;
 const KMH_MPS = 1000 / 3600;
 
-const PROFILES: Record<DeviceKind, TrackProfile> = {
+const PROFILES: Record<TravelKind, TrackProfile> = {
   boat: {
     kind: 'boat',
     driftRadiusM: 80,
@@ -83,8 +83,8 @@ const PROFILES: Record<DeviceKind, TrackProfile> = {
   },
 };
 
-/** The profile of a device of this kind; anything that is not a kind reads as a car. */
-export const trackProfile = (kind?: unknown): TrackProfile => PROFILES[isDeviceKind(kind) ? kind : 'car'];
+/** The profile of a camera of this kind; anything that is not a kind reads as a car. */
+export const trackProfile = (kind?: unknown): TrackProfile => PROFILES[isTravelKind(kind) ? kind : 'car'];
 
 /** `12.4 nm` or `23.0 km`; under one unit with one decimal more. */
 export const formatDistance = (metres: number, units: TrackUnits): string => {

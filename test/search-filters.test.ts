@@ -1,12 +1,12 @@
 /**
  * Search filter tests: --tag candidates, tag intersection, --from/--to windows
- * (and their --after/--before aliases), --subject device:… matching.
+ * (and their --after/--before aliases), --subject camera:… matching.
  *
  * Faceted behaviour (kind, region, standalone filters, paging, starvation) is
  * covered separately in search-faceted.test.ts.
  */
 
-import { DEVICES_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import { CAMERAS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { TAGS_ROOT } from '@ein/paths';
 import { ADMIN_ACCESS } from '@ein/testing';
@@ -49,22 +49,22 @@ Deno.test({
   const cmd = testCommands(client);
 
   try {
-    await client.exec(`mkdir -p /media ${DEVICES_ROOT}`);
-    // `subject-device` answers for a device that exists; the files only carry its path.
-    for (const device of ['iphone-6', 'pixel-7', 'scanjet']) await vfs.create(ADMIN_ACCESS, 'device', DEVICES_ROOT, device);
+    await client.exec(`mkdir -p /media ${CAMERAS_ROOT}`);
+    // `subject-camera` answers for a camera that exists; the files only carry its path.
+    for (const camera of ['iphone-6', 'pixel-7', 'scanjet']) await vfs.create(ADMIN_ACCESS, 'camera', CAMERAS_ROOT, camera);
     await client.exec('echo a > /media/old.jpg && echo b > /media/new.jpg && echo c > /media/other.jpg && echo d > /media/scan.jpg');
 
     await vfs.update(ADMIN_ACCESS, '/media/old.jpg', {
-      attrs: { ...captureTime('2015-06-01T12:00:00'), devicePath: `${DEVICES_ROOT}/iphone-6` },
+      attrs: { ...captureTime('2015-06-01T12:00:00'), cameraPath: `${CAMERAS_ROOT}/iphone-6` },
     });
     await vfs.update(ADMIN_ACCESS, '/media/new.jpg', {
-      attrs: { ...captureTime('2022-08-15T09:30:00'), devicePath: `${DEVICES_ROOT}/pixel-7` },
+      attrs: { ...captureTime('2022-08-15T09:30:00'), cameraPath: `${CAMERAS_ROOT}/pixel-7` },
     });
     await vfs.update(ADMIN_ACCESS, '/media/other.jpg', {
-      attrs: { devicePath: `${DEVICES_ROOT}/iphone-6` },
+      attrs: { cameraPath: `${CAMERAS_ROOT}/iphone-6` },
     });
     await vfs.update(ADMIN_ACCESS, '/media/scan.jpg', {
-      attrs: { devicePath: `${DEVICES_ROOT}/scanjet` },
+      attrs: { cameraPath: `${CAMERAS_ROOT}/scanjet` },
     });
 
     await cmd.shouldSucceed('label add /media/old.jpg vacation');
@@ -125,63 +125,63 @@ Deno.test({
       assertEquals(paths(res2), ['/media/old.jpg']);
     });
 
-    await t.step('device filter matches path or name', async () => {
-      const res = await client.execJson<Results>('search --tag vacation --subject device:pixel-7');
+    await t.step('camera filter matches path or name', async () => {
+      const res = await client.execJson<Results>('search --tag vacation --subject camera:pixel-7');
       assertEquals(paths(res), ['/media/new.jpg']);
 
-      const res2 = await client.execJson<Results>(`search --tag vacation --subject device:${DEVICES_ROOT}/iphone-6`);
+      const res2 = await client.execJson<Results>(`search --tag vacation --subject camera:${CAMERAS_ROOT}/iphone-6`);
       assertEquals(paths(res2), ['/media/old.jpg']);
     });
 
-    await t.step('a device filter on its own is not limited by the scan window', async () => {
-      // With no other filter the timeline drives. --subject device:… is pushed into the
-      // store query, so the driver only ever produces that device's rows and the
+    await t.step('a camera filter on its own is not limited by the scan window', async () => {
+      // With no other filter the timeline drives. --subject camera:… is pushed into the
+      // store query, so the driver only ever produces that camera's rows and the
       // --max-scan window of the newest rows cannot hide a camera's older media.
-      const res = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/iphone-6 --max-scan 1`);
+      const res = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 --max-scan 1`);
       assertEquals(paths(res), ['/media/old.jpg']);
 
-      const res2 = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/pixel-7 --max-scan 1`);
+      const res2 = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/pixel-7 --max-scan 1`);
       assertEquals(paths(res2), ['/media/new.jpg']);
     });
 
-    await t.step('a device filter pages dated media before undated media', async () => {
-      const first = await client.execJson<Results & { cursor: string | null }>(`search --subject device:${DEVICES_ROOT}/iphone-6 -l 1`);
+    await t.step('a camera filter pages dated media before undated media', async () => {
+      const first = await client.execJson<Results & { cursor: string | null }>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 -l 1`);
       assertEquals(first.results.map((hit) => hit.path), ['/media/old.jpg']);
 
       const second = await client.execJson<Results & { cursor: string | null }>(
-        `search --subject device:${DEVICES_ROOT}/iphone-6 -l 1 --cursor '${first.cursor}'`,
+        `search --subject camera:${CAMERAS_ROOT}/iphone-6 -l 1 --cursor '${first.cursor}'`,
       );
       assertEquals(second.results.map((hit) => hit.path), ['/media/other.jpg']);
 
       const done = await client.execJson<Results & { cursor: string | null }>(
-        `search --subject device:${DEVICES_ROOT}/iphone-6 -l 1 --cursor '${second.cursor}'`,
+        `search --subject camera:${CAMERAS_ROOT}/iphone-6 -l 1 --cursor '${second.cursor}'`,
       );
       assertEquals(done.results, []);
       assertEquals(done.cursor, null);
 
       // A name sort must not make the undated member disappear.
-      const byName = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/iphone-6 --sort name`);
+      const byName = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 --sort name`);
       assertEquals(paths(byName), ['/media/old.jpg', '/media/other.jpg']);
 
       // Undated stays at the tail in the opposite time direction too.
-      const oldestFirst = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/iphone-6 --sort time`);
+      const oldestFirst = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 --sort time`);
       assertEquals(oldestFirst.results.map((hit) => hit.path), ['/media/old.jpg', '/media/other.jpg']);
     });
 
-    await t.step('an entirely undated device still has media', async () => {
-      const results = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/scanjet`);
+    await t.step('an entirely undated camera still has media', async () => {
+      const results = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/scanjet`);
       assertEquals(results.results.map((hit) => hit.path), ['/media/scan.jpg']);
 
       const facets = await client.execJson<{ total: number; years: { year: number; count: number }[] }>(
-        `search --subject device:${DEVICES_ROOT}/scanjet --facets`,
+        `search --subject camera:${CAMERAS_ROOT}/scanjet --facets`,
       );
       assertEquals(facets.total, 1);
       assertEquals(facets.years, []);
     });
 
-    await t.step('a device filter counts undated members without adding date buckets', async () => {
+    await t.step('a camera filter counts undated members without adding date buckets', async () => {
       const facets = await client.execJson<{ total: number; years: { year: number; count: number }[] }>(
-        `search --subject device:${DEVICES_ROOT}/iphone-6 --facets`,
+        `search --subject camera:${CAMERAS_ROOT}/iphone-6 --facets`,
       );
       assertEquals(facets.total, 2);
       assertEquals(facets.years, [{ year: 2015, count: 1 }]);
@@ -189,7 +189,7 @@ Deno.test({
 
     await t.step('a store-counted facet total is exact, whatever --max-scan says', async () => {
       // Otherwise a floor reads as a total: a camera with 20k photos would
-      // claim to have exactly --max-scan of them. Time, kind and a device are
+      // claim to have exactly --max-scan of them. Time, kind and a camera are
       // all pushed into the store, so the store counts them.
       type Facets = { total: number; years: { year: number; count: number }[]; truncated: boolean };
       const all = await client.execJson<Facets>('search --facets --max-scan 1');
@@ -202,10 +202,10 @@ Deno.test({
       assertEquals(windowed.years, [{ year: 2022, count: 1 }]);
 
       // The undated member is in the total but has no year, exactly as the walk reports it.
-      const device = await client.execJson<Facets>(`search --subject device:${DEVICES_ROOT}/iphone-6 --facets --max-scan 1`);
-      assertEquals(device.truncated, false);
-      assertEquals(device.total, 2);
-      assertEquals(device.years, [{ year: 2015, count: 1 }]);
+      const camera = await client.execJson<Facets>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 --facets --max-scan 1`);
+      assertEquals(camera.truncated, false);
+      assertEquals(camera.total, 2);
+      assertEquals(camera.years, [{ year: 2015, count: 1 }]);
     });
 
     await t.step('a materialized source is counted whole', async () => {
@@ -231,8 +231,8 @@ Deno.test({
       assertEquals(media.truncated, false);
       assertEquals(media.total, (await client.execJson<{ total: number }>('search --kind photo,video --facets')).total);
 
-      // A device by its bare name is resolved by its module to the same store condition.
-      const byName = await client.execJson<{ total: number; truncated: boolean }>('search --subject device:iphone-6 --facets --max-scan 1');
+      // A camera by its bare name is resolved by its module to the same store condition.
+      const byName = await client.execJson<{ total: number; truncated: boolean }>('search --subject camera:iphone-6 --facets --max-scan 1');
       assertEquals([byName.total, byName.truncated], [2, false]);
     });
 
@@ -240,8 +240,8 @@ Deno.test({
       const res = await client.execJson<Results>('search --tag beach --from 2000');
       assertEquals(paths(res), ['/media/new.jpg']);
 
-      const device = await client.execJson<Results>(`search --subject device:${DEVICES_ROOT}/iphone-6 --from 2000`);
-      assertEquals(paths(device), ['/media/old.jpg']);
+      const camera = await client.execJson<Results>(`search --subject camera:${CAMERAS_ROOT}/iphone-6 --from 2000`);
+      assertEquals(paths(camera), ['/media/old.jpg']);
     });
 
     await t.step('an unparseable date is rejected', async () => {

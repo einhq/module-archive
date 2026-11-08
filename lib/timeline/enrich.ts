@@ -268,10 +268,10 @@ export const enrichPage = async (cmd: Command, entries: TimelineEntry[], opts: {
       }
 
       case 'track': {
-        // A track is its device's route, named by the device.
-        const device = entry.path.slice(0, entry.path.lastIndexOf('/'));
-        entry.ownerPath = device;
-        entry.title = await nameOf(cmd, cache, device);
+        // A track is its camera's route, named by the camera.
+        const camera = entry.path.slice(0, entry.path.lastIndexOf('/'));
+        entry.ownerPath = camera;
+        entry.title = await nameOf(cmd, cache, camera);
         return;
       }
     }

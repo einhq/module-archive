@@ -20,9 +20,9 @@
  *
  * `--dry-run` reports the delta and writes nothing.
  *
- * `--device <path>` narrows it to one device's files. That is how a device change reaches the
- * dates: `device-relink` links files to a device and `device-update` changes its clock, and both
- * then run this, because the rules are media's and the device module cannot import them.
+ * `--camera <path>` narrows it to one camera's files. That is how a camera change reaches the
+ * dates: `camera-relink` links files to a camera and `camera-update` changes its clock, and both
+ * then run this, because the rules are media's and the camera module cannot import them.
  *
  * `--under <path>` narrows it to the originals in the tree under a directory or album (a `within`
  * query), or to one file.
@@ -31,7 +31,7 @@ import type { AttrCondition, CmdReturn, Command, NodeAttrs, NodeQueryCursor, Nod
 import { collectUnknownFlags, NOT_DERIVED, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
 import type { MediaResolveTimeResult } from '@archive/media/api';
 import { isValidGpsDate, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
-import { clockForFile, type DeviceClock, NO_DEVICE_CLOCK, offsetAt } from '@archive/device/device-zone';
+import { type CameraClock, clockForFile, NO_CAMERA_CLOCK, offsetAt } from '@archive/camera/camera-zone';
 import { resolve } from '@std/path';
 
 const PAGE = 500;
@@ -42,7 +42,7 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
     boolean: ['dry-run', 'verbose'],
-    string: ['under', 'device'],
+    string: ['under', 'camera'],
     alias: { n: 'dry-run', v: 'verbose' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -52,21 +52,21 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
   const dry = Boolean(flags['dry-run']);
   const verbose = Boolean(flags.verbose);
   const under = typeof flags.under === 'string' ? resolve(cmd.cwd, flags.under) : undefined;
-  const device = typeof flags.device === 'string' ? resolve(cmd.cwd, flags.device) : undefined;
+  const camera = typeof flags.camera === 'string' ? resolve(cmd.cwd, flags.camera) : undefined;
 
   const vfs = cmd.sys.vfs;
   const access = cmd.access;
 
-  // One clock per device, not per file. A device's configuration is a property of the device,
+  // One clock per camera, not per file. A camera's configuration is a property of the camera,
   // and re-reading its log for each of the thousands of photographs it took would put two node
   // reads on every row of a corpus-sized walk.
-  const clocks = new Map<string, DeviceClock>();
-  const clockFor = async (devicePath: string | undefined): Promise<DeviceClock> => {
-    if (!devicePath) return NO_DEVICE_CLOCK;
-    const cached = clocks.get(devicePath);
+  const clocks = new Map<string, CameraClock>();
+  const clockFor = async (cameraPath: string | undefined): Promise<CameraClock> => {
+    if (!cameraPath) return NO_CAMERA_CLOCK;
+    const cached = clocks.get(cameraPath);
     if (cached) return cached;
-    const clock = await clockForFile(cmd, devicePath);
-    clocks.set(devicePath, clock);
+    const clock = await clockForFile(cmd, cameraPath);
+    clocks.set(cameraPath, clock);
     return clock;
   };
 
@@ -101,7 +101,7 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
       return;
     }
 
-    const clock = await clockFor(str(attrs.devicePath));
+    const clock = await clockFor(str(attrs.cameraPath));
 
     // Counted and named here rather than left to `resolveTime`, which silently falls through
     // to the camera clock. A fix this pass throws away is worth seeing: it is a receiver
@@ -115,10 +115,10 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
     const resolved = resolveTime({
       manual: str(attrs.whenManual),
       gps: when.gps,
-      device: when.device,
+      camera: when.device,
       digitizer: clock.digitizer,
       quicktimeUtc: clock.quicktimeUtc,
-      deviceOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
+      cameraOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
       archiveZone: SYSTEM_TIME_ZONE,
       ...stampedSources(attrs),
     });
@@ -144,13 +144,13 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
     if (!dry) await vfs.update(access, row.absPath, { attrs: timeAttrs(resolved) });
   };
 
-  // Renditions are left out in the store. `--device`: the files linked to one device, which the
-  // store answers from its devicePath index — what `device-relink` asks for after linking, or
+  // Renditions are left out in the store. `--camera`: the files linked to one camera, which the
+  // store answers from its cameraPath index — what `camera-relink` asks for after linking, or
   // after a clock setting changed.
-  const where: AttrCondition[] = [NOT_DERIVED, ...(device ? [{ ref: 'devicePath', op: 'eq' as const, value: device }] : [])];
+  const where: AttrCondition[] = [NOT_DERIVED, ...(camera ? [{ ref: 'cameraPath', op: 'eq' as const, value: camera }] : [])];
   const underNode = under === undefined ? undefined : await vfs.get(access, under);
   if (underNode?.type === 'file') {
-    if (!device || underNode.attrs.devicePath === device) await resolveOne({ id: underNode.id, absPath: under!, node: underNode, sortValue: null });
+    if (!camera || underNode.attrs.cameraPath === camera) await resolveOne({ id: underNode.id, absPath: under!, node: underNode, sortValue: null });
   } else {
     let after: NodeQueryCursor | undefined;
     for (;;) {
@@ -196,13 +196,13 @@ mediaResolveTime.spec = {
   flags: [
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would change, write nothing' },
     { name: 'under', type: 'path' as const, description: 'only the files in the tree under this directory or album, or this one file' },
-    { name: 'device', type: 'path' as const, description: 'only files linked to this device (its devicePath)' },
+    { name: 'camera', type: 'path' as const, description: 'only files linked to this camera (its cameraPath)' },
     { name: 'v', type: 'bool' as const, description: 'print every file that changes' },
   ],
   examples: [
     'media-resolve-time --dry-run',
     'media-resolve-time --under /archive/albums/Exempelalbum_2019',
-    'media-resolve-time --device /archive/devices/Exempelkamera --dry-run',
+    'media-resolve-time --camera /archive/cameras/Exempelkamera --dry-run',
   ],
   returns: 'how many files had their capture time re-resolved, and from which source.',
 };

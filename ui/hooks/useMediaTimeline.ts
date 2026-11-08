@@ -29,8 +29,8 @@ type UseMediaTimelineOptions = {
   under?: string;
   /** Directory path — every file in the tree under it, however deep, its own links not followed. */
   within?: string;
-  /** Device path (`/devices/<name>`) — the media that camera produced. */
-  device?: string;
+  /** Camera path (`/cameras/<name>`) — the media that camera produced. */
+  camera?: string;
   /** Restrict to these content kinds, e.g. the media-type filter. */
   kinds?: SearchKind[];
   /**
@@ -119,7 +119,7 @@ export function useMediaTimeline(opts: UseMediaTimelineOptions): UseMediaTimelin
     // Containers, people and locations already materialize their complete ordered
     // sets on the server, and a subtree is laid out whole while it is small enough.
     // One compact index gives their grids exact geometry; a subtree too large for one,
-    // devices and general search page by cursor.
+    // cameras and general search page by cursor.
     layout: under !== undefined || within !== undefined || person !== undefined || location !== undefined,
   });
 

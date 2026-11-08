@@ -19,7 +19,7 @@ const PHOTO = {
   geoDataExif: { latitude: 57.7, longitude: 11.95, altitude: 0, latitudeSpan: 0, longitudeSpan: 0 },
   people: [{ name: 'Anna Andersson' }, { name: 'Bo Berg' }],
   url: 'https://photos.google.com/photo/AF1Qip-example',
-  googlePhotosOrigin: { mobileUpload: { deviceFolder: { localFolderName: 'WhatsApp Images' }, deviceType: 'ANDROID_PHONE' } },
+  googlePhotosOrigin: { mobileUpload: { cameraFolder: { localFolderName: 'WhatsApp Images' }, cameraType: 'ANDROID_PHONE' } },
   favorited: true,
 };
 

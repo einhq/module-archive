@@ -1,7 +1,7 @@
 /**
  * A person's cover: a `coverPhoto` softlink child pointing at one of their face crops.
  *
- * The same link albums, locations and devices carry, so every reader already knows how to draw
+ * The same link albums, locations and cameras carry, so every reader already knows how to draw
  * it. What
  * differs is the target. An album's cover is one of its pictures; a person's is the crop of
  * their own face, `<image>/regions/<region>/image.avif`, because a photo the person is *in* is

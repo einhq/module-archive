@@ -6,7 +6,7 @@ import type { CommentEntry } from '@ein/api';
 import type { MediaDetails } from '@archive/media/api';
 export type {
   AlbumRef,
-  DeviceRef,
+  CameraRef,
   FaceBox,
   FingerprintRef,
   LocationRef,

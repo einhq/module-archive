@@ -6,13 +6,13 @@
  *
  * A page of files at a time, in a fixed number of store calls per page however many files it holds:
  * one query for the page, two child-link reads and one node read for the exif of the files whose
- * attrs change, and one batched write (`updateEach`). A device's clock is read once per call.
+ * attrs change, and one batched write (`updateEach`). A camera's clock is read once per call.
  */
 import type { Command, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
 import { NOT_DERIVED, SYSTEM_TIME_ZONE } from '@ein/client';
 import type { StagingRetimeAnswer, StagingTimeRules } from '@archive/staging/api';
 import { type CaptureWhen, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
-import { clockForFile, type DeviceClock, offsetAt } from '@archive/device/device-zone';
+import { type CameraClock, clockForFile, offsetAt } from '@archive/camera/camera-zone';
 import { stampsHold, timeStamps } from '@archive/staging/category';
 
 /** Files read per page. */
@@ -20,8 +20,8 @@ const PAGE = 500;
 
 const MEDIA = /^(image|video|audio)\//;
 
-/** Device clocks read so far, by `devicePath` (`''` for none). */
-type Clocks = Map<string, Promise<DeviceClock>>;
+/** Camera clocks read so far, by `cameraPath` (`''` for none). */
+type Clocks = Map<string, Promise<CameraClock>>;
 
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
@@ -86,16 +86,16 @@ const retimePage = async (cmd: Command, rows: NodeQueryEntry[], rules: StagingTi
     // An exif node from before `when` says nothing, and the time is left as it is.
     const when = whens.has(row.id) ? whens.get(row.id) : {};
     if (when !== undefined) {
-      const devicePath = str(attrs.devicePath) ?? '';
-      if (!clocks.has(devicePath)) clocks.set(devicePath, clockForFile(cmd, devicePath || undefined));
-      const clock = await clocks.get(devicePath)!;
+      const cameraPath = str(attrs.cameraPath) ?? '';
+      if (!clocks.has(cameraPath)) clocks.set(cameraPath, clockForFile(cmd, cameraPath || undefined));
+      const clock = await clocks.get(cameraPath)!;
       const resolved = resolveTime({
         manual: str(attrs.whenManual),
         gps: when.gps,
-        device: when.device,
+        camera: when.device,
         digitizer: clock.digitizer,
         quicktimeUtc: clock.quicktimeUtc,
-        deviceOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
+        cameraOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
         archiveZone: SYSTEM_TIME_ZONE,
         ...stampedSources(stamps),
       });
@@ -123,7 +123,7 @@ const retimePage = async (cmd: Command, rows: NodeQueryEntry[], rules: StagingTi
 /**
  * Date the staged media originals at `path` (a file) or within it (a directory) again by `rules`,
  * counting into `answer`; with `answer.dryRun` nothing is written. `clocks` lets several calls
- * share the device clocks they read.
+ * share the camera clocks they read.
  */
 export const retimeScope = async (cmd: Command, path: string, rules: StagingTimeRules, answer: StagingRetimeAnswer, clocks: Clocks = new Map()): Promise<void> => {
   const { vfs } = cmd.sys;

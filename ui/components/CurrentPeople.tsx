@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { openRoute } from '@ein/ui/signals';
 
-/** Someone tied to the page's subject: a resident of a location, an owner of a device. */
+/** Someone tied to the page's subject: a resident of a location, an owner of a camera. */
 type TiedPerson = {
   /** Person slug, the node's name under /people. */
   id: string;

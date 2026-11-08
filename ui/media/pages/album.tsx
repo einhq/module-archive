@@ -140,7 +140,7 @@ export default function AlbumDetailPage() {
         tabs={
           <Tabs.List>
             <Tabs.Tab value='media' leftSection={<TablerIcon name='photo' size={16} />}>Media</Tabs.Tab>
-            {/* An album made of a trip of a device's track (`trip-album`). */}
+            {/* An album made of a trip of a camera's track (`trip-album`). */}
             {info.trip && <Tabs.Tab value='trip' leftSection={<TablerIcon name='map-route' size={16} />}>Trip</Tabs.Tab>}
             <Tabs.Tab value='map' leftSection={<TablerIcon name='map' size={16} />}>Map</Tabs.Tab>
             <Tabs.Tab value='info' leftSection={<TablerIcon name='info-circle' size={16} />}>Info</Tabs.Tab>

@@ -1,20 +1,20 @@
 #!ts
 /**
- * track-trips — derive a device's trips and stays from its track, and keep them in `<device>/.trips`.
+ * track-trips — derive a camera's trips and stays from its track, and keep them in `<camera>/.trips`.
  *
- *   track-trips <device> [--full] [--dry-run]
+ *   track-trips <camera> [--full] [--dry-run]
  *
- * `<device>` is a device's slug or path, or its track's path. A run reads the track from where its
+ * `<camera>` is a camera's slug or path, or its track's path. A run reads the track from where its
  * trips are settled, the last stay or gap that ended one for good, and keeps what came before;
  * `--full` reads all of it. How the track is cut is `@archive/location/trips`; what it is cut with
- * (the device's kind, timezone, homes and `tripEdits`) is `@archive/location/device-trips`.
+ * (the camera's kind, timezone, homes and `tripEdits`) is `@archive/location/camera-trips`.
  *
  * The `track-trips` pipeline runs it when the track, the kind, the timezone or the homes change.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { DeviceTrips } from '@archive/location/api';
-import { deriveDeviceTrips } from '@archive/location/device-trips';
+import type { CameraTrips } from '@archive/location/api';
+import { deriveCameraTrips } from '@archive/location/camera-trips';
 
 const trackTrips = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -22,18 +22,18 @@ const trackTrips = async (cmd: Command): CmdReturn => {
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const target = flags._[0] === undefined ? undefined : String(flags._[0]);
   if (!target) {
-    await cmd.writeError('track-trips: usage: track-trips <device> [--full] [--dry-run]\n');
+    await cmd.writeError('track-trips: usage: track-trips <camera> [--full] [--dry-run]\n');
     return 1;
   }
 
   try {
-    const derived = await deriveDeviceTrips(cmd, target, { full: flags.full, dryRun: flags['dry-run'] });
+    const derived = await deriveCameraTrips(cmd, target, { full: flags.full, dryRun: flags['dry-run'] });
     if (cmd.json) {
-      await cmd.writeJSON(derived satisfies DeviceTrips);
+      await cmd.writeJSON(derived satisfies CameraTrips);
     } else {
       const ongoing = derived.trips.filter((trip) => trip.ongoing).length;
       await cmd.writeLn(
-        `${derived.device}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'}${ongoing ? ` (${ongoing} ongoing)` : ''}, ` +
+        `${derived.camera}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'}${ongoing ? ` (${ongoing} ongoing)` : ''}, ` +
           `${derived.stays.length} stay${derived.stays.length === 1 ? '' : 's'}` +
           (derived.settledUntil ? `, settled until ${derived.settledUntil}` : '') +
           (flags['dry-run'] ? ' (dry run, nothing written)' : ''),
@@ -49,15 +49,15 @@ const trackTrips = async (cmd: Command): CmdReturn => {
 trackTrips.spec = {
   name: 'track-trips',
   effect: 'write' as const,
-  description: "Derive a device's trips and stays from its track, into <device>/.trips",
+  description: "Derive a camera's trips and stays from its track, into <camera>/.trips",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
   ],
   flags: [
     { name: 'full', type: 'bool' as const, description: 'read the whole track, not only from where its trips are settled' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'derive and show them without writing .trips' },
   ],
-  examples: ['track-trips the-sailboat', 'track-trips /archive/devices/the-sailboat --full --dry-run'],
+  examples: ['track-trips the-sailboat', 'track-trips /archive/cameras/the-sailboat --full --dry-run'],
 };
 
 export default trackTrips;

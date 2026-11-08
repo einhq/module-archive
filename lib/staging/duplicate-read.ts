@@ -333,7 +333,7 @@ type MemberAttrs = {
   takenAt?: string;
   takenAtUtc?: string;
   takenAtSource?: string;
-  devicePath?: string;
+  cameraPath?: string;
   size?: number;
   sha256?: string;
   description?: string;
@@ -405,7 +405,7 @@ const buildSets = async (cmd: Command, scope: DuplicateScope, found: FoundSet[],
       ...displaySize(attrs.width, attrs.height, attrs.angle),
       ...(typeof attrs.takenAtUtc === 'string' ? { takenAtUtc: attrs.takenAtUtc } : {}),
       ...(typeof attrs.takenAtSource === 'string' ? { takenAtSource: attrs.takenAtSource } : {}),
-      ...(typeof attrs.devicePath === 'string' ? { device: attrs.devicePath } : {}),
+      ...(typeof attrs.cameraPath === 'string' ? { camera: attrs.cameraPath } : {}),
       alike: place === 'inbox' ? (findingOf(twin.attrs)?.peers ?? []).map((peer) => peer.id).filter((id) => inSet.has(id)) : [],
     };
   };
@@ -461,7 +461,7 @@ const buildSets = async (cmd: Command, scope: DuplicateScope, found: FoundSet[],
         carries: rules.carries.get(twin.id) ?? [],
         ...(album ? { album } : {}),
         ...(scoreOf.has(twin.id) ? { score: scoreOf.get(twin.id) } : {}),
-        ...(typeof attrs.devicePath === 'string' ? { device: attrs.devicePath } : {}),
+        ...(typeof attrs.cameraPath === 'string' ? { camera: attrs.cameraPath } : {}),
         copies: (copies.get(twin.id) ?? []).map((copy) => ({ id: copy.id, path: copy.path })),
       };
     };

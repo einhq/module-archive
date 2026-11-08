@@ -1,7 +1,7 @@
 /**
  * `staging init` on a staging area from before categories: loose files in `files/`, a folder
  * there, groups loose in `albums/` linking to the loose files, a relation from a library file to a
- * staged one, a link from the home, and GPX files waiting for a device. Afterwards the files are
+ * staged one, a link from the home, and GPX files waiting for a camera. Afterwards the files are
  * in the default category's loose batch, the folder is a category, the groups are the default
  * category's, the waiting GPX files are in `routes/`, every link still resolves, and `staging/` is
  * unlisted and wants no `text`. A dry run changes nothing; a second run finds nothing to do; a lost
@@ -53,7 +53,7 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
     for (const name of ['beach.jpg', 'dune.jpg', 'legacy/old.jpg']) await cmd.shouldSucceed(`mknode -t file ${FILES}/${name} --as mimetype=image/jpeg`);
     for (const name of ['hike.gpx', 'legacy/deep/walk.gpx']) {
       await cmd.shouldSucceed(`mknode -t file ${FILES}/${name} --as mimetype=application/gpx+xml`);
-      await vfs.update(ADMIN_ACCESS, `${FILES}/${name}`, { attrs: { trackDevicePending: true } });
+      await vfs.update(ADMIN_ACCESS, `${FILES}/${name}`, { attrs: { trackCameraPending: true } });
     }
     // A group from before categories, as the clusterer made it.
     await cmd.shouldSucceed(`mknode -t album ${ALBUMS}/day`);

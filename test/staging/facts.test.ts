@@ -70,7 +70,7 @@ Deno.test('a staged file created, deleted or moved makes its category’s fact, 
 
 Deno.test('an update makes the fact when grouping reads what it changed, and a GPS fix or a folder moved in does', async () => {
   const file = `${INBOX}/upload-2026-10-01/IMG_0002.jpg`;
-  for (const attr of ['takenAtUtc', 'indexedAt', 'facesAt', 'devicePath']) {
+  for (const attr of ['takenAtUtc', 'indexedAt', 'facesAt', 'cameraPath']) {
     assertEquals(await organizerFacts(event('updated', file, { changedAttrs: [attr] })), [[INBOX, 'c-inbox', 'updated', 'normal']], attr);
   }
   assertEquals(await organizerFacts(event('updated', file, { changedAttrs: ['sha256', 'textIndexedAt', 'duplicate'] })), []);

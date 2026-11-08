@@ -69,7 +69,7 @@ Deno.test('clutter: screenshots and saved images by name, folder and screen size
   assertEquals(classifyItem(png), 'screenshot');
   assertEquals(classifyItem({ ...png, width: 1920, height: 1080 }), 'screenshot');
   // A camera, a GPS fix, a JPEG or another size: a photograph.
-  assertEquals(classifyItem({ ...png, devicePath: '/archive/devices/phone' }), undefined);
+  assertEquals(classifyItem({ ...png, cameraPath: '/archive/cameras/phone' }), undefined);
   assertEquals(classifyItem({ ...png, takenAtSource: 'gps' }), undefined);
   assertEquals(classifyItem({ ...png, mimetype: 'image/jpeg' }), undefined);
   assertEquals(classifyItem({ ...png, width: 1000 }), undefined);

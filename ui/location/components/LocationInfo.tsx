@@ -37,7 +37,7 @@ const sourceLine = (location: LocationDetail): string | undefined => {
       return `Derived from ${location.locationPoints ?? 0} geotagged photo${location.locationPoints === 1 ? '' : 's'}` +
         (location.locationSpread !== undefined ? ` spread over ${location.locationSpread} m` : '');
     case 'track':
-      return 'Where a device stayed, from its track';
+      return 'Where a camera stayed, from its track';
     case 'nominatim':
       return 'Geocoded from the address';
     default:

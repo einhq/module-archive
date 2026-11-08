@@ -1,11 +1,11 @@
 #!ts
 /**
- * track-move — move the fixes of a time range from one device's track to another's.
+ * track-move — move the fixes of a time range from one camera's track to another's.
  *
- *   track-move <device> <to-device> [--from <iso>] [--to <iso>]
+ *   track-move <camera> <to-camera> [--from <iso>] [--to <iso>]
  *
- * For a trip recorded on the wrong device. Each device is a slug or a path, standing for its
- * track, or a track's path; the device moved to gets a track when it has none yet. The range is
+ * For a trip recorded on the wrong camera. Each camera is a slug or a path, standing for its
+ * track, or a track's path; the camera moved to gets a track when it has none yet. The range is
  * half-open, `[from, to)`; either end left out runs to that end of the track. The fixes keep what
  * a person said of them (`track-mark`), and both tracks judge again what the move changes. A fix
  * whose time the other track holds already leaves all the same, and the other keeps its own. The
@@ -18,7 +18,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackMove } from '@archive/location/api';
 
-const USAGE = 'track-move: usage: track-move <device> <to-device> [--from <iso>] [--to <iso>]\n';
+const USAGE = 'track-move: usage: track-move <camera> <to-camera> [--from <iso>] [--to <iso>]\n';
 
 const trackMove = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -41,7 +41,7 @@ const trackMove = async (cmd: Command): CmdReturn => {
     let to: string;
     try {
       to = await ensureTrack(cmd, target);
-      if (to === from.path) throw new Error(`${from.device} is the device the fixes are on`);
+      if (to === from.path) throw new Error(`${from.camera} is the camera the fixes are on`);
       const into = await openTrack(cmd, to, 'a');
       try {
         moved = await from.handle.movePoints({ from: flags.from, to: flags.to }, into.handle);
@@ -68,10 +68,10 @@ const trackMove = async (cmd: Command): CmdReturn => {
 trackMove.spec = {
   name: 'track-move',
   effect: 'write' as const,
-  description: "Move the fixes of a time range from one device's track to another's, for a trip recorded on the wrong device",
+  description: "Move the fixes of a time range from one camera's track to another's, for a trip recorded on the wrong camera",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path) the fixes are on, or a track's path" },
-    { name: 'to-device', type: 'path' as const, description: "the device (slug or path) to move them to, or a track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path) the fixes are on, or a track's path" },
+    { name: 'to-camera', type: 'path' as const, description: "the camera (slug or path) to move them to, or a track's path" },
   ],
   flags: [
     { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },

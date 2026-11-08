@@ -10,8 +10,8 @@ export const ALBUMS_ROOT = `${ARCHIVE_PATH}/albums`;
 export const PEOPLE_ROOT = `${ARCHIVE_PATH}/people`;
 /** Locations (`location` nodes) live under this prefix. */
 export const LOCATIONS_ROOT = `${ARCHIVE_PATH}/locations`;
-/** Devices live under this prefix; a device's recorded route is its child `track`. */
-export const DEVICES_ROOT = `${ARCHIVE_PATH}/devices`;
+/** Cameras live under this prefix; a camera's recorded route is its child `track`. */
+export const CAMERAS_ROOT = `${ARCHIVE_PATH}/cameras`;
 /**
  * Source files no single node owns, one folder per kind: a GEDCOM file, which describes many
  * people, is kept in `GENEALOGY_SOURCES`. A source with an owner is kept under it instead.

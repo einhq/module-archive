@@ -1,0 +1,184 @@
+#!ts
+/**
+ * Link a file to the camera that produced it, from the EXIF already extracted.
+ *
+ * Split out of exif-extract because it answers a different question: exif is a
+ * property of the file and never changes, while the camera registry grows over
+ * time. Registering a camera later should re-link its photos without re-running
+ * exiftool over all of them — `pipeline rerun media-camera <path>` does that.
+ *
+ * `--camera <camera>` skips the matching and links the given files to that camera, for files
+ * whose exif names no camera at all.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
+import { resolve } from '@std/path';
+import { NODE_TYPE_CAMERA } from '@archive/camera/camera';
+import type { ResolvedTime } from '@archive/media/capture-resolve';
+import { applyFileTime } from '@archive/media/resolve-time';
+
+type CameraInfo = { make?: string; model?: string };
+
+/**
+ * Write the link and re-resolve the file's time against it. The link changes what the capture
+ * time resolves to in ways the indexing pass could not know: the camera carries the timezone its
+ * clock was set to and how it keeps a video's `CreateDate`, and a digitizer's camera date is when
+ * it scanned the file rather than when the photograph was taken.
+ *
+ * `metadata/exif.when` is retained either way, which is what lets linking to an ordinary camera —
+ * or clearing the digitizer flag and relinking — restore the derived date without ever running
+ * exiftool again.
+ */
+const linkFile = async (cmd: Command, filePath: string, cameraPath: string): Promise<ResolvedTime | null> => {
+  await cmd.sys.vfs.update(cmd.access, filePath, { attrs: { cameraPath } });
+  const resolved = await applyFileTime(cmd, filePath);
+  // ln handles VFS softlink creation; there is no direct method for it
+  await cmd.execute(`ln -sf ${shq(cameraPath)} ${shq(`${filePath}/camera`)}`);
+  return resolved;
+};
+
+/** The file may be the camera's newest picture, and so its cover. */
+const coverCamera = async (cmd: Command, cameraPath: string): Promise<void> => {
+  const covered = await cmd.execute(`camera-cover ${shq(cameraPath)}`);
+  if (covered.code !== 0) await cmd.writeError(covered.stderr);
+};
+
+/**
+ * `--camera`: link the named files, and the files directly in the named directories, to a camera
+ * chosen by hand. For files whose exif names no camera — a phone that writes no make or model —
+ * which matching can never link.
+ */
+const linkByHand = async (cmd: Command, cameraPath: string, inputs: string[], verbose: boolean): CmdReturn => {
+  try {
+    const camera = await cmd.sys.vfs.get(cmd.access, cameraPath);
+    if (camera.type !== NODE_TYPE_CAMERA) {
+      await cmd.writeError(`camera-link: ${cameraPath}: not a camera (${camera.type})\n`);
+      return 1;
+    }
+  } catch {
+    await cmd.writeError(`camera-link: ${cameraPath}: not found\n`);
+    return 1;
+  }
+
+  const files: string[] = [];
+  for (const input of inputs) {
+    let node;
+    try {
+      node = await cmd.sys.vfs.get(cmd.access, input);
+    } catch {
+      await cmd.writeError(`camera-link: ${input}: not found\n`);
+      return 1;
+    }
+    if (node.type === 'directory') {
+      for (const child of await cmd.sys.vfs.children(cmd.access, input)) {
+        if (child.node.type === 'file') files.push(`${input}/${child.name}`);
+      }
+    } else {
+      files.push(input);
+    }
+  }
+
+  for (const file of files) {
+    const resolved = await linkFile(cmd, file, cameraPath);
+    if (verbose) await cmd.writeLn(`${file}: ${resolved ? `${resolved.takenAt} (${resolved.takenAtSource})` : 'no capture time'}`);
+  }
+  if (files.length > 0) await coverCamera(cmd, cameraPath);
+
+  if (cmd.json) await cmd.writeJSON({ ok: true, cameraPath, linked: files.length });
+  else if (!verbose) await cmd.writeLn(`Linked ${files.length} file${files.length === 1 ? '' : 's'} to ${cameraPath}`);
+  return 0;
+};
+
+const cameraLink = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, {
+    boolean: ['verbose'],
+    string: ['camera'],
+    alias: { v: 'verbose' },
+    unknown: collectUnknownFlags(unknown),
+  });
+
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const inputs = flags._.map((arg) => resolve(cmd.cwd, String(arg)));
+  const verbose = Boolean(flags.verbose);
+
+  if (inputs.length === 0) {
+    await cmd.writeError('camera-link: missing file path\n');
+    return 1;
+  }
+
+  if (flags.camera) return await linkByHand(cmd, resolve(cmd.cwd, String(flags.camera)), inputs, verbose);
+
+  if (inputs.length > 1) {
+    await cmd.writeError('camera-link: one file at a time, unless --camera names the camera\n');
+    return 1;
+  }
+  const inputPath = inputs[0];
+
+  let exifAttrs: Record<string, unknown>;
+  try {
+    const exif = await cmd.sys.vfs.get(cmd.access, `${inputPath}/metadata/exif`);
+    exifAttrs = exif.attrs as Record<string, unknown>;
+  } catch {
+    await cmd.writeError(`camera-link: ${inputPath}: no exif metadata\n`);
+    return 1;
+  }
+
+  const deviceinfo = (exifAttrs.deviceinfo ?? {}) as CameraInfo;
+  const serial = typeof exifAttrs.deviceSerialNumber === 'string' ? exifAttrs.deviceSerialNumber : undefined;
+  const make = deviceinfo.make;
+  const model = deviceinfo.model;
+
+  if (!serial && !(make && model)) {
+    if (verbose) await cmd.writeLn('No camera information in exif');
+    if (cmd.json) await cmd.writeJSON({ ok: true, matched: false });
+    return 0;
+  }
+
+  const matchFlags: string[] = [];
+  if (serial) matchFlags.push(`--serial ${shq(serial)}`);
+  if (make) matchFlags.push(`--make ${shq(make)}`);
+  if (model) matchFlags.push(`--model ${shq(model)}`);
+
+  const matchResult = await cmd.execute(`JSON_OUTPUT=1 camera-match ${matchFlags.join(' ')}`);
+
+  if (matchResult.code !== 0) {
+    if (verbose) await cmd.writeLn('No matching camera found');
+    if (cmd.json) await cmd.writeJSON({ ok: true, matched: false });
+    return 0;
+  }
+
+  const match = JSON.parse(matchResult.stdout) as { path: string; matchType: string };
+  const cameraPath: string = match.path;
+
+  const resolved = await linkFile(cmd, inputPath, cameraPath);
+  await coverCamera(cmd, cameraPath);
+
+  if (verbose) {
+    await cmd.writeLn(`Matched camera: ${cameraPath} (${match.matchType})`);
+    await cmd.writeLn(resolved ? `Capture time ${resolved.takenAt} (${resolved.takenAtSource})` : 'No capture time after linking');
+  }
+
+  if (cmd.json) {
+    await cmd.writeJSON({ ok: true, matched: true, cameraPath, matchType: match.matchType });
+  }
+
+  return 0;
+};
+
+cameraLink.spec = {
+  name: 'camera-link',
+  effect: 'write' as const,
+  description: 'Link a file to its capture camera using extracted exif, or to a camera named by hand',
+  args: [
+    { name: 'input', type: 'path' as const, description: 'VFS path to media file; with --camera, files or directories (repeatable)' },
+  ],
+  flags: [
+    { name: 'camera', type: 'path' as const, description: 'link to this camera instead of matching the exif (directories link the files directly in them)' },
+    { name: 'v', type: 'bool' as const, description: 'Verbose output' },
+  ],
+};
+
+export default cameraLink;

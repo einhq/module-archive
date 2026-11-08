@@ -36,7 +36,7 @@ Deno.test('model-bound steps take one slot each, and every kind they name is one
     const definition = parseYaml(await Deno.readTextFile(new URL(`pipelines/${file}`, moduleRoot))) as PipelineFile;
     assertEquals(definition.steps[step].kind, kind, file);
     // A slot is a request in flight against EMS; nothing here is a card, so nothing states a
-    // VRAM figure. The device is EMS's decision.
+    // VRAM figure. The camera is EMS's decision.
     assertEquals(definition.steps[step].requires, { models: 1 }, file);
     assertEquals(offered.includes(kind), true, `${file}: ${step} queues under ${kind}, which the drop-in does not name`);
   }

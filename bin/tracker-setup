@@ -1,26 +1,26 @@
 #!ts
 /**
- * tracker-setup — live tracking from a phone or GPS tracker: the link a device's fixes are posted
+ * tracker-setup — live tracking from a phone or GPS tracker: the link a camera's fixes are posted
  * to, and the QR code that sets Traccar Client up with it.
  *
- *   tracker-setup <device> [--origin <url>]          whether it is on, and the link
- *   tracker-setup <device> --new [--origin <url>]    turn it on, or replace the link
- *   tracker-setup <device> --off                     turn it off
+ *   tracker-setup <camera> [--origin <url>]          whether it is on, and the link
+ *   tracker-setup <camera> --new [--origin <url>]    turn it on, or replace the link
+ *   tracker-setup <camera> --off                     turn it off
  *
- * `--new` gives the device a track when it has none. The link is core's `track-token`; `--origin`
+ * `--new` gives the camera a track when it has none. The link is core's `track-token`; `--origin`
  * is the address the phone reaches EiN at, which only the asker knows, and with it the answer
- * carries the full URL and the QR code. The QR code is the URL with `?id=<device slug>`, which
- * Traccar Client reads as the server URL and the device identifier.
+ * carries the full URL and the QR code. The QR code is the URL with `?id=<camera slug>`, which
+ * Traccar Client reads as the server URL and the camera identifier.
  */
 import { basename } from '@std/path';
 import type { TrackToken } from '@ein/api';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/client';
-import type { TrackerSetup } from '@archive/device/api';
-import { qrSvg } from '@archive/device/qr';
+import type { TrackerSetup } from '@archive/camera/api';
+import { qrSvg } from '@archive/camera/qr';
 import { ensureTrack, trackOf } from '@archive/location/track';
 
-const USAGE = 'usage: tracker-setup <device> [--new|--off] [--origin <url>]';
+const USAGE = 'usage: tracker-setup <camera> [--new|--off] [--origin <url>]';
 
 const trackerSetup = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -46,8 +46,8 @@ const trackerSetup = async (cmd: Command): CmdReturn => {
   }
 
   try {
-    const { path: track, device } = await trackOf(cmd, target);
-    if (flags.new) await ensureTrack(cmd, device);
+    const { path: track, camera } = await trackOf(cmd, target);
+    if (flags.new) await ensureTrack(cmd, camera);
 
     let token: TrackToken = { track, enabled: false };
     if (await cmd.sys.vfs.exists(cmd.access, track)) {
@@ -56,17 +56,17 @@ const trackerSetup = async (cmd: Command): CmdReturn => {
       token = JSON.parse(ran.stdout) as TrackToken;
     }
 
-    const answer: TrackerSetup = { device, track, enabled: token.enabled };
+    const answer: TrackerSetup = { camera, track, enabled: token.enabled };
     if (token.path) {
       answer.url = origin ? `${origin}${token.path}` : token.path;
       if (origin) {
-        answer.qrText = `${answer.url}?id=${encodeURIComponent(basename(device))}`;
+        answer.qrText = `${answer.url}?id=${encodeURIComponent(basename(camera))}`;
         answer.qrSvg = qrSvg(answer.qrText);
       }
     }
 
     if (cmd.json) await cmd.writeJSON(answer satisfies TrackerSetup);
-    else await cmd.writeLn(answer.url ?? `${device} takes no tracker posts`);
+    else await cmd.writeLn(answer.url ?? `${camera} takes no tracker posts`);
     return 0;
   } catch (error) {
     return await fail(error instanceof Error ? error.message : String(error));
@@ -76,9 +76,9 @@ const trackerSetup = async (cmd: Command): CmdReturn => {
 trackerSetup.spec = {
   name: 'tracker-setup',
   effect: 'read' as const,
-  description: "Show, turn on, replace or turn off the link a phone or GPS tracker posts a device's position to",
+  description: "Show, turn on, replace or turn off the link a phone or GPS tracker posts a camera's position to",
   args: [
-    { name: 'device', type: 'string' as const, description: 'the device: its slug under the devices root, or its path' },
+    { name: 'camera', type: 'string' as const, description: 'the camera: its slug under the cameras root, or its path' },
   ],
   flags: [
     { name: 'new', writes: true, type: 'bool' as const, description: 'turn live tracking on, or replace the link; the one before it stops working' },

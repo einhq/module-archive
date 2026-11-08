@@ -1,44 +1,44 @@
 #!ts
 /**
- * trip-album — make a trip of a device's track an album, or take it from the album again.
+ * trip-album — make a trip of a camera's track an album, or take it from the album again.
  *
- *   trip-album <device> <trip> --new [--name=<name>]
- *   trip-album <device> <trip> --album=<album>
- *   trip-album <device> <trip> --detach
+ *   trip-album <camera> <trip> --new [--name=<name>]
+ *   trip-album <camera> <trip> --album=<album>
+ *   trip-album <camera> <trip> --detach
  *
- * `<device>` is a device's slug or path, or its track's path; `<trip>` is a trip's id from
+ * `<camera>` is a camera's slug or path, or its track's path; `<trip>` is a trip's id from
  * `trip-list`, or its first day. `--new` makes an album for it under the albums root, named after
- * where it got farthest when that place has a name, else after the device; the trip's days are the
+ * where it got farthest when that place has a name, else after the camera; the trip's days are the
  * album's span, not its name. `--album` makes an album that is there the trip's. Either writes the
- * trip as the album's attr `trip`, puts the device on the album's list (`album-device-add`) and
- * writes the album's span, which the trip widens. Whenever the device's trips are written, the album's trip is written anew from them, so
+ * trip as the album's attr `trip`, puts the camera on the album's list (`album-camera-add`) and
+ * writes the album's span, which the trip widens. Whenever the camera's trips are written, the album's trip is written anew from them, so
  * it grows while the trip is ongoing and gets the locations of its stays. A trip is one album's, and
- * an album holds one trip. `--detach` takes the trip off its album and leaves the device on the list.
+ * an album holds one trip. `--detach` takes the trip off its album and leaves the camera on the list.
  */
 
 import { basename, resolve } from '@std/path';
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, shq } from '@ein/client';
-import type { DeviceTrips, Trip } from '@archive/location/api';
-import { readDeviceTrips } from '@archive/location/device-trips';
+import type { CameraTrips, Trip } from '@archive/location/api';
+import { readCameraTrips } from '@archive/location/camera-trips';
 import { trackOf } from '@archive/location/track';
-import { addAlbumDevice } from '@archive/media/album-devices';
+import { addAlbumCamera } from '@archive/media/album-cameras';
 import type { AlbumTrip, TripAlbumAnswer } from '@archive/media/api';
 import { albumTripOf, matchTrip, TRIP_ATTR, tripAlbums, tripNamed, writeAlbumTrip } from '@archive/media/trip-album';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { ALBUMS_ROOT } from '@archive/paths';
 
-const USAGE = 'trip-album: usage: trip-album <device> <trip> --new [--name=<name>] | --album=<album> | --detach\n';
+const USAGE = 'trip-album: usage: trip-album <camera> <trip> --new [--name=<name>] | --album=<album> | --detach\n';
 
 const nameOf = async (cmd: Command, path: string): Promise<string | undefined> => {
   const name = (await cmd.sys.vfs.get(cmd.access, path).catch(() => undefined))?.attrs.name;
   return typeof name === 'string' && name.trim() ? name.trim() : undefined;
 };
 
-/** The name a new album of the trip gets: where it got farthest, or the device. */
-const defaultName = async (cmd: Command, trips: DeviceTrips, trip: Trip, deviceName: string): Promise<string> => {
+/** The name a new album of the trip gets: where it got farthest, or the camera. */
+const defaultName = async (cmd: Command, trips: CameraTrips, trip: Trip, cameraName: string): Promise<string> => {
   const stay = trip.destination.stay === undefined ? undefined : trips.stays[trip.destination.stay];
   const place = stay?.location && stay.kind !== 'home' ? await nameOf(cmd, stay.location) : undefined;
-  return place ?? deviceName;
+  return place ?? cameraName;
 };
 
 /** A path under the albums root no node has yet: `name`, else `name (2)`, `name (3)`, … */
@@ -62,14 +62,14 @@ const tripAlbum = async (cmd: Command): CmdReturn => {
   }
 
   try {
-    const { device } = await trackOf(cmd, target);
-    const deviceAttrs = (await cmd.sys.vfs.get(cmd.access, device)).attrs as Record<string, unknown>;
-    const timezone = typeof deviceAttrs.timezone === 'string' && deviceAttrs.timezone ? deviceAttrs.timezone : undefined;
-    const trips = await readDeviceTrips(cmd, device);
-    if (!trips) throw new Error(`${device}: no trips derived yet (track-trips ${shq(device)})`);
+    const { camera } = await trackOf(cmd, target);
+    const cameraAttrs = (await cmd.sys.vfs.get(cmd.access, camera)).attrs as Record<string, unknown>;
+    const timezone = typeof cameraAttrs.timezone === 'string' && cameraAttrs.timezone ? cameraAttrs.timezone : undefined;
+    const trips = await readCameraTrips(cmd, camera);
+    if (!trips) throw new Error(`${camera}: no trips derived yet (track-trips ${shq(camera)})`);
     const trip = tripNamed(trips.trips, name);
-    if (!trip) throw new Error(`no trip ${name} (trip-list ${shq(device)})`);
-    const holder = (await tripAlbums(cmd, device)).find((album) => matchTrip(trips.trips, album.trip)?.id === trip.id);
+    if (!trip) throw new Error(`no trip ${name} (trip-list ${shq(camera)})`);
+    const holder = (await tripAlbums(cmd, camera)).find((album) => matchTrip(trips.trips, album.trip)?.id === trip.id);
 
     let album: string;
     let title = '';
@@ -84,9 +84,9 @@ const tripAlbum = async (cmd: Command): CmdReturn => {
         const node = await cmd.sys.vfs.get(cmd.access, album);
         if (node.type !== NODE_TYPE_ALBUM) throw new Error(`${album}: not an album (is ${node.type})`);
         const held = node.attrs[TRIP_ATTR] as AlbumTrip | undefined;
-        if (held && album !== holder?.path) throw new Error(`${album} holds the trip ${held.day} of ${held.device} (trip-album --detach it first)`);
+        if (held && album !== holder?.path) throw new Error(`${album} holds the trip ${held.day} of ${held.camera} (trip-album --detach it first)`);
       } else {
-        title = flags.name?.trim() || await defaultName(cmd, trips, trip, await nameOf(cmd, device) ?? basename(device));
+        title = flags.name?.trim() || await defaultName(cmd, trips, trip, await nameOf(cmd, camera) ?? basename(camera));
         album = await freeAlbumPath(cmd, title);
       }
       if (holder && holder.path !== album) throw new Error(`trip ${trip.id} is the album ${holder.path} (trip-album --detach it first)`);
@@ -94,8 +94,8 @@ const tripAlbum = async (cmd: Command): CmdReturn => {
         const created = await cmd.execute(`album create ${shq(album)} --name ${shq(title)}`);
         if (created.code !== 0) throw new Error(created.stderr.trim() || `${album}: cannot create it`);
       }
-      await writeAlbumTrip(cmd, album, albumTripOf(device, timezone, trip, trips.stays));
-      await addAlbumDevice(cmd, album, device);
+      await writeAlbumTrip(cmd, album, albumTripOf(camera, timezone, trip, trips.stays));
+      await addAlbumCamera(cmd, album, camera);
       if (!cmd.json) await cmd.writeLn(`${flags.new ? 'Made' : 'Gave'} ${album} the trip ${trip.id}`);
     }
     if (cmd.json) await cmd.writeJSON({ album } satisfies TripAlbumAnswer);
@@ -109,14 +109,14 @@ const tripAlbum = async (cmd: Command): CmdReturn => {
 tripAlbum.spec = {
   name: 'trip-album',
   effect: 'write' as const,
-  description: "Make a trip of a device's track an album, a new one or one that is there, or take it from its album",
+  description: "Make a trip of a camera's track an album, a new one or one that is there, or take it from its album",
   args: [
-    { name: 'device', type: 'path' as const, description: "the device (slug or path), or its track's path" },
+    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
     { name: 'trip', type: 'string' as const, description: 'the trip: its id from trip-list, or its first day' },
   ],
   flags: [
     { name: 'new', type: 'bool' as const, description: 'make a new album of the trip' },
-    { name: 'name', type: 'string' as const, description: "the new album's name; by default where the trip got farthest, or the device" },
+    { name: 'name', type: 'string' as const, description: "the new album's name; by default where the trip got farthest, or the camera" },
     { name: 'album', type: 'path' as const, description: 'make this album the album of the trip' },
     { name: 'detach', type: 'bool' as const, description: 'take the trip off its album' },
   ],

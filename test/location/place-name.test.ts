@@ -1,5 +1,5 @@
 /**
- * How the place a device stayed at is named from what Overpass and Nominatim answer: by rank, then
+ * How the place a camera stayed at is named from what Overpass and Nominatim answer: by rank, then
  * by distance, never by a generic word or a feature too far away. The places are invented.
  */
 

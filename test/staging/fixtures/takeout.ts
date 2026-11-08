@@ -98,7 +98,7 @@ export const takeoutEntries = (pictures: Uint8Array[]): { entries: Entry[]; phot
         geoData: { latitude: where.lat, longitude: where.lng, altitude: 0, latitudeSpan: 0, longitudeSpan: 0 },
         geoDataExif: { latitude: where.lat, longitude: where.lng, altitude: 0, latitudeSpan: 0, longitudeSpan: 0 },
         url: `https://photos.google.com/photo/invented-${i}`,
-        googlePhotosOrigin: { mobileUpload: { deviceType: 'ANDROID_PHONE' } },
+        googlePhotosOrigin: { mobileUpload: { cameraType: 'ANDROID_PHONE' } },
         ...(favorited ? { favorited: true } : {}),
       }),
     });

@@ -4,7 +4,7 @@ import { isDirectory, type NodeChildEntry, shq, transformToDirectory } from '@ei
 import { albumContentDir } from '../lib/album-path.ts';
 
 /** An album's directories that hold what is said about it rather than its media. */
-const ALBUM_METADATA_DIRS = ['events', 'devices'];
+const ALBUM_METADATA_DIRS = ['events', 'cameras'];
 
 type UseAlbumDirectoriesResult = {
   directories: DirectoryEntry[];
@@ -58,7 +58,7 @@ export function useAlbumDirectories(albumPath: string): UseAlbumDirectoriesResul
       }
 
       setContentPath(dir);
-      // `events/` (rendered in the timeline) and `devices/` (the devices added to its map) are
+      // `events/` (rendered in the timeline) and `cameras/` (the cameras added to its map) are
       // album metadata, not browseable subfolders beside the album's actual media structure.
       setDirectories(children.filter((entry) => !ALBUM_METADATA_DIRS.includes(entry.name) && isDirectory(entry)).map((entry) => transformToDirectory(entry, dir)));
     } catch (err) {

@@ -81,7 +81,7 @@ const AV1_ONLY = 'video/mp4; codecs="av01.0.08M.08"';
 function failureText(video: HTMLVideoElement, rendition: boolean): string {
   if (rendition && video.canPlayType(VIDEO_SOURCE_TYPE) === '') {
     return video.canPlayType(AV1_ONLY) === ''
-      ? 'This browser or device cannot play AV1, the format this video is in.'
+      ? 'This browser or camera cannot play AV1, the format this video is in.'
       : 'This browser cannot play the format this video is in.';
   }
   return 'This rendition could not be played. It may still be transcoding.';

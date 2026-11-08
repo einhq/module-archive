@@ -77,8 +77,8 @@ export type NearFacts = {
   takenAtSource?: string;
   /** The capture time as the clock read it, without its offset (`takenAt`'s wall clock). */
   clock?: string;
-  /** The camera, by its device node's path, when it is known. */
-  device?: string;
+  /** The camera, by its camera node's path, when it is known. */
+  camera?: string;
   /** The capture time's fraction of a second (EXIF `SubSecTimeOriginal`), when the file has one. */
   subSecond?: string;
   /** A recording's length, in seconds. */
@@ -86,7 +86,7 @@ export type NearFacts = {
 };
 
 /** The sources of a capture time that are a clock running at the moment of capture. */
-const CLOCKS = new Set(['device', 'gps']);
+const CLOCKS = new Set(['camera', 'gps']);
 
 /** A vector as an embedding node holds it: its JSON text. Undefined for anything else. */
 export const parseVector = (bytes: Uint8Array): number[] | undefined => {
@@ -162,7 +162,7 @@ const twoMoments = (a: NearFacts, b: NearFacts): boolean => {
  */
 export const sameShot = (a: NearFacts, b: NearFacts): boolean => {
   if (a.width === undefined || a.width !== b.width || a.height !== b.height) return false;
-  if (a.device !== b.device) return false;
+  if (a.camera !== b.camera) return false;
   const gap = clockGap(a, b);
   return gap !== undefined && gap < NEAR.momentSeconds;
 };

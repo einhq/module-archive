@@ -352,7 +352,7 @@ const staging = async (cmd: Command): CmdReturn => {
           const { files, other, indexing, undated } = category.counts;
           await cmd.writeLn(`${category.name}: ${files} media, ${other} other, ${indexing} indexing, ${undated} undated`);
         }
-        if (status.routesWaiting > 0) await cmd.writeLn(`${status.routesWaiting} route(s) waiting for a device`);
+        if (status.routesWaiting > 0) await cmd.writeLn(`${status.routesWaiting} route(s) waiting for a camera`);
         if (status.genealogyWaiting > 0) await cmd.writeLn(`${status.genealogyWaiting} family tree(s) waiting to be imported`);
       }
       return 0;
@@ -1102,7 +1102,7 @@ staging.spec = {
       writes: true,
       type: 'string' as const,
       description:
-        'category: on, its files are digitized copies (scans), and no clock recorded while digitizing them (device, GPS, file name) dates them; off, they do. Its files are dated again',
+        'category: on, its files are digitized copies (scans), and no clock recorded while digitizing them (camera, GPS, file name) dates them; off, they do. Its files are dated again',
     },
     {
       name: 'filename-dates',

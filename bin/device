@@ -1,8 +1,0 @@
-#!bash
-arg --desc "Camera and recording device management"
-arg --group
-arg '<subcommand>' string "Subcommand: create, info, update, list, match, scan, relink, set-owner, remove-owner, home, correct-time"
-arg --rest
-arg --export
-
-device-$SUBCOMMAND "$@"

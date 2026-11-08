@@ -16,15 +16,15 @@
  *   after the GPS fix. Within 26 hours of the upload with no camera clock, it is the upload, and
  *   never used.
  * - **gps** — the receiver's clock, disciplined by satellite. True UTC, full precision, and the
- *   only source that knows what instant it actually was. It wins over the device.
- * - **device** — the camera's own clock. A wall clock with no zone attached, frequently wrong
+ *   only source that knows what instant it actually was. It wins over the camera.
+ * - **camera** — the camera's own clock. A wall clock with no zone attached, frequently wrong
  *   by minutes and occasionally by years, but for most files it is all there is.
  * - **name** — a date the file's name spells (`whenName`), read only where its staging category
  *   says names are dates (`@archive/media/filename-date`). The last resort: a phone writes the
  *   same clock into the name as into the tags, so the name decides only when the tags are gone.
  *
  * A **digitized** file (`digitized`, stamped where a category holds scans) is a copy made long
- * after the picture: the device's clock, the GPS receiver's, the name, and a Takeout instant that
+ * after the picture: the camera's clock, the GPS receiver's, the name, and a Takeout instant that
  * agrees with them all say when the copy was made, so none of them is believed, and only a
  * person's date is left: a manual one, an XMP one, or one changed in Google Photos.
  *
@@ -51,14 +51,14 @@ export type CaptureDateParts = {
   minute?: string;
   second?: string;
   /**
-   * The offset the reading was taken in. `Z` is a UTC reading from a device that keeps its clock
+   * The offset the reading was taken in. `Z` is a UTC reading from a camera that keeps its clock
    * in UTC, which says nothing about the wall clock where it stood; `+00:00` is a wall clock in
    * that offset.
    */
   timezone?: string;
   /**
-   * Read from a container's `CreateDate`. Without a timezone it is a wall clock unless the device
-   * registry says the device keeps that tag in UTC (`quicktimeUtc`).
+   * Read from a container's `CreateDate`. Without a timezone it is a wall clock unless the camera
+   * registry says the camera keeps that tag in UTC (`quicktimeUtc`).
    */
   quicktime?: true;
 };
@@ -68,7 +68,7 @@ export type CaptureDateParts = {
  * it was said on.
  *
  * The offset is deliberately left off even when the source carried one, because whether it
- * reaches `takenAt` is `resolveTime`'s decision — weighed against the GPS fix and the device
+ * reaches `takenAt` is `resolveTime`'s decision — weighed against the GPS fix and the camera
  * registry — and it can only decide that if it is handed the reading rather than a conclusion.
  * Appended at extraction time, it would also leak `+00:00` into an attr every range query
  * compares as bytes.
@@ -77,7 +77,7 @@ const partsToWallClock = (parts: CaptureDateParts): string =>
   `${parts.year}-${parts.month}-${parts.day}` +
   `T${parts.hour}:${parts.minute}:${parts.second ?? '00'}`;
 
-type TimeSource = 'manual' | 'sidecar' | 'gps' | 'device' | 'name';
+type TimeSource = 'manual' | 'sidecar' | 'gps' | 'camera' | 'name';
 
 /**
  * The times a paired sidecar gives (`@archive/media/sidecars`): a wall clock an XMP packet states
@@ -98,28 +98,28 @@ type TimeSources = {
   /** The manual capture time, as stored in the file's `whenManual` attr. */
   manual?: string;
   gps?: CaptureDateParts;
-  device?: CaptureDateParts;
+  camera?: CaptureDateParts;
   /**
-   * The offset in seconds the device's clock was set to at a given wall clock, when the device
-   * registry knows. `@archive/device/device-zone` builds this; the resolver only asks.
+   * The offset in seconds the camera's clock was set to at a given wall clock, when the camera
+   * registry knows. `@archive/camera/camera-zone` builds this; the resolver only asks.
    */
-  deviceOffsetAt?: (wallClock: string) => number | undefined;
+  cameraOffsetAt?: (wallClock: string) => number | undefined;
   /**
-   * The device is a scanner or an editor, so its clock records when the *file* was made.
+   * The camera is a scanner or an editor, so its clock records when the *file* was made.
    *
    * Some scanners write the scan time into `DateTimeOriginal` itself, which no
    * EXIF rule can catch — the registry's `digitizer` flag is the only thing that knows. The
-   * device source is dropped entirely, and so is the name, which it gave the file when it made
+   * camera source is dropped entirely, and so is the name, which it gave the file when it made
    * it; a GPS date, if there is one, still stands.
    */
   digitizer?: boolean;
   /**
-   * The device keeps a container's `CreateDate` in UTC, as the QuickTime format defines it, even
+   * The camera keeps a container's `CreateDate` in UTC, as the QuickTime format defines it, even
    * where the file does not say so: a `quicktime` reading with no timezone is then read as UTC.
    */
   quicktimeUtc?: boolean;
   /**
-   * The file is a digitized copy, a scan: every clock recorded while digitizing (device, GPS and
+   * The file is a digitized copy, a scan: every clock recorded while digitizing (camera, GPS and
    * name) is when the copy was made, and is dropped. A manual time still stands.
    */
   digitized?: boolean;
@@ -135,7 +135,7 @@ type TimeSources = {
 };
 
 /**
- * The furthest a GPS date and a device date may sit apart before the GPS date is disbelieved.
+ * The furthest a GPS date and a camera date may sit apart before the GPS date is disbelieved.
  *
  * 26 hours: the widest real UTC offset is +14:00, and a camera clock that has never been set
  * since a battery change can be several hours out on top of that. Anything beyond is not a
@@ -174,19 +174,19 @@ type GpsVerdict = { ok: true } | { ok: false; reason: string };
  * a syntactically perfect date from a receiver that was reporting an old fix — and the only
  * evidence for it is the camera's own clock sitting somewhere else entirely.
  *
- * With no device date there is nothing to check against, and the GPS date is taken as read.
+ * With no camera date there is nothing to check against, and the GPS date is taken as read.
  *
  * Deliberately **not** checked: the 1024-week GPS rollover, which shifts a receiver's date by
  * about 19.7 years. No file in the archive shows it, and a speculative check on a date this
  * system otherwise believes would throw away good dates for a fault nobody here has.
  */
-export const isValidGpsDate = (gps: CaptureDateParts, device?: CaptureDateParts): GpsVerdict => {
-  if (!device) return { ok: true };
+export const isValidGpsDate = (gps: CaptureDateParts, camera?: CaptureDateParts): GpsVerdict => {
+  if (!camera) return { ok: true };
 
-  const delta = partsToNaiveSeconds(gps) - partsToNaiveSeconds(device);
+  const delta = partsToNaiveSeconds(gps) - partsToNaiveSeconds(camera);
   if (Math.abs(delta) > GPS_SANITY_WINDOW_SECONDS) {
     const hours = (delta / 3600).toFixed(1);
-    return { ok: false, reason: `gps date is ${hours}h from the device clock (stale fix?)` };
+    return { ok: false, reason: `gps date is ${hours}h from the camera clock (stale fix?)` };
   }
   return { ok: true };
 };
@@ -194,7 +194,7 @@ export const isValidGpsDate = (gps: CaptureDateParts, device?: CaptureDateParts)
 /**
  * The UTC offset the camera was standing in, recovered from the pair of dates.
  *
- * `device − gps` is the offset plus the camera's clock error, and rounding to the hour
+ * `camera − gps` is the offset plus the camera's clock error, and rounding to the hour
  * separates them: real offsets are whole hours here, and the residue is drift — +1 h 15 m is
  * not a timezone but a camera running a quarter of an hour fast.
  *
@@ -203,29 +203,29 @@ export const isValidGpsDate = (gps: CaptureDateParts, device?: CaptureDateParts)
  * contains clock drift would be inventing precision — the wall clock is still the camera's own
  * either way, so only the stamped offset is affected.
  */
-export const recoverOffsetSeconds = (device: CaptureDateParts, gps: CaptureDateParts): number =>
-  Math.round((partsToNaiveSeconds(device) - partsToNaiveSeconds(gps)) / 3600) * 3600;
+export const recoverOffsetSeconds = (camera: CaptureDateParts, gps: CaptureDateParts): number =>
+  Math.round((partsToNaiveSeconds(camera) - partsToNaiveSeconds(gps)) / 3600) * 3600;
 
 /**
- * A UTC device reading (`timezone: 'Z'`) restated as the wall clock where the device stood, with
- * its offset: the device registry's, else the archive zone's at that instant. Any other reading
+ * A UTC camera reading (`timezone: 'Z'`) restated as the wall clock where the camera stood, with
+ * its offset: the camera registry's, else the archive zone's at that instant. Any other reading
  * is returned as it is.
  */
 const placeUtcReading = (
-  device: CaptureDateParts,
-  deviceOffsetAt: TimeSources['deviceOffsetAt'],
+  camera: CaptureDateParts,
+  cameraOffsetAt: TimeSources['cameraOffsetAt'],
   archiveZone: string,
 ): CaptureDateParts | undefined => {
-  if (device.timezone !== 'Z') return device;
+  if (camera.timezone !== 'Z') return camera;
   try {
-    const utc = Temporal.PlainDateTime.from(partsToWallClock(device));
+    const utc = Temporal.PlainDateTime.from(partsToWallClock(camera));
     const local = (offset: number) => utc.add({ seconds: offset }).toString({ smallestUnit: 'second' });
     // The registry answers for a wall clock, which is what is being sought: asked first at the UTC
     // reading, then again at the wall clock that gives, which settles it unless a zone changed
     // its offset in between.
-    const guess = deviceOffsetAt?.(local(0));
+    const guess = cameraOffsetAt?.(local(0));
     const offset = guess !== undefined
-      ? deviceOffsetAt?.(local(guess)) ?? guess
+      ? cameraOffsetAt?.(local(guess)) ?? guess
       : Temporal.Instant.from(`${local(0)}Z`).toZonedDateTimeISO(archiveZone).offsetNanoseconds / 1e9;
     const stamped = withOffset(local(offset), offset);
     const [date, time] = stamped.slice(0, 19).split('T');
@@ -247,9 +247,9 @@ const placeUtcReading = (
  */
 export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   const { manual, archiveZone } = sources;
-  const given = sources.device?.quicktime && sources.device.timezone === undefined && sources.quicktimeUtc ? { ...sources.device, timezone: 'Z' } : sources.device;
-  const reading = given && placeUtcReading(given, sources.deviceOffsetAt, archiveZone);
-  const device = sources.digitizer || sources.digitized ? undefined : reading;
+  const given = sources.camera?.quicktime && sources.camera.timezone === undefined && sources.quicktimeUtc ? { ...sources.camera, timezone: 'Z' } : sources.camera;
+  const reading = given && placeUtcReading(given, sources.cameraOffsetAt, archiveZone);
+  const camera = sources.digitizer || sources.digitized ? undefined : reading;
 
   // manual wins outright: a person looked at the photograph.
   if (manual !== undefined && isCaptureTime(manual)) {
@@ -259,7 +259,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
 
   // A date an editor wrote into the sidecar is a person's too, at the precision they gave it.
   if (sources.sidecar?.wallClock !== undefined) {
-    const stated = resolveWallClock(sources.sidecar.wallClock, sources.deviceOffsetAt, archiveZone);
+    const stated = resolveWallClock(sources.sidecar.wallClock, sources.cameraOffsetAt, archiveZone);
     if (stated) return { ...stated, takenAtSource: 'sidecar' };
   }
 
@@ -272,7 +272,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
     return { takenAt: sources.sidecar!.instant!, takenAtUtc: sources.sidecar!.instant!, takenAtSource: 'sidecar' };
   }
 
-  // Cross-checked against the *unsuppressed* device date: a digitizer's clock is the wrong
+  // Cross-checked against the *unsuppressed* camera date: a digitizer's clock is the wrong
   // time but it is still a clock, and a fix two days off one is two days off either way.
   const gps = !sources.digitized && sources.gps && isValidGpsDate(sources.gps, reading).ok ? sources.gps : undefined;
 
@@ -281,9 +281,9 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
     if (takenAtUtc) {
       // The instant is the GPS receiver's. The wall clock is the camera's, because that is the
       // clock the photographer was reading — and the difference between the two is what says
-      // which offset to stamp it with. Without a device date there is nothing to display but
+      // which offset to stamp it with. Without a camera date there is nothing to display but
       // the UTC reading itself.
-      const takenAt = device ? withOffset(partsToWallClock(device), recoverOffsetSeconds(device, gps)) : `${partsToWallClock(gps)}Z`;
+      const takenAt = camera ? withOffset(partsToWallClock(camera), recoverOffsetSeconds(camera, gps)) : `${partsToWallClock(gps)}Z`;
       return { takenAt, takenAtUtc, takenAtSource: 'gps' };
     }
   }
@@ -291,23 +291,23 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   // A Takeout instant near the camera clock is the instant the camera clock names: the wall clock
   // stays the camera's, the instant is Google's, and the two say which offset to stamp. A camera
   // that recorded its own offset already says all of it.
-  if (instant && device && device.timezone === undefined) {
-    return { takenAt: withOffset(partsToWallClock(device), recoverOffsetSeconds(device, instant)), takenAtUtc: sources.sidecar!.instant!, takenAtSource: 'sidecar' };
+  if (instant && camera && camera.timezone === undefined) {
+    return { takenAt: withOffset(partsToWallClock(camera), recoverOffsetSeconds(camera, instant)), takenAtUtc: sources.sidecar!.instant!, takenAtSource: 'sidecar' };
   }
 
-  if (device) {
-    const wallClock = partsToWallClock(device);
+  if (camera) {
+    const wallClock = partsToWallClock(camera);
     // An offset the camera itself recorded outranks anything the registry believes about it.
-    const explicit = device.timezone;
-    const registry = sources.deviceOffsetAt?.(wallClock);
+    const explicit = camera.timezone;
+    const registry = sources.cameraOffsetAt?.(wallClock);
     const takenAt = explicit !== undefined ? `${wallClock}${explicit}` : registry !== undefined ? withOffset(wallClock, registry) : wallClock;
     const takenAtUtc = toUtc(takenAt, archiveZone);
-    if (takenAtUtc) return { takenAt, takenAtUtc, takenAtSource: 'device' };
+    if (takenAtUtc) return { takenAt, takenAtUtc, takenAtSource: 'camera' };
   }
 
   // A digitizer named the file when it made it, as its clock dated it.
   if (sources.name !== undefined && !sources.digitizer && !sources.digitized) {
-    const named = resolveName(sources.name, sources.deviceOffsetAt, archiveZone);
+    const named = resolveName(sources.name, sources.cameraOffsetAt, archiveZone);
     if (named) return { ...named, takenAtSource: 'name' };
   }
 
@@ -316,22 +316,22 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
 
 /**
  * A wall clock a person stated (an XMP date) as the pair of attrs: with its own offset as it is;
- * otherwise as a name's is read, a minute or second taking the device registry's offset, else the
+ * otherwise as a name's is read, a minute or second taking the camera registry's offset, else the
  * archive's zone, and a coarser one staying as precise as it is.
  */
-const resolveWallClock = (value: string, deviceOffsetAt: TimeSources['deviceOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
-  if (parseCaptureTime(value)?.offset === undefined) return resolveName(value, deviceOffsetAt, archiveZone);
+const resolveWallClock = (value: string, cameraOffsetAt: TimeSources['cameraOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
+  if (parseCaptureTime(value)?.offset === undefined) return resolveName(value, cameraOffsetAt, archiveZone);
   const takenAtUtc = toUtc(value, archiveZone);
   return takenAtUtc ? { takenAt: value, takenAtUtc } : undefined;
 };
 
 /**
  * A name's capture time as the pair of attrs. A UTC reading is placed on the wall clock where the
- * device stood, as a UTC device reading is; a wall clock takes the device registry's offset when
+ * camera stood, as a UTC camera reading is; a wall clock takes the camera registry's offset when
  * it knows one, and is otherwise read in the archive's zone, as the camera clock is; a day stays
  * a day.
  */
-const resolveName = (name: string, deviceOffsetAt: TimeSources['deviceOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
+const resolveName = (name: string, cameraOffsetAt: TimeSources['cameraOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
   const parts = parseCaptureTime(name);
   if (!parts) return undefined;
   if (parts.precision !== 'second' && parts.precision !== 'minute') {
@@ -340,12 +340,12 @@ const resolveName = (name: string, deviceOffsetAt: TimeSources['deviceOffsetAt']
   }
   const wall = { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute, second: parts.second };
   if (name.endsWith('Z')) {
-    const placed = placeUtcReading({ ...wall, timezone: 'Z' }, deviceOffsetAt, archiveZone);
+    const placed = placeUtcReading({ ...wall, timezone: 'Z' }, cameraOffsetAt, archiveZone);
     const takenAtUtc = toUtc(name, archiveZone);
     return placed && takenAtUtc ? { takenAt: `${partsToWallClock(placed)}${placed.timezone ?? ''}`, takenAtUtc } : undefined;
   }
   const wallClock = partsToWallClock(wall);
-  const registry = deviceOffsetAt?.(wallClock);
+  const registry = cameraOffsetAt?.(wallClock);
   const takenAt = registry !== undefined ? withOffset(wallClock, registry) : wallClock;
   const takenAtUtc = toUtc(takenAt, archiveZone);
   return takenAtUtc ? { takenAt, takenAtUtc } : undefined;

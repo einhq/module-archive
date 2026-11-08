@@ -1,0 +1,8 @@
+#!bash
+arg --desc "Camera and recording camera management"
+arg --group
+arg '<subcommand>' string "Subcommand: create, info, update, list, match, scan, relink, set-owner, remove-owner, home, correct-time"
+arg --rest
+arg --export
+
+camera-$SUBCOMMAND "$@"

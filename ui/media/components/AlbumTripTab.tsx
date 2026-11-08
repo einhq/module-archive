@@ -15,7 +15,7 @@ import { AlbumEventNote } from './AlbumEventNote.tsx';
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-/** A local day, `YYYY-MM-DD`, as a date; the day is already the device's, so it is read as UTC. */
+/** A local day, `YYYY-MM-DD`, as a date; the day is already the camera's, so it is read as UTC. */
 const showDay = (day: string): string => dayFormat.format(new Date(`${day}T00:00:00Z`));
 
 const slugOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
@@ -24,7 +24,7 @@ const CLOCK: Intl.DateTimeFormatOptions = { hour: '2-digit', minute: '2-digit' }
 const DAY_AND_CLOCK: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
 
 /**
- * Times on the device's clock, as its days are: UTC for a device without a timezone, and for one
+ * Times on the camera's clock, as its days are: UTC for a camera without a timezone, and for one
  * whose timezone the browser does not know.
  */
 const formatIn = (timezone: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
@@ -67,19 +67,19 @@ function WeatherText({ weather }: { weather?: TripWeather }) {
 
 const STAY_KINDS: Record<TripStay['kind'], string> = { home: 'Home', rest: 'Long stay', overnight: 'Overnight' };
 
-/** The device's name and kind, and the names of the locations the stays are at, read once. */
-function useTripNames(trip: AlbumTrip): { deviceName: string; units: 'nautical' | 'metric'; names: Map<string, string> } {
-  const [device, setDevice] = useState<StatNode | undefined>(undefined);
+/** The camera's name and kind, and the names of the locations the stays are at, read once. */
+function useTripNames(trip: AlbumTrip): { cameraName: string; units: 'nautical' | 'metric'; names: Map<string, string> } {
+  const [camera, setCamera] = useState<StatNode | undefined>(undefined);
   const [names, setNames] = useState(new Map<string, string>());
   const places = useMemo(() => [...new Set(trip.stays.flatMap((stay) => stay.location ?? stay.home ?? []))], [trip.stays]);
 
   useEffect(() => {
     let cancelled = false;
-    execCommand<StatNode>(`stat ${shq(trip.device)}`).then((node) => !cancelled && setDevice(node), () => {});
+    execCommand<StatNode>(`stat ${shq(trip.camera)}`).then((node) => !cancelled && setCamera(node), () => {});
     return () => {
       cancelled = true;
     };
-  }, [trip.device]);
+  }, [trip.camera]);
 
   useEffect(() => {
     let cancelled = false;
@@ -93,8 +93,8 @@ function useTripNames(trip: AlbumTrip): { deviceName: string; units: 'nautical' 
     };
   }, [places]);
 
-  const name = device?.attrs.name;
-  return { deviceName: typeof name === 'string' && name ? name : slugOf(trip.device), units: trackProfile(device?.attrs.kind).units, names };
+  const name = camera?.attrs.name;
+  return { cameraName: typeof name === 'string' && name ? name : slugOf(trip.camera), units: trackProfile(camera?.attrs.kind).units, names };
 }
 
 /**
@@ -106,7 +106,7 @@ function useTripNames(trip: AlbumTrip): { deviceName: string; units: 'nautical' 
 export function AlbumTripTab(
   { album, title, trip, editable, onChanged }: { album: string; title: string; trip: AlbumTrip; editable: boolean; onChanged: () => void },
 ) {
-  const { deviceName, units, names } = useTripNames(trip);
+  const { cameraName, units, names } = useTripNames(trip);
   const { events, reload } = useAlbumEvents(album);
   const access = useAccessIds();
   const { users } = useIdentities();
@@ -150,10 +150,10 @@ export function AlbumTripTab(
               <Text fw={600}>{trip.day === last ? showDay(trip.day) : `${showDay(trip.day)} – ${showDay(last)}`}</Text>
               {trip.ongoing && <Badge color='green' variant='light'>Ongoing</Badge>}
             </Group>
-            <Anchor component={Link} to={`/devices/${encodeURIComponent(slugOf(trip.device))}?tab=trips`} size='sm'>
+            <Anchor component={Link} to={`/cameras/${encodeURIComponent(slugOf(trip.camera))}?tab=trips`} size='sm'>
               <Group gap={4} wrap='nowrap'>
                 <TablerIcon name='map-route' size={14} />
-                {deviceName}
+                {cameraName}
               </Group>
             </Anchor>
           </Group>

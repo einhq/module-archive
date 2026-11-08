@@ -1,5 +1,5 @@
 /**
- * The name of the place a device stayed at (`@archive/location/place-name`).
+ * The name of the place a camera stayed at (`@archive/location/place-name`).
  *
  * A boat stays at harbours, islands and bays, which a reverse geocoder names only by the town
  * around them. So the named features OpenStreetMap's Overpass API has within `PLACE_RADIUS_M`

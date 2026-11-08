@@ -1,0 +1,21 @@
+name: media-camera-cover
+description: Offer a video's poster frame to its camera as a cover
+
+# camera-link covers a camera as it links each file, which for a video is usually before its
+# poster frame exists: a camera that took only videos would stay uncovered. So a video's
+# renditions being made is when its camera is offered the poster frame. An image is covered at
+# link time, as it needs no rendition to be picked, and a video linked to no camera is passed over.
+trigger:
+  on: media.renditions.made
+  wants: archive
+  match:
+    mimetype: 'video/*'
+
+steps:
+  camera-cover:
+    command: camera-cover --media $NODE_PATH
+    description: Offer the video's poster frame to its camera as a cover
+
+options:
+  maxAttempts: 2
+  priority: 5

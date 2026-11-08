@@ -171,7 +171,7 @@ const SAVED_FOLDER = /whatsapp|telegram|messenger|signal/i;
 const SCREEN_SIZES = new Set(['750x1334', '768x1280', '1080x1920', '1080x2340', '1125x2436', '1170x2532', '1242x2688', '1440x3200']);
 
 /** What an item's own attrs and path say clutter is. */
-type ClutterInput = { name: string; mimetype: string; width?: number; height?: number; takenAtSource?: string; devicePath?: string; folderNames: string[] };
+type ClutterInput = { name: string; mimetype: string; width?: number; height?: number; takenAtSource?: string; cameraPath?: string; folderNames: string[] };
 
 /**
  * Whether an item is a screenshot or an image saved from a message, from its name, folders, type
@@ -180,7 +180,7 @@ type ClutterInput = { name: string; mimetype: string; width?: number; height?: n
 export const classifyItem = (input: ClutterInput): 'screenshot' | 'saved' | undefined => {
   if (SCREENSHOT_NAME.test(input.name) || input.folderNames.some((name) => SCREENSHOT_FOLDER.test(name))) return 'screenshot';
   const flat = input.mimetype === 'image/png' || input.mimetype === 'image/webp';
-  if (flat && !input.devicePath && input.takenAtSource !== 'gps' && input.width && input.height) {
+  if (flat && !input.cameraPath && input.takenAtSource !== 'gps' && input.width && input.height) {
     if (SCREEN_SIZES.has(`${input.width}x${input.height}`) || SCREEN_SIZES.has(`${input.height}x${input.width}`)) return 'screenshot';
   }
   if (SAVED_NAME.some((pattern) => pattern.test(input.name)) || input.folderNames.some((name) => SAVED_FOLDER.test(name))) return 'saved';
@@ -593,7 +593,7 @@ export const isSeedFolder = (folder: PlanFolder, inFolder: PlanItem[], edits: St
 export const classOf = (item: PlanItem, ctx: Pick<PlanContext, 'strategy' | 'folders'>): 'clutter' | 'timeline' | 'period' | 'undated' => {
   // The phone folder a Takeout names counts as one of the item's folders: `WhatsApp Images`.
   const folderNames = [...folderNamesOf(item, ctx.folders), ...(item.localFolder ? [item.localFolder] : [])];
-  if (ctx.strategy === 'events' && classifyItem({ ...item, devicePath: item.device, folderNames })) return 'clutter';
+  if (ctx.strategy === 'events' && classifyItem({ ...item, cameraPath: item.camera, folderNames })) return 'clutter';
   if (item.precision === 'none') return 'undated';
   if (item.precision !== 'instant') return 'period';
   return 'timeline';

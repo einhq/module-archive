@@ -2,7 +2,7 @@
 /**
  * location-update — change what is written about a location.
  *
- * The location-side counterpart of `person-update` and `device-update`: one
+ * The location-side counterpart of `person-update` and `camera-update`: one
  * vocabulary for editing a location rather than `attrs -s` on its node. Its
  * position is not here — `position-set <location>/position` writes the shape — and neither is
  * anything geocoding derives (`displayName`, `geocode*`).
@@ -11,7 +11,7 @@
  * change and `location-upkeep` looks the location up again, leaving a shape set by
  * hand alone (see `location-locate`).
  *
- * Clearing is explicit, as in `device-update`: `--clear city` removes the attr,
+ * Clearing is explicit, as in `camera-update`: `--clear city` removes the attr,
  * an empty `--city ''` is refused.
  */
 import type { CmdReturn, Command } from '@ein/client';

@@ -16,7 +16,7 @@ type AlbumInfo = {
   type?: string;
   /** Who may change it, for the page to offer only what the reader may do. Absent until read. */
   ownership?: NodeAccessProps;
-  /** The trip of a device's track it was made (`trip-album`). */
+  /** The trip of a camera's track it was made (`trip-album`). */
   trip?: AlbumTrip;
 };
 

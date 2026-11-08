@@ -1,7 +1,7 @@
 /**
- * The weather of a device's trips and their legs (`@archive/location/trip-weather`), as
+ * The weather of a camera's trips and their legs (`@archive/location/trip-weather`), as
  * `track-weather` gives it them: the track is sampled once an hour, the weather looked up where the
- * device was at each of those hours, and the hours summed up for each leg and for the whole trip.
+ * camera was at each of those hours, and the hours summed up for each leg and for the whole trip.
  */
 
 import type { Trip, TripLeg, TripWeather } from '@archive/location/api';

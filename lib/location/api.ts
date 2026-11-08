@@ -24,19 +24,19 @@ export type LocationEntry = {
   lng?: number;
 };
 
-/** `track-list`: a device's track, with the track registry's summary of it — no points read. */
+/** `track-list`: a camera's track, with the track registry's summary of it — no points read. */
 export type TrackEntry = {
-  /** The device's slug, which is what its page's route uses. */
+  /** The camera's slug, which is what its page's route uses. */
   id: string;
-  /** The device's path. */
-  device: string;
-  /** The track's path, `<device>/track`. */
+  /** The camera's path. */
+  camera: string;
+  /** The track's path, `<camera>/track`. */
   path: string;
   /** The track node's id. */
   nodeId: string;
-  /** The device's name. */
+  /** The camera's name. */
   name: string;
-  /** How the device travels (`DeviceKind`), which sets the units its speed is shown in. */
+  /** How the camera travels (`TravelKind`), which sets the units its speed is shown in. */
   kind?: string;
   description?: string;
   points: number;
@@ -47,7 +47,7 @@ export type TrackEntry = {
 
 /**
  * `track-stage`: the file's fixes joined a track, or it waits at `path` (in its staging area's
- * `routes/` when it was staged) for someone to say which device recorded it. `skipped` counts the
+ * `routes/` when it was staged) for someone to say which camera recorded it. `skipped` counts the
  * fixes the track already had, `untimed` the points without a time, which no track takes.
  */
 export type TrackStageResult =
@@ -77,8 +77,8 @@ export type GpxInfo =
     /** The earliest and latest point time. */
     start?: string;
     end?: string;
-    /** The registered devices the file names, which `track-stage` would choose from. */
-    devices: { path: string; name: string }[];
+    /** The registered cameras the file names, which `track-stage` would choose from. */
+    cameras: { path: string; name: string }[];
   }
   | { path: string; error: string };
 
@@ -91,7 +91,7 @@ export type TrackPoint = {
   lat: number;
   lng: number;
   ts?: string;
-  /** Metres per second, as the device reported it. Only on a read that was not simplified. */
+  /** Metres per second, as the camera reported it. Only on a read that was not simplified. */
   speed?: number;
   /** Why the fix is left out, a rule's name or `manual`, on a `--rejected` read that was not simplified. */
   rejected?: string;
@@ -129,11 +129,11 @@ export type GeocodePositionResult =
   | { skipped: 'geocoded already'; geocodedAt: string };
 
 /**
- * A place a device stayed, derived from its track by `track-trips`. Its position is the mean of
+ * A place a camera stayed, derived from its track by `track-trips`. Its position is the mean of
  * its fixes, which for a long stay lands on the berth or the parking spot.
  *
- * - `home`: at one of the device's homes; it ends the trip arriving there.
- * - `rest`: longer than the device's long rest anywhere else; it ends the trip arriving there too.
+ * - `home`: at one of the camera's homes; it ends the trip arriving there.
+ * - `rest`: longer than the camera's long rest anywhere else; it ends the trip arriving there too.
  * - `overnight`: two hours or more across a local midnight, within a trip.
  */
 export type TripStay = {
@@ -169,7 +169,7 @@ type TripBounds = { north: number; south: number; east: number; west: number };
 
 /**
  * The weather over a leg or a trip, from `track-weather`: the weather of each hour along its
- * track (`@archive/weather/at`) at where the device was then. A value no hour had is left out.
+ * track (`@archive/weather/at`) at where the camera was then. A value no hour had is left out.
  */
 export type TripWeather = {
   /** How many hours were sampled. */
@@ -188,7 +188,7 @@ export type TripWeather = {
 
 /** One local day of a trip. */
 export type TripLeg = {
-  /** The day, `YYYY-MM-DD`, in the device's timezone. */
+  /** The day, `YYYY-MM-DD`, in the camera's timezone. */
   day: string;
   /** Its first and last fix, ISO. */
   start: string;
@@ -202,7 +202,7 @@ export type TripLeg = {
   weather?: TripWeather;
 };
 
-/** A trip derived from a device's track, from one home or long rest to the next. */
+/** A trip derived from a camera's track, from one home or long rest to the next. */
 export type Trip = {
   /**
    * What names it to `trip-edit`: its first local day, `YYYY-MM-DD`, and for a further trip
@@ -231,13 +231,13 @@ export type Trip = {
   joined?: string[];
   /** `track-weather`: the weather over all its days. */
   weather?: TripWeather;
-  /** Albums whose span overlaps it and whose devices include the device. */
+  /** Albums whose span overlaps it and whose cameras include the camera. */
   albums: string[];
   /** `trip-list`: the album it was made (`trip-album`). `.trips` does not keep it. */
   album?: string;
 };
 
-/** Changes made by hand to how a device's track is cut into trips: its attr `tripEdits`. */
+/** Changes made by hand to how a camera's track is cut into trips: its attr `tripEdits`. */
 export type TripEdits = {
   /** The first fixes, ISO, of trips joined to the trip before them. */
   merge?: string[];
@@ -245,9 +245,9 @@ export type TripEdits = {
   split?: string[];
 };
 
-/** `track-trips`: a device's trips and stays, as kept in `<device>/.trips`. */
-export type DeviceTrips = {
-  device: string;
+/** `track-trips`: a camera's trips and stays, as kept in `<camera>/.trips`. */
+export type CameraTrips = {
+  camera: string;
   /** When they were derived, ISO. */
   computedAt: string;
   /** The track's last fix, ISO. */
@@ -267,7 +267,7 @@ export type DeviceTrips = {
 
 /** How `track-places` placed one stay. */
 export type TrackPlacesStay = {
-  /** Its index in the device's stays, and its first fix, ISO. */
+  /** Its index in the camera's stays, and its first fix, ISO. */
   stay: number;
   start: string;
   lat: number;
@@ -288,7 +288,7 @@ export type TrackPlacesStay = {
 
 /** `track-places`: the stays it placed, and the names it looked up again under `--rename`. */
 export type TrackPlaces = {
-  device: string;
+  camera: string;
   stays: TrackPlacesStay[];
   renamed: { location: string; from: string; to: string }[];
   /** How many lookups failed; their stays are asked about again on the next run. */
@@ -299,7 +299,7 @@ export type TrackPlaces = {
 
 /** `track-weather`: what it sampled, and what it left for the next run. */
 export type TrackWeather = {
-  device: string;
+  camera: string;
   /** `CFG_WEATHER` is turned off: nothing was asked or written. */
   off?: true;
   /** The legs it gave weather, and how many hours it sampled for them. */
@@ -313,14 +313,14 @@ export type TrackWeather = {
   requests: number;
 };
 
-/** `trip-list`: a device's trips and stays as last derived; none when they never were. */
+/** `trip-list`: a camera's trips and stays as last derived; none when they never were. */
 export type TripList = {
-  device: string;
+  camera: string;
   /** When they were derived, ISO; absent when they never were. */
   computedAt?: string;
   /** The track's last fix, ISO. */
   lastFix?: string;
-  /** What the device's kind shows distances in. */
+  /** What the camera's kind shows distances in. */
   units: 'nautical' | 'metric';
   /** The IANA timezone the legs' days are cut in; UTC when absent. */
   timezone?: string;

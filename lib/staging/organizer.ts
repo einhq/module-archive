@@ -202,7 +202,7 @@ type FileAttrs = {
   takenAtSource?: string;
   width?: number;
   height?: number;
-  devicePath?: string;
+  cameraPath?: string;
   facesAt?: string;
   faceCount?: number;
 };
@@ -310,7 +310,7 @@ export const readMedia = async (vfs: Vfs, access: Access, rows: FileRow[], base:
       ...(typeof attrs.takenAtSource === 'string' ? { takenAtSource: attrs.takenAtSource } : {}),
       ...(typeof attrs.width === 'number' ? { width: attrs.width } : {}),
       ...(typeof attrs.height === 'number' ? { height: attrs.height } : {}),
-      ...(typeof attrs.devicePath === 'string' ? { device: attrs.devicePath } : {}),
+      ...(typeof attrs.cameraPath === 'string' ? { camera: attrs.cameraPath } : {}),
       ...(typeof attrs.faceCount === 'number' ? { faceCount: attrs.faceCount } : {}),
       ...(signal?.point ? { lat: signal.point.lat, lng: signal.point.lng } : {}),
       ...(signal && signal.persons.length > 0 ? { persons: signal.persons } : {}),

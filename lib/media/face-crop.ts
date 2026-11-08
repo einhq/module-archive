@@ -33,7 +33,7 @@ export const CROP_QUALITY = 70;
  * Longest encoded edge of a face crop.
  *
  * The largest consumer is the 96 CSS-pixel crop on the unidentified-people cards. Four
- * device pixels per CSS pixel leaves headroom even on the densest screens the UI is likely
+ * camera pixels per CSS pixel leaves headroom even on the densest screens the UI is likely
  * to meet; retaining anything larger only makes the browser transfer and decode pixels it
  * immediately throws away. This is a bound, not a target: small source crops stay untouched.
  */

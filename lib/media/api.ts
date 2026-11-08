@@ -55,11 +55,11 @@ export type LocationRef = NodeRef & { lat?: number; lng?: number; radius?: numbe
  */
 export type AlbumRef = NodeRef & { memberPath?: string };
 
-/** A person who owns the device, with the span the ownership link carries. */
+/** A person who owns the camera, with the span the ownership link carries. */
 export type OwnerRef = NodeRef & { from?: string; to?: string };
 
-/** The device the file was taken with, and who owned it. */
-export type DeviceRef = NodeRef & { make?: string; model?: string; owners: OwnerRef[] };
+/** The camera the file was taken with, and who owned it. */
+export type CameraRef = NodeRef & { make?: string; model?: string; owners: OwnerRef[] };
 
 /** A perceptual fingerprint child — provenance only, never the vector. */
 export type FingerprintRef = { name: string; computedAt?: string; computedBy?: string };
@@ -120,7 +120,7 @@ export type MediaExif = {
   /** The picture: the raster turned by `angle` and squared by `sar`. */
   displayWidth?: number;
   displayHeight?: number;
-  devicePath?: string;
+  cameraPath?: string;
   /** Only present when fetched with `--fields raw`. */
   raw?: Record<string, unknown>;
 };
@@ -195,7 +195,7 @@ export type MediaDetails = {
   takenAt?: string;
   /** The instant, `YYYY-MM-DDTHH:MM:SSZ`. Only needed to offer the viewer's own reading. */
   takenAtUtc?: string;
-  /** Which source won: `manual`, `gps`, `device` or `name`. */
+  /** Which source won: `manual`, `gps`, `camera` or `name`. */
   takenAtSource?: string;
   /** A digitized copy (a scan): the clocks recorded while digitizing were not believed. */
   digitized?: true;
@@ -221,7 +221,7 @@ export type MediaDetails = {
   position: MediaPosition | null;
   location: LocationRef | null;
   photographer: NodeRef | null;
-  device: DeviceRef | null;
+  camera: CameraRef | null;
   /** Every album holding the file — the one it lives in and any that link it. */
   albums: AlbumRef[];
   people: PersonTag[];
@@ -786,8 +786,8 @@ export type DuplicateMember = {
   album?: { path: string; name: string };
   /** In a set of look-alikes, how alike it is to the set's anchor (absent on the anchor). */
   score?: number;
-  /** The camera it came from (`devicePath`), when known. */
-  device?: string;
+  /** The camera it came from (`cameraPath`), when known. */
+  camera?: string;
   /** Its staged byte copies, which go with it when it is dropped. */
   copies: { id: string; path: string }[];
 };
@@ -878,8 +878,8 @@ export type AlbumScores = {
 /** One subject a container's media have, and how many of them have it. */
 export type SubjectTally = { path: string; name: string; count: number };
 
-/** One device on an album's list: the device's path and name, and why it is there. */
-export type AlbumDevice = {
+/** One camera on an album's list: the camera's path and name, and why it is there. */
+export type AlbumCamera = {
   path: string;
   name: string;
   /** `media`: it took some of the album's media. `added`: it was added to the list by hand. */
@@ -889,29 +889,29 @@ export type AlbumDevice = {
 };
 
 /**
- * `album-device-list <album>`: the devices whose tracks the album's map draws, the most media first
- * and those added by hand after them; and the devices that took some of its media but were removed
- * from the list. A folder that is not an album lists the devices of its media and removes none.
+ * `album-camera-list <album>`: the cameras whose tracks the album's map draws, the most media first
+ * and those added by hand after them; and the cameras that took some of its media but were removed
+ * from the list. A folder that is not an album lists the cameras of its media and removes none.
  */
-export type AlbumDeviceList = {
+export type AlbumCameraList = {
   album: string;
-  devices: AlbumDevice[];
-  removed: AlbumDevice[];
+  cameras: AlbumCamera[];
+  removed: AlbumCamera[];
 };
 
 /**
- * An album's attr `trip`: the trip of a device's track the album was made, as `trip-album` wrote
+ * An album's attr `trip`: the trip of a camera's track the album was made, as `trip-album` wrote
  * it. Its stays are the ones it starts and ends at and those along the way, and the places and legs
- * name them by their index in `stays`. It is written again whenever the device's trips are.
+ * name them by their index in `stays`. It is written again whenever the camera's trips are.
  */
 export type AlbumTrip = {
-  device: string;
+  camera: string;
   /** Its first local day, `YYYY-MM-DD`. */
   day: string;
   /** Its first and last fix, ISO. */
   start: string;
   end: string;
-  /** The device's timezone, which its days are in; UTC without one. */
+  /** The camera's timezone, which its days are in; UTC without one. */
   timezone?: string;
   ongoing: boolean;
   from: TripPlace;
@@ -932,7 +932,7 @@ export type TripAlbumAnswer = { album: string };
 
 /**
  * `subjects-in <container>`: who and what the media a container shows have — the people in them,
- * the locations they are linked to, the devices that took them and who held the camera — each
+ * the locations they are linked to, the cameras that took them and who held the camera — each
  * counted and the most counted first, and how many of the media carry a position.
  */
 export type ContainerSubjects = {
@@ -942,7 +942,7 @@ export type ContainerSubjects = {
   positioned: number;
   people: SubjectTally[];
   locations: SubjectTally[];
-  devices: SubjectTally[];
+  cameras: SubjectTally[];
   photographers: SubjectTally[];
   /** The container holds more than its listing reached; the counts are over what it did. */
   truncated: boolean;

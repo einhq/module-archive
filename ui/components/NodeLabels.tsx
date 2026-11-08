@@ -38,7 +38,7 @@ function useNodeLabels(path: string): string[] {
 }
 
 type Props = {
-  /** The labeled node: an album, a person, a location, a device or a file. */
+  /** The labeled node: an album, a person, a location, a camera or a file. */
   path: string;
   /** Space above the row, as the other lines of a header's meta keep. */
   mt?: number;

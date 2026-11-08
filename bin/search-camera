@@ -1,0 +1,113 @@
+#!ts
+/**
+ * search-camera — find cameras and recorders by what they are called.
+ *
+ * Discovered by `search` like every other `search-*` on PATH. Its rows are in the `name` channel
+ * (name, make and model, serial number, id) and the `description` channel.
+ *
+ * A substring ladder, the same shape `search-people` and `search-location` use, over a
+ * scan of `/cameras`: one listing of tens of entries, not thousands, with several fields to
+ * score in each.
+ *
+ * The serial number is matched too. It reads like an implementation detail, but
+ * it is the one field that tells two identical camera bodies apart, and it is
+ * what `camera-match` keys on — so it is what someone chasing "which camera shot
+ * this" actually has in hand.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
+import { nameScore } from '@archive/media/name-quality';
+import { type CameraEntry, CAMERAS_ROOT, listCameras } from '@archive/camera/camera';
+
+/** The best `nameScore` over the fields. */
+const scoreText = (query: string, fields: (string | undefined)[]): number => Math.max(0, ...fields.map((field) => nameScore(query, field)));
+
+const searchCamera = async (cmd: Command): CmdReturn => {
+  // `search` asks every provider what it can answer before fanning out, so a
+  // narrow query pays only the providers that can contribute to it. Answered
+  // ahead of the query check: this is a question about the command, not a search.
+  if (cmd.args.includes('--kinds')) {
+    await cmd.writeLn(JSON.stringify({ kinds: ['camera'] }));
+    return 0;
+  }
+
+  const queryParts: string[] = [];
+  let limit = 10;
+  let root = CAMERAS_ROOT;
+  let i = 0;
+
+  while (i < cmd.args.length) {
+    const arg = cmd.args[i];
+    if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
+    else if (arg === '--root') root = cmd.args[++i] || CAMERAS_ROOT;
+    else queryParts.push(arg);
+    i++;
+  }
+
+  const query = queryParts.join(' ').trim();
+  if (!query) {
+    await cmd.writeError('search-camera: missing search query\n');
+    return 1;
+  }
+
+  const queryLower = query.toLowerCase();
+  const named: SearchProviderHit[] = [];
+  const described: SearchProviderHit[] = [];
+
+  // One `ls -l` rather than an `attrs` per camera — see listCameras.
+  let cameras: CameraEntry[] = [];
+  try {
+    cameras = await listCameras(cmd, root);
+  } catch {
+    // no cameras root
+  }
+
+  for (const camera of cameras) {
+    // `make model` as one field so "canon eos" matches a camera split across
+    // the two, which is how EXIF stores every camera.
+    const makeModel = [camera.make, camera.model].filter(Boolean).join(' ');
+    const hit = { path: camera.path, type: 'camera', name: camera.name, ...(camera.description || makeModel ? { description: camera.description || makeModel } : {}) };
+    const name = scoreText(queryLower, [camera.name, makeModel, camera.serialNumber, camera.id]);
+    if (name > 0) named.push({ ...hit, channel: 'name', score: name });
+    const description = scoreText(queryLower, [camera.description]);
+    if (description > 0) described.push({ ...hit, channel: 'description', score: description });
+  }
+
+  // Each channel's best `limit`; path breaks ties.
+  const best = (hits: SearchProviderHit[]) => hits.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, limit);
+  const limited = [...best(named), ...best(described)];
+  const truncated = named.length > limit || described.length > limit;
+
+  if (cmd.json) {
+    await cmd.writeJSON({ results: limited, ...(truncated ? { truncated } : {}) } satisfies SearchProviderResponse);
+  } else if (limited.length === 0) {
+    await cmd.writeLn('No matches found.');
+  } else {
+    for (const r of limited) {
+      await cmd.writeLn(`${(r.score * 100).toFixed(1)}% ${r.channel.padEnd(11)} ${r.path}`);
+      if (r.description) await cmd.writeLn(`     ${r.description}`);
+    }
+  }
+
+  return 0;
+};
+
+searchCamera.spec = {
+  name: 'search-camera',
+  effect: 'read' as const,
+  description: 'Search cameras by name, make, model or serial number',
+  args: [
+    { name: 'query', type: 'string' as const, description: 'Search query text' },
+  ],
+  flags: [
+    { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
+    { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
+    { name: 'root', type: 'string' as const, description: `Cameras root (default: ${CAMERAS_ROOT})` },
+  ],
+  examples: [
+    "search-camera 'exempelkamera' -l 10",
+  ],
+  returns: 'matching cameras, one row per channel that found it (name, description), best first within each.',
+};
+
+export default searchCamera;

@@ -1,12 +1,12 @@
 /**
  * The files the archive's nodes were made from, and the links that say so.
  *
- * A source is filed in a folder: under the node that owns it when one does (a device's
+ * A source is filed in a folder: under the node that owns it when one does (a camera's
  * `routes/` holds the GPX files of its track), else under `SOURCES_ROOT/<kind>` (a GEDCOM file
  * describes many people, none of whom owns it). Every node built from a source gets a softlink to
  * it in its own `sources/`, named after the file, which may carry attrs saying what in the file
  * the node came from. The VFS re-points a softlink when the file it names moves, so the links
- * follow a renamed device or a refiled source.
+ * follow a renamed camera or a refiled source.
  *
  * Imports only `@ein/client`, its own answer types and std, so bins and other areas can import it.
  */

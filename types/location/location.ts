@@ -36,7 +36,7 @@ export type LocationAttrs = NodeAttrs & {
    * Where the shape came from. `media-centroid` is derived from the geotagged
    * files linked to the location and is preferred over an address lookup: it is
    * measured rather than looked up, and it describes the location's extent.
-   * `track` means it was made where a device stayed (`track-places`): measured
+   * `track` means it was made where a camera stayed (`track-places`): measured
    * too, but one stay's mean, so a centroid of photos replaces it. `nominatim`
    * means the written address was geocoded instead. `manual` means
    * a human drew it, which outranks all three — and which is why editing a shape has

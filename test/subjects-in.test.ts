@@ -1,9 +1,9 @@
 /**
- * `subjects-in`: the people, locations, devices and photographers of an album's media, counted
+ * `subjects-in`: the people, locations, cameras and photographers of an album's media, counted
  * over the members the album shows; and `find-within --under`, which narrows the map to them.
  */
 
-import { ALBUMS_ROOT, DEVICES_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, CAMERAS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import type { ContainerSubjects } from '@archive/media/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
@@ -29,11 +29,11 @@ Deno.test({
   const album = `${ALBUMS_ROOT}/summer`;
 
   try {
-    for (const root of [PEOPLE_ROOT, LOCATIONS_ROOT, DEVICES_ROOT, ALBUMS_ROOT, '/elsewhere']) await cmd.shouldSucceed(`mkdir -p ${root}`);
+    for (const root of [PEOPLE_ROOT, LOCATIONS_ROOT, CAMERAS_ROOT, ALBUMS_ROOT, '/elsewhere']) await cmd.shouldSucceed(`mkdir -p ${root}`);
     await vfs.create(ADMIN_ACCESS, 'person', PEOPLE_ROOT, 'anna', { attrs: { name: 'Anna Andersson' } });
     await vfs.create(ADMIN_ACCESS, 'person', PEOPLE_ROOT, 'bo', { attrs: { name: 'Bo' } });
     await vfs.create(ADMIN_ACCESS, 'location', LOCATIONS_ROOT, 'beach', { attrs: { name: 'The Beach' } });
-    await vfs.create(ADMIN_ACCESS, 'device', DEVICES_ROOT, 'camera', { attrs: { name: 'Example Camera' } });
+    await vfs.create(ADMIN_ACCESS, 'camera', CAMERAS_ROOT, 'camera', { attrs: { name: 'Example Camera' } });
     await vfs.create(ADMIN_ACCESS, 'album', ALBUMS_ROOT, 'summer', { attrs: { name: 'Summer' } });
     const boId = (await vfs.get(ADMIN_ACCESS, `${PEOPLE_ROOT}/bo`)).id;
     await cmd.shouldSucceed(`mkdir -p ${PEOPLE_ROOT}/unknown`);
@@ -43,7 +43,7 @@ Deno.test({
     // Two photos in the album, one added to it by a link, and one outside it.
     for (const path of [`${album}/a.jpg`, `${album}/b.jpg`, '/elsewhere/c.jpg', '/elsewhere/d.jpg']) {
       await cmd.shouldSucceed(`echo x > ${path}`);
-      await vfs.update(ADMIN_ACCESS, path, { attrs: { mimetype: 'image/jpeg', devicePath: `${DEVICES_ROOT}/camera` } });
+      await vfs.update(ADMIN_ACCESS, path, { attrs: { mimetype: 'image/jpeg', cameraPath: `${CAMERAS_ROOT}/camera` } });
       await cmd.shouldSucceed(`mknode -t position ${path}/position`);
       await cmd.shouldSucceed(`position-set ${path}/position --lat=57.7 --lng=11.97`);
     }
@@ -72,7 +72,7 @@ Deno.test({
         { path: `${PEOPLE_ROOT}/bo`, name: 'Bo', count: 1 },
       ]);
       assertEquals(subjects.locations, [{ path: `${LOCATIONS_ROOT}/beach`, name: 'The Beach', count: 1 }]);
-      assertEquals(subjects.devices, [{ path: `${DEVICES_ROOT}/camera`, name: 'Example Camera', count: 3 }]);
+      assertEquals(subjects.cameras, [{ path: `${CAMERAS_ROOT}/camera`, name: 'Example Camera', count: 3 }]);
       assertEquals(subjects.photographers, [{ path: `${PEOPLE_ROOT}/bo`, name: 'Bo', count: 1 }]);
       assertEquals(subjects.truncated, false);
     });

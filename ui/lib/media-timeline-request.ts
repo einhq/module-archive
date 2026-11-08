@@ -6,7 +6,7 @@ type MediaTimelineRequest = {
   location?: string;
   under?: string;
   within?: string;
-  device?: string;
+  camera?: string;
   kinds?: SearchFilters['kinds'];
   filters?: SearchFilters;
   rankByRelevance?: boolean;
@@ -19,8 +19,8 @@ type MediaTimelineRequest = {
  * stays testable without React.
  */
 export function mediaTimelineSearchRequest(opts: MediaTimelineRequest): { filters: SearchFilters; anchor: string | null } {
-  const { person, location, under, within, device, kinds, filters, rankByRelevance = false, ascending = false, anchor = null } = opts;
-  const subject = person ? subjectArg('person', person) : location ? subjectArg('location', location) : device ? subjectArg('device', device) : undefined;
+  const { person, location, under, within, camera, kinds, filters, rankByRelevance = false, ascending = false, anchor = null } = opts;
+  const subject = person ? subjectArg('person', person) : location ? subjectArg('location', location) : camera ? subjectArg('camera', camera) : undefined;
 
   return {
     filters: {

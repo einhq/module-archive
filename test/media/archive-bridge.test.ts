@@ -58,7 +58,7 @@ Deno.test({
         'see-speakers',
         'assign-speakers',
         'transcribe-file',
-        'device-link',
+        'camera-link',
         'geocode-position',
         'assign-faces',
         'album-stack',
@@ -91,7 +91,7 @@ Deno.test({
         const name of [
           'media-ingest',
           'media-reindex',
-          'media-device',
+          'media-camera',
           'media-geocode',
           'media-stills',
           'media-transcode',
@@ -151,7 +151,7 @@ Deno.test({
       await waitFor(() => hasInstance('media-stills', nodeId), 'media-stills instance');
       await waitFor(() => hasInstance('media-fingerprint', nodeId), 'media-fingerprint instance');
       await waitFor(() => hasInstance('media-faces', nodeId), 'media-faces instance');
-      await waitFor(() => hasInstance('media-device', nodeId), 'media-device instance');
+      await waitFor(() => hasInstance('media-camera', nodeId), 'media-camera instance');
     });
 
     await t.step('face completion starts its downstream jobs only after facesAt lands', async () => {

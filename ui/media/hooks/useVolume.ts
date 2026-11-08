@@ -3,7 +3,7 @@ import { usePersistedState } from '@ein/ui/hooks';
 import { parseVolume } from '../lib/player-settings.ts';
 
 /**
- * Whether a page can set the volume: an iPhone's or iPad's Safari leaves it to the device's own
+ * Whether a page can set the volume: an iPhone's or iPad's Safari leaves it to the camera's own
  * buttons, ignores the assignment and always reads 1.
  */
 const volumeSettable = (): boolean => {
@@ -15,7 +15,7 @@ const volumeSettable = (): boolean => {
 /**
  * The lightbox players' sound: the volume and mute of the element in `ref`, as the element reports
  * them, and the two ways to change them. The volume is remembered across files and visits, shared
- * by the video and audio players; `canSetVolume` is false where only the device's buttons can.
+ * by the video and audio players; `canSetVolume` is false where only the camera's buttons can.
  */
 export function useVolume(ref: RefObject<HTMLMediaElement | null>) {
   const [storedVolume, setStoredVolume] = usePersistedState<string>('lightbox.volume', '1');

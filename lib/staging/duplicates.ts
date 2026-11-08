@@ -788,7 +788,7 @@ const factsOf = (id: string, attrs: Record<string, unknown>): NearFacts => {
     ...(typeof attrs.takenAtUtc === 'string' ? { takenAtUtc: attrs.takenAtUtc } : {}),
     ...(typeof attrs.takenAtSource === 'string' ? { takenAtSource: attrs.takenAtSource } : {}),
     ...(typeof attrs.takenAt === 'string' ? { clock: wallClockOf(attrs.takenAt) } : {}),
-    ...(typeof attrs.devicePath === 'string' ? { device: attrs.devicePath } : {}),
+    ...(typeof attrs.cameraPath === 'string' ? { camera: attrs.cameraPath } : {}),
     ...(typeof attrs.duration === 'number' ? { duration: attrs.duration } : {}),
   };
 };

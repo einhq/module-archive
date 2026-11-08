@@ -3,7 +3,7 @@
  * media-details — everything the UI sidebar shows for one media file, in one
  * read: description, the extracted text, capture
  * time, location + location, tagged people with their age at capture time,
- * photographer, the device that took it with its owners, the albums holding it
+ * photographer, the camera that took it with its owners, the albums holding it
  * and comments.
  *
  * Sources are the file-node children documented in docs/architecture.md:
@@ -28,7 +28,7 @@ import { ageAt, ageMonthsAt } from '@archive/people/genealogy';
 import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@media/orientation';
 import type {
   AlbumRef,
-  DeviceRef,
+  CameraRef,
   FingerprintRef,
   LocationRef,
   MediaDetails,
@@ -247,7 +247,7 @@ const readExif = async (
   vfs: Vfs,
   access: Access,
   path: string,
-  fileAttrs: { width?: number; height?: number; sar?: number; devicePath?: string },
+  fileAttrs: { width?: number; height?: number; sar?: number; cameraPath?: string },
   angle: Angle,
   wantRaw: boolean,
 ): Promise<MediaExif | null> => {
@@ -285,7 +285,7 @@ const readExif = async (
     exif.displayWidth = dims.width;
     exif.displayHeight = dims.height;
   }
-  if (fileAttrs.devicePath) exif.devicePath = fileAttrs.devicePath;
+  if (fileAttrs.cameraPath) exif.cameraPath = fileAttrs.cameraPath;
   if (wantRaw && attrs.raw) exif.raw = attrs.raw;
 
   return Object.keys(exif).length > 0 ? exif : null;
@@ -446,23 +446,23 @@ const readAlbums = async (vfs: Vfs, access: Access, path: string, fileId: string
 type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
 
 /**
- * The device that took the file, with its owners.
+ * The camera that took the file, with its owners.
  *
- * `devicePath` is stamped on the file by `device-link`. Owners are one listing
- * of `<device>/owners/` — softlinks at whose target the person lives, carrying
- * the ownership span in `attrs.relation`, exactly as `device-info` reads them.
+ * `cameraPath` is stamped on the file by `camera-link`. Owners are one listing
+ * of `<camera>/owners/` — softlinks at whose target the person lives, carrying
+ * the ownership span in `attrs.relation`, exactly as `camera-info` reads them.
  */
-const readDevice = async (vfs: Vfs, access: Access, devicePath: string): Promise<DeviceRef | null> => {
+const readCamera = async (vfs: Vfs, access: Access, cameraPath: string): Promise<CameraRef | null> => {
   let node;
   try {
-    node = await vfs.get<{ name?: string; make?: string; model?: string }>(access, devicePath);
+    node = await vfs.get<{ name?: string; make?: string; model?: string }>(access, cameraPath);
   } catch {
     return null;
   }
 
   const owners: OwnerRef[] = [];
   try {
-    for (const entry of await vfs.children<OwnerLinkAttrs>(access, `${devicePath}/owners`)) {
+    for (const entry of await vfs.children<OwnerLinkAttrs>(access, `${cameraPath}/owners`)) {
       const target = entry.node.props.softlink;
       if (!target) continue;
       const relation = entry.node.attrs.relation;
@@ -485,9 +485,9 @@ const readDevice = async (vfs: Vfs, access: Access, devicePath: string): Promise
   }
 
   return {
-    id: basename(devicePath),
-    path: devicePath,
-    name: node.attrs.name ?? basename(devicePath),
+    id: basename(cameraPath),
+    path: cameraPath,
+    name: node.attrs.name ?? basename(cameraPath),
     ...(node.attrs.make ? { make: node.attrs.make } : {}),
     ...(node.attrs.model ? { model: node.attrs.model } : {}),
     owners: owners.sort((a, b) => a.name.localeCompare(b.name)),
@@ -703,7 +703,7 @@ type FileAttrs = {
   height?: number;
   sar?: number;
   duration?: number;
-  devicePath?: string;
+  cameraPath?: string;
 };
 
 const stackMember = (id: string, path: string, node: Awaited<ReturnType<Vfs['get']>>): StackMemberRef => {
@@ -796,7 +796,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
   // Capture time only — never fall back to modtime: ages are computed from
   // this, and a file's modtime would silently produce "age today" instead.
   //
-  // One attr now, not a coalesce: `takenAt` *is* the resolution of the manual, GPS, device and
+  // One attr now, not a coalesce: `takenAt` *is* the resolution of the manual, GPS, camera and
   // name sources (`@archive/media/resolve-time`). `whenManual` travels alongside it so the lightbox can
   // offer a revert, and `takenAtSource` so it can say where the date came from.
   const takenAt = node.attrs.takenAt;
@@ -811,7 +811,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     position,
     location,
     photographer,
-    device,
+    camera,
     albums,
     peopleResult,
     comments,
@@ -829,7 +829,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     childNames.has('position') ? readPosition(vfs, access, `${path}/position`) : Promise.resolve(null),
     childNames.has('location') ? locationTarget(vfs, access, `${path}/location`) : Promise.resolve(null),
     childNames.has('photographer') ? linkTarget(vfs, access, `${path}/photographer`) : Promise.resolve(null),
-    node.attrs.devicePath ? readDevice(vfs, access, node.attrs.devicePath) : Promise.resolve(null),
+    node.attrs.cameraPath ? readCamera(vfs, access, node.attrs.cameraPath) : Promise.resolve(null),
     readAlbums(vfs, access, path, node.id),
     readPeople(vfs, access, path, takenAt),
     readComments(cmd, path),
@@ -881,7 +881,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     position,
     location,
     photographer,
-    device,
+    camera,
     albums,
     // People seen or tagged first; someone only heard joins them, so "who is in this" covers
     // a recording as it does a photo.
@@ -922,9 +922,9 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     }
     if (details.location) await cmd.writeLn(`location: ${details.location.name}`);
     if (details.photographer) await cmd.writeLn(`photographer: ${details.photographer.name}`);
-    if (details.device) {
-      const owners = details.device.owners.map((o) => o.name).join(', ');
-      await cmd.writeLn(`device: ${details.device.name}${owners ? ` (owned by ${owners})` : ''}`);
+    if (details.camera) {
+      const owners = details.camera.owners.map((o) => o.name).join(', ');
+      await cmd.writeLn(`camera: ${details.camera.name}${owners ? ` (owned by ${owners})` : ''}`);
     }
     for (const a of details.albums) {
       await cmd.writeLn(`album: ${a.name} ${a.path}${a.memberPath ? ' (linked)' : ''}`);
@@ -955,7 +955,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
 mediaDetails.spec = {
   name: 'media-details',
   effect: 'read' as const,
-  description: 'Read description, time, location, device with owners, albums, tagged people (with age), comments and versions for a media file',
+  description: 'Read description, time, location, camera with owners, albums, tagged people (with age), comments and versions for a media file',
   args: [
     { name: 'file', type: 'path' as const, description: 'VFS path to file node' },
   ],

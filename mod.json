@@ -1,7 +1,7 @@
 {
   "name": "archive",
   "version": "0.17.24",
-  "description": "The archive: people and their family tree, locations and tracks, devices, photos, videos and documents, and finding things among them",
+  "description": "The archive: people and their family tree, locations and tracks, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
   "coreApi": "^0.12.9",
   "exports": {
@@ -32,12 +32,12 @@
     "media": "^0.1.9"
   },
   "imports": {
-    "@archive/device/api": "./lib/device/api.ts",
-    "@archive/device/device": "./lib/device/device.ts",
-    "@archive/device/device-zone": "./lib/device/device-zone.ts",
-    "@archive/device/homes": "./lib/device/homes.ts",
-    "@archive/device/qr": "./lib/device/qr.ts",
-    "@archive/device/types": "./types/device/mod.ts",
+    "@archive/camera/api": "./lib/camera/api.ts",
+    "@archive/camera/camera": "./lib/camera/camera.ts",
+    "@archive/camera/camera-zone": "./lib/camera/camera-zone.ts",
+    "@archive/camera/homes": "./lib/camera/homes.ts",
+    "@archive/camera/qr": "./lib/camera/qr.ts",
+    "@archive/camera/types": "./types/camera/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",
     "@archive/find-within": "./lib/find-within.ts",
@@ -46,7 +46,7 @@
     "@archive/labels/label-model": "./lib/labels/label-model.ts",
     "@archive/labels/vocabulary": "./lib/labels/vocabulary.ts",
     "@archive/location/centroid": "./lib/location/centroid.ts",
-    "@archive/location/device-trips": "./lib/location/device-trips.ts",
+    "@archive/location/camera-trips": "./lib/location/camera-trips.ts",
     "@archive/location/geocode": "./lib/location/geocode.ts",
     "@archive/location/event-rules": "./lib/location/event-rules.ts",
     "@archive/location/location-link": "./lib/location/location-link.ts",
@@ -57,7 +57,7 @@
     "@archive/location/trip-weather": "./lib/location/trip-weather.ts",
     "@archive/location/trips": "./lib/location/trips.ts",
     "@archive/location/types": "./types/location/mod.ts",
-    "@archive/media/album-devices": "./lib/media/album-devices.ts",
+    "@archive/media/album-cameras": "./lib/media/album-cameras.ts",
     "@archive/media/album-members": "./lib/media/album-members.ts",
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",
@@ -386,7 +386,7 @@
         "type": "boolean",
         "default": "true",
         "label": "Look up the weather",
-        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a device's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
+        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a camera's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
         "group": "Places"
       },
       {
@@ -417,7 +417,7 @@
       "key": "OVERPASS_URL",
       "kind": "option",
       "default": "https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter",
-      "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a device stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
+      "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a camera stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
     },
     {
       "key": "SMHI_METOBS_URL",
@@ -461,12 +461,12 @@
       "description": "A location under /archive/locations: its name, the address it was written down with and how that was geocoded, the people who lived there and the photos linked to it. Where it is on the map is its child named position, a point, circle or outline."
     },
     {
-      "type": "device",
-      "label": "Device",
+      "type": "camera",
+      "label": "Camera",
       "category": "content",
-      "root": "/archive/devices",
+      "root": "/archive/cameras",
       "searchable": true,
-      "plural": "Devices",
+      "plural": "Cameras",
       "description": "A camera, phone or tracker, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right."
     },
     {
@@ -485,17 +485,17 @@
   "roots": [
     "/archive/people",
     "/archive/locations",
-    "/archive/devices",
+    "/archive/cameras",
     "/archive/albums",
     "/archive/sources"
   ],
   "indexes": [
     {
-      "name": "trip_device",
+      "name": "trip_camera",
       "on": [
-        "trip.device"
+        "trip.camera"
       ],
-      "partial": "trip.device"
+      "partial": "trip.camera"
     },
     {
       "name": "event_date",
@@ -533,12 +533,12 @@
       "partial": "mediaStack.albumId"
     },
     {
-      "name": "device_taken_utc",
+      "name": "camera_taken_utc",
       "on": [
-        "devicePath",
+        "cameraPath",
         "takenAtUtc"
       ],
-      "partial": "devicePath"
+      "partial": "cameraPath"
     },
     {
       "name": "device_serial",
@@ -548,7 +548,7 @@
       "partial": "deviceSerialNumber"
     },
     {
-      "name": "device_model",
+      "name": "camera_model",
       "on": [
         "deviceinfo.make",
         "deviceinfo.model"
@@ -635,9 +635,9 @@
       "/albums": "ui/media/pages/albums.tsx",
       "/albums/:id": "ui/media/pages/album.tsx",
       "/albums/new": "ui/media/pages/new-album.tsx",
-      "/devices": "ui/device/pages/devices.tsx",
-      "/devices/:id": "ui/device/pages/device.tsx",
-      "/devices/new": "ui/device/pages/new-device.tsx",
+      "/cameras": "ui/camera/pages/cameras.tsx",
+      "/cameras/:id": "ui/camera/pages/camera.tsx",
+      "/cameras/new": "ui/camera/pages/new-camera.tsx",
       "/duplicates": "ui/media/pages/duplicates.tsx",
       "/events/anniversary": "ui/pages/events-anniversary.tsx",
       "/explore/people": "ui/pages/explore-people.tsx",
@@ -676,8 +676,8 @@
       "person": "/people/{name}",
       "location": "/locations/{name}",
       "album": "/albums/{path}",
-      "device": "/devices/{name}",
-      "track": "/devices/{parent}?tab=track"
+      "camera": "/cameras/{name}",
+      "track": "/cameras/{parent}?tab=track"
     }
   }
 }

@@ -34,7 +34,7 @@ One family follows a rule of its own:
 - **whisper runs in one place per host.** On a host with a card, that is always the card, in
   float16, and a transcription waits for room rather than move to the CPU. On a host without a
   card, it is the CPU, in int8. The place is part of the transcript's signature
-  (`on=cuda:float16`). One precision on both devices was measured and does not give the same
+  (`on=cuda:float16`). One precision on both cameras was measured and does not give the same
   words: int8 on the card and int8 on the CPU differed in 7% of words on Swedish home video. So
   the rule is that a transcript never depends on what else was on the card at the time.
 
