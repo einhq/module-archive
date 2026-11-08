@@ -36,6 +36,7 @@ import type { RelinkResult } from '@archive/device/api';
 import type { MediaResolveTimeResult } from '@archive/media/api';
 
 const NODE_TYPE_EXIF = 'exif';
+const METADATA_DIR = 'metadata';
 const PAGE = 200;
 
 type DeviceInfoAttr = { make?: string; model?: string };
@@ -44,6 +45,25 @@ const str = (value: unknown): string | undefined => (typeof value === 'string' &
 
 /** `/albums/x/files/y.jpg/metadata/exif` → `/albums/x/files/y.jpg`. */
 const fileOf = (exifPath: string): string => dirname(dirname(exifPath));
+
+/** The file each exif node of `exifIds` describes (`<file>/metadata/exif`): two batched parent lookups. */
+const filesOfExif = async (cmd: Command, exifIds: string[]): Promise<Map<string, string>> => {
+  const found = new Map<string, string>();
+  if (exifIds.length === 0) return found;
+  const vfs = cmd.sys.vfs;
+  const up = await vfs.getParentLinksByIds(cmd.access, exifIds);
+  const metadataOf = new Map<string, string>();
+  for (const [id, links] of up) {
+    const link = links.find((each) => each.name === NODE_TYPE_EXIF);
+    if (link) metadataOf.set(id, link.parentId);
+  }
+  const files = await vfs.getParentLinksByIds(cmd.access, [...new Set(metadataOf.values())]);
+  for (const [exif, metadata] of metadataOf) {
+    const link = files.get(metadata)?.find((each) => each.name === METADATA_DIR);
+    if (link) found.set(exif, link.parentId);
+  }
+  return found;
+};
 
 /**
  * Re-date this device's files, which is media's to do: both halves of a link change a capture
@@ -133,6 +153,8 @@ const relinkDevice = async (cmd: Command, devicePath: string, flags: RelinkFlags
       if (rows.length === 0) break;
       after = { value: null, id: rows[rows.length - 1].id };
 
+      // This device's rows, as ingest would decide them.
+      const mine: NodeQueryEntry[] = [];
       for (const row of rows) {
         // A file carrying both the serial and the make and model comes back from each lookup.
         if (seen.has(row.id)) continue;
@@ -143,15 +165,18 @@ const relinkDevice = async (cmd: Command, devicePath: string, flags: RelinkFlags
         const info = attrs.deviceinfo as DeviceInfoAttr | undefined;
         const fingerprint = { serialNumber: str(attrs.deviceSerialNumber), make: str(info?.make), model: str(info?.model) };
         // Ingest's choice: a serial another device has, or a model line an earlier device has, is not this device's.
-        if (matchDevice(pool, fingerprint)?.path !== devicePath) continue;
+        if (matchDevice(pool, fingerprint)?.path === devicePath) mine.push(row);
+      }
 
+      // Their files, read in one batch per page rather than a `get` per file.
+      const fileIds = await filesOfExif(cmd, mine.map((row) => row.id));
+      const files = await vfs.getNodesByIds(access, [...new Set(fileIds.values())]);
+
+      for (const row of mine) {
+        const fileId = fileIds.get(row.id);
+        const file = fileId ? files.get(fileId) : undefined;
+        if (!file) continue;
         const filePath = fileOf(row.absPath);
-        let file;
-        try {
-          file = await vfs.get(access, filePath);
-        } catch {
-          continue;
-        }
 
         const current = str((file.attrs as NodeAttrs).devicePath);
         // Another device already owns this file, linked by hand or before a fingerprint changed.

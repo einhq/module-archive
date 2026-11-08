@@ -189,6 +189,14 @@ Deno.test({
       const again = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/iPhone_12`);
       assertEquals(again.linked, 0);
       assertEquals(again.skipped, 2);
+
+      // A file another device owns is left alone, and taken only with `--force`.
+      await vfs.update(ADMIN_ACCESS, '/shots/b.jpg', { attrs: { devicePath: `${DEVICES_ROOT}/Other` } });
+      const owned = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/iPhone_12`);
+      assertEquals([owned.linked, owned.skipped], [0, 2]);
+      const forced = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/iPhone_12 --force`);
+      assertEquals([forced.linked, forced.skipped], [1, 1]);
+      assertEquals((await client.execJson<{ devicePath: string }>('attrs /shots/b.jpg')).devicePath, `${DEVICES_ROOT}/iPhone_12`);
     });
 
     await t.step('digitizer flag clears and restores derived dates without touching a manual override', async () => {
