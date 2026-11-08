@@ -348,12 +348,14 @@ function VersionsSection({ versions }: { versions: MediaVersion[] }) {
   );
 }
 
-const COMMENT_MIN_ROWS = 2;
 const COMMENT_MAX_ROWS = 6;
+/** The send button inside the comment box, and the room kept for it at the box's right, in px. */
+const COMMENT_SEND_BUTTON = 26;
+const COMMENT_SEND_SECTION = 36;
 
 /**
- * Sizes the comment box to `draft`: its own `rows` while empty, otherwise tall enough for the text
- * between COMMENT_MIN_ROWS and COMMENT_MAX_ROWS lines, scrolling past that.
+ * Sizes the comment box to `draft`: one row while empty, otherwise tall enough for the text, up to
+ * COMMENT_MAX_ROWS lines, scrolling past that.
  */
 function fitComment(box: HTMLTextAreaElement | null, draft: string) {
   if (!box) return;
@@ -845,18 +847,41 @@ export function MediaSidebar(
             )}
             {canEdit && (
               <>
+                {
+                  /* Send sits inside the box, in its bottom-right corner as on the chat page, so it
+                    stays beside the last line as the box grows. Enter is a new line; Ctrl+Enter posts. */
+                }
                 <Textarea
                   ref={commentRef}
                   value={draft}
                   onChange={(e) => setDraft(e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      void post();
+                    }
+                  }}
                   placeholder='Add a comment…'
-                  rows={COMMENT_MIN_ROWS}
+                  rows={1}
+                  readOnly={posting}
+                  rightSectionWidth={COMMENT_SEND_SECTION}
+                  rightSectionPointerEvents='all'
+                  styles={{ section: { alignItems: 'flex-end', paddingBottom: 4 } }}
+                  rightSection={
+                    <ActionIcon
+                      variant='filled'
+                      color='marine'
+                      size={COMMENT_SEND_BUTTON}
+                      onClick={() => void post()}
+                      disabled={!draft.trim()}
+                      loading={posting}
+                      title='Comment'
+                      aria-label='Comment'
+                    >
+                      <TablerIcon name='send' size={14} />
+                    </ActionIcon>
+                  }
                 />
-                {draft.trim() && (
-                  <Group>
-                    <Button size='xs' onClick={post} loading={posting}>Comment</Button>
-                  </Group>
-                )}
               </>
             )}
           </SidebarSection>
