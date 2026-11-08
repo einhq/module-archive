@@ -1,5 +1,7 @@
 # The archive's model-bound work in the media pool, a kind a line: the backlogs the models worker
-# rotates between, in this order, and the second worker the other way round. Every kind a pipeline
-# step names with `requires: models` is here, or it never runs (test/media/model-slots.test.ts).
-faces
-diarize
+# rotates between, in this order, and the second worker the other way round. `ops=` names the EMS
+# ops a kind's steps call: a worker for another EMS instance takes the kind only when that instance
+# serves them all and stamps them as the primary does. Every kind a pipeline step names with
+# `requires: models` is here, or it never runs (test/media/model-slots.test.ts).
+faces ops=faces.detect,faces.detect_video,image.renditions,video.poster
+diarize ops=speech.voiceprint,speech.active_speakers

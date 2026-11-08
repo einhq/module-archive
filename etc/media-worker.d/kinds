@@ -1,9 +1,8 @@
 # The archive's work in the media pool that takes the media worker's CPU budget, a kind a line, in
 # the order offered. `reserve` puts a kind in the share kept for the work after ingest
 # (CFG_CPU_NON_ENTRY_SLOTS). Every kind a pipeline step names with `requires: cpu` is here, or it
-# never runs (test/media/model-slots.test.ts).
-#
-# Some run on EiN's own data:
+# never runs (test/media/model-slots.test.ts). None calls EMS, so none names `ops=`, and only the
+# primary's worker takes them. They run on EiN's own data:
 unzip                    # a zip in a staging category expanded                (priority 100)
 interpret reserve        # what a file's metadata means: its time and place    (priority 100)
 face-assign reserve      # a kNN over every known face embedding               (priority 40)
