@@ -28,8 +28,8 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.11.0",
-    "media": "^0.2.0"
+    "ems": "^0.12.0",
+    "media": "^0.3.0"
   },
   "imports": {
     "@archive/camera/api": "./lib/camera/api.ts",
