@@ -15,11 +15,11 @@
  *
  * The panel stays mounted from one picture to the next, so a step updates only the rows that
  * change (ein/core#915). What belongs to the picture shown starts over when `media` changes: the
- * comment draft, the open menu and dialogs, the doubt question and the scroll; children that keep
+ * comment draft, the open menu and dialogs (the comment delete's confirmation too), the doubt question and the scroll; children that keep
  * state of their own for a picture are keyed by its path.
  */
 
-import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
+import { CoverAvatar, Dialog, DialogActions, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
@@ -441,6 +441,9 @@ export function MediaSidebar(
   const [menuOpen, setMenuOpen] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
+  /** The comment whose delete waits to be confirmed. */
+  const [deleting, setDeleting] = useState<CommentEntry | null>(null);
+  const [deletingBusy, setDeletingBusy] = useState(false);
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
@@ -449,6 +452,8 @@ export function MediaSidebar(
     setEditing(false);
     setMenuOpen(false);
     setAsking(null);
+    setDeleting(null);
+    setDeletingBusy(false);
   }
   /** The picture shown, for a comment posted on one to know whether it is still the one shown. */
   const pathRef = useRef(media.path);
@@ -462,7 +467,7 @@ export function MediaSidebar(
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || sharing || asking !== null || menuOpen), [editing, sharing, asking, menuOpen]);
+  useEffect(() => onLayer(editing || sharing || asking !== null || menuOpen || deleting !== null), [editing, sharing, asking, menuOpen, deleting]);
   // Escape closes the edit menu, and not the lightbox beneath. Mantine's menu answers Escape only
   // with the focus inside it, and a click on its button leaves the focus on the button, so the key
   // is taken here, at the window, first.
@@ -518,6 +523,18 @@ export function MediaSidebar(
       if (pathRef.current === path) setDraft('');
     } finally {
       if (pathRef.current === path) setPosting(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    const path = media.path;
+    setDeletingBusy(true);
+    try {
+      await removeComment(deleting.slug);
+      if (pathRef.current === path) setDeleting(null);
+    } finally {
+      if (pathRef.current === path) setDeletingBusy(false);
     }
   };
 
@@ -840,7 +857,7 @@ export function MediaSidebar(
                     key={comment.slug}
                     comment={comment}
                     canDelete={access?.uid === comment.uid}
-                    onDelete={() => removeComment(comment.slug)}
+                    onDelete={() => setDeleting(comment)}
                   />
                 ))}
               </Stack>
@@ -956,6 +973,13 @@ export function MediaSidebar(
           </SidebarSection>
         )}
       </Stack>
+      <Dialog opened={deleting !== null} onClose={() => setDeleting(null)} title='Delete comment?' icon='trash' pattern='danger' size='sm' floating>
+        <Text size='sm' style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }}>{deleting?.body}</Text>
+        <DialogActions>
+          <Button variant='default' onClick={() => setDeleting(null)}>Cancel</Button>
+          <Button color='red' loading={deletingBusy} onClick={() => void confirmDelete()}>Delete</Button>
+        </DialogActions>
+      </Dialog>
       {details && (
         <MediaEditModal
           opened={editing}
