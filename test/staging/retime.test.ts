@@ -72,7 +72,7 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
             indexedAt: '2026-10-18T00:00:00Z',
             when: camera
               ? {
-                camera: {
+                device: {
                   year: camera.slice(0, 4),
                   month: camera.slice(5, 7),
                   day: camera.slice(8, 10),

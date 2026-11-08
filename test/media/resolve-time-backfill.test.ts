@@ -45,7 +45,7 @@ Deno.test({
 
     await t.step('a gps fix supplies the instant and the camera clock the wall clock', async () => {
       await media('/shots/gps.jpg', {
-        camera: parts('2015-07-25T14:03:11'),
+        device: parts('2015-07-25T14:03:11'),
         gps: parts('2015-07-25T12:03:11'),
       });
       await cmd.shouldSucceed('media-resolve-time');
@@ -60,7 +60,7 @@ Deno.test({
     await t.step('a stale fix is disbelieved and counted', async () => {
       // The corpus shape: a file shot on the 21st carrying the receiver's last lock, from the 19th.
       await media('/shots/stale.jpg', {
-        camera: parts('2014-11-21T22:53:37'),
+        device: parts('2014-11-21T22:53:37'),
         gps: parts('2014-11-19T11:41:01'),
       });
       const res = await client.execJson<Result>('media-resolve-time');
@@ -72,7 +72,7 @@ Deno.test({
     });
 
     await t.step('a hand-typed time wins, and keeps its precision', async () => {
-      await media('/shots/manual.jpg', { camera: parts('2015-07-25T14:03:11') }, { whenManual: '1975' });
+      await media('/shots/manual.jpg', { device: parts('2015-07-25T14:03:11') }, { whenManual: '1975' });
       await cmd.shouldSucceed('media-resolve-time');
 
       const attrs = await attrsOf('/shots/manual.jpg');
@@ -109,7 +109,7 @@ Deno.test({
     });
 
     await t.step('--dry-run writes nothing and says what it would do', async () => {
-      await media('/shots/dry.jpg', { camera: parts('2001-02-03T04:05:06') });
+      await media('/shots/dry.jpg', { device: parts('2001-02-03T04:05:06') });
 
       const res = await client.execJson<Result>('media-resolve-time --dry-run');
       assertEquals(res.dryRun, true);
@@ -128,7 +128,7 @@ Deno.test({
 
     await t.step('--under narrows the walk', async () => {
       await client.exec('mkdir -p /other');
-      await media('/other/x.jpg', { camera: parts('2003-03-03T03:03:03') });
+      await media('/other/x.jpg', { device: parts('2003-03-03T03:03:03') });
 
       const res = await client.execJson<Result>('media-resolve-time --under /other');
       assertEquals(res.scanned, 1);
