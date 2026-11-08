@@ -11,7 +11,7 @@ import { usePersistedState } from '@ein/ui/hooks';
 import { ActionIcon, Group, Stack, Text, UnstyledButton } from '@mantine/core';
 import type { ReactNode } from 'react';
 
-export const SECTION_ICON_SIZE = 32;
+const SECTION_ICON_SIZE = 32;
 
 /**
  * The sections folded or unfolded by hand, as `id:open` and `id:closed` separated by commas; a
