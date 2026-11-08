@@ -1,0 +1,91 @@
+#!ts
+/**
+ * track-home — a track's home bases: the berths, yards and houses where arriving ends a trip.
+ *
+ *   track-home <track>                         its home bases
+ *   track-home <track> --add <location>...     make locations home bases
+ *   track-home <track> --remove <location>...  take them off
+ *
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`); a location is its path or its slug under the locations root. Without a change it
+ * answers the track's own list, or, while it lists none, the residences of the owners of the
+ * cameras that record into it (`@archive/location/track-homes`). A home added or taken off derives
+ * the track's trips again: the bridge announces it (`track.changed`).
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { LOCATIONS_ROOT } from '@archive/paths';
+import type { TrackHomes } from '@archive/location/api';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { addTrackHome, readTrackHomes, removeTrackHome } from '@archive/location/track-homes';
+
+const locationPath = (cwd: string, arg: string): string => arg.includes('/') ? resolve(cwd, arg) : `${LOCATIONS_ROOT}/${arg}`;
+
+const trackHome = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['add', 'remove'], collect: ['add', 'remove'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [target, ...rest] = flags._.map(String);
+  const adds = (flags.add ?? []) as string[];
+  const removes = (flags.remove ?? []) as string[];
+  if (!target || rest.length > 0) {
+    await cmd.writeError('track-home: usage: track-home <track> [--add <location>]... [--remove <location>]...\n');
+    return 1;
+  }
+
+  try {
+    const { path: track } = await trackOf(cmd, target);
+
+    if (adds.length === 0 && removes.length === 0) {
+      const answer = (await readTrackHomes(cmd, track)) satisfies TrackHomes;
+      if (cmd.json) {
+        await cmd.writeJSON(answer);
+        return 0;
+      }
+      if (answer.homes.length === 0) await cmd.writeLn('No home bases, and no owner of a camera recording into it with a home.');
+      for (const home of answer.homes) {
+        const span = home.from || home.to ? ` ${home.from ?? '…'} – ${home.to ?? ''}` : '';
+        const owner = home.owner ? ` (home of ${home.owner}${span})` : '';
+        await cmd.writeLn(`${home.name}  ${home.location}${owner}`);
+      }
+      return 0;
+    }
+
+    for (const location of adds.map((arg) => locationPath(cmd.cwd, arg))) {
+      const added = await addTrackHome(cmd, track, location);
+      if (!cmd.json) await cmd.writeLn(added ? `Added ${location}` : `${location}: already a home base`);
+    }
+    for (const location of removes.map((arg) => locationPath(cmd.cwd, arg))) {
+      const removed = await removeTrackHome(cmd, track, location);
+      if (!removed) throw new Error(`${location}: not a home base of ${track}`);
+      if (!cmd.json) await cmd.writeLn(`Removed ${location}`);
+    }
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`track-home: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+trackHome.spec = {
+  name: 'track-home',
+  effect: 'read' as const,
+  description: "List or change a track's home bases, where arriving ends a trip",
+  args: [
+    { name: 'track', type: 'path' as const, description: TRACK_ARG },
+  ],
+  flags: [
+    { name: 'add', type: 'string' as const, writes: true, description: 'make a location a home base, by its path or its slug (repeatable)' },
+    { name: 'remove', type: 'string' as const, writes: true, description: 'take a location off the home bases, by its path or its slug (repeatable)' },
+  ],
+  examples: [
+    'track-home sailboat',
+    'track-home sailboat --add exempelhamnen',
+    'track-home /archive/devices/sailboat/position/history --remove /archive/locations/exempelhamnen',
+  ],
+  returns: 'without a change: the home bases, each with its location, name, source (track, or owner with the span) and point when it has one.',
+};
+
+export default trackHome;

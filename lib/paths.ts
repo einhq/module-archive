@@ -10,7 +10,7 @@ export const ALBUMS_ROOT = `${ARCHIVE_PATH}/albums`;
 export const PEOPLE_ROOT = `${ARCHIVE_PATH}/people`;
 /** Locations (`location` nodes) live under this prefix. */
 export const LOCATIONS_ROOT = `${ARCHIVE_PATH}/locations`;
-/** Cameras live under this prefix; a camera's recorded route is its child `track`. */
+/** Cameras live under this prefix; one that records where it was links to its track as its child `track`. */
 export const CAMERAS_ROOT = `${ARCHIVE_PATH}/cameras`;
 /**
  * Source files no single node owns, one folder per kind: a GEDCOM file, which describes many

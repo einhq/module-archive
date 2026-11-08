@@ -41,7 +41,7 @@ export function GpxDetails({ path }: { path: string }) {
     ['Points', `${info.points.toLocaleString()}${info.timed < info.points ? ` (${info.timed.toLocaleString()} with a time)` : ''}`],
     ['File time', info.time ? `${minute(info.time)} UTC` : undefined],
     ['Size', formatBytes(info.size)],
-    ['Cameras named', info.cameras.length > 0 ? info.cameras.map((camera) => camera.name).join(', ') : 'none registered'],
+    ['Matches', info.matches.length > 0 ? info.matches.map((track) => track.name).join(', ') : 'no track it names'],
   ];
 
   return (

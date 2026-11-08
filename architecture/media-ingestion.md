@@ -657,13 +657,14 @@ waits for rather than by a shared DAG:
    cannot see (a hard link into `files/`, a fact lost while the bridge was down, and for a profile
    a face named or a position arriving, which reach it once a week).
 
-   An album's **cameras**, whose tracks its Map tab draws over its span, are not kept by the
-   pipeline: `album-camera-list` reads the cameras of its members' `cameraPath` each time it is
-   asked, so a member linked to its camera after joining needs no fact. Beside them it lists the
-   cameras added by hand, softlinks in the album's `cameras/` directory (`album-camera-add`), and
-   leaves out the cameras of its media named in the album's `camerasRemoved` attr
-   (`album-camera-rm`), which keeps a removal as more of that camera's media joins
-   (`lib/media/album-cameras.ts`).
+   An album's **tracks**, which its Map tab draws over its span, are not kept by the pipeline:
+   `album-track-list` reads the cameras of its members' `cameraPath` each time it is asked, and the
+   track each of them records into (the camera's child softlink `track`), so a member linked to its
+   camera after joining, or a camera given its track later, needs no fact. Beside them it lists the
+   tracks added by hand, softlinks in the album's `tracks/` directory (`album-track-add`), and
+   leaves out the tracks of its media named in the album's `tracksRemoved` attr
+   (`album-track-rm`), which keeps a removal as more of that track's media joins
+   (`lib/media/album-tracks.ts`).
 
    `timeline` also **filters**: `--q` over an entry's title and description, and `--person`,
    `--location`, `--tag`. A subject matches two ways — an entry _about_ them (`ownerPath`, `people`)

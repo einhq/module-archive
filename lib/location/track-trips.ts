@@ -1,32 +1,32 @@
 /**
- * A camera's trips and stays, kept as JSON in its `.trips` child (`@archive/location/camera-trips`).
+ * A track's trips and stays, kept as JSON in its `.trips` child (`@archive/location/track-trips`).
  *
- * `deriveCameraTrips` cuts the track into trips (`@archive/location/trips`) with what the camera
+ * `deriveTrackTrips` cuts the track into trips (`@archive/location/trips`) with what the track
  * says of itself: the thresholds of its kind, its timezone, its homes and the edits in its attr
  * `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more or fewer fixes before that point than it had.
  * A stay derived again from the same first fix keeps the location `track-places` gave it, and a
  * leg or trip derived again with the same first and last fix the weather `track-weather` gave it.
- * Whenever `.trips` is written, the albums made of the camera's trips are written anew from it
+ * Whenever `.trips` is written, the albums made of the track's trips are written anew from it
  * (`@archive/media/trip-album`).
  */
 
 import type { Command } from '@ein/client';
-import type { CameraTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api';
-import { readCameraHomes } from '@archive/camera/homes';
+import type { TrackTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api';
 import { trackOf } from '@archive/location/track';
+import { readTrackHomes } from '@archive/location/track-homes';
 import { trackProfile } from '@archive/location/track-profile';
 import { keepTripWeather } from '@archive/location/trip-weather';
 import { numberTrips, segmentTrips, type TripFix, type TripHome, type TripSegmentation, type TripSettings } from '@archive/location/trips';
-import { albumCameras } from '@archive/media/album-cameras';
+import { albumTracks } from '@archive/media/album-tracks';
 import { refreshTripAlbums } from '@archive/media/trip-album';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { AUTO_ORIGIN } from '@archive/staging/auto-album';
 
-/** The camera's child holding its trips. A dotfile, so nothing indexes it. */
+/** The track's child holding its trips. A dotfile, so nothing indexes it. */
 const TRIPS_FILE = '.trips';
-/** The camera attr holding the edits made by hand. */
+/** The track attr holding the edits made by hand. */
 export const TRIP_EDITS_ATTR = 'tripEdits';
 
 /** The track is read this many days at a time. */
@@ -43,7 +43,7 @@ type TrackReader = {
 
 const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 
-/** The camera's edits, as its attr holds them. */
+/** The track's edits, as its attr holds them. */
 export const tripEditsOf = (attrs: Record<string, unknown>): TripEdits => {
   const raw = (attrs[TRIP_EDITS_ATTR] ?? {}) as Record<string, unknown>;
   const merge = strings(raw.merge);
@@ -51,23 +51,23 @@ export const tripEditsOf = (attrs: Record<string, unknown>): TripEdits => {
   return { ...(merge.length ? { merge } : {}), ...(split.length ? { split } : {}) };
 };
 
-/** The camera's trips as last derived, or undefined when they never were. */
-export const readCameraTrips = async (cmd: Command, camera: string): Promise<CameraTrips | undefined> => {
-  const path = `${camera}/${TRIPS_FILE}`;
+/** The track's trips as last derived, or undefined when they never were. */
+export const readTrackTrips = async (cmd: Command, track: string): Promise<TrackTrips | undefined> => {
+  const path = `${track}/${TRIPS_FILE}`;
   if (!(await cmd.sys.vfs.exists(cmd.access, path))) return undefined;
   const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
   try {
-    return JSON.parse(await new Response(handle.readable).text()) as CameraTrips;
+    return JSON.parse(await new Response(handle.readable).text()) as TrackTrips;
   } finally {
     await handle.close();
   }
 };
 
-/** Write the camera's trips to its `.trips`, shared as the camera is, and the albums made of them. */
-export const writeCameraTrips = async (cmd: Command, camera: string, trips: CameraTrips): Promise<void> => {
-  const { mode, gid, acl } = (await cmd.sys.vfs.get(cmd.access, camera)).props;
-  await cmd.sys.vfs.ensure(cmd.access, 'file', camera, TRIPS_FILE, { props: { mode, gid, ...(acl?.length ? { acl } : {}) }, attrs: { mimetype: 'application/json' } });
-  const path = `${camera}/${TRIPS_FILE}`;
+/** Write the track's trips to its `.trips`, shared as the track is, and the albums made of them. */
+export const writeTrackTrips = async (cmd: Command, track: string, trips: TrackTrips): Promise<void> => {
+  const { mode, gid, acl } = (await cmd.sys.vfs.get(cmd.access, track)).props;
+  await cmd.sys.vfs.ensure(cmd.access, 'file', track, TRIPS_FILE, { props: { mode, gid, ...(acl?.length ? { acl } : {}) }, attrs: { mimetype: 'application/json' } });
+  const path = `${track}/${TRIPS_FILE}`;
   const bytes = encoder.encode(JSON.stringify(trips));
   const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'w' });
   try {
@@ -94,8 +94,8 @@ const readFixes = async (handle: TrackReader, from: number, last: number): Promi
   return fixes.filter((fix, index) => index === 0 || fix.ms !== fixes[index - 1].ms);
 };
 
-/** Albums whose span overlaps the trip's days and whose cameras include `camera`. */
-const candidateAlbums = async (cmd: Command, camera: string, trip: Omit<Trip, 'albums'>, camerasOf: Map<string, Promise<string[]>>): Promise<string[]> => {
+/** Albums whose span overlaps the trip's days and whose map draws `track`. */
+const candidateAlbums = async (cmd: Command, track: string, trip: Omit<Trip, 'albums'>, tracksOf: Map<string, Promise<string[]>>): Promise<string[]> => {
   const albums: string[] = [];
   let after: { value: string | null; id: string } | undefined;
   for (;;) {
@@ -110,10 +110,10 @@ const candidateAlbums = async (cmd: Command, camera: string, trip: Omit<Trip, 'a
       limit: ALBUM_PAGE,
     });
     for (const row of rows) {
-      if (!camerasOf.has(row.absPath)) {
-        camerasOf.set(row.absPath, albumCameras(cmd, row.absPath).then((list) => list.cameras.map((entry) => entry.path), () => []));
+      if (!tracksOf.has(row.absPath)) {
+        tracksOf.set(row.absPath, albumTracks(cmd, row.absPath).then((list) => list.tracks.map((entry) => entry.path), () => []));
       }
-      if ((await camerasOf.get(row.absPath)!).includes(camera)) albums.push(row.absPath);
+      if ((await tracksOf.get(row.absPath)!).includes(track)) albums.push(row.absPath);
     }
     if (rows.length < ALBUM_PAGE) return albums;
     after = { value: rows[rows.length - 1].sortValue, id: rows[rows.length - 1].id };
@@ -131,17 +131,17 @@ const withPlace = (stay: TripStay, placed: Map<string, TripStay>): TripStay => {
 };
 
 /**
- * Derive the camera's trips again (see the file comment), write them unless `dryRun`, and return
- * them. `target` is the camera, by slug or path, or its track.
+ * Derive the track's trips again (see the file comment), write them unless `dryRun`, and return
+ * them. `target` names the track as `trackOf` reads it.
  */
-export const deriveCameraTrips = async (cmd: Command, target: string, opts: { full?: boolean; dryRun?: boolean; now?: number } = {}): Promise<CameraTrips> => {
-  const { path: trackPath, camera } = await trackOf(cmd, target);
-  const node = await cmd.sys.vfs.get(cmd.access, camera);
+export const deriveTrackTrips = async (cmd: Command, target: string, opts: { full?: boolean; dryRun?: boolean; now?: number } = {}): Promise<TrackTrips> => {
+  const { path: trackPath } = await trackOf(cmd, target);
+  const node = await cmd.sys.vfs.get(cmd.access, trackPath);
   const attrs = node.attrs as Record<string, unknown>;
   const profile = trackProfile(attrs.kind);
   const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
   const edits = tripEditsOf(attrs);
-  const homes: TripHome[] = (await readCameraHomes(cmd, camera)).homes.flatMap((home) =>
+  const homes: TripHome[] = (await readTrackHomes(cmd, trackPath)).homes.flatMap((home) =>
     home.lat === undefined || home.lng === undefined
       ? []
       : [{ lat: home.lat, lng: home.lng, path: home.location, ...(home.from ? { from: home.from } : {}), ...(home.to ? { to: home.to } : {}) }]
@@ -157,17 +157,15 @@ export const deriveCameraTrips = async (cmd: Command, target: string, opts: { fu
   // What the trips are derived with, besides the track. Anything else reads the whole track.
   const basis = JSON.stringify({ clusterRadiusM: profile.clusterRadiusM, longRestMs: profile.longRestMs, timezone, homes, edits });
 
-  const empty: CameraTrips = { camera, computedAt: new Date(settings.now!).toISOString(), basis, trips: [], stays: [] };
-  if (!(await cmd.sys.vfs.exists(cmd.access, trackPath))) return empty;
-  const trackId = (await cmd.sys.vfs.get(cmd.access, trackPath)).id;
-  const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [trackId])).get(trackId);
+  const empty: TrackTrips = { track: trackPath, computedAt: new Date(settings.now!).toISOString(), basis, trips: [], stays: [] };
+  const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [node.id])).get(node.id);
   if (!summary?.firstTs || !summary.lastTs) return empty;
 
-  const prior = await readCameraTrips(cmd, camera);
+  const prior = await readTrackTrips(cmd, trackPath);
   const before = opts.full ? undefined : prior;
   const settled = before?.basis === basis && before.settledUntil ? Date.parse(before.settledUntil) : undefined;
   const handle = await cmd.sys.vfs.open(cmd.access, trackPath, { mode: 'r' }) as unknown as TrackReader;
-  let previous: CameraTrips | undefined;
+  let previous: TrackTrips | undefined;
   let fixes: TripFix[] = [];
   let seg: TripSegmentation = { trips: [], stays: [] };
   try {
@@ -203,7 +201,7 @@ export const deriveCameraTrips = async (cmd: Command, target: string, opts: { fu
   // Where `track-places` placed a stay holds for the stay derived again from the same first fix.
   const placed = new Map((prior?.stays ?? []).filter((stay) => stay.location || stay.unnamed).map((stay) => [stay.start, stay]));
 
-  const camerasOf = new Map<string, Promise<string[]>>();
+  const tracksOf = new Map<string, Promise<string[]>>();
   const derived: Trip[] = [];
   for (const trip of seg.trips) {
     derived.push({
@@ -212,14 +210,14 @@ export const deriveCameraTrips = async (cmd: Command, target: string, opts: { fu
       to: shiftPlace(trip.to, offset),
       destination: shiftPlace(trip.destination, offset),
       legs: trip.legs.map((leg) => ({ ...leg, from: shiftPlace(leg.from, offset), to: shiftPlace(leg.to, offset) })),
-      albums: await candidateAlbums(cmd, camera, trip, camerasOf),
+      albums: await candidateAlbums(cmd, trackPath, trip, tracksOf),
     });
   }
 
   const settledUntil = seg.settledUntil ?? (previous ? from : undefined);
   const settledPoints = (previous?.settledPoints ?? 0) + (settledUntil === undefined ? 0 : fixes.filter((fix) => fix.ms < settledUntil).length);
-  const trips: CameraTrips = {
-    camera,
+  const trips: TrackTrips = {
+    track: trackPath,
     computedAt: new Date(settings.now!).toISOString(),
     lastFix: summary.lastTs,
     ...(settledUntil !== undefined ? { settledUntil: new Date(settledUntil).toISOString(), settledPoints } : {}),
@@ -227,6 +225,6 @@ export const deriveCameraTrips = async (cmd: Command, target: string, opts: { fu
     trips: numberTrips([...keptTrips, ...keepTripWeather(derived, prior?.trips ?? [])]),
     stays: [...keptStays, ...seg.stays.map((stay) => withPlace(stay, placed))],
   };
-  if (!opts.dryRun) await writeCameraTrips(cmd, camera, trips);
+  if (!opts.dryRun) await writeTrackTrips(cmd, trackPath, trips);
   return trips;
 };

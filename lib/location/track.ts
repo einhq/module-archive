@@ -1,23 +1,38 @@
 /**
- * Shared helpers for the track commands: which track a camera names, handle
- * access, the point shape, and the listing of every camera's track.
+ * Shared helpers for the track commands: which track a target names, its name, handle access, the
+ * point shape, and the listing of every track.
  *
- * A track is the route a camera recorded, kept as the camera's child `track`.
- * What a track is without reading it — point count, span, extent — is the
- * track registry's alone; nothing copies it onto the node. The GPX files it
- * was read from are kept in the camera's `routes/` and linked from the
- * track's `sources/`.
+ * A track is a `track` node anywhere under the archive, such as the history of a device's position.
+ * It is what travels: how (`kind`), the timezone its days are cut in, its edits to its trips
+ * (`tripEdits`) and its description are its attrs, and its home bases (`homes/`), its trips
+ * (`.trips`) and the GPX files it was read from (`routes/`, linked from its `sources/`) are its
+ * children. A camera that also records where it was links to its track from its child softlink
+ * `track`. What a track is without reading it — point count, span, extent — is the track registry's
+ * alone; nothing copies it onto the node.
  */
+import { ARCHIVE_PATH } from '@ein/paths';
 import { CAMERAS_ROOT } from '@archive/paths';
 import type { TrackEntry } from '@archive/location/api';
 import { fileSource, linkSource } from '@archive/sources';
 import type { Command } from '@ein/client';
-import { dirname, resolve } from '@std/path';
+import { basename, dirname, resolve } from '@std/path';
 
-/** The name of a camera's track. */
-const TRACK_CHILD = 'track';
-/** The child of a camera that holds the GPX files its track was read from. */
+/** The child softlink of a camera that names the track it records into. */
+export const TRACK_LINK = 'track';
+/** The child of a track that holds the GPX files it was read from. */
 const ROUTES_DIR = 'routes';
+/** Where a bare name, one without a `/`, is looked for: a device, then a camera, of that name. */
+const TRACK_HOLDER_ROOTS = [`${ARCHIVE_PATH}/devices`, CAMERAS_ROOT];
+/** What a command's track argument takes (`trackOf`), as its spec says it. */
+export const TRACK_ARG = "the track's path, or a device or camera that has one, by its path or its name";
+
+const NODE_TYPE_TRACK = 'track';
+/** A node whose name says what it is of, not what it is called: a device's `position`, say. */
+const NODE_TYPE_ENTITY = 'entity';
+const NODE_TYPE_CAMERA = 'camera';
+
+/** Tracks per query page. */
+const TRACK_PAGE = 200;
 
 /** A coordinate point. `ts` is the track's primary key, so it is never optional at rest. */
 export type TrackPoint = {
@@ -89,87 +104,153 @@ type TrackLikeHandle = {
   close(): Promise<void>;
 };
 
-const str = (value: unknown): string | undefined => typeof value === 'string' && value !== '' ? value : undefined;
+type Node = Awaited<ReturnType<Command['sys']['vfs']['get']>>;
+
+const str = (value: unknown): string | undefined => typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
 
 /**
- * Every camera under `root` that has a track, with what the registry says of it.
- *
- * One listing of the cameras with their child edges says which have a track, one
- * batched read gives those tracks' nodes and one registry read their summaries,
- * so no track is opened however many there are.
+ * What the track at `path` is called: its own `label`, else the `label`, `name` or node name of the
+ * nearest node above it that is neither a track nor an entity — for a device's position history,
+ * the device. `nodes` keeps the nodes read, by path, for the next track.
  */
-export async function listTracks(cmd: Command, root: string = CAMERAS_ROOT): Promise<TrackEntry[]> {
-  const cameras = (await cmd.sys.vfs.children(cmd.access, root, { childLinks: true })).filter((entry) => entry.node.type === 'camera');
-  const trackIds = new Map(cameras.flatMap((entry) => {
-    const track = entry.children?.find((child) => child.name === TRACK_CHILD);
-    return track ? [[entry.name, track.id] as const] : [];
-  }));
-  const ids = [...trackIds.values()];
-  const [nodes, summaries] = await Promise.all([cmd.sys.vfs.getNodesByIds(cmd.access, ids), cmd.sys.vfs.trackSummaries(cmd.access, ids)]);
+export async function trackName(cmd: Command, path: string, track: Node, nodes = new Map<string, Promise<Node | undefined>>()): Promise<string> {
+  const own = str(track.attrs.label);
+  if (own) return own;
+  for (let at = dirname(path); at !== '/' && at !== '.'; at = dirname(at)) {
+    if (!nodes.has(at)) nodes.set(at, cmd.sys.vfs.get(cmd.access, at).catch(() => undefined));
+    const node = await nodes.get(at);
+    if (!node) break;
+    if (node.type === NODE_TYPE_TRACK || node.type === NODE_TYPE_ENTITY) continue;
+    return str(node.attrs.label) ?? str(node.attrs.name) ?? basename(at);
+  }
+  return basename(path);
+}
 
-  return cameras.flatMap((entry): TrackEntry[] => {
-    const id = trackIds.get(entry.name) ?? '';
-    const node = nodes.get(id);
-    const summary = summaries.get(id);
-    if (!node || node.type !== 'track' || !summary) return [];
-    const camera = `${root}/${entry.name}`;
-    return [{
-      id: entry.name,
-      camera,
-      path: `${camera}/${TRACK_CHILD}`,
-      nodeId: id,
-      name: str((entry.node.attrs as Record<string, unknown>).name) ?? entry.name,
-      kind: str((entry.node.attrs as Record<string, unknown>).kind),
-      description: str((node.attrs as Record<string, unknown>).description),
+/**
+ * Every track within `within` (a `track` node anywhere in its tree), with what the registry says of
+ * it. One query finds them and one registry read gives their summaries, so no track is opened
+ * however many there are.
+ */
+export async function listTracks(cmd: Command, within: string = ARCHIVE_PATH): Promise<TrackEntry[]> {
+  const rows: { path: string; node: Node }[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  for (;;) {
+    const page = await cmd.sys.vfs.query(cmd.access, { types: [NODE_TYPE_TRACK], within, after, limit: TRACK_PAGE });
+    rows.push(...page.map((row) => ({ path: row.absPath, node: row.node as Node })));
+    if (page.length < TRACK_PAGE) break;
+    after = { value: page[page.length - 1].sortValue, id: page[page.length - 1].id };
+  }
+  const summaries = await cmd.sys.vfs.trackSummaries(cmd.access, rows.map((row) => row.node.id));
+  const nodes = new Map<string, Promise<Node | undefined>>();
+
+  const tracks = await Promise.all(rows.map(async ({ path, node }): Promise<TrackEntry | undefined> => {
+    const summary = summaries.get(node.id);
+    if (!summary) return undefined;
+    return {
+      path,
+      nodeId: node.id,
+      name: await trackName(cmd, path, node, nodes),
+      kind: str(node.attrs.kind),
+      description: str(node.attrs.description),
       ...summary,
-    }];
+    };
+  }));
+  return tracks.filter((track): track is TrackEntry => track !== undefined).sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path));
+}
+
+/** The path a target names: a path as it is, a bare name the first holder of that name (`TRACK_HOLDER_ROOTS`). */
+const targetPath = async (cmd: Command, target: string): Promise<string> => {
+  if (target.includes('/')) return resolve(cmd.cwd, target);
+  for (const root of TRACK_HOLDER_ROOTS) {
+    if (await cmd.sys.vfs.exists(cmd.access, `${root}/${target}`, { follow: false })) return `${root}/${target}`;
+  }
+  throw new Error(`${target}: no device or camera of that name (${TRACK_HOLDER_ROOTS.join(', ')})`);
+};
+
+/** The node at `path`, not followed, and the path a softlink there points at. */
+const nodeAt = async (cmd: Command, path: string): Promise<{ node: Node; target?: string }> => {
+  const node = await cmd.sys.vfs.get(cmd.access, path, { follow: false, readlink: true }).catch(() => {
+    throw new Error(`${path}: not found`);
   });
-}
+  return { node, ...(node.props.softlink ? { target: resolve(dirname(path), node.props.softlink) } : {}) };
+};
 
 /**
- * The track a target names, and the camera it belongs to. A camera — its slug, or its
- * path — stands for its `track` child, whether or not that exists yet; a track node
- * stands for itself.
+ * The track a target names, and what it is called. A track is itself, and a softlink to one the
+ * track it points at; a node with a child softlink `track` (a camera) is the track that links to;
+ * any other node (a device) is the one track within its tree. A bare name is looked for in
+ * `TRACK_HOLDER_ROOTS`.
  */
-export async function trackOf(cmd: Command, target: string): Promise<{ path: string; camera: string }> {
-  const path = target.includes('/') ? resolve(cmd.cwd, target) : `${CAMERAS_ROOT}/${target}`;
-  const node = await cmd.sys.vfs.get(cmd.access, path);
-  if (node.type === 'camera') return { path: `${path}/${TRACK_CHILD}`, camera: path };
-  if (node.type === 'track') return { path, camera: path.slice(0, path.lastIndexOf('/')) || '/' };
-  throw new Error(`${path}: not a camera or a track (is ${node.type})`);
+export async function trackOf(cmd: Command, target: string): Promise<{ path: string; name: string }> {
+  let path = await targetPath(cmd, target);
+  let { node, target: linked } = await nodeAt(cmd, path);
+  if (linked) {
+    path = linked;
+    ({ node, target: linked } = await nodeAt(cmd, path));
+    if (linked) throw new Error(`${path}: a link to a link`);
+  }
+
+  if (node.type !== NODE_TYPE_TRACK) {
+    const link = `${path}/${TRACK_LINK}`;
+    const child = await cmd.sys.vfs.exists(cmd.access, link, { follow: false }) ? await nodeAt(cmd, link) : undefined;
+    if (child?.target) {
+      path = child.target;
+      node = (await nodeAt(cmd, path)).node;
+      if (node.type !== NODE_TYPE_TRACK) throw new Error(`${link} points at ${path}, which is not a track (is ${node.type})`);
+    } else {
+      const found = await cmd.sys.vfs.query(cmd.access, { types: [NODE_TYPE_TRACK], within: path, limit: TRACK_PAGE });
+      if (found.length === 0) throw new Error(`${path} has no track`);
+      if (found.length > 1) throw new Error(`${path} has ${found.length} tracks: name one`);
+      path = found[0].absPath;
+      node = found[0].node as Node;
+    }
+  }
+  return { path, name: await trackName(cmd, path, node) };
 }
 
-/** A camera's track, made empty when it has none yet. Returns its path. */
-export async function ensureTrack(cmd: Command, target: string): Promise<string> {
-  const { path, camera } = await trackOf(cmd, target);
-  await cmd.sys.vfs.ensure(cmd.access, 'track', camera, TRACK_CHILD);
-  return path;
+/** Open the track a target names (see `trackOf`). Caller closes. */
+export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 'w'): Promise<{ path: string; name: string; handle: TrackLikeHandle }> {
+  const track = await trackOf(cmd, target);
+  const handle = await cmd.sys.vfs.open(cmd.access, track.path, { mode });
+  return { ...track, handle: handle as unknown as TrackLikeHandle };
 }
 
-/** Open the track a target names (see `trackOf`), verifying its type. Caller closes. */
-export async function openTrack(cmd: Command, target: string, mode: 'r' | 'a' | 'w'): Promise<{ path: string; camera: string; handle: TrackLikeHandle }> {
-  const { path, camera } = await trackOf(cmd, target);
-  let node;
-  try {
-    node = await cmd.sys.vfs.get(cmd.access, path);
-  } catch {
-    throw new Error(`${camera} has no track yet (track-create ${camera})`);
+/** A camera that links to a track, with what a GPX file may name it by. */
+type TrackCamera = { path: string; name: string; make?: string; model?: string; serialNumber?: string };
+
+/**
+ * The cameras that link to each of `tracks` (their child softlink `track`), by the track's path:
+ * one lookup of the links, one read of the cameras.
+ */
+export async function trackCameras(cmd: Command, tracks: string[]): Promise<Map<string, TrackCamera[]>> {
+  const byTrack = new Map<string, TrackCamera[]>(tracks.map((track) => [track, []]));
+  if (tracks.length === 0) return byTrack;
+  const links = (await cmd.sys.vfs.findLinks(cmd.access, tracks)).filter((link) => basename(link.absPath) === TRACK_LINK);
+  const cameras = await cmd.sys.vfs.getNodesByIds(cmd.access, [...new Set(links.map((link) => link.parentId))]);
+  for (const link of links) {
+    const camera = cameras.get(link.parentId);
+    if (camera?.type !== NODE_TYPE_CAMERA) continue;
+    const path = dirname(link.absPath);
+    const attrs = camera.attrs as Record<string, unknown>;
+    byTrack.get(resolve(path, link.target))?.push({
+      path,
+      name: str(attrs.name) ?? basename(path),
+      ...(str(attrs.make) ? { make: str(attrs.make) } : {}),
+      ...(str(attrs.model) ? { model: str(attrs.model) } : {}),
+      ...(str(attrs.serialNumber) ? { serialNumber: str(attrs.serialNumber) } : {}),
+    });
   }
-  if (node.type !== 'track') {
-    throw new Error(`${path}: not a track node (is ${node.type})`);
-  }
-  const handle = await cmd.sys.vfs.open(cmd.access, path, { mode });
-  return { path, camera, handle: handle as unknown as TrackLikeHandle };
+  return byTrack;
 }
 
 /**
- * Keep a GPX file a track was read from: filed in its camera's `routes/`, moved there or with
- * `copy` copied, and linked from the track's `sources/`. A file the camera holds already, byte for
+ * Keep a GPX file a track was read from: filed in the track's `routes/`, moved there or with
+ * `copy` copied, and linked from the track's `sources/`. A file the track holds already, byte for
  * byte, is not kept twice (`fileSource`). `name` is the name to keep it under, instead of its own.
  * Returns where it is kept.
  */
 export async function keepRoute(cmd: Command, trackPath: string, gpxPath: string, sha256: string, opts: { copy?: boolean; name?: string } = {}): Promise<string> {
-  const { path } = await fileSource(cmd.sys.vfs, cmd.access, gpxPath, `${dirname(trackPath)}/${ROUTES_DIR}`, { sha256, ...opts });
+  const { path } = await fileSource(cmd.sys.vfs, cmd.access, gpxPath, `${trackPath}/${ROUTES_DIR}`, { sha256, ...opts });
   await linkSource(cmd.sys.vfs, cmd.access, trackPath, path);
   return path;
 }
@@ -292,7 +373,7 @@ export function parseGpx(xml: string): Gpx {
 /**
  * The fixes of a GPX file a track takes: those with a time. A track is keyed by time, and the
  * registry gives a point without one the moment it arrives, which for a file is the upload rather
- * than when the camera was there; such points are left out. `problem` says why nothing is left.
+ * than when the track was there; such points are left out. `problem` says why nothing is left.
  */
 export function timedPoints(points: TrackPoint[]): { points: TrackPoint[]; untimed: number; problem?: string } {
   const timed = points.filter((point) => point.ts !== undefined);
@@ -304,14 +385,14 @@ export function timedPoints(points: TrackPoint[]): { points: TrackPoint[]; untim
 const words = (text: string): string => ` ${text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ')} `;
 
 /**
- * The cameras a GPX file could have come from: those whose name, make and model, or serial
- * number appears, as whole words, in its creator or one of its names. Labels shorter than
- * three characters are too ambiguous to count.
+ * The tracks a GPX file could have been recorded into: those whose name, or the name, make and
+ * model, or serial number of a camera that links to them, appears, as whole words, in its creator or
+ * one of its names. Labels shorter than three characters are too ambiguous to count.
  */
-export function camerasForGpx<D extends { name: string; make?: string; model?: string; serialNumber?: string }>(cameras: D[], gpx: Pick<Gpx, 'creator' | 'names'>): D[] {
+export function tracksForGpx<T extends { name: string; cameras?: Omit<TrackCamera, 'path'>[] }>(tracks: T[], gpx: Pick<Gpx, 'creator' | 'names'>): T[] {
   const said = [gpx.creator, ...gpx.names].filter((text): text is string => Boolean(text)).map(words);
-  return cameras.filter((camera) => {
-    const labels = [camera.name, [camera.make, camera.model].filter(Boolean).join(' '), camera.serialNumber ?? '']
+  return tracks.filter((track) => {
+    const labels = [track.name, ...(track.cameras ?? []).flatMap((camera) => [camera.name, [camera.make, camera.model].filter(Boolean).join(' '), camera.serialNumber ?? ''])]
       .map(words)
       .filter((label) => label.trim().length >= 3);
     return labels.some((label) => said.some((text) => text.includes(label)));

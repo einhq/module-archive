@@ -6,13 +6,13 @@ import { useState } from 'react';
 import type { Trip, TripList, TripPlace } from '@archive/location/api';
 import { formatDistance } from '@archive/location/track-profile';
 import { albumRoute } from '../../media/lib/album-path.ts';
-import { useCameraTrips } from '../hooks/useCameraTrips.ts';
+import { useTrackTrips } from '../hooks/useTrackTrips.ts';
 import { AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
 import { TripMoveDialog } from './TripMoveDialog.tsx';
 
 const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-/** A local day, `YYYY-MM-DD`, as a date; the day is already the camera's, so it is read as UTC. */
+/** A local day, `YYYY-MM-DD`, as a date; the day is already the track's, so it is read as UTC. */
 const showDay = (day: string): string => dayFormat.format(new Date(`${day}T00:00:00Z`));
 
 const span = (trip: Trip): string => trip.days.length === 1 ? showDay(trip.day) : `${showDay(trip.day)} – ${showDay(trip.days[trip.days.length - 1])}`;
@@ -46,14 +46,14 @@ type OnAlbum = (trip: string, album: 'new' | 'detach' | string, name?: string) =
  */
 const newAlbumRoute = (list: TripList, trip: Trip): string => {
   const stay = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
-  const params = new URLSearchParams({ camera: list.camera, trip: trip.id, of: span(trip) });
+  const params = new URLSearchParams({ track: list.track, trip: trip.id, of: span(trip) });
   if (stay?.name && stay.kind !== 'home') params.set('name', stay.name);
   return `/albums/new?${params}`;
 };
 
 /**
  * The album the trip was made, or, until it is one, the albums it may belong to. Whoever may change
- * the camera gets **New album**, which asks for the album's name in the Create Album dialog, and
+ * the track gets **New album**, which asks for the album's name in the Create Album dialog, and
  * **Put in an album…**, which picks any album they may change, the ones its pictures are in first,
  * or names a new one; anyone else gets the list.
  */
@@ -120,13 +120,13 @@ function TripCard(
     busy: boolean;
     onEdit: (name: string, how: 'merge' | 'split') => void;
     onAlbum: OnAlbum;
-    /** Move the trip to the camera at `to`; settles when it is done or has failed. */
+    /** Move the trip to the track at `to`; settles when it is done or has failed. */
     onMove: (trip: Trip, to: string) => Promise<void>;
   },
 ) {
   const [moving, setMoving] = useState(false);
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
-  // The legs' days are the camera's, so their times are told on its clock too.
+  // The legs' days are the track's, so their times are told on its clock too.
   const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: list.timezone ?? 'UTC' });
   return (
     <Card radius='md' withBorder>
@@ -157,14 +157,14 @@ function TripCard(
                 leftSection={<TablerIcon name='arrows-exchange' size={14} />}
                 onClick={() => setMoving(true)}
               >
-                Move to camera…
+                Move to track…
               </Button>
             </Group>
           )}
         </Group>
         {moving && (
           <TripMoveDialog
-            camera={list.camera}
+            track={list.track}
             subtitle={span(trip)}
             busy={busy}
             onClose={() => setMoving(false)}
@@ -232,13 +232,13 @@ function TripCard(
 }
 
 /**
- * A camera's trips, newest first, as derived from its track: each with its days, distance, where
- * it went, and its album or the albums it may belong to. `camera` is the camera's path; `editable`
- * offers making a trip an album and taking it off again, joining a trip to the one before it,
- * parting it again, moving it to another camera, and deriving them all again.
+ * A track's trips, newest first: each with its days, distance, where it went, and its album or the
+ * albums it may belong to. `track` is the track's path; `editable` offers making a trip an album and
+ * taking it off again, joining a trip to the one before it, parting it again, moving it to another
+ * track, and deriving them all again.
  */
-export function CameraTripsTab({ camera, editable }: { camera: string; editable: boolean }) {
-  const { trips, loading, error, edit, derive, makeAlbum, move } = useCameraTrips(camera);
+export function TrackTripsTab({ track, editable }: { track: string; editable: boolean }) {
+  const { trips, loading, error, edit, derive, makeAlbum, move } = useTrackTrips(track);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 

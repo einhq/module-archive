@@ -2,11 +2,12 @@
 /**
  * track-append — append coordinate points to a track.
  *
- *   track-append <camera> --lat=57.7 --lng=11.97 [--ts <iso>] [--alt=<m>] [--speed=<m/s>]
- *   track-append <camera> 57.7 11.97 [--ts <iso>]
- *   track-append <camera> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
+ *   track-append <track> --lat=57.7 --lng=11.97 [--ts <iso>] [--alt=<m>] [--speed=<m/s>]
+ *   track-append <track> 57.7 11.97 [--ts <iso>]
+ *   track-append <track> --json '[{"lat":..,"lng":..,"ts":..}, ...]'
  *
- * `<camera>` is a camera's slug or path, standing for its track, or a track's path.
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`).
  *
  * The flag form is the one that works everywhere. A western or southern
  * coordinate cannot be a positional — parseArgs reads the leading `-` of
@@ -17,7 +18,7 @@
  * A point is keyed by its timestamp, so appending out of order is fine and
  * re-appending the same fix is a no-op rather than a duplicate.
  */
-import { openTrack, toPoint, type TrackPoint } from '@archive/location/track';
+import { openTrack, toPoint, TRACK_ARG, type TrackPoint } from '@archive/location/track';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 
@@ -33,7 +34,7 @@ const trackAppend = async (cmd: Command): CmdReturn => {
   const target = flags._[0] as string | undefined;
 
   if (!target) {
-    await cmd.writeError('track-append: usage: track-append <camera> <lat> <lng> [--ts <iso>] | --json <points>\n');
+    await cmd.writeError('track-append: usage: track-append <track> <lat> <lng> [--ts <iso>] | --json <points>\n');
     return 1;
   }
 
@@ -84,9 +85,9 @@ const trackAppend = async (cmd: Command): CmdReturn => {
 trackAppend.spec = {
   name: 'track-append',
   effect: 'write' as const,
-  description: "Append coordinate points to a camera's track",
+  description: 'Append coordinate points to a track',
   args: [
-    { name: 'camera', type: 'path' as const, description: "the camera (slug or path) whose track takes the points, or a track's path" },
+    { name: 'track', type: 'path' as const, description: `the track that takes the points: ${TRACK_ARG}` },
     { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
     { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
   ],

@@ -878,40 +878,41 @@ export type AlbumScores = {
 /** One subject a container's media have, and how many of them have it. */
 export type SubjectTally = { path: string; name: string; count: number };
 
-/** One camera on an album's list: the camera's path and name, and why it is there. */
-export type AlbumCamera = {
+/** One track on an album's list: the track's path and name, and why it is there. */
+export type AlbumTrack = {
   path: string;
   name: string;
-  /** `media`: it took some of the album's media. `added`: it was added to the list by hand. */
+  /** `media`: a camera that took some of the album's media records into it. `added`: it was added to the list by hand. */
   source: 'media' | 'added';
-  /** How many of the media the album shows it took. */
+  /** How many of the media the album shows were taken by cameras that record into it. */
   media: number;
 };
 
 /**
- * `album-camera-list <album>`: the cameras whose tracks the album's map draws, the most media first
- * and those added by hand after them; and the cameras that took some of its media but were removed
- * from the list. A folder that is not an album lists the cameras of its media and removes none.
+ * `album-track-list <album>`: the tracks the album's map draws, the most media first and those
+ * added by hand after them; and the tracks of its media that were removed from the list. A folder
+ * that is not an album lists the tracks of its media and removes none.
  */
-export type AlbumCameraList = {
+export type AlbumTrackList = {
   album: string;
-  cameras: AlbumCamera[];
-  removed: AlbumCamera[];
+  tracks: AlbumTrack[];
+  removed: AlbumTrack[];
 };
 
 /**
- * An album's attr `trip`: the trip of a camera's track the album was made, as `trip-album` wrote
- * it. Its stays are the ones it starts and ends at and those along the way, and the places and legs
- * name them by their index in `stays`. It is written again whenever the camera's trips are.
+ * An album's attr `trip`: the trip of a track the album was made, as `trip-album` wrote it. Its
+ * stays are the ones it starts and ends at and those along the way, and the places and legs name
+ * them by their index in `stays`. It is written again whenever the track's trips are.
  */
 export type AlbumTrip = {
-  camera: string;
+  /** The track's path. */
+  track: string;
   /** Its first local day, `YYYY-MM-DD`. */
   day: string;
   /** Its first and last fix, ISO. */
   start: string;
   end: string;
-  /** The camera's timezone, which its days are in; UTC without one. */
+  /** The track's timezone, which its days are in; UTC without one. */
   timezone?: string;
   ongoing: boolean;
   from: TripPlace;

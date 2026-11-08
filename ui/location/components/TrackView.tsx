@@ -30,25 +30,24 @@ function Stat({ label, value }: { label: string; value: string }) {
 }
 
 type TrackViewProps = {
-  /** The camera's slug. */
-  camera: string;
-  /** How it travels, which says the units: knots and nautical miles for a boat, km/h and km otherwise. */
-  kind?: string;
-  /** What a camera with no track yet offers to start one: uploading GPX files, live tracking. */
+  /** The track's path. */
+  path: string;
+  /** What a track with no fixes yet offers to start one: uploading GPX files. */
   emptyActions?: ReactNode;
   /** Whether the reader may change the track, which rejecting and accepting its fixes needs. */
   editable?: boolean;
 };
 
 /**
- * A camera's track: its route on a map that fills the window, and over the map's foot what the
- * route adds up to. While its last fix is recent, the panel says how fast it is going and how old
- * the fix is, and the map draws where it is now and can follow it. The fixes the track left out
- * are drawn faintly; a click picks the fix nearest it, and the panel says what the track made of
- * it and offers to overrule that.
+ * A track: its route on a map that fills the window, and over the map's foot what the route adds
+ * up to, in the units of how it travels: knots and nautical miles for a boat, km/h and km
+ * otherwise. While its last fix is recent, the panel says how fast it is going and how old the fix
+ * is, and the map draws where it is now and can follow it. The fixes the track left out are drawn
+ * faintly; a click picks the fix nearest it, and the panel says what the track made of it and
+ * offers to overrule that.
  */
-export function TrackView({ camera, kind, emptyActions, editable = false }: TrackViewProps) {
-  const { track, segments, loading, refetch, reread, revision } = useTrack(camera);
+export function TrackView({ path, emptyActions, editable = false }: TrackViewProps) {
+  const { track, segments, loading, refetch, reread, revision } = useTrack(path);
   const rejected = useRejectedRuns(track?.path, revision);
   const [picked, setPicked] = useState<TrackPoint | null>(null);
   const marked = useCallback(() => {
@@ -62,7 +61,7 @@ export function TrackView({ camera, kind, emptyActions, editable = false }: Trac
   const [following, setFollowing] = useState<string | null>(null);
   const stopFollowing = useCallback(() => setFollowing(null), []);
 
-  const profile = trackProfile(kind);
+  const profile = trackProfile(track?.kind);
   // Summed per segment, so a day boundary or a gap adds no phantom distance.
   const runs = useMemo(() => segments.map((segment) => ({ day: segment.id, points: segment.points })), [segments]);
   const distance = useMemo(() => trackDistance(runs), [runs]);
@@ -75,8 +74,8 @@ export function TrackView({ camera, kind, emptyActions, editable = false }: Trac
   if (!track || track.points === 0) {
     return (
       <Container size='xl' p='md'>
-        <EmptyState title='This camera has recorded no track' actions={emptyActions}>
-          Its route appears here once a GPX file it recorded is uploaded, or a phone tracks it live.
+        <EmptyState title='Nothing recorded yet' actions={emptyActions}>
+          Its route appears here once a GPX file it was recorded in is uploaded, or its tracker reports where it is.
         </EmptyState>
       </Container>
     );

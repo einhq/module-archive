@@ -21,7 +21,6 @@ import type { Command, NodeChildEntry } from '@ein/client';
 import type { NodeOwnership } from '@ein/api';
 import { nodeOwnership, shq } from '@ein/client';
 import type { CameraAttrs } from '@archive/camera/types';
-import { isTravelKind, type TravelKind } from '@archive/location/track-profile';
 
 export { CAMERAS_ROOT };
 export const NODE_TYPE_CAMERA = 'camera';
@@ -37,7 +36,6 @@ export type CameraEntry = {
   model?: string;
   serialNumber?: string;
   timezone?: string;
-  kind?: TravelKind;
   digitizer?: boolean;
   quicktimeUtc?: boolean;
   description?: string;
@@ -90,7 +88,6 @@ export const listCameras = async (cmd: Command, root: string = CAMERAS_ROOT): Pr
         model: str(attrs.model),
         serialNumber: str(attrs.serialNumber),
         timezone: str(attrs.timezone),
-        kind: isTravelKind(attrs.kind) ? attrs.kind : undefined,
         digitizer: bool(attrs.digitizer),
         quicktimeUtc: bool(attrs.quicktimeUtc),
         description: str((attrs as Record<string, unknown>).description),

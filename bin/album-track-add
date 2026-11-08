@@ -1,0 +1,52 @@
+#!ts
+/**
+ * album-track-add — put tracks on the list of an album, which its map draws: a GPS tracker carried
+ * on the trip, say, which took none of its pictures. A track removed from the list comes back; one
+ * a camera of its media records into, never removed, is on it already.
+ *
+ * A track is its path, or a device or camera that has one, by its path or its name (`trackOf`).
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { addAlbumTrack } from '@archive/media/album-tracks';
+
+const albumTrackAdd = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [album, ...tracks] = flags._.map(String);
+  if (!album || tracks.length === 0) {
+    await cmd.writeError('album-track-add: expected an album and at least one track\n');
+    return 1;
+  }
+
+  try {
+    const albumPath = resolve(cmd.cwd, album);
+    for (const target of tracks) {
+      const { path } = await trackOf(cmd, target);
+      const changed = await addAlbumTrack(cmd, albumPath, path);
+      if (!cmd.json) await cmd.writeLn(changed ? `Added ${path}` : `${path}: already listed`);
+    }
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`album-track-add: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+albumTrackAdd.spec = {
+  name: 'album-track-add',
+  effect: 'write' as const,
+  description: "Put tracks on an album's list, which its map draws",
+  args: [
+    { name: 'album', type: 'path' as const, description: 'the album' },
+    { name: 'track', type: 'path' as const, variadic: true, description: `tracks: ${TRACK_ARG}` },
+  ],
+  flags: [],
+  examples: ['album-track-add /archive/albums/Exempelalbum_2019 sailboat', 'album-track-add /archive/albums/Exempelalbum_2019 /archive/devices/sailboat/position/history'],
+};
+
+export default albumTrackAdd;

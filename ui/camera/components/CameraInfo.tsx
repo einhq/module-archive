@@ -1,33 +1,32 @@
 import { TablerIcon } from '@ein/ui/components';
 import { Badge, Button, Code, Stack, Text } from '@mantine/core';
-import { isTravelKind, TRAVEL_KIND_LABELS } from '@archive/location/track-profile';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import type { CameraDetail, CameraOwner } from '../hooks/useCamera.ts';
-import { CameraHomes } from './CameraHomes.tsx';
 import { CameraOwners } from './CameraOwners.tsx';
+import { CameraTrack } from './CameraTrack.tsx';
 
 type CameraInfoProps = {
   camera: CameraDetail;
   owners: CameraOwner[];
   editable: boolean;
-  /** Whether it travels, so where it belongs (its home bases) is worth saying. */
-  travels: boolean;
   /** `useCamera().addOwner`, with what an owner change re-reads on the page. */
   setOwner: (personPath: string, span: { from?: string; to?: string }, update?: boolean) => Promise<void>;
   removeOwner: (personId: string) => Promise<void>;
   /** Links the media it took that were indexed before it matched them; `relinking` while it runs. */
   onRelink: () => void;
   relinking: boolean;
+  /** `useCamera().setTrack`. */
+  setTrack: (track: string | null) => Promise<void>;
 };
 
 /**
- * Everything known about a camera beside its timeline: its settings, who has owned it, where it
- * belongs when it travels, and what it is.
+ * Everything known about a camera beside its timeline: its settings, who has owned it, the track it
+ * records into, and what it is.
  */
-export function CameraInfo({ camera, owners, editable, travels, setOwner, removeOwner, onRelink, relinking }: CameraInfoProps) {
+export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setTrack }: CameraInfoProps) {
   const matchable = Boolean(camera.serial || (camera.make && camera.model));
-  const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.kind || camera.digitizer || camera.quicktimeUtc;
+  const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.digitizer || camera.quicktimeUtc;
 
   return (
     <Stack gap='md'>
@@ -36,7 +35,6 @@ export function CameraInfo({ camera, owners, editable, travels, setOwner, remove
         {camera.model && <InfoFact label='Model'>{camera.model}</InfoFact>}
         {camera.serial && <InfoFact label='Serial number'>{camera.serial}</InfoFact>}
         {camera.timezone && <InfoFact label='Timezone'>{camera.timezone}</InfoFact>}
-        {isTravelKind(camera.kind) && <InfoFact label='Travels as'>{TRAVEL_KIND_LABELS[camera.kind]}</InfoFact>}
         {camera.digitizer && (
           <InfoFact label='Capture dates'>
             <Badge size='sm' variant='light' color='yellow'>Scanner dates suppressed</Badge>
@@ -68,7 +66,7 @@ export function CameraInfo({ camera, owners, editable, travels, setOwner, remove
 
       <CameraOwners camera={camera} owners={owners} editable={editable} setOwner={setOwner} removeOwner={removeOwner} />
 
-      {travels && <CameraHomes camera={camera.path} editable={editable} />}
+      <CameraTrack track={camera.track} editable={editable} setTrack={setTrack} />
 
       {camera.description && (
         <InfoSection title='About'>

@@ -266,14 +266,6 @@ export const enrichPage = async (cmd: Command, entries: TimelineEntry[], opts: {
         if (cover) entry.cover = cover;
         return;
       }
-
-      case 'track': {
-        // A track is its camera's route, named by the camera.
-        const camera = entry.path.slice(0, entry.path.lastIndexOf('/'));
-        entry.ownerPath = camera;
-        entry.title = await nameOf(cmd, cache, camera);
-        return;
-      }
     }
   }));
 };

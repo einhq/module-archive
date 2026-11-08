@@ -8,7 +8,7 @@
  *   albums/<category>/.organizer, .request
  *                             the organizer's checkpoint, and a request for a run of it
  *   journal/                  decisions made in staging
- *   routes/                   GPX files waiting for the camera that recorded them
+ *   routes/                   GPX files waiting for the track they belong to
  *   genealogy/                GEDCOM files waiting to be matched to the archive's people and imported
  * ```
  *

@@ -1,18 +1,21 @@
 /**
- * Track commands: track-create / track-append / track-read / track-import (GPX) /
- * track-list / track-stage. A track is a camera's child `track`, and every command takes the
- * camera (its slug or path) or the track's path; a GPX file read into it is kept in the camera's
- * `routes/` and linked from the track's `sources/`. Runs against the in-memory track registry.
+ * Track commands: track-append / track-read / track-import (GPX) / track-list / track-stage /
+ * track-mark / track-move / track-update / camera-track. A track is a `track` node anywhere under
+ * the archive — here, as a GPS tracker keeps one, the history of a device's position — and every
+ * command takes its path, or the device or camera that has one, by its path or its name; a GPX file
+ * read into it is kept in its `routes/` and linked from its `sources/`. Runs against the in-memory
+ * track registry.
  */
 
 import { CAMERAS_ROOT } from '@archive/paths';
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import { camerasForGpx, parseGpx } from '@archive/location/track';
-import type { GpxInfo, TrackStageResult } from '@archive/location/api';
+import { parseGpx, tracksForGpx } from '@archive/location/track';
+import type { GpxInfo, TrackEntry, TrackStageResult } from '@archive/location/api';
 import type { StagingStatus } from '@archive/staging/api';
 import type { SourceFile } from '@archive/sources/api';
+import { DEVICES, historyOf, mkTracker } from './tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 let client: ShellClient;
@@ -26,11 +29,9 @@ type ReadResult = {
 
 const flat = (result: ReadResult): Point[] => result.segments.flatMap((segment) => segment.points);
 
-type Summary = { points: number; firstTs?: string; lastTs?: string; bbox?: Record<string, number> };
-
-/** What `track-list` says of one camera's track. */
-const listed = async (camera: string): Promise<Summary | undefined> =>
-  (await client.execJson<(Summary & { id: string })[]>('track-list')).find((track) => track.id === camera);
+/** What `track-list` says of one device's track. */
+const listed = async (device: string): Promise<TrackEntry | undefined> =>
+  (await client.execJson<TrackEntry[]>('track-list')).find((track) => track.path === historyOf(device));
 
 const GPX = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="test">
@@ -73,16 +74,18 @@ Deno.test('parseGpx keeps speed and course, from GPX 1.0 or a TrackPointExtensio
   assertEquals(gpx.points.map((point) => [point.speed, point.course]), [[4.2, 271.5], [3, 90], [undefined, undefined]]);
 });
 
-Deno.test('camerasForGpx matches a camera by name, make and model, or serial', () => {
-  const cameras = [
-    { name: 'Hiking GPS', make: 'Exempel', model: 'Logger 2' },
-    { name: 'Phone', serialNumber: 'SN12345' },
+Deno.test("tracksForGpx matches a track by its name, or a camera's name, make and model, or serial", () => {
+  const tracks = [
+    { name: 'Hiking GPS' },
+    { name: 'Anna', cameras: [{ name: 'Phone', serialNumber: 'SN12345' }] },
+    { name: 'Sailboat', cameras: [{ name: 'Chart plotter', make: 'Exempel', model: 'Logger 2' }] },
     { name: 'Go' },
   ];
-  assertEquals(camerasForGpx(cameras, { creator: 'Exempel Logger 2', names: [] }).map((d) => d.name), ['Hiking GPS']);
-  assertEquals(camerasForGpx(cameras, { names: ['export from sn12345'] }).map((d) => d.name), ['Phone']);
+  assertEquals(tracksForGpx(tracks, { creator: 'Exempel Logger 2', names: [] }).map((track) => track.name), ['Sailboat']);
+  assertEquals(tracksForGpx(tracks, { names: ['export from sn12345'] }).map((track) => track.name), ['Anna']);
+  assertEquals(tracksForGpx(tracks, { names: ['Hiking GPS, day 2'] }).map((track) => track.name), ['Hiking GPS']);
   // Whole words: "Phone" is not in "Headphones", and two letters ("Go") say nothing.
-  assertEquals(camerasForGpx(cameras, { names: ['Headphones on', 'Go for a walk'] }), []);
+  assertEquals(tracksForGpx(tracks, { names: ['Headphones on', 'Go for a walk'] }), []);
 });
 
 Deno.test({
@@ -94,32 +97,39 @@ Deno.test({
   client = await testCtx.server.createShellClient();
   const cmd = testCommands(client);
 
-  try {
-    for (const camera of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right']) {
-      await cmd.shouldSucceed(`mknode -p -t camera ${CAMERAS_ROOT}/${camera} --as name=${camera}`);
+  const tracker = (name: string, extra = '') => cmd.shouldSucceed(`${mkTracker(name)} ${extra}`);
+
+  const write = async (path: string, xml: string) => {
+    await cmd.shouldSucceed(`mkfile ${path}`);
+    const fh = await ctx.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+    try {
+      await fh.write(new TextEncoder().encode(xml));
+    } finally {
+      await fh.close();
     }
+  };
 
-    await t.step("track-create gives a camera its track, the camera's child track", async () => {
-      await cmd.shouldSucceed('track-create trip1 --description "Trip 1"');
+  try {
+    for (const name of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right', 'untimed']) await tracker(name);
 
-      const info = await client.execJson<{ type: string }>(`info ${CAMERAS_ROOT}/trip1/track`);
-      assertEquals(info.type, 'track');
+    await t.step("track-list finds a device's track anywhere under the archive, named after the device", async () => {
+      const trip1 = await listed('trip1');
+      assertEquals([trip1?.name, trip1?.points], ['trip1', 0]);
 
-      const attrs = await client.execJson<{ description: string; points?: number }>(`attrs ${CAMERAS_ROOT}/trip1/track`);
-      assertEquals(attrs.description, 'Trip 1');
-      assertEquals(attrs.points, undefined);
-      assertEquals((await listed('trip1'))?.points, 0);
-
-      await cmd.shouldFailWith('track-create trip1', 'already exists');
-      await cmd.shouldFailWith(`track-create ${CAMERAS_ROOT}/trip1`, 'already exists');
+      // Its own label wins; the entity between it and the device names nothing.
+      await cmd.shouldSucceed(`attrs ${DEVICES}/trip1 -s label='Trip one'`);
+      assertEquals((await listed('trip1'))?.name, 'Trip one');
+      await cmd.shouldSucceed(`attrs ${historyOf('trip1')} -s label='The first trip'`);
+      assertEquals((await listed('trip1'))?.name, 'The first trip');
+      await cmd.shouldSucceed(`attrs ${historyOf('trip1')} -d label && attrs ${DEVICES}/trip1 -s label=trip1`);
     });
 
     await t.step('track-append and track-read roundtrip points', async () => {
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/trip1/track 57.7 11.97 --ts 2020-05-01T10:00:00Z`);
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/trip1/track 57.71 11.98 --ts 2020-05-01T10:01:00Z --alt=5`);
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/trip1/track --json '[{"lat":57.72,"lng":11.99,"ts":"2020-05-01T10:02:00Z"}]'`);
+      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.7 11.97 --ts 2020-05-01T10:00:00Z`);
+      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.71 11.98 --ts 2020-05-01T10:01:00Z --alt=5`);
+      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} --json '[{"lat":57.72,"lng":11.99,"ts":"2020-05-01T10:02:00Z"}]'`);
 
-      const all = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/trip1/track`);
+      const all = await client.execJson<ReadResult>(`track-read ${historyOf('trip1')}`);
       const points = flat(all);
 
       assertEquals(all.segments.length, 1);
@@ -128,7 +138,7 @@ Deno.test({
       assertEquals(points[0].ts, '2020-05-01T10:00:00.000Z');
       assertEquals(points[1].alt, 5);
 
-      const window = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/trip1/track --from 2020-05-01T10:01:00Z`);
+      const window = await client.execJson<ReadResult>(`track-read ${historyOf('trip1')} --from 2020-05-01T10:01:00Z`);
       assertEquals(flat(window).map((p) => p.lat), [57.71, 57.72]);
     });
 
@@ -136,12 +146,11 @@ Deno.test({
       // Cape Town: a negative latitude, and an altitude below sea level. Both start with
       // a dash, which the positional form cannot carry — parseArgs reads it as the next
       // flag. Its own track, so trip1's point count and bbox stay exact.
-      await cmd.shouldSucceed('track-create south --description South');
-      await cmd.shouldFail(`track-append ${CAMERAS_ROOT}/south/track -33.9249 18.4241 --ts=2020-05-01T10:00:00Z`);
+      await cmd.shouldFail(`track-append ${historyOf('south')} -33.9249 18.4241 --ts=2020-05-01T10:00:00Z`);
 
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/south/track --lat=-33.9249 --lng=18.4241 --ts=2020-05-01T10:00:00Z --alt=-5`);
+      await cmd.shouldSucceed(`track-append ${historyOf('south')} --lat=-33.9249 --lng=18.4241 --ts=2020-05-01T10:00:00Z --alt=-5`);
 
-      const south = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/south/track`);
+      const south = await client.execJson<ReadResult>(`track-read ${historyOf('south')}`);
       const pts = south.segments.flatMap((seg) => seg.points);
       assertEquals(pts.length, 1);
       assertEquals(pts[0].lat, -33.9249);
@@ -151,7 +160,7 @@ Deno.test({
 
     await t.step('re-appending the same fix adds nothing', async () => {
       const result = await client.execJson<{ appended: number; skipped: number }>(
-        `track-append ${CAMERAS_ROOT}/trip1/track --json '[{"lat":57.7,"lng":11.97,"ts":"2020-05-01T10:00:00Z"}]'`,
+        `track-append ${historyOf('trip1')} --json '[{"lat":57.7,"lng":11.97,"ts":"2020-05-01T10:00:00Z"}]'`,
       );
 
       assertEquals(result.appended, 0);
@@ -165,7 +174,7 @@ Deno.test({
       assertEquals(before?.lastTs, '2020-05-01T10:02:00.000Z');
       assertEquals(before?.bbox, { north: 57.72, south: 57.7, east: 11.99, west: 11.97 });
 
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/trip1/track 57.69 12.05 --ts 2020-05-01T10:03:00Z`);
+      await cmd.shouldSucceed(`track-append ${historyOf('trip1')} 57.69 12.05 --ts 2020-05-01T10:03:00Z`);
       const after = await listed('trip1');
       assertEquals(after?.points, 4);
       assertEquals(after?.lastTs, '2020-05-01T10:03:00.000Z');
@@ -173,15 +182,14 @@ Deno.test({
     });
 
     await t.step('track-list follows a track fed by its routing key', async () => {
-      await cmd.shouldSucceed(`mknode -t camera ${CAMERAS_ROOT}/live --as name=live`);
-      await cmd.shouldSucceed('track-create live --routing-key tracker.live');
+      await tracker('live', '--al routingKeys=tracker.live');
       ctx.router.publish('tracker.live', [
         { lat: 57.7, lng: 11.97, ts: '2022-02-01T08:00:00Z' },
         { lat: 57.75, lng: 11.9, ts: '2022-02-01T08:01:00Z' },
       ]);
 
       // The relay hands the event over on a later turn.
-      let summary: Summary | undefined;
+      let summary: TrackEntry | undefined;
       for (let tries = 0; tries < 50 && summary?.points !== 2; tries++) {
         await new Promise((resolve) => setTimeout(resolve, 20));
         summary = await listed('live');
@@ -192,26 +200,23 @@ Deno.test({
     });
 
     await t.step('an out-of-order append reads back in time order', async () => {
-      await cmd.shouldSucceed('track-create backfill');
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/backfill/track 57.8 11.5 --ts 2021-03-01T10:05:00Z`);
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/backfill/track 57.7 11.4 --ts 2021-03-01T10:00:00Z`);
+      await cmd.shouldSucceed(`track-append ${historyOf('backfill')} 57.8 11.5 --ts 2021-03-01T10:05:00Z`);
+      await cmd.shouldSucceed(`track-append ${historyOf('backfill')} 57.7 11.4 --ts 2021-03-01T10:00:00Z`);
 
-      const points = flat(await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/backfill/track`));
-
+      const points = flat(await client.execJson<ReadResult>(`track-read ${historyOf('backfill')}`));
       assertEquals(points.map((p) => p.ts), ['2021-03-01T10:00:00.000Z', '2021-03-01T10:05:00.000Z']);
     });
 
     await t.step('--bbox reads past the box so the line reaches its edge', async () => {
-      await cmd.shouldSucceed('track-create thin');
       // A west-to-east line: only 11.3, 11.4 and 11.5 are inside the box below.
       const points = Array.from({ length: 9 }, (_, i) => ({
         lat: 57.7,
         lng: 11.0 + i * 0.1,
         ts: `2021-01-01T10:0${i}:00Z`,
       }));
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/thin/track --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${historyOf('thin')} --json '${JSON.stringify(points)}'`);
 
-      const boxed = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/thin/track --bbox=58,57,11.55,11.25`);
+      const boxed = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --bbox=58,57,11.55,11.25`);
       const lngs = flat(boxed).map((p) => Number(p.lng.toFixed(1)));
 
       // The default margin widens the box by a quarter of its own size, which
@@ -223,27 +228,25 @@ Deno.test({
       assertEquals(lngs.includes(11.0), false);
 
       // margin=0 is the box exactly.
-      const exact = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/thin/track --bbox=58,57,11.55,11.25 --margin 0`);
+      const exact = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --bbox=58,57,11.55,11.25 --margin 0`);
       assertEquals(flat(exact).map((p) => Number(p.lng.toFixed(1))), [11.3, 11.4, 11.5]);
     });
 
     await t.step('a pause cuts the line into two segments', async () => {
-      await cmd.shouldSucceed('track-create paused');
       const points = [
         { lat: 57.7, lng: 11.0, ts: '2021-02-01T10:00:00Z' },
         { lat: 57.7, lng: 11.1, ts: '2021-02-01T10:01:00Z' },
         { lat: 57.7, lng: 11.2, ts: '2021-02-01T14:00:00Z' },
         { lat: 57.7, lng: 11.3, ts: '2021-02-01T14:01:00Z' },
       ];
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/paused/track --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${historyOf('paused')} --json '${JSON.stringify(points)}'`);
 
-      const result = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/paused/track`);
+      const result = await client.execJson<ReadResult>(`track-read ${historyOf('paused')}`);
       assertEquals(result.segments.length, 2);
       assertEquals(result.segments.map((segment) => segment.points.length), [2, 2]);
     });
 
-    await t.step("--still draws a stay as two points, and the camera's kind says what a spike is", async () => {
-      await cmd.shouldSucceed('track-create moored');
+    await t.step("--still draws a stay as two points, and the track's kind says what a spike is", async () => {
       // Half an hour drifting ten metres either way on a berth, a fix a minute, with one fix
       // thrown 3 km north: 50 m/s there and back, a glitch for a boat but not for a car.
       const metre = 1 / 111_320;
@@ -252,9 +255,10 @@ Deno.test({
         lng: 11.97,
         ts: new Date(Date.parse('2021-04-01T10:00:00Z') + i * 60_000).toISOString(),
       }));
-      await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/moored/track --json '${JSON.stringify(points)}'`);
+      await cmd.shouldSucceed(`track-append ${historyOf('moored')} --json '${JSON.stringify(points)}'`);
       const spiked = (read: ReadResult) => flat(read).some((p) => p.lat > 57.7 + 1000 * metre);
 
+      // A device's name stands for its track.
       assertEquals((await client.execJson<ReadResult>(`track-read moored`)).points, 31);
 
       const asCar = await client.execJson<ReadResult>(`track-read moored --still`);
@@ -264,7 +268,7 @@ Deno.test({
       const slower = await client.execJson<ReadResult>(`track-read moored --still --max-speed=20`);
       assertEquals(slower.points, 2);
 
-      await cmd.shouldSucceed(`camera-update ${CAMERAS_ROOT}/moored --kind boat`);
+      await cmd.shouldSucceed('track-update moored --kind boat');
       const asBoat = await client.execJson<ReadResult>(`track-read moored --still`);
       assertEquals(asBoat.points, 2);
       assertEquals(flat(asBoat).map((p) => p.ts), [points[0].ts, points[30].ts]);
@@ -273,12 +277,28 @@ Deno.test({
       await cmd.shouldFailWith('track-read moored --max-speed=20', '--max-speed needs --still');
     });
 
+    await t.step('track-update sets how a track travels, refuses what it does not know, and --clear removes it', async () => {
+      await cmd.shouldSucceed(`track-update ${DEVICES}/moored --timezone Europe/Stockholm --description 'Kept at the jetty'`);
+      const attrs = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${historyOf('moored')}`);
+      assertEquals([attrs.kind, attrs.timezone, attrs.description], ['boat', 'Europe/Stockholm', 'Kept at the jetty']);
+      assertEquals((await listed('moored'))?.kind, 'boat');
+      assertEquals(await client.execJson('track-update moored --clear timezone --clear description'), { ok: true });
+      const cleared = await client.execJson<{ kind?: string; timezone?: string; description?: string }>(`attrs ${historyOf('moored')}`);
+      assertEquals([cleared.kind, cleared.timezone, cleared.description], ['boat', undefined, undefined]);
+
+      await cmd.shouldFailWith('track-update moored --kind submarine', "unknown kind 'submarine'");
+      await cmd.shouldFailWith('track-update moored --timezone Mars/Olympus', "unknown timezone 'Mars/Olympus'");
+      await cmd.shouldFailWith('track-update moored --kind car --clear kind', 'both set and cleared');
+      await cmd.shouldFailWith('track-update moored --clear colour', "unknown field 'colour'");
+      await cmd.shouldFailWith('track-update moored', 'nothing to change');
+    });
+
     await t.step('--tolerance thins the line, --limit caps it', async () => {
-      const thin = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/thin/track --tolerance 1`);
+      const thin = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --tolerance 1`);
       // A straight line collapses to its endpoints.
       assertEquals(thin.points, 2);
 
-      const capped = await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/thin/track --limit 4`);
+      const capped = await client.execJson<ReadResult>(`track-read ${historyOf('thin')} --limit 4`);
       assertEquals(capped.points <= 4, true);
       assertEquals(capped.truncated, true);
     });
@@ -290,7 +310,6 @@ Deno.test({
         lng: 11.97 + i * 0.0001,
         ts: new Date(Date.UTC(2020, 6, 1, 10, 0, i)).toISOString(),
       }));
-      await cmd.shouldSucceed('track-create glitch');
       await cmd.shouldSucceed(`track-append glitch --json '${JSON.stringify(points)}'`);
       assertEquals((await listed('glitch'))?.points, 20);
 
@@ -320,7 +339,6 @@ Deno.test({
     await t.step('track-mark --near rejects the fixes around a point, and --marked reject --clear brings back only those', async () => {
       // Steady going a fix a second, about 13 m apart: the first four are within 40 m of the first.
       const points = Array.from({ length: 25 }, (_, i) => ({ lat: 57.7 + i * 0.0001, lng: 11.97 + i * 0.0001, ts: new Date(Date.UTC(2020, 6, 1, 10, 0, i)).toISOString() }));
-      await cmd.shouldSucceed('track-create cluster');
       await cmd.shouldSucceed(`track-append cluster --json '${JSON.stringify(points)}'`);
 
       assertEquals(await client.execJson(`track-mark cluster --near=${points[0].lat},${points[0].lng} --reject`), { marked: 4 });
@@ -338,40 +356,33 @@ Deno.test({
       await cmd.shouldFailWith('track-mark cluster --marked=kept --clear', 'invalid --marked');
     });
 
-    await t.step('track-move moves a time range to another camera, giving it a track', async () => {
+    await t.step('track-move moves a time range to another track', async () => {
       const points = Array.from({ length: 20 }, (_, i) => ({ lat: 57.7 + i * 0.0001, lng: 11.97 + i * 0.0001, ts: new Date(Date.UTC(2020, 7, 1, 10, 0, i)).toISOString() }));
-      await cmd.shouldSucceed('track-create wrong');
       await cmd.shouldSucceed(`track-append wrong --json '${JSON.stringify(points)}'`);
       await cmd.shouldSucceed(`track-mark wrong --from ${points[5].ts} --to ${points[6].ts} --reject`);
 
       const moved = await client.execJson(`track-move wrong right --from ${points[5].ts} --to ${points[15].ts}`);
-      assertEquals(moved, { moved: 10, to: `${CAMERAS_ROOT}/right/track` });
+      assertEquals(moved, { moved: 10, to: historyOf('right') });
       assertEquals((await listed('wrong'))?.points, 10);
       assertEquals((await listed('right'))?.points, 9);
       const rejected = await client.execJson<ReadResult>('track-read right --only-rejected');
       assertEquals(rejected.segments.flatMap((segment) => segment.points).map((point) => [point.ts, point.manual]), [[points[5].ts, 'reject']]);
 
       await cmd.shouldFailWith('track-move wrong', 'usage');
-      await cmd.shouldFailWith('track-move wrong wrong', 'the camera the fixes are on');
+      await cmd.shouldFailWith(`track-move wrong ${historyOf('wrong')}`, 'the track the fixes are on');
       await cmd.shouldFailWith('track-move right wrong --to=soon', 'invalid --to');
     });
 
-    await t.step('track-import parses GPX (both attribute orders)', async () => {
-      await cmd.shouldSucceed('mkfile /trip.gpx');
-      const fh = await ctx.vfs.open(ADMIN_ACCESS, '/trip.gpx', { mode: 'w' });
-      try {
-        await fh.write(new TextEncoder().encode(GPX));
-      } finally {
-        await fh.close();
-      }
+    await t.step("track-import parses GPX (both attribute orders) and keeps the file in the track's routes/", async () => {
+      await write('/trip.gpx', GPX);
 
       const result = await client.execJson<{ imported: number; track: string; source: string }>(`track-import hike /trip.gpx`);
       assertEquals(result.imported, 3);
-      assertEquals(result.track, `${CAMERAS_ROOT}/hike/track`);
+      assertEquals(result.track, historyOf('hike'));
 
-      // The camera's slug, its path and the track's path all name the same track.
-      assertEquals(await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/hike`), await client.execJson<ReadResult>('track-read hike'));
-      const points = flat(await client.execJson<ReadResult>(`track-read ${CAMERAS_ROOT}/hike/track`));
+      // The device's name, its path and the track's path all name the same track.
+      assertEquals(await client.execJson<ReadResult>(`track-read ${DEVICES}/hike`), await client.execJson<ReadResult>('track-read hike'));
+      const points = flat(await client.execJson<ReadResult>(`track-read ${historyOf('hike')}`));
       assertEquals(points.map((p) => p.lat), [57.7, 57.71, 57.72]);
       assertEquals(points.map((p) => p.lng), [11.97, 11.98, 11.99]);
       assertEquals(points[0].alt, 12.5);
@@ -381,29 +392,19 @@ Deno.test({
       assertEquals(hike?.points, 3);
       assertEquals(hike?.bbox, { north: 57.72, south: 57.7, east: 11.99, west: 11.97 });
 
-      // The file stays where it was, and a copy is kept with the camera and linked from the track.
+      // The file stays where it was, and a copy is kept with the track and linked from it.
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, '/trip.gpx'), true);
-      assertEquals(result.source, `${CAMERAS_ROOT}/hike/routes/trip.gpx`);
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${CAMERAS_ROOT}/hike/track`)).map((s) => s.path), [`${CAMERAS_ROOT}/hike/routes/trip.gpx`]);
+      assertEquals(result.source, `${historyOf('hike')}/routes/trip.gpx`);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('hike')}`)).map((s) => s.path), [`${historyOf('hike')}/routes/trip.gpx`]);
 
       // Importing the same file twice does not double the track, nor keep the file twice.
-      const again = await client.execJson<{ imported: number; skipped: number }>(`track-import ${CAMERAS_ROOT}/hike/track /trip.gpx`);
+      const again = await client.execJson<{ imported: number; skipped: number }>(`track-import ${historyOf('hike')} /trip.gpx`);
       assertEquals(again.imported, 0);
       assertEquals(again.skipped, 3);
-      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${CAMERAS_ROOT}/hike/routes`)).map((e) => e.name), ['trip.gpx']);
+      assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${historyOf('hike')}/routes`)).map((e) => e.name), ['trip.gpx']);
     });
 
     await t.step('track-import leaves out a point without a time, and refuses a file with only those', async () => {
-      const write = async (path: string, xml: string) => {
-        await cmd.shouldSucceed(`mkfile ${path}`);
-        const fh = await ctx.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
-        try {
-          await fh.write(new TextEncoder().encode(xml));
-        } finally {
-          await fh.close();
-        }
-      };
-      await cmd.shouldSucceed(`mknode -t camera ${CAMERAS_ROOT}/untimed`);
       await write(
         '/partly-timed.gpx',
         `<gpx><trk><trkseg><trkpt lat="58.1" lon="12.1"><time>2020-07-01T08:00:00Z</time></trkpt><trkpt lat="58.2" lon="12.2"></trkpt></trkseg></trk></gpx>`,
@@ -415,41 +416,62 @@ Deno.test({
 
       await write('/planned.gpx', `<gpx><trk><trkseg><trkpt lat="58.1" lon="12.1"/><trkpt lat="58.2" lon="12.2"/></trkseg></trk></gpx>`);
       await cmd.shouldFailWith('track-import untimed /planned.gpx', 'none of its 2 track points has a time');
-      await cmd.shouldFailWith('track-stage /planned.gpx --camera untimed', 'none of its 2 track points has a time');
+      await cmd.shouldFailWith('track-stage /planned.gpx --track untimed', 'none of its 2 track points has a time');
+    });
+
+    await t.step('camera-track links a camera to the track it records into, which then stands for it', async () => {
+      const phone = `${CAMERAS_ROOT}/hiking-phone`;
+      await cmd.shouldSucceed(`mknode -p -t camera ${phone} --as name='Hiking phone'`);
+      await cmd.shouldFailWith('track-read hiking-phone', `${phone} has no track`);
+
+      assertEquals(await client.execJson('camera-track hiking-phone hike'), { ok: true });
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/track`)).softlink, historyOf('hike'));
+      assertEquals(await client.execJson<ReadResult>('track-read hiking-phone'), await client.execJson<ReadResult>('track-read hike'));
+      // The track is still named after its device, not the camera that links to it.
+      assertEquals((await listed('hike'))?.name, 'hike');
+
+      // Linked again elsewhere, the link moves; --none takes it away.
+      await cmd.shouldSucceed(`camera-track ${phone} ${historyOf('trip1')}`);
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${phone}/track`)).softlink, historyOf('trip1'));
+      await cmd.shouldSucceed('camera-track hiking-phone --none');
+      assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, `${phone}/track`, { follow: false }), false);
+
+      await cmd.shouldFailWith(`camera-track ${DEVICES}/hike hike`, 'not a camera');
+      await cmd.shouldFailWith('camera-track hiking-phone', 'usage');
+      await cmd.shouldFailWith('camera-track hiking-phone hike --none', 'usage');
     });
 
     await t.step('rejects invalid input', async () => {
       await cmd.shouldSucceed('mkfile /not-track');
-      await cmd.shouldFailWith('track-append /not-track 1 2', 'not a camera or a track');
-      await cmd.shouldSucceed(`mknode -t camera ${CAMERAS_ROOT}/trackless`);
-      await cmd.shouldFailWith('track-read trackless', 'has no track yet');
-      await cmd.shouldFailWith(`track-append ${CAMERAS_ROOT}/trip1/track abc 11`, 'numeric lat and lng');
-      await cmd.shouldFailWith(`track-read ${CAMERAS_ROOT}/thin/track --bbox=1,2,3`, 'invalid --bbox');
-      await cmd.shouldFailWith(`track-read ${CAMERAS_ROOT}/thin/track --tolerance x`, 'invalid --tolerance');
+      await cmd.shouldFailWith('track-append /not-track 1 2', '/not-track has no track');
+      await cmd.shouldSucceed(`mknode -p -t device ${DEVICES}/trackless`);
+      await cmd.shouldFailWith('track-read trackless', `${DEVICES}/trackless has no track`);
+      // A device with two tracks says which to name.
+      await cmd.shouldSucceed(`mknode -t track ${DEVICES}/trackless/east && mknode -t track ${DEVICES}/trackless/west`);
+      await cmd.shouldFailWith('track-read trackless', 'has 2 tracks: name one');
+      await cmd.shouldSucceed(`track-read ${DEVICES}/trackless/east`);
+      await cmd.shouldFailWith(`track-append ${historyOf('trip1')} abc 11`, 'numeric lat and lng');
+      await cmd.shouldFailWith(`track-read ${historyOf('thin')} --bbox=1,2,3`, 'invalid --bbox');
+      await cmd.shouldFailWith(`track-read ${historyOf('thin')} --tolerance x`, 'invalid --tolerance');
+      await cmd.shouldFailWith('track-read missing', 'no device or camera of that name');
       const res = await client.exec('track-read missing');
       assertEquals(res.success, false);
       assertStringIncludes(res.error ?? '', 'track-read');
     });
 
-    await t.step("track-stage imports a GPX into the camera it names, and moves the file to the camera's routes/", async () => {
-      await cmd.shouldSucceed(`mknode -t camera ${CAMERAS_ROOT}/logger --as name=Logger --as make=Exempel --as model=Trail`);
+    await t.step("track-stage imports a GPX into the track it names, and moves the file to the track's routes/", async () => {
+      // A logger whose make and model the file's creator names, recording into the tracker's track.
+      await tracker('logger');
+      await cmd.shouldSucceed(`mknode -p -t camera ${CAMERAS_ROOT}/trail-logger --as name='Trail logger' --as make=Exempel --as model=Trail`);
+      await cmd.shouldSucceed(`camera-track trail-logger ${historyOf('logger')}`);
       await cmd.shouldSucceed('staging init --user admin && mkdir -p /home/admin/staging/files/inbox/upload-2026-10-16');
-      const write = async (path: string, xml: string) => {
-        await cmd.shouldSucceed(`mkfile ${path}`);
-        const fh = await ctx.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
-        try {
-          await fh.write(new TextEncoder().encode(xml));
-        } finally {
-          await fh.close();
-        }
-      };
 
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
       const staged = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
-      const kept = `${CAMERAS_ROOT}/logger/routes/walk.gpx`;
-      assertEquals(staged, { status: 'imported', track: `${CAMERAS_ROOT}/logger/track`, imported: 3, skipped: 0, untimed: 0, source: kept });
+      const kept = `${historyOf('logger')}/routes/walk.gpx`;
+      assertEquals(staged, { status: 'imported', track: historyOf('logger'), imported: 3, skipped: 0, untimed: 0, source: kept });
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${CAMERAS_ROOT}/logger/track`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('logger')}`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
 
       // Staged again, nothing is added: a fix is keyed by its time, and the same bytes are kept once.
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/again.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
@@ -458,41 +480,27 @@ Deno.test({
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/again.gpx');
     });
 
-    await t.step('track-stage leaves a GPX naming no known camera waiting in routes/, until told which', async () => {
+    await t.step('track-stage leaves a GPX naming no known track waiting in routes/, until told which', async () => {
       const staged = '/home/admin/staging/files/inbox/upload-2026-10-16/odd.gpx';
-      await cmd.shouldSucceed(`mkfile ${staged}`);
-      const fh = await ctx.vfs.open(ADMIN_ACCESS, staged, { mode: 'w' });
-      try {
-        await fh.write(new TextEncoder().encode(GPX.replace('creator="test"', 'creator="Unknown Thing"').replaceAll('2020-06-01', '2020-07-01')));
-      } finally {
-        await fh.close();
-      }
+      await write(staged, GPX.replace('creator="test"', 'creator="Unknown Thing"').replaceAll('2020-06-01', '2020-07-01'));
 
       const pending = await client.execJson<TrackStageResult>(`track-stage ${staged}`);
       const waiting = '/home/admin/staging/routes/odd.gpx';
       assertEquals(pending.status === 'pending' && pending.path, waiting);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, staged), false);
-      assertEquals((await client.execJson<{ trackCameraPending: boolean }>(`attrs ${waiting}`)).trackCameraPending, true);
+      assertEquals((await client.execJson<{ trackPending: boolean }>(`attrs ${waiting}`)).trackPending, true);
       assertEquals((await client.execJson<StagingStatus>('staging status')).routesWaiting, 1);
 
-      // Told which camera, and under which name to keep it (as the camera page's upload says).
-      const told = await client.execJson<TrackStageResult>(`track-stage ${waiting} --camera logger --name 'July walk.gpx'`);
-      assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${CAMERAS_ROOT}/logger/routes/July walk.gpx`]);
+      // Told which track, and under which name to keep it (as the track page's upload says).
+      const told = await client.execJson<TrackStageResult>(`track-stage ${waiting} --track logger --name 'July walk.gpx'`);
+      assertEquals(told.status === 'imported' && [told.imported, told.source], [3, `${historyOf('logger')}/routes/July walk.gpx`]);
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, waiting), false);
-      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, `${CAMERAS_ROOT}/logger/routes/July walk.gpx`)).attrs.trackCameraPending, undefined);
-      assertEquals((await client.execJson<SourceFile[]>(`source-list ${CAMERAS_ROOT}/logger/track`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
+      assertEquals((await ctx.vfs.get(ADMIN_ACCESS, `${historyOf('logger')}/routes/July walk.gpx`)).attrs.trackPending, undefined);
+      assertEquals((await client.execJson<SourceFile[]>(`source-list ${historyOf('logger')}`)).map((s) => s.name), ['July walk.gpx', 'walk.gpx']);
     });
 
-    await t.step('gpx-info says what GPX files hold and which cameras they name, without importing them', async () => {
-      await cmd.shouldSucceed('mkfile /named.gpx');
-      const fh = await ctx.vfs.open(ADMIN_ACCESS, '/named.gpx', { mode: 'w' });
-      try {
-        await fh.write(
-          new TextEncoder().encode(GPX.replace('creator="test"', 'creator="Exempel Trail"').replace('<trk>', '<metadata><name>Morning walk</name></metadata><trk>')),
-        );
-      } finally {
-        await fh.close();
-      }
+    await t.step('gpx-info says what GPX files hold and which tracks they name, without importing them', async () => {
+      await write('/named.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"').replace('<trk>', '<metadata><name>Morning walk</name></metadata><trk>'));
       const size = (await ctx.vfs.get(ADMIN_ACCESS, '/named.gpx')).attrs.size;
 
       const [named, plain] = await client.execJson<GpxInfo[]>('gpx-info /named.gpx /trip.gpx');
@@ -506,10 +514,10 @@ Deno.test({
         timed: 3,
         start: '2020-06-01T10:00:00.000Z',
         end: '2020-06-01T10:02:00.000Z',
-        cameras: [{ path: `${CAMERAS_ROOT}/logger`, name: 'Logger' }],
+        matches: [{ path: historyOf('logger'), name: 'logger' }],
       });
-      assertEquals(plain.path === '/trip.gpx' && !('error' in plain) && [plain.creator, plain.cameras], ['test', []]);
-      // Nothing was imported: the file stays, the camera's track as it was.
+      assertEquals(plain.path === '/trip.gpx' && !('error' in plain) && [plain.creator, plain.matches], ['test', []]);
+      // Nothing was imported: the file stays, the track as it was.
       assertEquals(await ctx.vfs.exists(ADMIN_ACCESS, '/named.gpx'), true);
 
       // A file that cannot be read is answered with why, beside the others, and the command fails.
@@ -518,9 +526,9 @@ Deno.test({
       await cmd.shouldSucceed('gpx-info /trip.gpx');
     });
 
-    await t.step('track-list names the cameras that have a track', async () => {
-      const tracks = await client.execJson<{ id: string; path: string; name: string; points: number }[]>('track-list');
-      assertEquals(tracks.map((track) => track.id).sort(), [
+    await t.step('track-list lists every track under the archive, or under a path given', async () => {
+      const tracks = await client.execJson<TrackEntry[]>('track-list');
+      assertEquals(tracks.map((track) => track.path).filter((path) => path.endsWith('/position/history')).map((path) => path.split('/')[3]).sort(), [
         'backfill',
         'cluster',
         'glitch',
@@ -536,8 +544,9 @@ Deno.test({
         'untimed',
         'wrong',
       ]);
-      const hike = tracks.find((track) => track.id === 'hike')!;
-      assertEquals([hike.path, hike.name, hike.points], [`${CAMERAS_ROOT}/hike/track`, 'hike', 3]);
+      const hike = tracks.find((track) => track.path === historyOf('hike'))!;
+      assertEquals([hike.name, hike.points], ['hike', 3]);
+      assertEquals((await client.execJson<TrackEntry[]>(`track-list ${DEVICES}/hike`)).map((track) => track.path), [historyOf('hike')]);
     });
   } finally {
     client.close();

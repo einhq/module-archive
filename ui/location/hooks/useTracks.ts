@@ -6,10 +6,10 @@ import { execCommand } from '@ein/ui/signals';
 import type { TrackEntry, TrackPoint, TrackRead } from '@archive/location/api';
 
 /**
- * Every camera's track with its summary (`track-list`), which the track
- * registry answers for all of them at once, so a listing never opens a track.
+ * Every track with its summary (`track-list`), which the track registry answers
+ * for all of them at once, so a listing never opens a track.
  */
-function useTracks(): { tracks: TrackEntry[]; loading: boolean; error: Error | null; refetch: () => void } {
+export function useTracks(): { tracks: TrackEntry[]; loading: boolean; error: Error | null; refetch: () => void } {
   const [tracks, setTracks] = useState<TrackEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -34,15 +34,9 @@ function useTracks(): { tracks: TrackEntry[]; loading: boolean; error: Error | n
   return { tracks, loading, error, refetch: fetchTracks };
 }
 
-/** Whether the camera `id` (its slug) has recorded a track; undefined while that is asked. */
-export function useHasTrack(id: string | undefined): boolean | undefined {
-  const { tracks, loading } = useTracks();
-  return loading ? undefined : tracks.some((track) => track.id === id && track.points > 0);
-}
-
 /**
  * A track read, as one colored line per day, labelled by `label`. Every read here is
- * `--still`: a camera lying still is drawn as one point where it lay, not as its GPS drift.
+ * `--still`: a track lying still is drawn as one point where it lay, not as its GPS drift.
  */
 const toSpecs = (path: string, read: TrackRead, label: (day: string) => string): MapTrackSpec[] =>
   (read.segments ?? []).map((segment, index): MapTrackSpec => ({
@@ -53,14 +47,14 @@ const toSpecs = (path: string, read: TrackRead, label: (day: string) => string):
   }));
 
 /**
- * One camera's whole track, thinned to about `maxPoints`. `id` is the camera's slug.
+ * One whole track, thinned to about `maxPoints`. `path` is the track's path.
  *
  * The cap goes to the server, which simplifies and cuts the line there — a
  * dense day is never shipped whole just to be thrown away in the browser.
  * `reread` reads the track and its summary again, as after its fixes were marked.
  */
 export function useTrack(
-  id: string | undefined,
+  trackPath: string | undefined,
   maxPoints = 4000,
 ): {
   track: TrackEntry | undefined;
@@ -79,7 +73,7 @@ export function useTrack(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const track = tracks.find((entry) => entry.id === id);
+  const track = tracks.find((entry) => entry.path === trackPath);
   const path = track?.path;
   const points = track?.points ?? 0;
 
@@ -251,14 +245,14 @@ export function useMapTracks(
 }
 
 /**
- * The routes of `cameras` over a span of time — what an album shows: each of their tracks that
- * recorded anything between `from` and `to`, read for that span alone. `cameras` is null while it
- * is still being asked.
+ * The routes of `paths` (tracks) over a span of time — what an album shows: each of them that
+ * recorded anything between `from` and `to`, read for that span alone. `paths` is null while it is
+ * still being asked.
  */
 export function useSpanTracks(
   from: string | undefined,
   to: string | undefined,
-  cameras: string[] | null,
+  paths: string[] | null,
   maxPoints = 4000,
 ): { segments: MapTrackSpec[]; loading: boolean } {
   const { tracks, loading: listLoading } = useTracks();
@@ -270,10 +264,10 @@ export function useSpanTracks(
     // last. Compared as instants, since a span's ends may be written with or without a zone.
     const start = from ? Date.parse(`${from.slice(0, 10)}T00:00:00`) : NaN;
     const end = to ? Date.parse(`${to.slice(0, 10)}T23:59:59.999`) : NaN;
-    const listed = new Set(cameras ?? []);
+    const listed = new Set(paths ?? []);
     const during = Number.isNaN(start) || Number.isNaN(end)
       ? []
-      : tracks.filter((track) => listed.has(track.camera) && track.firstTs && track.lastTs && Date.parse(track.firstTs) <= end && Date.parse(track.lastTs) >= start);
+      : tracks.filter((track) => listed.has(track.path) && track.firstTs && track.lastTs && Date.parse(track.firstTs) <= end && Date.parse(track.lastTs) >= start);
     if (during.length === 0) {
       setSegments([]);
       setLoading(false);
@@ -297,7 +291,7 @@ export function useSpanTracks(
     return () => {
       cancelled = true;
     };
-  }, [tracks, from, to, cameras, maxPoints]);
+  }, [tracks, from, to, paths, maxPoints]);
 
-  return { segments, loading: loading || listLoading || cameras === null };
+  return { segments, loading: loading || listLoading || paths === null };
 }

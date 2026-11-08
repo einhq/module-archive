@@ -1,29 +1,30 @@
 #!ts
 /**
- * trip-edit — change where a camera's track is cut into trips, and derive them again.
+ * trip-edit — change where a track is cut into trips, and derive them again.
  *
- *   trip-edit <camera> <trip> --merge
- *   trip-edit <camera> <day> --split
+ *   trip-edit <track> <trip> --merge
+ *   trip-edit <track> <day> --split
  *
- * `--merge` joins the trip (its id from `trip-list`, or its first day) to the trip before it,
- * whatever ended that one. `--split` parts again a trip joined on that day, or else starts a trip
- * at that day's midnight. The edits are kept in the camera's attr `tripEdits`, and the trips are
- * derived again from the whole track.
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`). `--merge` joins the trip (its id from `trip-list`, or its first day) to the trip
+ * before it, whatever ended that one. `--split` parts again a trip joined on that day, or else
+ * starts a trip at that day's midnight. The edits are kept in the track's attr `tripEdits`, and the
+ * trips are derived again from the whole track.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { CameraTrips, TripEdits } from '@archive/location/api';
-import { deriveCameraTrips, readCameraTrips, TRIP_EDITS_ATTR, tripEditsOf } from '@archive/location/camera-trips';
-import { trackOf } from '@archive/location/track';
+import type { TrackTrips, TripEdits } from '@archive/location/api';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { deriveTrackTrips, readTrackTrips, TRIP_EDITS_ATTR, tripEditsOf } from '@archive/location/track-trips';
 import { localDayOf } from '@archive/location/trips';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 /** The edits after joining the trip `name` names to the one before it, and what to say of it. */
-const merged = (trips: CameraTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
+const merged = (trips: TrackTrips, edits: TripEdits, name: string): { edits: TripEdits; said: string } => {
   const index = trips.trips.findIndex((trip) => trip.id === name);
   const at = index >= 0 ? index : trips.trips.findIndex((trip) => trip.day === name);
-  if (at < 0) throw new Error(`no trip ${name} (trip-list ${trips.camera})`);
+  if (at < 0) throw new Error(`no trip ${name} (trip-list ${trips.track})`);
   if (at === 0) throw new Error(`${name} is the first trip: there is none before it to join`);
   const trip = trips.trips[at];
   const before = trips.trips[at - 1].id;
@@ -35,13 +36,13 @@ const merged = (trips: CameraTrips, edits: TripEdits, name: string): { edits: Tr
 };
 
 /** The edits after parting the track on `day`, and what to say of it. */
-const split = (trips: CameraTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
+const split = (trips: TrackTrips, edits: TripEdits, day: string, dayOf: (ms: number) => string): { edits: TripEdits; said: string } => {
   const joined = (edits.merge ?? []).filter((start) => dayOf(Date.parse(start)) === day);
   if (joined.length > 0) {
     return { edits: { ...edits, merge: edits.merge!.filter((start) => !joined.includes(start)) }, said: `Parted the trip joined on ${day} again` };
   }
   if (!DAY.test(day)) throw new Error(`'${day}' is not a day (YYYY-MM-DD)`);
-  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${trips.camera})`);
+  if (!trips.trips.some((trip) => trip.days.slice(1).includes(day))) throw new Error(`no trip goes on into ${day} (trip-list ${trips.track})`);
   return { edits: { ...edits, split: [...edits.split ?? [], day] }, said: `Started a trip on ${day}` };
 };
 
@@ -51,21 +52,21 @@ const tripEdit = async (cmd: Command): CmdReturn => {
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const [target, name] = flags._.map(String);
   if (!target || !name || flags.merge === flags.split) {
-    await cmd.writeError('trip-edit: usage: trip-edit <camera> <trip|day> --merge|--split\n');
+    await cmd.writeError('trip-edit: usage: trip-edit <track> <trip|day> --merge|--split\n');
     return 1;
   }
 
   try {
-    const { camera } = await trackOf(cmd, target);
-    const attrs = (await cmd.sys.vfs.get(cmd.access, camera)).attrs as Record<string, unknown>;
-    const trips = await readCameraTrips(cmd, camera) ?? await deriveCameraTrips(cmd, camera, { full: true });
+    const { path: track } = await trackOf(cmd, target);
+    const attrs = (await cmd.sys.vfs.get(cmd.access, track)).attrs as Record<string, unknown>;
+    const trips = await readTrackTrips(cmd, track) ?? await deriveTrackTrips(cmd, track, { full: true });
     const edits = tripEditsOf(attrs);
     const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
     const change = flags.merge ? merged(trips, edits, name) : split(trips, edits, name, localDayOf(timezone));
 
     const next = { ...change.edits.merge?.length ? { merge: change.edits.merge } : {}, ...change.edits.split?.length ? { split: change.edits.split } : {} };
-    await cmd.sys.vfs.update(cmd.access, camera, { attrs: { [TRIP_EDITS_ATTR]: Object.keys(next).length > 0 ? next : null } });
-    const derived = await deriveCameraTrips(cmd, camera, { full: true });
+    await cmd.sys.vfs.update(cmd.access, track, { attrs: { [TRIP_EDITS_ATTR]: Object.keys(next).length > 0 ? next : null } });
+    const derived = await deriveTrackTrips(cmd, track, { full: true });
 
     if (cmd.json) await cmd.writeJSON({ ok: true });
     else await cmd.writeLn(`${change.said}: ${derived.trips.length} trip${derived.trips.length === 1 ? '' : 's'} now.`);
@@ -79,16 +80,16 @@ const tripEdit = async (cmd: Command): CmdReturn => {
 tripEdit.spec = {
   name: 'trip-edit',
   effect: 'write' as const,
-  description: "Join a camera's trip to the one before it, or part its track on a day, and derive its trips again",
+  description: "Join a track's trip to the one before it, or part the track on a day, and derive its trips again",
   args: [
-    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
+    { name: 'track', type: 'path' as const, description: TRACK_ARG },
     { name: 'trip', type: 'string' as const, description: 'the trip (its id, or its first day) to join, or the day to part on' },
   ],
   flags: [
     { name: 'merge', type: 'bool' as const, description: 'join the trip to the one before it' },
     { name: 'split', type: 'bool' as const, description: 'part a trip joined on this day again, or start a trip on it' },
   ],
-  examples: ['trip-edit the-sailboat 2025-06-10 --merge', 'trip-edit the-sailboat 2025-06-10 --split'],
+  examples: ['trip-edit sailboat 2025-06-10 --merge', 'trip-edit sailboat 2025-06-10 --split'],
 };
 
 export default tripEdit;

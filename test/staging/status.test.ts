@@ -2,7 +2,7 @@
  * `staging status` reads a staging area without writing to it: per category the staged originals
  * by kind from one aggregate (renditions and versions are not originals), with the exact copies
  * among them by where their originals lie, the destination as an
- * album reference, today's upload folder, and the routes waiting for a camera.
+ * album reference, today's upload folder, and the routes waiting for a track.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { StagingStatus } from '@archive/staging/api';
@@ -56,7 +56,7 @@ Deno.test({ name: 'staging status', sanitizeResources: false, sanitizeOps: false
       ...read,
       duplicate: { inbox: 'anna', sha256: 'd'.repeat(64), at: '2026-10-16T10:00:00Z' },
     });
-    await file(`${STAGING}/routes/hike.gpx`, { mimetype: 'application/gpx+xml', size: 10, trackCameraPending: true });
+    await file(`${STAGING}/routes/hike.gpx`, { mimetype: 'application/gpx+xml', size: 10, trackPending: true });
 
     await t.step('each category is counted by kind, and the reading writes nothing', async () => {
       const seen: string[] = [];

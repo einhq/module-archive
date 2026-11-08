@@ -1,0 +1,55 @@
+#!ts
+/**
+ * album-track-list — the tracks an album's map draws (`@archive/media/album-tracks`): the ones the
+ * cameras of its media record into, the most media first, and the ones added by hand; then the
+ * tracks of its media that were removed from the list.
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AlbumTrackList } from '@archive/media/api';
+import { albumTracks } from '@archive/media/album-tracks';
+
+const albumTrackList = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [arg] = flags._.map(String);
+  if (!arg) {
+    await cmd.writeError('album-track-list: expected an album\n');
+    return 1;
+  }
+
+  try {
+    const answer = await albumTracks(cmd, resolve(cmd.cwd, arg));
+    if (cmd.json) {
+      await cmd.writeJSON(answer satisfies AlbumTrackList);
+      return 0;
+    }
+    if (answer.tracks.length === 0) await cmd.writeLn('No tracks');
+    for (const track of answer.tracks) {
+      await cmd.writeLn(`${track.source === 'media' ? String(track.media).padStart(5) : 'added'}  ${track.name}  ${track.path}`);
+    }
+    if (answer.removed.length > 0) {
+      await cmd.writeLn('Removed:');
+      for (const track of answer.removed) await cmd.writeLn(`${String(track.media).padStart(5)}  ${track.name}  ${track.path}`);
+    }
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`album-track-list: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+albumTrackList.spec = {
+  name: 'album-track-list',
+  effect: 'read' as const,
+  description: "The tracks an album's map draws: those the cameras of its media record into and those added by hand, and the tracks of its media removed from the list",
+  args: [{ name: 'album', type: 'path' as const, description: 'the album, or a folder in one' }],
+  flags: [],
+  examples: ['album-track-list /archive/albums/Exempelalbum_2019', 'JSON_OUTPUT=1 album-track-list /archive/albums/Exempelalbum_2019'],
+  returns:
+    "each listed track's path and name, whether cameras of the album's media record into it (and how many of the media they took) or it was added by hand; and the tracks of its media removed from the list.",
+};
+
+export default albumTrackList;

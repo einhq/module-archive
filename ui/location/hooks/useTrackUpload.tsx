@@ -6,7 +6,7 @@ import type { TrackStageResult } from '@archive/location/api';
 
 /**
  * Put a GPX file in /tmp and answer the path it got. Nothing there is indexed, and `track-stage`
- * moves it to the camera's `routes/` once its fixes are in the track; one it refuses is swept a
+ * moves it to the track's `routes/` once its fixes are in the track; one it refuses is swept a
  * day later.
  */
 const putInTemp = async (file: File): Promise<string> => {
@@ -23,12 +23,12 @@ const putInTemp = async (file: File): Promise<string> => {
 };
 
 /**
- * GPX files into one camera's track. The camera is the one whose page this is, so the files go
- * straight into its track rather than through staging, which would have to guess it from the file.
- * `camera` is the camera's slug or path. `open` raises a file picker that offers GPX files only;
- * `input`, the picker, has to be rendered somewhere on the page, and `sending` is true while files go.
+ * GPX files into one track. The track is the one whose page this is, so the files go straight into
+ * it rather than through staging, which would have to guess it from the file. `track` is the
+ * track's path. `open` raises a file picker that offers GPX files only; `input`, the picker, has to
+ * be rendered somewhere on the page, and `sending` is true while files go.
  */
-export function useTrackUpload(camera: string, onImported?: () => void): { open: () => void; sending: boolean; input: ReactNode } {
+export function useTrackUpload(track: string, onImported?: () => void): { open: () => void; sending: boolean; input: ReactNode } {
   const [sending, setSending] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
 
@@ -42,7 +42,7 @@ export function useTrackUpload(camera: string, onImported?: () => void): { open:
     for (const file of files) {
       try {
         const path = await putInTemp(file);
-        const result = await execCommand<TrackStageResult>(`track-stage ${shq(path)} --camera ${shq(camera)} --name ${shq(file.name)}`);
+        const result = await execCommand<TrackStageResult>(`track-stage ${shq(path)} --track ${shq(track)} --name ${shq(file.name)}`);
         if (result.status === 'imported') {
           points += result.imported;
           untimed += result.untimed;

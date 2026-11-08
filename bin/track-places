@@ -1,13 +1,14 @@
 #!ts
 /**
- * track-places — put each of a camera's stays at a location, and name the locations it makes.
+ * track-places — put each of a track's stays at a location, and name the locations it makes.
  *
- *   track-places <camera> [--rename] [--dry-run]
+ *   track-places <track> [--rename] [--dry-run]
  *
- * `<camera>` is a camera's slug or path, or its track's path. It reads the stays `track-trips`
- * keeps in `<camera>/.trips` and gives each one not placed yet a `location`:
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`). It reads the stays `track-trips` keeps in `<track>/.trips` and gives each one not
+ * placed yet a `location`:
  *
- * - a stay at one of the camera's homes, that home;
+ * - a stay at one of the track's homes, that home;
  * - else the location whose position is within `SNAP_M` of the stay, the nearest;
  * - else a new location there, named by `@archive/location/place-name`: the harbour, boatyard,
  *   island or bay around it, or the town. It has `locationSource: 'track'`, its `placeKind` and its
@@ -30,12 +31,12 @@
 import { LOCATIONS_ROOT } from '@archive/paths';
 import { basename, dirname } from '@std/path';
 import { type CmdReturn, collectUnknownFlags, type Command, haversineMeters, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { CameraTrips, TrackPlaces, TrackPlacesStay, TripStay } from '@archive/location/api';
-import { readCameraTrips, writeCameraTrips } from '@archive/location/camera-trips';
+import type { TrackPlaces, TrackPlacesStay, TrackTrips, TripStay } from '@archive/location/api';
 import { POSITION_CHILD } from '@archive/location/location-link';
 import { PlaceNamer } from '@archive/location/place-cache';
 import { overpassEndpoints, type PlaceName } from '@archive/location/place-name';
-import { trackOf } from '@archive/location/track';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { readTrackTrips, writeTrackTrips } from '@archive/location/track-trips';
 import { type LocationAttrs, NODE_TYPE_LOCATION } from '@archive/location/types';
 import { slugifyName } from '@archive/people/person';
 
@@ -132,9 +133,9 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 const unplaced = (stay: TripStay, locations: Map<string, string>): boolean => !stay.unnamed && (!stay.location || !locations.has(stay.location));
 
 const placeStays = async (cmd: Command, target: string, opts: { rename: boolean; dryRun: boolean }): Promise<TrackPlaces> => {
-  const { camera } = await trackOf(cmd, target);
-  const result: TrackPlaces = { camera, stays: [], renamed: [], failed: 0, requests: 0 };
-  const trips = await readCameraTrips(cmd, camera);
+  const { path: track } = await trackOf(cmd, target);
+  const result: TrackPlaces = { track, stays: [], renamed: [], failed: 0, requests: 0 };
+  const trips = await readTrackTrips(cmd, track);
   if (!trips) return result;
 
   const locations = await locationIds(cmd);
@@ -210,7 +211,7 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
   }
 
   result.requests += namer.requests;
-  if (!opts.dryRun && result.stays.some((entry) => entry.outcome !== 'failed')) await recordPlaces(cmd, camera, result.stays);
+  if (!opts.dryRun && result.stays.some((entry) => entry.outcome !== 'failed')) await recordPlaces(cmd, track, result.stays);
   return result;
 };
 
@@ -218,8 +219,8 @@ const placeStays = async (cmd: Command, target: string, opts: { rename: boolean;
  * Write where the stays are into `.trips`, read again first: `track-trips` may have written it
  * since. A stay is matched by its first fix; one derived differently since is left for the next run.
  */
-const recordPlaces = async (cmd: Command, camera: string, placed: TrackPlacesStay[]): Promise<void> => {
-  const current = await readCameraTrips(cmd, camera);
+const recordPlaces = async (cmd: Command, track: string, placed: TrackPlacesStay[]): Promise<void> => {
+  const current = await readTrackTrips(cmd, track);
   if (!current) return;
   const byStart = new Map(placed.map((entry) => [entry.start, entry]));
   let changed = false;
@@ -230,7 +231,7 @@ const recordPlaces = async (cmd: Command, camera: string, placed: TrackPlacesSta
     const { location: _location, unnamed: _unnamed, ...rest } = stay;
     return entry.outcome === 'unnamed' ? { ...rest, unnamed: true as const } : { ...rest, location: entry.location! };
   });
-  if (changed) await writeCameraTrips(cmd, camera, { ...current, stays } satisfies CameraTrips);
+  if (changed) await writeTrackTrips(cmd, track, { ...current, stays } satisfies TrackTrips);
 };
 
 const trackPlaces = async (cmd: Command): CmdReturn => {
@@ -239,7 +240,7 @@ const trackPlaces = async (cmd: Command): CmdReturn => {
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const target = flags._[0] === undefined ? undefined : String(flags._[0]);
   if (!target) {
-    await cmd.writeError('track-places: usage: track-places <camera> [--rename] [--dry-run]\n');
+    await cmd.writeError('track-places: usage: track-places <track> [--rename] [--dry-run]\n');
     return 1;
   }
 
@@ -256,7 +257,7 @@ const trackPlaces = async (cmd: Command): CmdReturn => {
     for (const renamed of result.renamed) await cmd.writeLn(`renamed  ${renamed.location}: ${renamed.from} → ${renamed.to}`);
     const count = (outcome: TrackPlacesStay['outcome']) => result.stays.filter((entry) => entry.outcome === outcome).length;
     await cmd.writeLn(
-      `${result.camera}: ${count('home') + count('near')} at known places, ${count('created')} new, ${count('unnamed')} unnamed` +
+      `${result.track}: ${count('home') + count('near')} at known places, ${count('created')} new, ${count('unnamed')} unnamed` +
         (result.failed ? `, ${result.failed} failed (asked again next run)` : '') +
         `; ${result.requests} request${result.requests === 1 ? '' : 's'} to Overpass and Nominatim` +
         (flags['dry-run'] ? ' (dry run, nothing written)' : ''),
@@ -271,15 +272,15 @@ const trackPlaces = async (cmd: Command): CmdReturn => {
 trackPlaces.spec = {
   name: 'track-places',
   effect: 'write' as const,
-  description: "Put each of a camera's stays at a location, naming the ones it makes after the harbour, island, bay or town there",
+  description: "Put each of a track's stays at a location, naming the ones it makes after the harbour, island, bay or town there",
   args: [
-    { name: 'camera', type: 'path' as const, description: "the camera (slug or path), or its track's path" },
+    { name: 'track', type: 'path' as const, description: TRACK_ARG },
   ],
   flags: [
     { name: 'rename', type: 'bool' as const, description: "ask Overpass and Nominatim again for the names of the stays' locations, except names changed by hand" },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'look the places up and show them without making locations or writing .trips' },
   ],
-  examples: ['track-places the-sailboat', 'track-places /archive/cameras/the-sailboat --dry-run'],
+  examples: ['track-places sailboat', 'track-places /archive/devices/sailboat/position/history --dry-run'],
 };
 
 export default trackPlaces;

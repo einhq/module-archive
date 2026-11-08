@@ -1,14 +1,14 @@
 /**
- * How a camera moves, and what that means for reading its track (`@archive/location/track-profile`).
+ * How a track travels, and what that means for reading it (`@archive/location/track-profile`).
  *
- * A camera's `kind` picks one profile: the thresholds that tell a stop from drift and a trip from a
- * rest, and the units its distances and speeds are shown in. A camera with no kind reads as a car.
+ * A track's `kind` picks one profile: the thresholds that tell a stop from drift and a trip from a
+ * rest, and the units its distances and speeds are shown in. A track with no kind reads as a car.
  * Imports nothing, so the bins and the UI share it.
  */
 
-/** What a camera travels as. */
+/** What a track travels as. */
 export const TRAVEL_KINDS = ['boat', 'car', 'bike', 'foot'] as const;
-export type TravelKind = typeof TRAVEL_KINDS[number];
+type TravelKind = typeof TRAVEL_KINDS[number];
 
 /** How each kind is named to a person. */
 export const TRAVEL_KIND_LABELS: Record<TravelKind, string> = { boat: 'Boat', car: 'Car', bike: 'Bike', foot: 'On foot' };
@@ -22,9 +22,9 @@ type TrackProfile = {
   kind: TravelKind;
   /** A stop's fixes stay within this many metres of where it began; wider is GPS drift no more. */
   driftRadiusM: number;
-  /** How long the camera has to stay within the drift radius before it counts as stopped. */
+  /** How long the track has to stay within the drift radius before it counts as stopped. */
   stillMinMs: number;
-  /** At or under this speed, in m/s, the camera counts as lying still. */
+  /** At or under this speed, in m/s, the track counts as lying still. */
   stillMaxSpeedMps: number;
   /** A jump implying more than this speed, in m/s, is a GPS glitch. */
   maxSpeedMps: number;
@@ -83,7 +83,7 @@ const PROFILES: Record<TravelKind, TrackProfile> = {
   },
 };
 
-/** The profile of a camera of this kind; anything that is not a kind reads as a car. */
+/** The profile of a track of this kind; anything that is not a kind reads as a car. */
 export const trackProfile = (kind?: unknown): TrackProfile => PROFILES[isTravelKind(kind) ? kind : 'car'];
 
 /** `12.4 nm` or `23.0 km`; under one unit with one decimal more. */

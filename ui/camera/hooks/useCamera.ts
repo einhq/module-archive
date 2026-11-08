@@ -12,8 +12,6 @@ export type CameraFields = {
   model: string;
   serial: string;
   timezone: string;
-  /** How it travels (`TravelKind`), or empty when not said. */
-  kind: string;
   description: string;
   digitizer: boolean;
   quicktimeUtc: boolean;
@@ -23,6 +21,8 @@ export type CameraDetail = CameraFields & {
   id: string;
   path: string;
   ownership: NodeOwnership;
+  /** The path of the track it records into (its child softlink `track`), when it links to one. */
+  track?: string;
 };
 
 export type CameraOwner = {
@@ -47,13 +47,15 @@ type UseCameraResult = {
   removeOwner: (personId: string) => Promise<void>;
   /** Link media this camera produced but was registered too late to claim. */
   relink: () => Promise<RelinkResult>;
+  /** Link the camera to the track at `track` (`camera-track`), or with null take the link away. */
+  setTrack: (track: string | null) => Promise<void>;
 };
 
 type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-const EMPTY: CameraFields = { name: '', make: '', model: '', serial: '', timezone: '', kind: '', description: '', digitizer: false, quicktimeUtc: false };
+const EMPTY: CameraFields = { name: '', make: '', model: '', serial: '', timezone: '', description: '', digitizer: false, quicktimeUtc: false };
 
 /** Flag name for each field, as `camera-update` spells it. */
 type TextCameraField = Exclude<keyof CameraFields, 'digitizer' | 'quicktimeUtc'>;
@@ -63,7 +65,6 @@ const FLAGS: Record<TextCameraField, string> = {
   model: 'model',
   serial: 'serial',
   timezone: 'timezone',
-  kind: 'kind',
   description: 'description',
 };
 
@@ -101,6 +102,8 @@ export function useCamera(id: string | undefined): UseCameraResult {
       }
 
       const attrs = entry.node.attrs as Record<string, unknown>;
+      // A camera that records no track has no `track` link, which is not an error.
+      const track = await execCommand<{ softlink?: string }>(`props -L ${shq(`${path}/track`)}`).then((props) => props.softlink, () => undefined);
       setCamera({
         id,
         path,
@@ -109,11 +112,11 @@ export function useCamera(id: string | undefined): UseCameraResult {
         model: str(attrs.model),
         serial: str(attrs.serialNumber),
         timezone: str(attrs.timezone),
-        kind: str(attrs.kind),
         description: str(attrs.description),
         digitizer: attrs.digitizer === true,
         quicktimeUtc: attrs.quicktimeUtc === true,
         ownership: { mode: entry.node.props.mode, uid: entry.node.props.uid, gid: entry.node.props.gid },
+        ...(track ? { track } : {}),
       });
 
       // The camera itself is enough to draw the page, so stop blocking here. What
@@ -217,5 +220,11 @@ export function useCamera(id: string | undefined): UseCameraResult {
     return await execCommand<RelinkResult>(`camera-relink ${shq(path)}`);
   }, [path]);
 
-  return { camera, owners, loading, error, refetch: fetchCamera, save, addOwner, removeOwner, relink };
+  const setTrack = useCallback(async (track: string | null) => {
+    if (!path) return;
+    await execCommand(`camera-track ${shq(path)} ${track ? shq(track) : '--none'}`);
+    await fetchCamera();
+  }, [path, fetchCamera]);
+
+  return { camera, owners, loading, error, refetch: fetchCamera, save, addOwner, removeOwner, relink, setTrack };
 }

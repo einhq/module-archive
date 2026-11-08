@@ -2,14 +2,14 @@
 /**
  * track-mark — overrule the track's rules on the fixes of a time range.
  *
- *   track-mark <camera> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
+ *   track-mark <track> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept]
  *              --reject | --accept | --clear
  *
- * `<camera>` is a camera's slug or path, standing for its track, or a track's path. The range
- * is half-open, `[from, to)`; either end left out runs to that end of the track. `--near` keeps
- * the fixes within `--within` metres (40 by default) of a point, and `--marked` those a person
- * rejected or accepted, so `--marked reject --clear` brings back what was rejected by hand and
- * leaves what was accepted.
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`). The range is half-open, `[from, to)`; either end left out runs to that end of the
+ * track. `--near` keeps the fixes within `--within` metres (40 by default) of a point, and
+ * `--marked` those a person rejected or accepted, so `--marked reject --clear` brings back what was
+ * rejected by hand and leaves what was accepted.
  *
  * The track judges its fixes by rules as it stores them, and leaves out the ones they reject
  * (`track-read --rejected` reads them). `--reject` leaves the fixes out whatever the rules say,
@@ -18,12 +18,12 @@
  *
  * Output: how many fixes' verdict changed; `{"marked": n}` in JSON mode.
  */
-import { openTrack, type TrackSelection, type TrackVerdict } from '@archive/location/track';
+import { openTrack, TRACK_ARG, type TrackSelection, type TrackVerdict } from '@archive/location/track';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { TrackMark } from '@archive/location/api';
 
-const USAGE = 'track-mark: usage: track-mark <camera> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept] --reject | --accept | --clear\n';
+const USAGE = 'track-mark: usage: track-mark <track> [--from <iso>] [--to <iso>] [--near <lat,lng> [--within <m>]] [--marked reject|accept] --reject | --accept | --clear\n';
 
 /** How far from `--near`, in metres, a fix is kept when `--within` is not given. */
 const DEFAULT_WITHIN_M = 40;
@@ -99,9 +99,9 @@ const trackMark = async (cmd: Command): CmdReturn => {
 trackMark.spec = {
   name: 'track-mark',
   effect: 'write' as const,
-  description: "Reject or accept the fixes of a time range of a camera's track by hand, overruling its rules, or clear that",
+  description: 'Reject or accept the fixes of a time range of a track by hand, overruling its rules, or clear that',
   args: [
-    { name: 'camera', type: 'path' as const, description: "the camera (slug or path) whose track to mark, or a track's path" },
+    { name: 'track', type: 'path' as const, description: `the track to mark: ${TRACK_ARG}` },
   ],
   flags: [
     { name: 'from', type: 'string' as const, description: 'only fixes at or after this ISO timestamp' },
@@ -114,8 +114,8 @@ trackMark.spec = {
     { name: 'clear', type: 'bool' as const, description: 'hand the fixes back to the rules' },
   ],
   examples: [
-    'track-mark the-sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --near=57.70,11.97 --reject',
-    'track-mark the-sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --marked=reject --clear',
+    'track-mark sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --near=57.70,11.97 --reject',
+    'track-mark sailboat --from=2025-07-01T00:00:00Z --to=2025-07-02T00:00:00Z --marked=reject --clear',
   ],
 };
 

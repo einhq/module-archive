@@ -1,7 +1,7 @@
 #!ts
 /**
  * source-list — the files a node was read from: the links in its `sources/`, with what each
- * file is. A camera's track lists the GPX files of its route, a person the GEDCOM files that
+ * file is. A track lists the GPX files it was read from, a person the GEDCOM files that
  * describe them.
  *
  *   source-list <node>

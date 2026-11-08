@@ -1,8 +1,8 @@
-import { Alert, Anchor, Button, Container, Grid, Group, Stack, Tabs, Text } from '@mantine/core';
+import { Alert, Anchor, Container, Grid, Stack, Tabs, Text } from '@mantine/core';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
 import { TimelineFeed } from '../../components/TimelineFeed.tsx';
-import { Dialog, EntityDetailHeader, PageLoader, TablerIcon } from '@ein/ui/components';
+import { EntityDetailHeader, PageLoader, TablerIcon } from '@ein/ui/components';
 import { forgetSubjectFacets, useSubjectFacets } from '../../hooks/useSubjectFacets.ts';
 import { useSubjectTimeline } from '../../hooks/useSubjectTimeline.ts';
 import { useAccessIds } from '@ein/ui/hooks';
@@ -10,11 +10,6 @@ import { canWrite, subjectArg } from '@ein/ui/lib';
 import { EventModal } from '../../people/components/EventModal.tsx';
 import { CameraEditModal } from '../components/CameraEditModal.tsx';
 import { CameraInfo } from '../components/CameraInfo.tsx';
-import { CameraTripsTab } from '../components/CameraTripsTab.tsx';
-import { TrackView } from '../../location/components/TrackView.tsx';
-import { useHasTrack } from '../../location/hooks/useTracks.ts';
-import { useTrackUpload } from '../../location/hooks/useTrackUpload.tsx';
-import { TrackerSetup } from '../components/TrackerSetup.tsx';
 import { useCamera } from '../hooks/useCamera.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -22,13 +17,10 @@ import { CurrentPeopleLine } from '../../components/CurrentPeople.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { yearSpan } from '../../lib/year-span.ts';
 
-const TABS = ['info', 'media', 'track', 'trips'] as const;
+const TABS = ['info', 'media'] as const;
 type CameraTab = typeof TABS[number];
 
 const isTab = (value: string | null): value is CameraTab => value !== null && (TABS as readonly string[]).includes(value);
-
-/** The tabs only a camera that travels has. */
-const TRAVEL_TABS: readonly CameraTab[] = ['track', 'trips'];
 
 /** The feed here does not page, so the sentinels have nothing to observe. */
 const noSentinel = () => {};
@@ -40,26 +32,17 @@ export default function CameraDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { camera, owners, loading, save, addOwner, removeOwner, relink } = useCamera(id);
+  const { camera, owners, loading, save, addOwner, removeOwner, relink, setTrack } = useCamera(id);
   const access = useAccessIds();
-  const hasTrack = useHasTrack(id);
 
-  // A camera travels once it is said how (`kind`) or it has recorded a track; only then do a
-  // track and trips have anything to show.
-  const travels = Boolean(camera?.kind) || hasTrack === true;
-
-  // What is known about the camera, its history beside it, is what the page opens on; the other
-  // tabs are linkable. A travel tab asked of a camera that does not travel opens Info.
+  // What is known about the camera, its history beside it, is what the page opens on; the media
+  // tab is linkable.
   const asked = searchParams.get('tab');
-  const tab: CameraTab = isTab(asked) && (travels || !TRAVEL_TABS.includes(asked)) ? asked : 'info';
+  const tab: CameraTab = isTab(asked) ? asked : 'info';
   const setTab = (value: string | null) => setSearchParams(value && value !== 'info' ? { tab: value } : {}, { replace: true });
 
   const [editing, setEditing] = useState(false);
   const [addingEvent, setAddingEvent] = useState(false);
-  const [tracking, setTracking] = useState(false);
-  // Raised by an upload, so the Track tab reads the track again.
-  const [trackRead, setTrackRead] = useState(0);
-  const upload = useTrackUpload(id ?? '', () => setTrackRead((n) => n + 1));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,8 +72,6 @@ export default function CameraDetailPage() {
   }
 
   const editable = canWrite(camera.ownership, access);
-  // Recording a track is for a camera that is said to travel, by whoever may change it.
-  const records = editable && Boolean(camera.kind);
 
   const runRelink = async () => {
     try {
@@ -134,8 +115,6 @@ export default function CameraDetailPage() {
           <Tabs.List>
             <Tabs.Tab value='info' leftSection={<TablerIcon name='info-circle' size={16} />}>Info</Tabs.Tab>
             <Tabs.Tab value='media' leftSection={<TablerIcon name='photo' size={16} />}>Media</Tabs.Tab>
-            {travels && <Tabs.Tab value='track' leftSection={<TablerIcon name='route' size={16} />}>Track</Tabs.Tab>}
-            {travels && <Tabs.Tab value='trips' leftSection={<TablerIcon name='map-route' size={16} />}>Trips</Tabs.Tab>}
           </Tabs.List>
         }
         path={camera.path}
@@ -163,13 +142,7 @@ export default function CameraDetailPage() {
           ? {
             share: camera.path,
             edit: () => setEditing(true),
-            items: [
-              ...(records
-                ? [{ label: upload.sending ? 'Uploading GPX…' : 'Upload GPX', icon: 'upload', button: true, lead: true, disabled: upload.sending, onClick: upload.open }]
-                : []),
-              { label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) },
-              ...(records ? [{ label: 'Live tracking', icon: 'broadcast', onClick: () => setTracking(true) }] : []),
-            ],
+            items: [{ label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) }],
             trash: { path: camera.path, name: camera.name, leaveTo: '/cameras' },
           }
           : undefined}
@@ -177,15 +150,9 @@ export default function CameraDetailPage() {
 
       {
         /* The body pads itself (AppShell's padding is off so the header can bleed); the
-          variable tells the media tab's grid how much to cancel on a phone. The track has none. */
+          variable tells the media tab's grid how much to cancel on a phone. */
       }
-      <Container
-        size='xl'
-        py='md'
-        px='md'
-        display={tab === 'track' ? 'none' : undefined}
-        style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}
-      >
+      <Container size='xl' py='md' px='md' style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)' } as CSSProperties}>
         <Stack gap='lg'>
           {error && (
             <Alert icon={<TablerIcon name='alert-circle' size={16} />} color='red'>
@@ -217,11 +184,11 @@ export default function CameraDetailPage() {
                   camera={camera}
                   owners={owners}
                   editable={editable}
-                  travels={travels}
                   setOwner={setOwner}
                   removeOwner={dropOwner}
                   onRelink={runRelink}
                   relinking={busy}
+                  setTrack={setTrack}
                 />
               </Grid.Col>
             </Grid>
@@ -236,28 +203,8 @@ export default function CameraDetailPage() {
               selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
             />
           </Tabs.Panel>
-
-          <Tabs.Panel value='trips'>
-            <CameraTripsTab camera={camera.path} editable={editable} />
-          </Tabs.Panel>
         </Stack>
       </Container>
-
-      {/* The track's map takes the window below the header, edge to edge, outside the body's padding. */}
-      <Tabs.Panel value='track'>
-        <TrackView
-          key={trackRead}
-          camera={camera.id}
-          kind={camera.kind}
-          editable={editable}
-          emptyActions={records && (
-            <Group gap='xs' justify='center'>
-              <Button variant='light' leftSection={<TablerIcon name='upload' size={16} />} loading={upload.sending} onClick={upload.open}>Upload GPX</Button>
-              <Button variant='default' leftSection={<TablerIcon name='broadcast' size={16} />} onClick={() => setTracking(true)}>Live tracking</Button>
-            </Group>
-          )}
-        />
-      </Tabs.Panel>
 
       <CameraEditModal
         opened={editing}
@@ -269,20 +216,6 @@ export default function CameraDetailPage() {
           setMessage(note ?? null);
         }}
       />
-      {records && upload.input}
-      {records && (
-        <Dialog
-          opened={tracking}
-          onClose={() => setTracking(false)}
-          title='Live tracking from a phone'
-          subtitle={camera.name}
-          icon='broadcast'
-          pattern='camera'
-          size='lg'
-        >
-          <TrackerSetup camera={camera.id} />
-        </Dialog>
-      )}
       <EventModal
         ownerPath={camera.path}
         ownerName={camera.name}

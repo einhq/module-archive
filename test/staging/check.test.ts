@@ -50,7 +50,7 @@ Deno.test({ name: 'staging check', sanitizeResources: false, sanitizeOps: false 
       await cmd.shouldSucceed(`ln -s ${FILES}/scans/box/scan.tif ${ALBUMS}/inbox/day/scan.tif`);
       await cmd.shouldSucceed(`ln -s ${FILES}/inbox/batch/b.jpg ${ALBUMS}/inbox/day/b.jpg && rm ${FILES}/inbox/batch/b.jpg`);
       await cmd.shouldSucceed(`mknode -t file ${FILES}/inbox/batch/hike.gpx --as mimetype=application/gpx+xml`);
-      await vfs.update(ADMIN_ACCESS, `${FILES}/inbox/batch/hike.gpx`, { attrs: { trackCameraPending: true } });
+      await vfs.update(ADMIN_ACCESS, `${FILES}/inbox/batch/hike.gpx`, { attrs: { trackPending: true } });
       await cmd.shouldSucceed(`rm -r ${STAGING}/journal`);
 
       const answer = await check();

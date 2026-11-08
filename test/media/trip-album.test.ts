@@ -1,20 +1,21 @@
 /**
- * trip-album: a trip of a camera's track becomes a new album or one that is there, which then holds
- * it as its attr `trip`, lists the camera and spans the trip without any photos; a trip is one
+ * trip-album: a trip of a track becomes a new album or one that is there, which then holds it as
+ * its attr `trip`, lists the track and spans the trip without any photos; a trip is one
  * album's and an album holds one trip; `--detach` takes it off again; and an ongoing trip's album
  * grows with it as `track-trips` runs. The tracks are invented.
  */
 
-import { ALBUMS_ROOT, CAMERAS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT } from '@archive/paths';
 import { assert, assertEquals } from '@std/assert';
 import { createTestContext, testCommands } from '@ein/testing';
-import type { CameraTrips, TripList } from '@archive/location/api';
-import type { AlbumCameraList, AlbumTrip, TripAlbumAnswer } from '@archive/media/api';
+import type { TrackTrips, TripList } from '@archive/location/api';
+import type { AlbumTrackList, AlbumTrip, TripAlbumAnswer } from '@archive/media/api';
+import { historyOf, mkTracker } from '../location/tracker.ts';
 
 const testCtx = createTestContext({ boot: true, modules: ['archive'] });
 
-const BOAT = `${CAMERAS_ROOT}/the-sailboat`;
-const CAR = `${CAMERAS_ROOT}/the-car`;
+const BOAT = historyOf('the-sailboat');
+const CAR = historyOf('the-car');
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -37,12 +38,11 @@ Deno.test({
   const client = await testCtx.server.createShellClient();
   const cmd = testCommands(client);
   const attrs = (path: string) => client.execJson<AlbumAttrs>(`attrs '${path}'`);
-  const list = (camera = 'the-sailboat') => client.execJson<TripList>(`trip-list ${camera}`);
+  const list = (track = 'the-sailboat') => client.execJson<TripList>(`trip-list ${track}`);
 
   try {
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
-    await cmd.shouldSucceed(`mknode -p -t camera ${BOAT} --as name=Sailboat --as kind=boat --as timezone=Europe/Stockholm`);
-    await cmd.shouldSucceed('track-create the-sailboat');
+    await cmd.shouldSucceed(mkTracker('the-sailboat', 'Sailboat', { kind: 'boat', timezone: 'Europe/Stockholm' }));
     // Two trips: one day out on 2025-06-05, and two days from 2025-06-10 with a night at anchor.
     const points = [
       ...rest(0, 4, 0),
@@ -55,17 +55,17 @@ Deno.test({
       ...rest(11, 4, 30_000),
     ];
     await cmd.shouldSucceed(`track-append ${BOAT} --json '${JSON.stringify(points)}'`);
-    const derived = await client.execJson<CameraTrips>('track-trips the-sailboat');
+    const derived = await client.execJson<TrackTrips>('track-trips the-sailboat');
     assertEquals(derived.trips.map((trip) => trip.id), ['2025-06-05', '2025-06-10']);
 
     let first = '';
-    await t.step('--new makes an album of the trip, which lists the camera and spans the trip', async () => {
+    await t.step('--new makes an album of the trip, which lists the track and spans the trip', async () => {
       first = (await client.execJson<TripAlbumAnswer>('trip-album the-sailboat 2025-06-05 --new')).album;
       assertEquals(first, `${ALBUMS_ROOT}/Sailboat`);
       const album = await attrs(first);
       assertEquals(album.name, 'Sailboat');
       const trip = derived.trips[0];
-      assertEquals(album.trip?.camera, BOAT);
+      assertEquals(album.trip?.track, BOAT);
       assertEquals(album.trip?.day, '2025-06-05');
       assertEquals(album.trip?.timezone, 'Europe/Stockholm');
       assertEquals([album.trip?.start, album.trip?.end], [trip.start, trip.end]);
@@ -75,8 +75,8 @@ Deno.test({
       // The span is the trip's, as the wall clock in Stockholm (two hours ahead in June).
       assertEquals(album.timeStart, new Date(Date.parse(trip.start) + 2 * HOUR).toISOString().slice(0, 19));
       assertEquals(album.timeEnd, new Date(Date.parse(trip.end) + 2 * HOUR).toISOString().slice(0, 19));
-      const cameras = await client.execJson<AlbumCameraList>(`album-camera-list '${first}'`);
-      assertEquals(cameras.cameras.map((camera) => [camera.path, camera.source]), [[BOAT, 'added']]);
+      const tracks = await client.execJson<AlbumTrackList>(`album-track-list '${first}'`);
+      assertEquals(tracks.tracks.map((track) => [track.path, track.source]), [[BOAT, 'added']]);
       assertEquals((await list()).trips.map((entry) => entry.album), [first, undefined]);
     });
 
@@ -111,13 +111,12 @@ Deno.test({
     });
 
     await t.step('the album of an ongoing trip grows with it as track-trips runs', async () => {
-      await cmd.shouldSucceed(`mknode -p -t camera ${CAR} --as name=Car --as kind=car`);
-      await cmd.shouldSucceed('track-create the-car');
+      await cmd.shouldSucceed(mkTracker('the-car', 'Car', { kind: 'car' }));
       const now = Math.floor(Date.now() / HOUR) * HOUR;
       const parked = Array.from({ length: 16 }, (_, i) => fixAt(now - 6 * DAY + i * 6 * HOUR, 0));
       const away = Array.from({ length: 3 }, (_, i) => fixAt(now - 4 * HOUR + i * HOUR, (i + 1) * 5_000));
       await cmd.shouldSucceed(`track-append ${CAR} --json '${JSON.stringify([...parked, ...away])}'`);
-      const trips = await client.execJson<CameraTrips>('track-trips the-car');
+      const trips = await client.execJson<TrackTrips>('track-trips the-car');
       assertEquals(trips.trips.map((trip) => trip.ongoing), [true]);
       const { album } = await client.execJson<TripAlbumAnswer>(`trip-album the-car ${trips.trips[0].id} --new --name 'Road trip'`);
       assertEquals(album, `${ALBUMS_ROOT}/Road trip`);

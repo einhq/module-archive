@@ -6,10 +6,12 @@
  */
 
 import { CAMERAS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
-import type { CameraHomes, ScanResult } from '@archive/camera/api';
+import type { ScanResult } from '@archive/camera/api';
+import type { TrackHomes } from '@archive/location/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext, type ShellClient, testCommands } from '@ein/testing';
+import { historyOf, mkTracker } from '../location/tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -320,17 +322,14 @@ Deno.test({
       assertEquals((await client.execJson<Relink>(`camera-relink ${CAMERAS_ROOT}/Nikon_D70`)).linked, 1);
       assertEquals((await client.execJson<{ cameraPath: string }>('attrs /shots/g.jpg')).cameraPath, `${CAMERAS_ROOT}/Nikon_D70`);
     });
-    await t.step('camera-update sets a kind, refuses one it does not know, and --clear removes it', async () => {
-      const camera = `${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III`;
-      await cmd.shouldSucceed(`camera-update ${camera} --kind boat`);
-      assertEquals((await client.execJson<{ kind?: string }>(`camera-info ${camera}`)).kind, 'boat');
-      await cmd.shouldFail(`camera-update ${camera} --kind submarine`);
-      await cmd.shouldSucceed(`camera-update ${camera} --clear kind`);
-      assertEquals((await client.execJson<{ kind?: string }>(`attrs ${camera}`)).kind, undefined);
+    await t.step("camera-update takes no travel kind: how something travels is its track's", async () => {
+      await cmd.shouldFail(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --kind boat`);
     });
 
-    await t.step("camera-home lists its own home bases, and its owners' homes while it has none", async () => {
+    await t.step("track-home lists a track's own home bases, and the homes of its cameras' owners while it has none", async () => {
       const boat = `${CAMERAS_ROOT}/Exempelbaten`;
+      const track = historyOf('exempelbaten');
+      await cmd.shouldSucceed(mkTracker('exempelbaten', 'Exempelbaten'));
       await cmd.shouldSucceed('camera-create --name Exempelbaten');
       await cmd.shouldSucceed(`mkdir -p ${LOCATIONS_ROOT}`);
       await cmd.shouldSucceed(`mknode -t location ${LOCATIONS_ROOT}/hamnen --as name=Hamnen`);
@@ -342,24 +341,29 @@ Deno.test({
       await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/huset --from 2005`);
       await cmd.shouldSucceed(`person-set-home ${PEOPLE_ROOT}/berit ${LOCATIONS_ROOT}/torpet --from 1990 --to 2000`);
 
+      // No camera records into the track yet: it has no homes.
+      assertEquals((await client.execJson<TrackHomes>(`track-home ${track}`)).homes, []);
+
       // Only the residence that overlaps the ownership counts, and only for the overlap.
-      let homes = await client.execJson<CameraHomes>(`camera-home ${boat} list`);
+      await cmd.shouldSucceed(`camera-track ${boat} ${track}`);
+      let homes = await client.execJson<TrackHomes>(`track-home ${track}`);
+      assertEquals(homes.track, track);
       assertEquals(homes.homes.map((home) => [home.source, home.name, home.from, home.to]), [['owner', 'Huset', '2010', '2020']]);
       assertEquals(homes.homes[0].owner, `${PEOPLE_ROOT}/berit`);
 
-      await cmd.shouldSucceed('camera-home Exempelbaten add hamnen');
-      await cmd.shouldSucceed(`camera-home ${boat} add ${LOCATIONS_ROOT}/hamnen`);
-      homes = await client.execJson<CameraHomes>(`camera-home ${boat}`);
-      assertEquals(homes.homes.map((home) => [home.source, home.name, home.lat, home.lng]), [['camera', 'Hamnen', 57.5, 11.9]]);
-      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${boat}/homes/hamnen`)).softlink, `${LOCATIONS_ROOT}/hamnen`);
+      assertEquals(await client.execJson('track-home exempelbaten --add hamnen'), { ok: true });
+      await cmd.shouldSucceed(`track-home ${track} --add ${LOCATIONS_ROOT}/hamnen`);
+      homes = await client.execJson<TrackHomes>('track-home Exempelbaten');
+      assertEquals(homes.homes.map((home) => [home.source, home.name, home.lat, home.lng]), [['track', 'Hamnen', 57.5, 11.9]]);
+      assertEquals((await client.execJson<{ softlink: string }>(`props -L ${track}/homes/hamnen`)).softlink, `${LOCATIONS_ROOT}/hamnen`);
 
       // A person is no place to come home to.
-      await cmd.shouldFail(`camera-home ${boat} add ${PEOPLE_ROOT}/berit`);
-      await cmd.shouldFail(`camera-home ${boat} rm huset`);
+      await cmd.shouldFail(`track-home ${track} --add ${PEOPLE_ROOT}/berit`);
+      await cmd.shouldFail(`track-home ${track} --remove huset`);
 
-      await cmd.shouldSucceed(`camera-home ${boat} rm hamnen`);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${boat}/homes`), false);
-      homes = await client.execJson<CameraHomes>(`camera-home ${boat} list`);
+      await cmd.shouldSucceed(`track-home ${track} --remove hamnen`);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${track}/homes`), false);
+      homes = await client.execJson<TrackHomes>(`track-home ${track}`);
       assertEquals(homes.homes.map((home) => home.source), ['owner']);
     });
   } finally {

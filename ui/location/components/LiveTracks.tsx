@@ -8,7 +8,7 @@ import { formatSpeed, trackProfile } from '@archive/location/track-profile';
 import { dayColor } from '../lib/track-colors.ts';
 import './live-tracks.css';
 
-/** The color a live camera is drawn in: its track's color for the day of its last fix. */
+/** The color a live track is drawn in: its color for the day of its last fix. */
 const liveColor = (entry: LiveTrack): string => dayColor(entry.track.path, entry.last.ts?.slice(0, 10) ?? '');
 
 /** `12 km/h · 40 s ago`, in knots for a boat, or the age alone when the speed is not known. */
@@ -37,9 +37,9 @@ function DragWatcher({ onDrag }: { onDrag: () => void }) {
 }
 
 /**
- * What a map draws of the live cameras, as children of its `MapView`: a pin where each one is now,
+ * What a map draws of the live tracks, as children of its `MapView`: a pin where each one is now,
  * labelled with its speed and the age of the fix, and the line it has drawn since the page opened.
- * While `following` names a track's path the map keeps that camera's newest fix in view, until the
+ * While `following` names a track's path the map keeps that track's newest fix in view, until the
  * map is dragged (`onStopFollowing`). A pin's click is `onPick`.
  */
 export function LiveTrackLayers({ live, now, following, onStopFollowing, onPick }: {
@@ -60,7 +60,7 @@ export function LiveTrackLayers({ live, now, following, onStopFollowing, onPick 
       onClick: onPick && (() => onPick(entry.track.path)),
     })), [live, now, following, onPick]);
 
-  // `MapTracks` follows its last track, so the followed camera goes last.
+  // `MapTracks` follows its last track, so the followed one goes last.
   const lines = useMemo(() =>
     [...live]
       .sort((a, b) => Number(a.track.path === following) - Number(b.track.path === following))
@@ -77,7 +77,7 @@ export function LiveTrackLayers({ live, now, following, onStopFollowing, onPick 
   );
 }
 
-/** A toggle for following one live camera. */
+/** A toggle for following one live track. */
 export function FollowButton({ entry, following, onFollow }: { entry: LiveTrack; following: boolean; onFollow: (path: string | null) => void }) {
   const label = following ? `Stop following ${entry.track.name}` : `Follow ${entry.track.name}`;
   return (
@@ -94,8 +94,8 @@ export function FollowButton({ entry, following, onFollow }: { entry: LiveTrack;
   );
 }
 
-/** One row per live camera: its color, its name linking to its track, its speed and the age of its fix, and a Follow toggle. */
-export function LiveCameraList({ live, now, following, onFollow }: {
+/** One row per live track: its color, its name linking to its page, its speed and the age of its fix, and a Follow toggle. */
+export function LiveTrackList({ live, now, following, onFollow }: {
   live: LiveTrack[];
   now: number;
   following: string | null;
@@ -107,7 +107,7 @@ export function LiveCameraList({ live, now, following, onFollow }: {
         <Group key={entry.track.path} gap='xs' wrap='nowrap'>
           <Box w={10} h={10} style={{ borderRadius: '50%', background: liveColor(entry), flex: 'none' }} />
           <Box style={{ flex: 1, minWidth: 0 }}>
-            <Anchor component={Link} to={`/cameras/${encodeURIComponent(entry.track.id)}?tab=track`} size='sm' fw={500} truncate display='block'>
+            <Anchor component={Link} to={`/tracks/${encodeURIComponent(entry.track.path)}`} size='sm' fw={500} truncate display='block'>
               {entry.track.name}
             </Anchor>
             <Text size='xs' c='dimmed' truncate>{liveSummary(entry, now)}</Text>

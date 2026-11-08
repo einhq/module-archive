@@ -1,16 +1,16 @@
 #!ts
 /**
- * track-stage — a GPX file dropped in staging becomes its camera's route.
+ * track-stage — a GPX file dropped in staging becomes its track's route.
  *
- *   track-stage <gpx-file> [--camera <camera>] [--name <name>]
+ *   track-stage <gpx-file> [--track <track>] [--name <name>]
  *
- * The camera is the one the file names: its `creator`, or a `<name>` in it,
- * matching a registered camera's name, make and model, or serial number
- * (`camerasForGpx`). With exactly one such camera the fixes are appended to its
- * track (made if missing) and the file moves to the camera's `routes/`, linked
- * from the track's `sources/` (`keepRoute`). With none or several the file
- * stays, marked `trackCameraPending`, for someone to say which camera it was —
- * `--camera` is that answer; one staged in a category waits in its staging
+ * The track is the one the file names: its `creator`, or a `<name>` in it,
+ * matching a track's name, or the name, make and model, or serial number of a
+ * camera that records into it (`tracksForGpx`). With exactly one such track the
+ * fixes are appended to it and the file moves to the track's `routes/`, linked
+ * from its `sources/` (`keepRoute`). With none or several the file stays,
+ * marked `trackPending`, for someone to say which track it belongs to —
+ * `--track` is that answer; one staged in a category waits in its staging
  * area's `routes/`.
  *
  * Re-staging the same file adds nothing: a fix is keyed by its timestamp. A point
@@ -20,15 +20,14 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
-import { listCameras } from '@archive/camera/camera';
 import type { TrackStageResult } from '@archive/location/api';
-import { camerasForGpx, ensureTrack, keepRoute, openTrack, parseGpx, timedPoints } from '@archive/location/track';
+import { keepRoute, listTracks, openTrack, parseGpx, timedPoints, TRACK_ARG, trackCameras, tracksForGpx } from '@archive/location/track';
 import { sha256Hex } from '@archive/sources';
 import { initStaging } from '@archive/staging/init';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
 
 /**
- * Where a GPX file waits for its camera: `routes/` of the staging area it is staged in, under its
+ * Where a GPX file waits for its track: `routes/` of the staging area it is staged in, under its
  * own name or the first free `name-2.gpx`, … there; `path` itself when it is not staged under
  * `files/`. Moves it there, making `routes/` if it is missing.
  */
@@ -48,13 +47,13 @@ const waitInRoutes = async (cmd: Command, path: string): Promise<string> => {
 
 const trackStage = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { string: ['camera', 'name'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { string: ['track', 'name'], unknown: collectUnknownFlags(unknown) });
 
   if (await reportUnknownFlags(cmd, unknown)) return 1;
 
   const target = flags._[0] as string | undefined;
   if (!target) {
-    await cmd.writeError('track-stage: usage: track-stage <gpx-file> [--camera <camera>] [--name <name>]\n');
+    await cmd.writeError('track-stage: usage: track-stage <gpx-file> [--track <track>] [--name <name>]\n');
     return 1;
   }
 
@@ -63,7 +62,7 @@ const trackStage = async (cmd: Command): CmdReturn => {
   const gpxPath = resolve(cmd.cwd, target);
 
   try {
-    const waited = (await vfs.get(access, gpxPath)).attrs.trackCameraPending === true;
+    const waited = (await vfs.get(access, gpxPath)).attrs.trackPending === true;
     const handle = await vfs.open(access, gpxPath, { mode: 'r' });
     let bytes: Uint8Array;
     try {
@@ -80,25 +79,26 @@ const trackStage = async (cmd: Command): CmdReturn => {
       return 1;
     }
 
-    let camera = flags.camera as string | undefined;
-    if (camera === undefined) {
-      const candidates = camerasForGpx(await listCameras(cmd), gpx);
+    let target = flags.track as string | undefined;
+    if (target === undefined) {
+      const tracks = await listTracks(cmd);
+      const cameras = await trackCameras(cmd, tracks.map((track) => track.path));
+      const candidates = tracksForGpx(tracks.map((track) => ({ ...track, cameras: cameras.get(track.path) })), gpx);
       if (candidates.length !== 1) {
-        await vfs.update(access, gpxPath, { attrs: { trackCameraPending: true } });
+        await vfs.update(access, gpxPath, { attrs: { trackPending: true } });
         const waiting = await waitInRoutes(cmd, gpxPath);
-        const reason = candidates.length === 0 ? 'no registered camera matches it' : `${candidates.length} cameras match it`;
+        const reason = candidates.length === 0 ? 'no track matches it' : `${candidates.length} tracks match it`;
         if (cmd.json) {
           await cmd.writeJSON({ status: 'pending', path: waiting, reason, candidates: candidates.map((candidate) => candidate.path) } satisfies TrackStageResult);
         } else {
-          await cmd.writeLn(`${waiting}: waiting for a camera, ${reason}${gpx.creator ? ` (creator "${gpx.creator}")` : ''}`);
+          await cmd.writeLn(`${waiting}: waiting for a track, ${reason}${gpx.creator ? ` (creator "${gpx.creator}")` : ''}`);
         }
         return 0;
       }
-      camera = candidates[0].path;
+      target = candidates[0].path;
     }
 
-    const trackPath = await ensureTrack(cmd, camera);
-    const { handle: track } = await openTrack(cmd, trackPath, 'a');
+    const { path: trackPath, handle: track } = await openTrack(cmd, target, 'a');
     let imported: number;
     try {
       imported = await track.appendPoints(points);
@@ -107,8 +107,8 @@ const trackStage = async (cmd: Command): CmdReturn => {
     }
 
     const source = await keepRoute(cmd, trackPath, gpxPath, await sha256Hex(bytes), { name: flags.name ? basename(flags.name) : undefined });
-    // A file that waited for its camera is kept without the mark of waiting.
-    if (waited) await vfs.update(access, source, { attrs: { trackCameraPending: null } });
+    // A file that waited for its track is kept without the mark of waiting.
+    if (waited) await vfs.update(access, source, { attrs: { trackPending: null } });
 
     if (cmd.json) {
       await cmd.writeJSON({ status: 'imported', track: trackPath, imported, skipped: points.length - imported, untimed, source } satisfies TrackStageResult);
@@ -127,15 +127,15 @@ trackStage.spec = {
   name: 'track-stage',
   effect: 'write' as const,
   description:
-    "Import a staged GPX file into the track of the camera it names, and move the file to the camera's routes/; mark it pending when no single camera matches, and keep it in its staging area's routes/",
+    "Import a staged GPX file into the track it names, and move the file to the track's routes/; mark it pending when no single track matches, and keep it in its staging area's routes/",
   args: [
     { name: 'gpx', type: 'path' as const, description: 'VFS path to the GPX file' },
   ],
   flags: [
-    { name: 'camera', type: 'path' as const, description: 'the camera (slug or path) it came from, instead of the one it names' },
-    { name: 'name', type: 'string' as const, description: "the name to keep the file under in the camera's routes/, instead of its own" },
+    { name: 'track', type: 'path' as const, description: `the track it belongs to, instead of the one it names: ${TRACK_ARG}` },
+    { name: 'name', type: 'string' as const, description: "the name to keep the file under in the track's routes/, instead of its own" },
   ],
-  examples: ['track-stage /home/anna/staging/files/inbox/upload-2026-10-16/hike.gpx', 'track-stage /home/anna/staging/routes/hike.gpx --camera garmin-etrex'],
+  examples: ['track-stage /home/anna/staging/files/inbox/upload-2026-10-16/hike.gpx', 'track-stage /home/anna/staging/routes/hike.gpx --track hiking-gps'],
   returns: 'imported, with the track, the number of new fixes and where the file is kept; or pending, with why.',
 };
 

@@ -8,24 +8,25 @@ import { execCommand } from '@ein/ui/signals';
 import { EntityPicker } from '../../components/EntityPicker.tsx';
 import { InfoSection } from '../../components/InfoSection.tsx';
 import { spanLine } from '../../lib/residence-span.ts';
-import { useCameraHomes } from '../hooks/useCameraHomes.ts';
+import { useTrackHomes } from '../hooks/useTrackHomes.ts';
 
 const locationRoute = (path: string): string => `/locations/${encodeURIComponent(path.split('/').pop() ?? path)}`;
 
 /**
- * Where arriving ends one of the camera's trips, as a section of its Info tab: the locations it
- * lists, or, while it lists none, its owners' homes for the time they owned it. `editable` offers
- * adding and removing its own.
+ * Where arriving ends one of the track's trips, as a section of its Info tab: the locations it
+ * lists, or, while it lists none, the homes of the owners of the cameras that record into it, for
+ * the time they owned them. `track` is the track's path; `editable` offers adding and removing its
+ * own.
  */
-export function CameraHomes({ camera, editable }: { camera: string; editable: boolean }) {
-  const { homes, add, remove } = useCameraHomes(camera);
+export function TrackHomes({ track, editable }: { track: string; editable: boolean }) {
+  const { homes, add, remove } = useTrackHomes(track);
   const [adding, setAdding] = useState(false);
   const [pick, setPick] = useState<string | null>(null);
   const [locations, setLocations] = useState<{ value: string; label: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const own = homes.filter((home) => home.source === 'camera');
+  const own = homes.filter((home) => home.source === 'track');
   // Owners who lived together give the same place for the same years; it is listed once.
   const owners = homes
     .filter((home) => home.source === 'owner')
@@ -94,7 +95,7 @@ export function CameraHomes({ camera, editable }: { camera: string; editable: bo
       ))}
       {own.length === 0 && (
         <Text size='sm' c='dimmed'>
-          {owners.length > 0 ? 'None set, so its owners’ homes count:' : 'None set, and none of its owners has a home recorded.'}
+          {owners.length > 0 ? 'None set, so the homes of the owners of its cameras count:' : 'None set, and no owner of a camera that records into it has a home recorded.'}
         </Text>
       )}
       {owners.map((home) => (

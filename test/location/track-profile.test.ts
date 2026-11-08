@@ -1,4 +1,4 @@
-/** Track profiles: a camera's kind picks its thresholds and the units its track is shown in. */
+/** Track profiles: a track's kind picks its thresholds and the units it is shown in. */
 
 import { assertEquals } from '@std/assert';
 import { formatDistance, formatSpeed, trackProfile } from '@archive/location/track-profile';

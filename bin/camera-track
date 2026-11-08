@@ -1,0 +1,76 @@
+#!ts
+/**
+ * camera-track — the track a camera records into: a phone that also records where it was.
+ *
+ *   camera-track <camera> <track>    link the camera to the track
+ *   camera-track <camera> --none     take the link away
+ *
+ * The link is the camera's child softlink `track`, pointing at the track node. Through it the
+ * owners of the camera are the track's owners when its homes are looked for, an album with the
+ * camera's pictures draws the track on its map, and a GPX file naming the camera's make and model
+ * is the track's. `<camera>` is its path or its slug under the cameras root; `<track>` is a track's
+ * path, or a device or camera that has one, by its path or its name (`trackOf`).
+ */
+
+import { resolve } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { CAMERAS_ROOT, NODE_TYPE_CAMERA } from '@archive/camera/camera';
+import { TRACK_ARG, TRACK_LINK, trackOf } from '@archive/location/track';
+
+const cameraTrack = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['none'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [cameraArg, target, ...rest] = flags._.map(String);
+  if (!cameraArg || rest.length > 0 || (target === undefined) === !flags.none) {
+    await cmd.writeError('camera-track: usage: camera-track <camera> <track> | camera-track <camera> --none\n');
+    return 1;
+  }
+
+  try {
+    const camera = cameraArg.includes('/') ? resolve(cmd.cwd, cameraArg) : `${CAMERAS_ROOT}/${cameraArg}`;
+    const node = await cmd.sys.vfs.get(cmd.access, camera).catch(() => {
+      throw new Error(`${camera}: not found`);
+    });
+    if (node.type !== NODE_TYPE_CAMERA) throw new Error(`${camera}: not a camera (${node.type})`);
+
+    const link = `${camera}/${TRACK_LINK}`;
+    const held = await cmd.sys.vfs.get(cmd.access, link, { follow: false, readlink: true }).catch(() => undefined);
+    if (held && !held.props.softlink) throw new Error(`${link} is a ${held.type}, not a link to a track`);
+
+    const track = target === undefined ? undefined : (await trackOf(cmd, target)).path;
+    if (held && held.props.softlink !== track) await cmd.sys.vfs.unlink(cmd.access, link, camera, { readlink: true });
+    if (track && held?.props.softlink !== track) {
+      await cmd.sys.vfs.create(cmd.access, 'softlink', camera, TRACK_LINK, {
+        props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: track },
+      });
+    }
+
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    else await cmd.writeLn(track ? `${camera} records into ${track}` : `${camera} records into no track`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`camera-track: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+cameraTrack.spec = {
+  name: 'camera-track',
+  effect: 'write' as const,
+  description: 'Link a camera to the track it records into, such as a phone that also records where it was, or take the link away',
+  args: [
+    { name: 'camera', type: 'path' as const, description: 'the camera, by its path or its slug' },
+    { name: 'track', type: 'path' as const, description: TRACK_ARG },
+  ],
+  flags: [
+    { name: 'none', type: 'bool' as const, description: 'take the link away' },
+  ],
+  examples: [
+    'camera-track anna-phone anna-phone-tracker',
+    'camera-track /archive/cameras/anna-phone /archive/devices/anna-phone-tracker/position/history',
+    'camera-track anna-phone --none',
+  ],
+};
+
+export default cameraTrack;

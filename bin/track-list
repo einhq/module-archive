@@ -1,20 +1,21 @@
 #!ts
 /**
- * track-list — the cameras that have a track, with what the track registry says
- * of each: point count, span and extent, read for all of them at once, so no
- * track is opened.
+ * track-list — the tracks under the archive (or under a path given), with what the track registry
+ * says of each: point count, span and extent, read for all of them at once, so no track is opened.
+ * A track is named as `trackName` says: its own label, or the device or camera it belongs to.
  */
-import { CAMERAS_ROOT } from '@archive/paths';
+import { ARCHIVE_PATH } from '@ein/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { TrackEntry } from '@archive/location/api';
 import { listTracks } from '@archive/location/track';
+import { resolve } from '@std/path';
 
 const trackList = async (cmd: Command): CmdReturn => {
-  const root = typeof cmd.args[0] === 'string' ? cmd.args[0] : CAMERAS_ROOT;
+  const within = typeof cmd.args[0] === 'string' ? resolve(cmd.cwd, cmd.args[0]) : ARCHIVE_PATH;
 
   let tracks: TrackEntry[];
   try {
-    tracks = await listTracks(cmd, root);
+    tracks = await listTracks(cmd, within);
   } catch (error) {
     await cmd.writeError(`track-list: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -25,7 +26,9 @@ const trackList = async (cmd: Command): CmdReturn => {
     return 0;
   }
   for (const track of tracks) {
-    await cmd.writeLn(`${track.path} ${track.points} points${track.firstTs ? ` ${track.firstTs.slice(0, 10)}–${(track.lastTs ?? track.firstTs).slice(0, 10)}` : ''}`);
+    await cmd.writeLn(
+      `${track.name}  ${track.path}  ${track.points} points${track.firstTs ? ` ${track.firstTs.slice(0, 10)}–${(track.lastTs ?? track.firstTs).slice(0, 10)}` : ''}`,
+    );
   }
   return 0;
 };
@@ -33,10 +36,11 @@ const trackList = async (cmd: Command): CmdReturn => {
 trackList.spec = {
   name: 'track-list',
   effect: 'read' as const,
-  description: 'List the cameras that have a track, with its point count, span and extent',
-  args: [{ name: 'root', type: 'path' as const, description: `Camera directory (default: ${CAMERAS_ROOT})` }],
+  description: 'List the tracks, with their name, kind, point count, span and extent',
+  args: [{ name: 'within', type: 'path' as const, description: `where to look for tracks (default: ${ARCHIVE_PATH})` }],
   flags: [],
-  returns: 'one row per camera with a track.',
+  examples: ['track-list', 'track-list /archive/devices'],
+  returns: 'one row per track.',
 };
 
 export default trackList;

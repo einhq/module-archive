@@ -3,7 +3,7 @@
  * and — as much the point — which are not.
  */
 
-import { ALBUMS_ROOT, CAMERAS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { deriveLocationEvents, LOCATION_EVENTS, type LocationRuleContext, type VfsEventInput } from '../../lib/location/event-rules.ts';
 
@@ -12,12 +12,15 @@ const POINT = `${ALBUMS_ROOT}/trip/files/a.jpg/position`;
 const SHAPE = `${LOCATION}/position`;
 const LINK = `${ALBUMS_ROOT}/trip/files/a.jpg/location`;
 
-const ctx = (opts: { points?: string[]; links?: Record<string, { target: string; attrs?: Record<string, unknown> }> } = {}): LocationRuleContext => ({
+const ctx = (
+  opts: { points?: string[]; links?: Record<string, { target: string; attrs?: Record<string, unknown> }>; types?: Record<string, string> } = {},
+): LocationRuleContext => ({
   hasPoint: (path) => Promise.resolve(opts.points?.includes(path) ?? false),
   getLink: (path) => {
     const link = opts.links?.[path];
     return Promise.resolve(link ? { id: 'l1', target: link.target, attrs: link.attrs ?? {} } : undefined);
   },
+  getNode: (path) => Promise.resolve(opts.types?.[path] ? { type: opts.types[path] } : undefined),
 });
 
 const event = (nodeType: string, path: string, type: string, changedAttrs?: string[]): VfsEventInput => ({
@@ -84,23 +87,28 @@ Deno.test('rule: other softlinks are ignored', async () => {
   assertEquals(await types(event('softlink', LINK, 'created'), context), []);
 });
 
-const CAMERA = `${CAMERAS_ROOT}/the-sailboat`;
+const TRACK = '/archive/devices/the-sailboat/position/history';
 
-Deno.test("rule: points appended to a camera's track are announced for the camera", async () => {
-  assertEquals(await types(event('track', `${CAMERA}/track`, 'updated', [])), [`${LOCATION_EVENTS.trackChanged} ${CAMERA}`]);
-  // An attr written on the track, or a track that is not a camera's, is not.
-  assertEquals(await types(event('track', `${CAMERA}/track`, 'updated', ['description'])), []);
+Deno.test('rule: points appended to a track anywhere under the archive are announced for the track', async () => {
+  assertEquals(await types(event('track', TRACK, 'updated', [])), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
+  assertEquals(await types(event('track', '/archive/cameras/the-phone/track', 'updated', [])), [`${LOCATION_EVENTS.trackChanged} /archive/cameras/the-phone/track`]);
+  // A track outside the archive is not, nor one being made.
   assertEquals(await types(event('track', '/home/someone/route', 'updated', [])), []);
+  assertEquals(await types(event('track', TRACK, 'created')), []);
 });
 
-Deno.test("rule: a camera's kind or timezone changing is announced, other attrs are not", async () => {
-  assertEquals(await types(event('camera', CAMERA, 'updated', ['kind'])), [`${LOCATION_EVENTS.trackChanged} ${CAMERA}`]);
-  assertEquals(await types(event('camera', CAMERA, 'updated', ['timezone', 'name'])), [`${LOCATION_EVENTS.trackChanged} ${CAMERA}`]);
-  assertEquals(await types(event('camera', CAMERA, 'updated', ['name', 'tripEdits'])), []);
+Deno.test("rule: a track's kind or timezone changing is announced, other attrs are not", async () => {
+  assertEquals(await types(event('track', TRACK, 'updated', ['kind'])), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
+  assertEquals(await types(event('track', TRACK, 'updated', ['timezone', 'description'])), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
+  assertEquals(await types(event('track', TRACK, 'updated', ['description', 'tripEdits'])), []);
+  // An update without changedAttrs: no way to tell, so nothing.
+  assertEquals(await types(event('track', TRACK, 'updated')), []);
 });
 
-Deno.test('rule: a home added to or taken off a camera is announced', async () => {
-  assertEquals(await types(event('softlink', `${CAMERA}/homes/the-berth`, 'created')), [`${LOCATION_EVENTS.trackChanged} ${CAMERA}`]);
-  assertEquals(await types(event('softlink', `${CAMERA}/homes/the-berth`, 'deleted')), [`${LOCATION_EVENTS.trackChanged} ${CAMERA}`]);
-  assertEquals(await types(event('softlink', `${ALBUMS_ROOT}/trip/homes/x`, 'created')), []);
+Deno.test('rule: a home added to or taken off a track is announced, a person moving is not', async () => {
+  const context = ctx({ types: { [TRACK]: 'track', [`${PEOPLE_ROOT}/anna`]: 'person' } });
+  assertEquals(await types(event('softlink', `${TRACK}/homes/the-berth`, 'created'), context), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
+  assertEquals(await types(event('softlink', `${TRACK}/homes/the-berth`, 'deleted'), context), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
+  assertEquals(await types(event('softlink', `${PEOPLE_ROOT}/anna/homes/the-house`, 'created'), context), []);
+  assertEquals(await types(event('softlink', `${ALBUMS_ROOT}/trip/homes/x`, 'created'), context), []);
 });

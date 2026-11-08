@@ -63,6 +63,14 @@
       "order": 50
     },
     {
+      "id": "archive.tracks",
+      "section": "browse",
+      "label": "Tracks",
+      "icon": "route",
+      "to": "/tracks",
+      "order": 60
+    },
+    {
       "id": "archive.albums",
       "section": "browse",
       "label": "Albums",

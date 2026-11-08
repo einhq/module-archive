@@ -1,18 +1,19 @@
 /**
- * track-weather on a camera's trips, against a stub Open-Meteo on loopback: it asks nobody when
+ * track-weather on a track's trips, against a stub Open-Meteo on loopback: it asks nobody when
  * `CFG_WEATHER` is off, and does by default; each leg and the whole trip get the weather of the track's hours, the wind's
  * direction averaged as vectors; the album made of the trip gets it too; a trip that has its
  * weather is not sampled again, and deriving the trips again keeps it; a failed lookup leaves the
  * weather as it was and the next run asks again. The track and its weather are invented.
  */
 
-import { ALBUMS_ROOT, CAMERAS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { createTestContext, testCommands } from '@ein/testing';
 import type { TrackWeather, Trip, TripLeg, TripList } from '@archive/location/api';
 import { hourlyFixes, keepTripWeather, summarizeWeather } from '@archive/location/trip-weather';
 import type { AlbumTrip } from '@archive/media/api';
 import type { WeatherReading } from '@archive/weather/api';
+import { historyOf, mkTracker } from './tracker.ts';
 
 const M2DEG = 1 / 111_320;
 const HOUR = 3_600_000;
@@ -118,15 +119,14 @@ Deno.test({
   const sail = Array.from({ length: 5 }, (_, i) => fix(4, 9 + i, 2_500 * i));
 
   try {
-    await cmd.shouldSucceed(`mknode -p -t camera ${CAMERAS_ROOT}/the-sailboat --as name=the-sailboat --as kind=boat`);
-    await cmd.shouldSucceed('track-create the-sailboat');
-    await cmd.shouldSucceed(`track-append ${CAMERAS_ROOT}/the-sailboat --json '${JSON.stringify([...rest(0, 0), ...sail, ...rest(5, 10_000)])}'`);
+    await cmd.shouldSucceed(mkTracker('the-sailboat', 'the-sailboat', { kind: 'boat' }));
+    await cmd.shouldSucceed(`track-append the-sailboat --json '${JSON.stringify([...rest(0, 0), ...sail, ...rest(5, 10_000)])}'`);
     await cmd.shouldSucceed('track-trips the-sailboat');
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT}`);
     await cmd.shouldSucceed('trip-album the-sailboat 2025-06-05 --new --name Out');
 
     await t.step('nothing is asked when CFG_WEATHER is off', async () => {
-      assertEquals(await weather('', 'CFG_WEATHER=false'), { camera: `${CAMERAS_ROOT}/the-sailboat`, off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
+      assertEquals(await weather('', 'CFG_WEATHER=false'), { track: historyOf('the-sailboat'), off: true, legs: 0, hours: 0, failed: 0, requests: 0 });
       assertEquals(asked, []);
     });
 

@@ -40,7 +40,7 @@ const UNGATED: Record<string, string> = {
   'staging-unzip': 'a zip in a staging category',
   'gedcom-stage': 'a GEDCOM file in staging',
   'track-stage': 'a GPX file in staging',
-  'track-trips': "a camera's track",
+  'track-trips': 'a track',
   'location-upkeep': 'a location',
   'location-link-point': 'a photo point near a location',
 };

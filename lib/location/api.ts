@@ -24,19 +24,21 @@ export type LocationEntry = {
   lng?: number;
 };
 
-/** `track-list`: a camera's track, with the track registry's summary of it — no points read. */
+/**
+ * `track-list`: a track — a `track` node anywhere under the archive — with the track registry's
+ * summary of it; no points read.
+ */
 export type TrackEntry = {
-  /** The camera's slug, which is what its page's route uses. */
-  id: string;
-  /** The camera's path. */
-  camera: string;
-  /** The track's path, `<camera>/track`. */
+  /** The track's path, which its page's route takes, URI-encoded. */
   path: string;
   /** The track node's id. */
   nodeId: string;
-  /** The camera's name. */
+  /**
+   * What it is called: its own `label`, else the label, name or node name of the nearest node
+   * above it that is neither a track nor an entity, such as the device it is the history of.
+   */
   name: string;
-  /** How the camera travels (`TravelKind`), which sets the units its speed is shown in. */
+  /** How it travels (`TravelKind`), which sets the units its speed is shown in. */
   kind?: string;
   description?: string;
   points: number;
@@ -47,8 +49,9 @@ export type TrackEntry = {
 
 /**
  * `track-stage`: the file's fixes joined a track, or it waits at `path` (in its staging area's
- * `routes/` when it was staged) for someone to say which camera recorded it. `skipped` counts the
- * fixes the track already had, `untimed` the points without a time, which no track takes.
+ * `routes/` when it was staged) for someone to say which track it belongs to; `candidates` are the
+ * tracks it names. `skipped` counts the fixes the track already had, `untimed` the points without a
+ * time, which no track takes.
  */
 export type TrackStageResult =
   | { status: 'imported'; track: string; imported: number; skipped: number; untimed: number; source: string }
@@ -77,8 +80,8 @@ export type GpxInfo =
     /** The earliest and latest point time. */
     start?: string;
     end?: string;
-    /** The registered cameras the file names, which `track-stage` would choose from. */
-    cameras: { path: string; name: string }[];
+    /** The archive's tracks the file names, which `track-stage` would choose from. */
+    matches: { path: string; name: string }[];
   }
   | { path: string; error: string };
 
@@ -91,7 +94,7 @@ export type TrackPoint = {
   lat: number;
   lng: number;
   ts?: string;
-  /** Metres per second, as the camera reported it. Only on a read that was not simplified. */
+  /** Metres per second, as the tracker reported it. Only on a read that was not simplified. */
   speed?: number;
   /** Why the fix is left out, a rule's name or `manual`, on a `--rejected` read that was not simplified. */
   rejected?: string;
@@ -129,11 +132,11 @@ export type GeocodePositionResult =
   | { skipped: 'geocoded already'; geocodedAt: string };
 
 /**
- * A place a camera stayed, derived from its track by `track-trips`. Its position is the mean of
- * its fixes, which for a long stay lands on the berth or the parking spot.
+ * A place a track stayed, derived by `track-trips`. Its position is the mean of its fixes, which
+ * for a long stay lands on the berth or the parking spot.
  *
- * - `home`: at one of the camera's homes; it ends the trip arriving there.
- * - `rest`: longer than the camera's long rest anywhere else; it ends the trip arriving there too.
+ * - `home`: at one of the track's homes; it ends the trip arriving there.
+ * - `rest`: longer than the long rest of the track's kind anywhere else; it ends the trip arriving there too.
  * - `overnight`: two hours or more across a local midnight, within a trip.
  */
 export type TripStay = {
@@ -169,7 +172,7 @@ type TripBounds = { north: number; south: number; east: number; west: number };
 
 /**
  * The weather over a leg or a trip, from `track-weather`: the weather of each hour along its
- * track (`@archive/weather/at`) at where the camera was then. A value no hour had is left out.
+ * track (`@archive/weather/at`) at where the track was then. A value no hour had is left out.
  */
 export type TripWeather = {
   /** How many hours were sampled. */
@@ -188,7 +191,7 @@ export type TripWeather = {
 
 /** One local day of a trip. */
 export type TripLeg = {
-  /** The day, `YYYY-MM-DD`, in the camera's timezone. */
+  /** The day, `YYYY-MM-DD`, in the track's timezone. */
   day: string;
   /** Its first and last fix, ISO. */
   start: string;
@@ -202,7 +205,7 @@ export type TripLeg = {
   weather?: TripWeather;
 };
 
-/** A trip derived from a camera's track, from one home or long rest to the next. */
+/** A trip derived from a track, from one home or long rest to the next. */
 export type Trip = {
   /**
    * What names it to `trip-edit`: its first local day, `YYYY-MM-DD`, and for a further trip
@@ -231,13 +234,13 @@ export type Trip = {
   joined?: string[];
   /** `track-weather`: the weather over all its days. */
   weather?: TripWeather;
-  /** Albums whose span overlaps it and whose cameras include the camera. */
+  /** Albums whose span overlaps it and whose map draws the track (`album-track-list`). */
   albums: string[];
   /** `trip-list`: the album it was made (`trip-album`). `.trips` does not keep it. */
   album?: string;
 };
 
-/** Changes made by hand to how a camera's track is cut into trips: its attr `tripEdits`. */
+/** Changes made by hand to how a track is cut into trips: its attr `tripEdits`. */
 export type TripEdits = {
   /** The first fixes, ISO, of trips joined to the trip before them. */
   merge?: string[];
@@ -245,9 +248,10 @@ export type TripEdits = {
   split?: string[];
 };
 
-/** `track-trips`: a camera's trips and stays, as kept in `<camera>/.trips`. */
-export type CameraTrips = {
-  camera: string;
+/** `track-trips`: a track's trips and stays, as kept in `<track>/.trips`. */
+export type TrackTrips = {
+  /** The track's path. */
+  track: string;
   /** When they were derived, ISO. */
   computedAt: string;
   /** The track's last fix, ISO. */
@@ -267,7 +271,7 @@ export type CameraTrips = {
 
 /** How `track-places` placed one stay. */
 export type TrackPlacesStay = {
-  /** Its index in the camera's stays, and its first fix, ISO. */
+  /** Its index in the track's stays, and its first fix, ISO. */
   stay: number;
   start: string;
   lat: number;
@@ -288,7 +292,7 @@ export type TrackPlacesStay = {
 
 /** `track-places`: the stays it placed, and the names it looked up again under `--rename`. */
 export type TrackPlaces = {
-  camera: string;
+  track: string;
   stays: TrackPlacesStay[];
   renamed: { location: string; from: string; to: string }[];
   /** How many lookups failed; their stays are asked about again on the next run. */
@@ -299,7 +303,7 @@ export type TrackPlaces = {
 
 /** `track-weather`: what it sampled, and what it left for the next run. */
 export type TrackWeather = {
-  camera: string;
+  track: string;
   /** `CFG_WEATHER` is turned off: nothing was asked or written. */
   off?: true;
   /** The legs it gave weather, and how many hours it sampled for them. */
@@ -313,17 +317,40 @@ export type TrackWeather = {
   requests: number;
 };
 
-/** `trip-list`: a camera's trips and stays as last derived; none when they never were. */
+/** `trip-list`: a track's trips and stays as last derived; none when they never were. */
 export type TripList = {
-  camera: string;
+  track: string;
   /** When they were derived, ISO; absent when they never were. */
   computedAt?: string;
   /** The track's last fix, ISO. */
   lastFix?: string;
-  /** What the camera's kind shows distances in. */
+  /** What the track's kind shows distances in. */
   units: 'nautical' | 'metric';
   /** The IANA timezone the legs' days are cut in; UTC when absent. */
   timezone?: string;
   trips: Trip[];
   stays: TripStay[];
 };
+
+/** One place where arriving ends one of a track's trips. */
+export type TrackHome = {
+  /** The location's path. */
+  location: string;
+  name: string;
+  /**
+   * `track` when the track lists it in its `homes/`; `owner` when it is the residence of an owner
+   * of a camera that records into the track, used because the track lists none.
+   */
+  source: 'track' | 'owner';
+  /** Whose residence it is, for `owner`. */
+  owner?: string;
+  /** For `owner`, the part of the residence that falls while they owned the camera; either end may be open. */
+  from?: string;
+  to?: string;
+  /** Where it is, when the location has a position. */
+  lat?: number;
+  lng?: number;
+};
+
+/** `track-home <track>`: its home bases. */
+export type TrackHomes = { track: string; homes: TrackHome[] };

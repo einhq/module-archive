@@ -1,20 +1,20 @@
 name: track-stage
-description: A GPX file dropped in staging becomes its camera's route
+description: A GPX file dropped in staging becomes its track's route
 
 # Subject is the GPX file. `updated` is the upload's size report, after the bytes
-# have landed; a file left waiting for a camera is not tried again — the staging
-# page asks which camera it was.
+# have landed; a file left waiting for a track is not tried again — the staging
+# page asks which track it belongs to.
 trigger:
   event: updated
   nodeType: file
   match:
     nodePath: ['/home/*/staging/**.gpx', '/home/*/staging/**.GPX']
-  skipIfAttr: trackCameraPending
+  skipIfAttr: trackPending
 
 steps:
   import:
     command: track-stage $NODE_PATH
-    description: Append its fixes to the track of the camera it names, and remove it
+    description: Append its fixes to the track it names, and move it to that track's routes/
 
 options:
   maxAttempts: 2

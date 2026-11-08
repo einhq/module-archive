@@ -84,9 +84,8 @@ export const entryRoute = (entry: TimelineEntry): string => {
     case 'album':
     case 'auto-album':
       return `/albums/${encodeURIComponent(entry.path)}`;
-    // A track is the route of the camera it is named after, shown on that camera's page.
     case 'track':
-      return `/cameras/${encodeURIComponent(entry.path.split('/').pop() ?? entry.path)}?tab=track`;
+      return `/tracks/${encodeURIComponent(entry.path)}`;
     // An anniversary is about a couple, which has no page; `path` is already
     // the half of it the entry was read from.
     case 'birth':

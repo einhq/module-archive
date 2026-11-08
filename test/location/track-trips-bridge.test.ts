@@ -1,13 +1,13 @@
 /**
- * The booted chain behind a camera's trips: points appended to a camera's track reach
- * archive-bridge, which announces `track.changed` for the camera on /dev/events.
+ * The booted chain behind a track's trips: points appended to a track under the archive reach
+ * archive-bridge, which announces `track.changed` for the track on /dev/events.
  */
 
-import { CAMERAS_ROOT } from '@archive/paths';
 import { LOCATION_EVENTS } from '@archive/location/event-rules';
 import { assertEquals } from '@std/assert';
 import { EVENTS_ROUTING_KEY } from '@ein/client';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
+import { historyOf, mkTracker } from './tracker.ts';
 
 const testCtx = createTestContext({ modules: ['archive'], boot: true });
 
@@ -18,12 +18,12 @@ Deno.test({
 }, async (t) => {
   const { vfs } = await testCtx.setup();
   const client = await testCtx.server.createShellClient();
-  const camera = `${CAMERAS_ROOT}/the-tracker`;
+  const track = historyOf('the-tracker');
 
   try {
-    await client.exec(`mknode -p -t camera ${camera} --as name=the-tracker && track-create ${camera}`);
+    await client.exec(mkTracker('the-tracker'));
 
-    await t.step("points appended to a camera's track announce track.changed for the camera", async () => {
+    await t.step('points appended to a track announce track.changed for the track', async () => {
       await vfs.create(ADMIN_ACCESS, 'router', '/tmp', 'events-tail', { attrs: { routingKey: EVENTS_ROUTING_KEY } });
       const handle = await vfs.open(ADMIN_ACCESS, '/tmp/events-tail', { mode: 'r' });
       try {
@@ -37,9 +37,9 @@ Deno.test({
           }
         })();
 
-        await client.exec(`track-append ${camera} --lat=59.1 --lng=18.1 --ts 2025-06-01T10:00:00Z`);
+        await client.exec(`track-append ${track} --lat=59.1 --lng=18.1 --ts 2025-06-01T10:00:00Z`);
         const fact = await changed;
-        assertEquals([fact?.subject, fact?.data?.cause], [camera, 'points']);
+        assertEquals([fact?.subject, fact?.data?.cause], [track, 'points']);
       } finally {
         await handle.close();
       }

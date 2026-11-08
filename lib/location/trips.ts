@@ -1,17 +1,17 @@
 /**
- * Trips and stays, derived from a camera's track (`@archive/location/trips`).
+ * Trips and stays, derived from a track (`@archive/location/trips`).
  *
- * The track is first collapsed into clusters: a cluster grows while the camera stays within the
+ * The track is first collapsed into clusters: a cluster grows while the track stays within the
  * cluster radius of where the cluster began. Then:
  *
- * - A cluster at one of the camera's homes, held for half an hour or more, is a `home` stay; one
+ * - A cluster at one of the track's homes, held for half an hour or more, is a `home` stay; one
  *   held longer than the long rest anywhere else is a `rest` stay. Either ends the trip arriving
  *   there and starts the next one there. So does a gap without fixes longer than the long rest,
- *   where the camera was last seen.
+ *   where the track was last seen.
  * - A cluster held for two hours or more across a local midnight is an `overnight` stay: it is
  *   kept, but the trip goes on.
- * - A trip is cut into one leg per local day, in the camera's timezone. Each leg ends where the
- *   camera was at the day's last fix: on the stay it spent the night at, or at that fix. A leg's
+ * - A trip is cut into one leg per local day, in the track's timezone. Each leg ends where the
+ *   track was at the day's last fix: on the stay it spent the night at, or at that fix. A leg's
  *   length runs from the day before's last fix, so the legs add up to the whole trip.
  * - The destination is the farthest stay from the start, or the farthest fix when the trip
  *   stayed nowhere 500 m or more from it. A trip that never gets 500 m from its start is dropped.
@@ -29,7 +29,7 @@ import type { Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api
 export type TripFix = { ms: number; lat: number; lng: number };
 
 /**
- * One of the camera's homes: where it is, and the location it is. `from` and `to` (`YYYY`,
+ * One of the track's homes: where it is, and the location it is. `from` and `to` (`YYYY`,
  * `YYYY-MM` or `YYYY-MM-DD`, either open) bound the local days it is a home on.
  */
 export type TripHome = { lat: number; lng: number; path: string; from?: string; to?: string };
@@ -64,7 +64,7 @@ export type TripSegmentation = {
 
 /** A stay across a local midnight at least this long is an overnight stay. */
 const OVERNIGHT_MIN_MS = 2 * 60 * 60 * 1000;
-/** A home ends a trip once the camera has been there this long, or when its track ends there. */
+/** A home ends a trip once the track has been there this long, or when it ends there. */
 const HOME_MIN_MS = 30 * 60 * 1000;
 /** A trip that never gets this many metres from its start is not one. */
 const MIN_TRIP_M = 500;
@@ -377,7 +377,7 @@ export function numberTrips<T extends { id: string; day: string }>(trips: T[]): 
   });
 }
 
-/** Where the camera spent the night after a day: the place of that day's last fix. */
+/** Where the track spent the night after a day: the place of that day's last fix. */
 function placeOfNight(day: Tagged[]): Pick<End, 'lat' | 'lng' | 'stay'> {
   const t = day[day.length - 1];
   return { lat: t.lat, lng: t.lng, ...(t.stay !== undefined ? { stay: t.stay } : {}) };

@@ -35,8 +35,6 @@
     "@archive/camera/api": "./lib/camera/api.ts",
     "@archive/camera/camera": "./lib/camera/camera.ts",
     "@archive/camera/camera-zone": "./lib/camera/camera-zone.ts",
-    "@archive/camera/homes": "./lib/camera/homes.ts",
-    "@archive/camera/qr": "./lib/camera/qr.ts",
     "@archive/camera/types": "./types/camera/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",
@@ -46,21 +44,22 @@
     "@archive/labels/label-model": "./lib/labels/label-model.ts",
     "@archive/labels/vocabulary": "./lib/labels/vocabulary.ts",
     "@archive/location/centroid": "./lib/location/centroid.ts",
-    "@archive/location/camera-trips": "./lib/location/camera-trips.ts",
     "@archive/location/geocode": "./lib/location/geocode.ts",
     "@archive/location/event-rules": "./lib/location/event-rules.ts",
     "@archive/location/location-link": "./lib/location/location-link.ts",
     "@archive/location/place-cache": "./lib/location/place-cache.ts",
     "@archive/location/place-name": "./lib/location/place-name.ts",
     "@archive/location/track": "./lib/location/track.ts",
+    "@archive/location/track-homes": "./lib/location/track-homes.ts",
     "@archive/location/track-profile": "./lib/location/track-profile.ts",
+    "@archive/location/track-trips": "./lib/location/track-trips.ts",
     "@archive/location/trip-weather": "./lib/location/trip-weather.ts",
     "@archive/location/trips": "./lib/location/trips.ts",
     "@archive/location/types": "./types/location/mod.ts",
-    "@archive/media/album-cameras": "./lib/media/album-cameras.ts",
     "@archive/media/album-members": "./lib/media/album-members.ts",
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",
+    "@archive/media/album-tracks": "./lib/media/album-tracks.ts",
     "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
     "@archive/media/face-assign": "./lib/media/face-assign.ts",
@@ -151,8 +150,7 @@
     "@std/streams": "jsr:@std/streams@^1.0.17",
     "@std/ulid": "jsr:@std/ulid@^1.0.0",
     "@std/yaml": "jsr:@std/yaml@^1.0.11",
-    "pg": "npm:pg@^8.16.3",
-    "qrcode-generator": "npm:qrcode-generator@^2.0.4"
+    "pg": "npm:pg@^8.16.3"
   },
   "config": {
     "options": [
@@ -386,7 +384,7 @@
         "type": "boolean",
         "default": "true",
         "label": "Look up the weather",
-        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a camera's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
+        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a track's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
         "group": "Places"
       },
       {
@@ -417,7 +415,7 @@
       "key": "OVERPASS_URL",
       "kind": "option",
       "default": "https://overpass-api.de/api/interpreter https://overpass.private.coffee/api/interpreter",
-      "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a camera stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
+      "description": "Where track-places asks OpenStreetMap's Overpass API for the harbours, islands and bays a track stayed at: one or more endpoints, separated by spaces, tried in turn. Point it at your own server to avoid the public ones' rate limit."
     },
     {
       "key": "SMHI_METOBS_URL",
@@ -467,7 +465,7 @@
       "root": "/archive/cameras",
       "searchable": true,
       "plural": "Cameras",
-      "description": "A camera, phone or tracker, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right."
+      "description": "A camera or phone, matched by make, model and serial number. Knows its time zone, so photos without one get their capture time right. One that also records where it was links to its track as its child track."
     },
     {
       "type": "media-region",
@@ -491,11 +489,11 @@
   ],
   "indexes": [
     {
-      "name": "trip_camera",
+      "name": "trip_track",
       "on": [
-        "trip.camera"
+        "trip.track"
       ],
-      "partial": "trip.camera"
+      "partial": "trip.track"
     },
     {
       "name": "event_date",
@@ -638,6 +636,8 @@
       "/cameras": "ui/camera/pages/cameras.tsx",
       "/cameras/:id": "ui/camera/pages/camera.tsx",
       "/cameras/new": "ui/camera/pages/new-camera.tsx",
+      "/tracks": "ui/location/pages/tracks.tsx",
+      "/tracks/:id": "ui/location/pages/track.tsx",
       "/duplicates": "ui/media/pages/duplicates.tsx",
       "/events/anniversary": "ui/pages/events-anniversary.tsx",
       "/explore/people": "ui/pages/explore-people.tsx",
@@ -677,7 +677,7 @@
       "location": "/locations/{name}",
       "album": "/albums/{path}",
       "camera": "/cameras/{name}",
-      "track": "/cameras/{parent}?tab=track"
+      "track": "/tracks/{path}"
     }
   }
 }

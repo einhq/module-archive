@@ -11,27 +11,27 @@ const fields = (of: string | null): FormField[] => [
   { key: 'description', label: 'Description', type: 'markdown', placeholder: 'Optional' },
 ];
 
-/** A trip of a camera's track the new album is made of (`trip-album`). */
-type TripOf = { camera: string; trip: string };
+/** A trip of a track the new album is made of (`trip-album`). */
+type TripOf = { track: string; trip: string };
 
 const build = (tripOf: TripOf | null) => (v: FormValues) => {
   const path = `${ALBUMS_ROOT}/${v.name.trim()}`;
   let command = `album create ${shq(path)}`;
   if (v.description) command += ` --description ${shq(v.description)}`;
-  if (tripOf) command += ` && trip-album ${shq(tripOf.camera)} ${shq(tripOf.trip)} --album=${shq(path)}`;
+  if (tripOf) command += ` && trip-album ${shq(tripOf.track)} ${shq(tripOf.trip)} --album=${shq(path)}`;
   return { command, navigateTo: `/albums/${encodeURIComponent(path)}` };
 };
 
 /**
  * `/albums/new`, in the dialog from the top bar's Create menu or as a page of its own. With
- * `?camera=` and `?trip=` the album is made of that trip of the camera's track (`trip-album
- * --album`), from its card on the camera's Trips tab; `?name=` is the name it starts with and
- * `?of=` the trip's days as the card shows them.
+ * `?track=` (a track's path) and `?trip=` the album is made of that trip of the track
+ * (`trip-album --album`), from its card on the track's Trips tab; `?name=` is the name it starts
+ * with and `?of=` the trip's days as the card shows them.
  */
 export default function NewAlbumPage() {
   const [params] = useSearchParams();
-  const camera = params.get('camera');
+  const track = params.get('track');
   const trip = params.get('trip');
-  const tripOf = camera && trip ? { camera, trip } : null;
+  const tripOf = track && trip ? { track, trip } : null;
   return <CommandForm fields={fields(tripOf && params.get('of'))} initial={{ name: params.get('name') ?? '' }} build={build(tripOf)} />;
 }

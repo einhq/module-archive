@@ -1,0 +1,88 @@
+#!ts
+/**
+ * track-update — change how a track travels: the settings its trips are derived with.
+ *
+ *   track-update <track> [--kind boat|car|bike|foot] [--timezone <IANA>] [--description <text>]
+ *                [--clear kind|timezone|description]
+ *
+ * `<track>` is a track's path, or what has one: a device or a camera, by its path or by its name
+ * (`trackOf`). `--kind` sets the thresholds its stops and trips are told by and the units it is
+ * shown in (`@archive/location/track-profile`); `--timezone` the days its trips are cut in, checked
+ * against ICU before it is stored. A changed kind or timezone derives its trips again: the bridge
+ * announces it (`track.changed`). Clearing is explicit, as in `camera-update`: `--clear timezone`
+ * removes the attr, an empty `--timezone ''` is refused.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { isKnownTimezone } from '@archive/camera/camera';
+import { TRACK_ARG, trackOf } from '@archive/location/track';
+import { isTravelKind, TRAVEL_KINDS } from '@archive/location/track-profile';
+
+/** The settings, by flag and attr alike. */
+const FIELDS = ['kind', 'timezone', 'description'] as const;
+type Field = typeof FIELDS[number];
+
+const isField = (value: string): value is Field => (FIELDS as readonly string[]).includes(value);
+
+const trackUpdate = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: [...FIELDS], collect: ['clear'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+
+  const fail = async (message: string): Promise<number> => {
+    await cmd.writeError(`track-update: ${message}\n`);
+    return 1;
+  };
+
+  const target = flags._[0] === undefined ? undefined : String(flags._[0]);
+  if (!target) return await fail('usage: track-update <track> [--kind <kind>] [--timezone <IANA>] [--description <text>] [--clear <field>]');
+
+  const clear = (flags.clear ?? []) as string[];
+  for (const field of clear) {
+    if (!isField(field)) return await fail(`unknown field '${field}' (expected: ${FIELDS.join(', ')})`);
+  }
+
+  const set: Partial<Record<Field, string>> = {};
+  for (const field of FIELDS) {
+    const value = flags[field] as string | undefined;
+    if (value === undefined) continue;
+    if (clear.includes(field)) return await fail(`'${field}' is both set and cleared`);
+    if (value.trim() === '') return await fail(`--${field} needs a value (--clear ${field} removes it)`);
+    set[field] = value;
+  }
+  if (set.kind !== undefined && !isTravelKind(set.kind)) return await fail(`unknown kind '${set.kind}' (expected: ${TRAVEL_KINDS.join(', ')})`);
+  if (set.timezone !== undefined && !isKnownTimezone(set.timezone)) {
+    return await fail(`unknown timezone '${set.timezone}' (expected an IANA name, e.g. Europe/Stockholm)`);
+  }
+  if (Object.keys(set).length === 0 && clear.length === 0) return await fail('nothing to change (pass a field, or --clear <field>)');
+
+  try {
+    const { path } = await trackOf(cmd, target);
+    const attrs: Record<string, string | null> = { ...set };
+    for (const field of clear) attrs[field] = null;
+    await cmd.sys.vfs.update(cmd.access, path, { attrs });
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    else await cmd.writeLn(`Updated ${path}`);
+    return 0;
+  } catch (error) {
+    return await fail(error instanceof Error ? error.message : String(error));
+  }
+};
+
+trackUpdate.spec = {
+  name: 'track-update',
+  effect: 'write' as const,
+  description: 'Change how a track travels: its kind, the timezone its trips are cut in, its description',
+  args: [
+    { name: 'track', type: 'path' as const, description: TRACK_ARG },
+  ],
+  flags: [
+    { name: 'kind', type: 'string' as const, description: `how it travels, which sets how it is read and the units it is shown in: ${TRAVEL_KINDS.join(', ')}` },
+    { name: 'timezone', type: 'string' as const, description: 'IANA timezone its trips are cut into days in, e.g. Europe/Stockholm' },
+    { name: 'description', type: 'string' as const, description: 'free-text note' },
+    { name: 'clear', type: 'string' as const, description: 'remove a field: kind, timezone or description (repeatable)' },
+  ],
+  examples: ['track-update sailboat --kind boat --timezone Europe/Stockholm', 'track-update /archive/devices/sailboat/position/history --clear timezone'],
+};
+
+export default trackUpdate;

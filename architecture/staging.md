@@ -14,7 +14,7 @@ Archive's `staging` area (the `staging` module until ein/core#442) owns a privat
   journal/<ulid>                       one entry per decision: a db-tier JSON file, 0600, whose
                                        attrs.stagingJournal say what was decided and whose body
                                        is the plan that undoes it
-  routes/                              GPX files waiting for the camera that recorded them
+  routes/                              GPX files waiting for the track they belong to
 ```
 
 A category is a directory under `files/`, its settings (`kind`, `label`, a default
@@ -28,7 +28,7 @@ everything else asks it. `staging init` makes an area whole and is idempotent: t
 directories, the default category, a category's settings for any other directory under
 `files/`, and with every link following (`renameMany`) a loose entry of `files/` into the
 default category's loose batch, a loose group of `albums/` into `albums/inbox/`, and a GPX
-file waiting for a camera into `routes/`. `staging status` reads an area without writing:
+file waiting for a track into `routes/`. `staging status` reads an area without writing:
 one aggregate within each category counts its originals (media, other files, those not
 indexed yet by the file's `indexedAt`, the undated, bytes), one read of each category's
 checkpoint its organizer summary, and one aggregate over the journal what was decided per

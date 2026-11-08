@@ -1,7 +1,6 @@
 import { Alert, Button, Select, SimpleGrid, Stack, Switch, TextInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type { RelinkResult } from '@archive/camera/api';
-import { TRAVEL_KIND_LABELS, TRAVEL_KINDS } from '@archive/location/track-profile';
 import { Dialog, DialogActions, MarkdownEditor, TablerIcon } from '@ein/ui/components';
 import type { CameraDetail, CameraFields } from '../hooks/useCamera.ts';
 import { LabelsField, useLabelsDraft } from '../../components/NodeLabels.tsx';
@@ -17,8 +16,6 @@ const TIMEZONES = (() => {
     return [] as string[];
   }
 })();
-
-const KIND_OPTIONS = TRAVEL_KINDS.map((kind) => ({ value: kind, label: TRAVEL_KIND_LABELS[kind] }));
 
 type TextField = Exclude<keyof CameraFields, 'digitizer' | 'quicktimeUtc'>;
 
@@ -106,15 +103,6 @@ export function CameraEditModal({ opened, onClose, camera, save, onSaved }: Came
           clearable
           limit={50}
           nothingFoundMessage='No such timezone'
-        />
-        <Select
-          label='Travels as'
-          placeholder='Not set'
-          description='How it travels. A boat’s track is shown in knots and nautical miles, the others’ in km/h and km.'
-          data={KIND_OPTIONS}
-          value={field('kind') || null}
-          onChange={(value) => setField('kind', value ?? '')}
-          clearable
         />
         <Switch
           label='Scanner or digitizer'

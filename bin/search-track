@@ -5,16 +5,17 @@
  * Discovered by `search` like every other `search-*` on PATH, when no kind is asked for or
  * `--kind track` is. Tracks are not among the node types this module declares, so the Search page
  * has no **Show** choice for them and `@` does not complete them. Its rows are in the `name`
- * channel (the track's name and id) and the `description` channel.
+ * channel (the track's name) and the `description` channel.
  *
- * The same substring ladder `search-people` and `search-camera` use, over a scan of the cameras'
- * tracks (`track-list`): a track is named by its camera, which is not an attr a query can match.
+ * The same substring ladder `search-people` and `search-camera` use, over a scan of the tracks
+ * (`track-list`): a track is usually named by the device or camera it belongs to, which is not an
+ * attr of its own a query can match.
  *
  * A track *does* have a time (`firstTs`), unlike the other timeless kinds, so it
  * is reported: it is the one field that tells apart two tracks along the same
  * route, and it lets a result card date itself without a second lookup.
  */
-import { CAMERAS_ROOT } from '@archive/paths';
+import { ARCHIVE_PATH } from '@ein/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import type { SearchProviderHit, SearchProviderResponse } from '@ein/api';
 import { nameScore } from '@archive/media/name-quality';
@@ -37,13 +38,13 @@ const searchTrack = async (cmd: Command): CmdReturn => {
 
   const queryParts: string[] = [];
   let limit = 10;
-  let root = CAMERAS_ROOT;
+  let root = ARCHIVE_PATH;
   let i = 0;
 
   while (i < cmd.args.length) {
     const arg = cmd.args[i];
     if (arg === '-l' || arg === '--limit') limit = parseInt(cmd.args[++i] || '10', 10);
-    else if (arg === '--root') root = cmd.args[++i] || CAMERAS_ROOT;
+    else if (arg === '--root') root = cmd.args[++i] || ARCHIVE_PATH;
     else queryParts.push(arg);
     i++;
   }
@@ -69,7 +70,7 @@ const searchTrack = async (cmd: Command): CmdReturn => {
       ...(track.description ? { description: track.description } : {}),
       ...(track.firstTs ? { takenAt: track.firstTs } : {}),
     };
-    const name = scoreText(queryLower, [track.name, track.id]);
+    const name = scoreText(queryLower, [track.name]);
     if (name > 0) named.push({ ...hit, channel: 'name', score: name });
     const description = scoreText(queryLower, [track.description]);
     if (description > 0) described.push({ ...hit, channel: 'description', score: description });
@@ -97,14 +98,14 @@ const searchTrack = async (cmd: Command): CmdReturn => {
 searchTrack.spec = {
   name: 'search-track',
   effect: 'read' as const,
-  description: 'Search tracks by the name of the camera that recorded them, or their description',
+  description: 'Search tracks by their name, or the device or camera they belong to, or their description',
   args: [
     { name: 'query', type: 'string' as const, description: 'Search query text' },
   ],
   flags: [
     { name: 'kinds', type: 'bool' as const, description: 'print the content kinds this provider can return, and exit' },
     { name: 'l', type: 'number' as const, description: 'Max results per channel (default 10)' },
-    { name: 'root', type: 'string' as const, description: `Cameras root (default: ${CAMERAS_ROOT})` },
+    { name: 'root', type: 'string' as const, description: `where to look for tracks (default: ${ARCHIVE_PATH})` },
   ],
   examples: [
     "search-track 'exempeltur' -l 10",
