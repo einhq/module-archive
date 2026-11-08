@@ -99,6 +99,16 @@ export const listDevices = async (cmd: Command, root: string = DEVICES_ROOT): Pr
     });
 };
 
+/** Whether `timezone` is an IANA time zone this runtime knows, such as `Europe/Stockholm`. */
+export const isKnownTimezone = (timezone: string): boolean => {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Which registered device produced a file with this fingerprint, if any.
  *
@@ -108,7 +118,10 @@ export const listDevices = async (cmd: Command, root: string = DEVICES_ROOT): Pr
  * falls through to make + model: an unregistered serial does not make the
  * camera model wrong, and the alternative is leaving those files unlinked.
  */
-export const matchDevice = (devices: DeviceEntry[], fingerprint: DeviceFingerprint): DeviceMatch | null => {
+export const matchDevice = (
+  devices: Pick<DeviceEntry, 'path' | 'serialNumber' | 'make' | 'model' | 'timezone' | 'digitizer'>[],
+  fingerprint: DeviceFingerprint,
+): DeviceMatch | null => {
   const { serialNumber, make, model } = fingerprint;
 
   if (serialNumber) {

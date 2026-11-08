@@ -9,32 +9,29 @@
  * needs. This walks the other way: from the device's fingerprint to the exif
  * nodes carrying it.
  *
- * A serial is a store-side equality served by an index and costs only the rows
- * it matches. A device identified by make + model is not — `deviceinfo` is a JSON object, and
- * its text form is not byte-identical between the store and JavaScript, so it
- * cannot be compared in SQL. Those fall back to scanning the serial-less exif
- * nodes and comparing in memory: a strict subset of the corpus, but a subset
- * whose rows each carry a full exiftool dump, so it is minutes rather than
- * seconds on a real archive. Give a device its serial where the camera writes
- * one.
+ * A file is linked to the device ingest would have chosen for it (`matchDevice` over every
+ * registered device): its serial's, or else the first whose make and model it carries — which
+ * takes a file whose serial no device has, so a device with a serial is also looked up by its
+ * make and model. The serial is a store-side equality served by an index and costs only the rows
+ * it matches; make and model are compared in the store too (`deviceinfo.make`,
+ * `deviceinfo.model`), but no index serves them, so that half reads every exif node.
  *
  * `--all` sweeps every registered device with a fingerprint. That is the library-wide answer to
  * an unlinked file, and the reason `media-scan` has no gap term for `media-device`: `device-link`
  * writes nothing when nothing matches, so from the file side a link that never ran and one that
  * ran and found nothing are the same thing. See `deriveGaps` in `@archive/media/event-rules`.
  *
- * It is a long pass, and it does more than link. Measured in production 2026-08-30: 19 of 35 devices had
- * a fingerprint, 157 368 exif rows were examined and it ran for minutes, because every serial-less
- * device pays the in-memory scan described above. And linking a file changes its capture time, so
+ * It is a long pass, and it does more than link. Linking a file changes its capture time, so
  * after linking each device's files are re-dated (media's `media-resolve-time --device`), which
- * reapplies the date policy to every file of that device — 1 287 files to link but 15 454 to
- * retime on that run. Use `--dry-run` first and read both numbers; the retime half is the one that
- * can surprise, and under `--dry-run` it counts only the files already linked.
+ * reapplies the date policy to every file of that device — in production on 2026-08-30, 1 287
+ * files to link but 15 454 to retime. Use `--dry-run` first and read both numbers; the retime
+ * half is the one that can surprise, and under `--dry-run` it counts only the files already
+ * linked.
  */
 import type { CmdReturn, Command, NodeAttrs, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { dirname, resolve } from '@std/path';
-import { type DeviceEntry, listDevices, NODE_TYPE_DEVICE, readDevice } from '@archive/device/device';
+import { type DeviceEntry, listDevices, matchDevice, NODE_TYPE_DEVICE, readDevice } from '@archive/device/device';
 import type { RelinkResult } from '@archive/device/api';
 import type { MediaResolveTimeResult } from '@archive/media/api';
 
@@ -78,10 +75,11 @@ const coverDevice = async (cmd: Command, devicePath: string, dryRun: boolean): P
 };
 
 /**
- * Relink one device. Returns `undefined` having written its own diagnosis, which is what lets
- * the sweep below carry on past a device that cannot be matched on.
+ * Relink one device, deciding each file among `devices`, every registered one. Returns
+ * `undefined` having written its own diagnosis, which is what lets the sweep below carry on past
+ * a device that cannot be matched on.
  */
-const relinkDevice = async (cmd: Command, devicePath: string, flags: RelinkFlags): Promise<RelinkResult | undefined> => {
+const relinkDevice = async (cmd: Command, devicePath: string, flags: RelinkFlags, devices: DeviceEntry[]): Promise<RelinkResult | undefined> => {
   const vfs = cmd.sys.vfs;
   const access = cmd.access;
 
@@ -114,58 +112,67 @@ const relinkDevice = async (cmd: Command, devicePath: string, flags: RelinkFlags
     return { device: devicePath, scanned: 0, linked: 0, retimed, skipped: 0 };
   }
 
-  const where = serialNumber
-    ? [{ ref: 'deviceSerialNumber', op: 'eq' as const, value: serialNumber }]
-    // No serial to key on: the model line is the only identity, and it has to
-    // be compared in memory. Restricted to the serial-less rows, which is where
-    // such a device's files are by definition.
-    : [{ ref: 'deviceSerialNumber', op: 'missing' as const }, { ref: 'deviceinfo', op: 'exists' as const }];
+  // A device outside the registry's folder is still decided as if it were in it, after the rest.
+  const pool = devices.some((device) => device.path === devicePath) ? devices : [...devices, { path: devicePath, serialNumber, make, model }];
+  const lookups = [
+    ...(serialNumber ? [[{ ref: 'deviceSerialNumber', op: 'eq' as const, value: serialNumber }]] : []),
+    ...(make && model
+      ? [[{ ref: { path: ['deviceinfo', 'make'] }, op: 'eq' as const, value: make }, { ref: { path: ['deviceinfo', 'model'] }, op: 'eq' as const, value: model }]]
+      : []),
+  ];
 
-  let after: NodeQueryCursor | undefined;
+  const seen = new Set<string>();
   let scanned = 0;
   let linked = 0;
   let skipped = 0;
 
-  for (;;) {
-    const rows: NodeQueryEntry[] = await vfs.query(access, { types: [NODE_TYPE_EXIF], where, after, limit: PAGE });
-    if (rows.length === 0) break;
-    after = { value: null, id: rows[rows.length - 1].id };
-    scanned += rows.length;
+  for (const where of lookups) {
+    let after: NodeQueryCursor | undefined;
+    for (;;) {
+      const rows: NodeQueryEntry[] = await vfs.query(access, { types: [NODE_TYPE_EXIF], where, after, limit: PAGE });
+      if (rows.length === 0) break;
+      after = { value: null, id: rows[rows.length - 1].id };
 
-    for (const row of rows) {
-      if (!serialNumber) {
-        const info = (row.node.attrs as NodeAttrs).deviceinfo as DeviceInfoAttr | undefined;
-        if (str(info?.make) !== make || str(info?.model) !== model) continue;
-      }
+      for (const row of rows) {
+        // A file carrying both the serial and the make and model comes back from each lookup.
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        scanned++;
 
-      const filePath = fileOf(row.absPath);
-      let file;
-      try {
-        file = await vfs.get(access, filePath);
-      } catch {
-        continue;
-      }
+        const attrs = row.node.attrs as NodeAttrs;
+        const info = attrs.deviceinfo as DeviceInfoAttr | undefined;
+        const fingerprint = { serialNumber: str(attrs.deviceSerialNumber), make: str(info?.make), model: str(info?.model) };
+        // Ingest's choice: a serial another device has, or a model line an earlier device has, is not this device's.
+        if (matchDevice(pool, fingerprint)?.path !== devicePath) continue;
 
-      const current = str((file.attrs as NodeAttrs).devicePath);
-      // Another device already owns this file. Overwriting is a decision, not a
-      // repair — a serial that matches two registered devices is a data problem
-      // worth seeing rather than silently resolving.
-      if (current && current !== devicePath && !flags.force) {
-        skipped++;
-        continue;
-      }
+        const filePath = fileOf(row.absPath);
+        let file;
+        try {
+          file = await vfs.get(access, filePath);
+        } catch {
+          continue;
+        }
 
-      if (current === devicePath) {
-        skipped++;
-        continue;
-      }
+        const current = str((file.attrs as NodeAttrs).devicePath);
+        // Another device already owns this file, linked by hand or before a fingerprint changed.
+        // Overwriting that is a decision (`--force`), not a repair.
+        if (current && current !== devicePath && !flags.force) {
+          skipped++;
+          continue;
+        }
 
-      if (!flags.dryRun) {
-        await vfs.update(access, filePath, { attrs: { devicePath } });
-        // ln handles VFS softlink creation; there is no direct method for it.
-        await cmd.execute(`ln -sf ${shq(devicePath)} ${shq(`${filePath}/device`)}`);
+        if (current === devicePath) {
+          skipped++;
+          continue;
+        }
+
+        if (!flags.dryRun) {
+          await vfs.update(access, filePath, { attrs: { devicePath } });
+          // ln handles VFS softlink creation; there is no direct method for it.
+          await cmd.execute(`ln -sf ${shq(devicePath)} ${shq(`${filePath}/device`)}`);
+        }
+        linked++;
       }
-      linked++;
     }
   }
 
@@ -205,7 +212,7 @@ const deviceRelink = async (cmd: Command): CmdReturn => {
     let failed = 0;
 
     for (const device of candidates) {
-      const result = await relinkDevice(cmd, device.path, flags);
+      const result = await relinkDevice(cmd, device.path, flags, devices);
       if (result) results.push(result);
       else failed++;
     }
@@ -242,7 +249,7 @@ const deviceRelink = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  const result = await relinkDevice(cmd, resolve(cmd.cwd, target), flags);
+  const result = await relinkDevice(cmd, resolve(cmd.cwd, target), flags, await listDevices(cmd));
   if (!result) return 1;
 
   if (cmd.json) {

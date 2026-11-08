@@ -73,6 +73,11 @@ Deno.test({
       await cmd.shouldFail(`device-update ${DEVICES_ROOT}/Canon_EOS_5D_Mark_III --timezone Mars/Olympus`);
     });
 
+    await t.step('device-create refuses a timezone ICU does not know, and makes nothing', async () => {
+      await cmd.shouldFailWith('device-create --name "Mars Rover" --timezone Mars/Olympus', 'unknown timezone');
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${DEVICES_ROOT}/Mars_Rover`), false);
+    });
+
     await t.step('an owner is a dated pair, and device-info reports both halves', async () => {
       await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/anna --name Anna`);
       await cmd.shouldSucceed(`device-set-owner ${DEVICES_ROOT}/Canon_EOS_5D_Mark_III ${PEOPLE_ROOT}/anna --from 2012 --to 2015`);
@@ -143,6 +148,12 @@ Deno.test({
       assertEquals(scan.matched, 1);
       assertEquals(scan.proposals.find((p) => p.suggestedName === 'Apple iPhone 12')?.files, 2);
       assertEquals(scan.proposals.find((p) => p.suggestedName === 'Nikon D70')?.serialNumber, 'SER-2');
+      assertEquals(scan.truncated, false);
+
+      // One serial is within the limit, but two proposals are not: the answer says it was cut short.
+      const one = await client.execJson<ScanResult>('device-scan --limit 1');
+      assertEquals(one.proposals.length, 1);
+      assertEquals(one.truncated, true);
     });
 
     await t.step('a proposal naming a registered device points back at it', async () => {
@@ -278,6 +289,28 @@ Deno.test({
       // A sweep is over the whole registry by definition, so naming one device as well is a
       // contradiction rather than a narrowing.
       await cmd.shouldFail(`device-relink --all ${DEVICES_ROOT}/iPhone_12`);
+    });
+
+    await t.step('device-relink links what ingest would: a serial no device has falls to the make and model', async () => {
+      // A second body of the same model line, whose serial is registered to nothing.
+      await media('/shots/e.jpg', { deviceSerialNumber: 'SER-9', deviceinfo: { make: 'Apple', model: 'iPhone 12' } });
+      // A serial that is registered wins over the make and model, as at ingest.
+      await media('/shots/f.jpg', { deviceSerialNumber: 'SER-2', deviceinfo: { make: 'Apple', model: 'iPhone 12' } });
+
+      const relinked = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/iPhone_12`);
+      assertEquals(relinked.linked, 1);
+      assertEquals((await client.execJson<{ devicePath: string }>('attrs /shots/e.jpg')).devicePath, `${DEVICES_ROOT}/iPhone_12`);
+      assertEquals((await client.execJson<{ devicePath?: string }>('attrs /shots/f.jpg')).devicePath, undefined);
+
+      const nikon = await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/Nikon_D70`);
+      assertEquals(nikon.linked, 1);
+      assertEquals((await client.execJson<{ devicePath: string }>('attrs /shots/f.jpg')).devicePath, `${DEVICES_ROOT}/Nikon_D70`);
+
+      // A device with a serial takes its model line's files whose serial no device has, as device-match gives them to it.
+      await media('/shots/g.jpg', { deviceSerialNumber: 'SER-8', deviceinfo: { make: 'Nikon', model: 'D70' } });
+      assertEquals((await client.execJson<{ path: string }>('device-match --serial SER-8 --make Nikon --model D70')).path, `${DEVICES_ROOT}/Nikon_D70`);
+      assertEquals((await client.execJson<Relink>(`device-relink ${DEVICES_ROOT}/Nikon_D70`)).linked, 1);
+      assertEquals((await client.execJson<{ devicePath: string }>('attrs /shots/g.jpg')).devicePath, `${DEVICES_ROOT}/Nikon_D70`);
     });
     await t.step('device-update sets a kind, refuses one it does not know, and --clear removes it', async () => {
       const device = `${DEVICES_ROOT}/Canon_EOS_5D_Mark_III`;

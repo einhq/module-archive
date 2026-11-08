@@ -119,18 +119,20 @@ export default function DevicesPage() {
   };
 
   const [adopting, setAdopting] = useState<string | null>(null);
-  const [adopted, setAdopted] = useState<string | null>(null);
+  const [adopted, setAdopted] = useState<{ message: string; failed?: boolean } | null>(null);
 
   const adoptProposal = async (proposal: DeviceProposal, key: string) => {
     try {
       setAdopting(key);
       setAdopted(null);
       const linked = await adopt(proposal);
-      setAdopted(
-        linked > 0
+      setAdopted({
+        message: linked > 0
           ? `Linked ${linked.toLocaleString()} file${linked === 1 ? '' : 's'} to ${proposal.existingName}.`
           : `${proposal.existingName} now carries the fingerprint, but no unclaimed files matched it.`,
-      );
+      });
+    } catch (err) {
+      setAdopted({ message: `Could not add the fingerprint to ${proposal.existingName}: ${err instanceof Error ? err.message : String(err)}`, failed: true });
     } finally {
       setAdopting(null);
     }
@@ -262,8 +264,14 @@ export default function DevicesPage() {
               )}
 
               {adopted && (
-                <Alert color='marine' variant='light' withCloseButton onClose={() => setAdopted(null)}>
-                  {adopted}
+                <Alert
+                  color={adopted.failed ? 'red' : 'marine'}
+                  variant='light'
+                  icon={adopted.failed ? <TablerIcon name='alert-circle' size={16} /> : undefined}
+                  withCloseButton
+                  onClose={() => setAdopted(null)}
+                >
+                  {adopted.message}
                 </Alert>
               )}
 

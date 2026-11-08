@@ -7,13 +7,15 @@
  * both what the legacy import produced and what a caller with a fingerprint in
  * hand — the devices page registering a proposal — actually has.
  *
+ * A timezone is checked against ICU, as `device-update` checks it, before anything is made.
+ *
  * A device created with a fingerprint (a serial, or make and model) is linked to the media
  * already in the archive that carry it, through `device-relink`.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { dirname, resolve } from '@std/path';
-import { DEVICES_ROOT, NODE_TYPE_DEVICE, OWNERS_DIR, slugifyDeviceName } from '@archive/device/device';
+import { DEVICES_ROOT, isKnownTimezone, NODE_TYPE_DEVICE, OWNERS_DIR, slugifyDeviceName } from '@archive/device/device';
 import type { RelinkResult } from '@archive/device/api';
 
 const deviceCreate = async (cmd: Command): CmdReturn => {
@@ -26,6 +28,12 @@ const deviceCreate = async (cmd: Command): CmdReturn => {
   const name = flags.name as string | undefined;
   if (!name || !name.trim()) {
     await cmd.writeError('device-create: missing --name\n');
+    return 1;
+  }
+
+  const timezone = flags.timezone as string | undefined;
+  if (timezone && !isKnownTimezone(timezone)) {
+    await cmd.writeError(`device-create: unknown timezone '${timezone}' (expected an IANA name, e.g. Europe/Stockholm)\n`);
     return 1;
   }
 
@@ -51,7 +59,7 @@ const deviceCreate = async (cmd: Command): CmdReturn => {
   if (flags.make) attrs.make = flags.make as string;
   if (flags.model) attrs.model = flags.model as string;
   if (flags.serial) attrs.serialNumber = flags.serial as string;
-  if (flags.timezone) attrs.timezone = flags.timezone as string;
+  if (timezone) attrs.timezone = timezone;
   if (flags.description) attrs.description = flags.description as string;
   if (flags.digitizer) attrs.digitizer = true;
   if (flags['quicktime-utc']) attrs.quicktimeUtc = true;

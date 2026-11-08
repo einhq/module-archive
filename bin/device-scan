@@ -142,7 +142,8 @@ const deviceScan = async (cmd: Command): CmdReturn => {
   }
 
   proposals.sort(byFiles);
-  const truncated = unknownSerials.length > limit;
+  // Cut short either way: serials past the limit were never looked at, or more proposals were found than are reported.
+  const truncated = unknownSerials.length > limit || proposals.length > limit;
   const result = {
     registered: devices.length,
     proposals: proposals.slice(0, limit),
@@ -169,7 +170,7 @@ const deviceScan = async (cmd: Command): CmdReturn => {
     if (proposal.existingPath) parts.push(`-> ${proposal.existingPath} (registered, missing this fingerprint)`);
     await cmd.writeLn(`  ${parts.join(' ')}`);
   }
-  if (truncated) await cmd.writeLn(`(more than ${limit} unknown serials; raise --limit to see them)`);
+  if (truncated) await cmd.writeLn(`(only the ${limit} with the most files are listed; raise --limit to see the rest)`);
 
   return 0;
 };

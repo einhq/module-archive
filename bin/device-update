@@ -18,7 +18,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { resolve } from '@std/path';
-import { NODE_TYPE_DEVICE } from '@archive/device/device';
+import { isKnownTimezone, NODE_TYPE_DEVICE } from '@archive/device/device';
 import type { RelinkResult } from '@archive/device/api';
 import { DEVICE_KINDS, isDeviceKind } from '@archive/location/track-profile';
 
@@ -37,15 +37,6 @@ const FIELDS: Record<string, string> = {
 
 /** The switches among `FIELDS`: set with the bare flag, unset with `--clear`. */
 const SWITCHES = ['digitizer', 'quicktime-utc'];
-
-const isKnownTimezone = (timezone: string): boolean => {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const deviceUpdate = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, {
