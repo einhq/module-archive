@@ -16,9 +16,9 @@ const putInTemp = async (file: File): Promise<string> => {
     headers: { 'Content-Type': file.type || 'application/gpx+xml' },
     body: file,
   });
-  if (!response.ok) throw new Error(`${file.name} could not be sent (HTTP ${response.status})`);
+  if (!response.ok) throw new Error(`it could not be sent (HTTP ${response.status})`);
   const answer = await response.json() as { path?: unknown };
-  if (typeof answer.path !== 'string') throw new Error(`${file.name} was sent but no path came back`);
+  if (typeof answer.path !== 'string') throw new Error('it was sent but no path came back');
   return answer.path;
 };
 
@@ -36,22 +36,31 @@ export function useTrackUpload(device: string, onImported?: () => void): { open:
     if (files.length === 0) return;
     setSending(true);
     let points = 0;
-    try {
-      for (const file of files) {
+    let untimed = 0;
+    let added = 0;
+    // Each file on its own: one that fails says so, and what the others added is still told.
+    for (const file of files) {
+      try {
         const path = await putInTemp(file);
         const result = await execCommand<TrackStageResult>(`track-stage ${shq(path)} --device ${shq(device)} --name ${shq(file.name)}`);
-        if (result.status === 'imported') points += result.imported;
+        if (result.status === 'imported') {
+          points += result.imported;
+          untimed += result.untimed;
+          added++;
+        }
+      } catch (error) {
+        notify({ message: `${file.name}: ${error instanceof Error ? error.message : String(error)}`, color: 'red' });
       }
+    }
+    setSending(false);
+    if (added > 0) {
+      const left = untimed > 0 ? `; ${untimed.toLocaleString()} without a time left out` : '';
       notify({
-        message: points > 0 ? `${points.toLocaleString()} new point${points === 1 ? '' : 's'} added to the track` : 'The track already had every point in it',
+        message: points > 0 ? `${points.toLocaleString()} new point${points === 1 ? '' : 's'} added to the track${left}` : `The track already had every point in it${left}`,
         color: 'green',
       });
-    } catch (error) {
-      notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
-    } finally {
-      setSending(false);
-      onImported?.();
     }
+    onImported?.();
   };
 
   const input = (

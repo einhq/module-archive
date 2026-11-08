@@ -13,7 +13,8 @@
  * `--device` is that answer; one staged in a category waits in its staging
  * area's `routes/`.
  *
- * Re-staging the same file adds nothing: a fix is keyed by its timestamp.
+ * Re-staging the same file adds nothing: a fix is keyed by its timestamp. A point
+ * without a time is left out, counted as `untimed`.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
@@ -21,7 +22,7 @@ import { basename, dirname, resolve } from '@std/path';
 import { toArrayBuffer } from '@std/streams/to-array-buffer';
 import { listDevices } from '@archive/device/device';
 import type { TrackStageResult } from '@archive/location/api';
-import { devicesForGpx, ensureTrack, keepRoute, openTrack, parseGpx } from '@archive/location/track';
+import { devicesForGpx, ensureTrack, keepRoute, openTrack, parseGpx, timedPoints } from '@archive/location/track';
 import { sha256Hex } from '@archive/sources';
 import { initStaging } from '@archive/staging/init';
 import { parseStagedPath, stagingRoots } from '@archive/staging/paths';
@@ -73,8 +74,9 @@ const trackStage = async (cmd: Command): CmdReturn => {
     const xml = new TextDecoder().decode(bytes);
 
     const gpx = parseGpx(xml);
-    if (gpx.points.length === 0) {
-      await cmd.writeError(`track-stage: ${gpxPath}: no track points found\n`);
+    const { points, untimed, problem } = timedPoints(gpx.points);
+    if (problem) {
+      await cmd.writeError(`track-stage: ${gpxPath}: ${problem}\n`);
       return 1;
     }
 
@@ -99,7 +101,7 @@ const trackStage = async (cmd: Command): CmdReturn => {
     const { handle: track } = await openTrack(cmd, trackPath, 'a');
     let imported: number;
     try {
-      imported = await track.appendPoints(gpx.points);
+      imported = await track.appendPoints(points);
     } finally {
       await track.close();
     }
@@ -109,9 +111,9 @@ const trackStage = async (cmd: Command): CmdReturn => {
     if (waited) await vfs.update(access, source, { attrs: { trackDevicePending: null } });
 
     if (cmd.json) {
-      await cmd.writeJSON({ status: 'imported', track: trackPath, imported, skipped: gpx.points.length - imported, source } satisfies TrackStageResult);
+      await cmd.writeJSON({ status: 'imported', track: trackPath, imported, skipped: points.length - imported, untimed, source } satisfies TrackStageResult);
     } else {
-      await cmd.writeLn(`Imported ${imported} points into ${trackPath}, kept as ${source}`);
+      await cmd.writeLn(`Imported ${imported} points into ${trackPath}${untimed ? `, left out ${untimed} without a time` : ''}, kept as ${source}`);
     }
   } catch (error) {
     await cmd.writeError(`track-stage: ${error instanceof Error ? error.message : String(error)}\n`);

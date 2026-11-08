@@ -5,13 +5,14 @@
  *   track-import <device> /uploads/trip.gpx
  *
  * Reads the GPX from a VFS file node (upload via PUT /file/<path>), parses
- * <trkpt> elements (lat/lon attrs, optional <ele>/<time>) and appends them.
+ * <trkpt> elements (lat/lon attrs, optional <ele>/<time>) and appends those with a
+ * time; a point without one is left out and counted as `untimed`.
  * Re-importing the same file appends nothing: a fix is keyed by its timestamp.
  * Gives the device its track if it has none. The file stays where it is, and a
  * copy is kept in the device's `routes/`, linked from the track's `sources/`
  * (`keepRoute`); `track-stage` moves it there instead.
  */
-import { ensureTrack, keepRoute, openTrack, parseGpx } from '@archive/location/track';
+import { ensureTrack, keepRoute, openTrack, parseGpx, timedPoints } from '@archive/location/track';
 import { sha256Hex } from '@archive/sources';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
@@ -46,9 +47,10 @@ const trackImport = async (cmd: Command): CmdReturn => {
     }
     const xml = new TextDecoder().decode(bytes);
 
-    const { points } = parseGpx(xml);
-    if (points.length === 0) {
-      await cmd.writeError(`track-import: ${gpxPath}: no track points found\n`);
+    const parsed = parseGpx(xml).points;
+    const { points, untimed, problem } = timedPoints(parsed);
+    if (problem) {
+      await cmd.writeError(`track-import: ${gpxPath}: ${problem}\n`);
       return 1;
     }
 
@@ -63,9 +65,9 @@ const trackImport = async (cmd: Command): CmdReturn => {
     const source = await keepRoute(cmd, trackPath, gpxPath, await sha256Hex(bytes), { copy: true });
 
     if (cmd.json) {
-      await cmd.writeJSON({ imported, skipped: points.length - imported, track: trackPath, source });
+      await cmd.writeJSON({ imported, skipped: points.length - imported, untimed, track: trackPath, source });
     } else {
-      await cmd.writeLn(`Imported ${imported} points into ${trackPath}`);
+      await cmd.writeLn(`Imported ${imported} points into ${trackPath}${untimed ? `, left out ${untimed} without a time` : ''}`);
     }
   } catch (error) {
     await cmd.writeError(`track-import: ${error instanceof Error ? error.message : String(error)}\n`);

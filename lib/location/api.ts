@@ -47,10 +47,11 @@ export type TrackEntry = {
 
 /**
  * `track-stage`: the file's fixes joined a track, or it waits at `path` (in its staging area's
- * `routes/` when it was staged) for someone to say which device recorded it.
+ * `routes/` when it was staged) for someone to say which device recorded it. `skipped` counts the
+ * fixes the track already had, `untimed` the points without a time, which no track takes.
  */
 export type TrackStageResult =
-  | { status: 'imported'; track: string; imported: number; skipped: number; source: string }
+  | { status: 'imported'; track: string; imported: number; skipped: number; untimed: number; source: string }
   | { status: 'pending'; path: string; reason: string; candidates: string[] };
 
 /**

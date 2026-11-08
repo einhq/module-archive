@@ -289,6 +289,17 @@ export function parseGpx(xml: string): Gpx {
   return { creator, name: texts(own, 'name')[0], description: texts(own, 'desc')[0], time: texts(own, 'time')[0], tracks, names, points };
 }
 
+/**
+ * The fixes of a GPX file a track takes: those with a time. A track is keyed by time, and the
+ * registry gives a point without one the moment it arrives, which for a file is the upload rather
+ * than when the device was there; such points are left out. `problem` says why nothing is left.
+ */
+export function timedPoints(points: TrackPoint[]): { points: TrackPoint[]; untimed: number; problem?: string } {
+  const timed = points.filter((point) => point.ts !== undefined);
+  const problem = points.length === 0 ? 'no track points found' : timed.length === 0 ? `none of its ${points.length} track points has a time` : undefined;
+  return { points: timed, untimed: points.length - timed.length, ...(problem ? { problem } : {}) };
+}
+
 /** Lower-case words, space-separated and padded: `Garmin eTrex 30x` and `garmin-etrex-30x` read the same. */
 const words = (text: string): string => ` ${text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).join(' ')} `;
 

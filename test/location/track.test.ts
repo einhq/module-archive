@@ -393,6 +393,31 @@ Deno.test({
       assertEquals((await ctx.vfs.children(ADMIN_ACCESS, `${DEVICES_ROOT}/hike/routes`)).map((e) => e.name), ['trip.gpx']);
     });
 
+    await t.step('track-import leaves out a point without a time, and refuses a file with only those', async () => {
+      const write = async (path: string, xml: string) => {
+        await cmd.shouldSucceed(`mkfile ${path}`);
+        const fh = await ctx.vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+        try {
+          await fh.write(new TextEncoder().encode(xml));
+        } finally {
+          await fh.close();
+        }
+      };
+      await cmd.shouldSucceed(`mknode -t device ${DEVICES_ROOT}/untimed`);
+      await write(
+        '/partly-timed.gpx',
+        `<gpx><trk><trkseg><trkpt lat="58.1" lon="12.1"><time>2020-07-01T08:00:00Z</time></trkpt><trkpt lat="58.2" lon="12.2"></trkpt></trkseg></trk></gpx>`,
+      );
+      const result = await client.execJson<{ imported: number; untimed: number }>('track-import untimed /partly-timed.gpx');
+      assertEquals(result.imported, 1);
+      assertEquals(result.untimed, 1);
+      assertEquals(flat(await client.execJson<ReadResult>('track-read untimed')).map((p) => p.ts), ['2020-07-01T08:00:00.000Z']);
+
+      await write('/planned.gpx', `<gpx><trk><trkseg><trkpt lat="58.1" lon="12.1"/><trkpt lat="58.2" lon="12.2"/></trkseg></trk></gpx>`);
+      await cmd.shouldFailWith('track-import untimed /planned.gpx', 'none of its 2 track points has a time');
+      await cmd.shouldFailWith('track-stage /planned.gpx --device untimed', 'none of its 2 track points has a time');
+    });
+
     await t.step('rejects invalid input', async () => {
       await cmd.shouldSucceed('mkfile /not-track');
       await cmd.shouldFailWith('track-append /not-track 1 2', 'not a device or a track');
@@ -422,7 +447,7 @@ Deno.test({
       await write('/home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx', GPX.replace('creator="test"', 'creator="Exempel Trail"'));
       const staged = await client.execJson<TrackStageResult>('track-stage /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
       const kept = `${DEVICES_ROOT}/logger/routes/walk.gpx`;
-      assertEquals(staged, { status: 'imported', track: `${DEVICES_ROOT}/logger/track`, imported: 3, skipped: 0, source: kept });
+      assertEquals(staged, { status: 'imported', track: `${DEVICES_ROOT}/logger/track`, imported: 3, skipped: 0, untimed: 0, source: kept });
       await cmd.shouldFail('info /home/admin/staging/files/inbox/upload-2026-10-16/walk.gpx');
       assertEquals((await client.execJson<SourceFile[]>(`source-list ${DEVICES_ROOT}/logger/track`)).map((s) => [s.name, s.path]), [['walk.gpx', kept]]);
 
@@ -508,6 +533,7 @@ Deno.test({
         'south',
         'thin',
         'trip1',
+        'untimed',
         'wrong',
       ]);
       const hike = tracks.find((track) => track.id === 'hike')!;
