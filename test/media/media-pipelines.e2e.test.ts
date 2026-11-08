@@ -17,7 +17,7 @@ import { encodeHex } from '@std/encoding/hex';
 import { dirname } from '@std/path';
 import { containerTest } from '@ein/testing';
 import { SystemTestHarness } from '@ein/testing';
-import { poster } from '@ems/client';
+import { poster, probe } from '@ems/client';
 import { faceCropRect, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { ANAMORPHIC, emsCommand, PHOTO, ROTATED, ROTATED_VIDEO, stageMediaFixtures } from './media-fixtures.ts';
 import { inventScene, moveShape, scenePng } from './invented-images.ts';
@@ -68,13 +68,27 @@ containerTest('media pipeline fan-out E2E', async (t) => {
   };
 
   /**
-   * A rendition's pixel size, read back the way `exif-extract` reads any file's: through EMS.
-   *
-   * Given a minute rather than the client's 5 s: the probe waits its turn in EMS's tool lane
-   * behind whatever the box is doing, and a slot there can be tens of seconds away under a crawl.
+   * A rendition's exiftool tags, read the way `exif-extract` reads any file's: EMS's
+   * `media.probe`. The rendition is fetched to a file on this host first, which is what
+   * `emsCommand` hands EMS.
    */
+  const tagsOf = async (path: string): Promise<{ ImageWidth: number; ImageHeight: number; Rotation?: number }> => {
+    const res = await fetch(`${baseUrl}/file${path}`, { headers: { cookie } });
+    assertEquals(res.status, 200, `fetch ${path}`);
+    const local = `${fixtures.dir}/probe-${crypto.randomUUID()}-${path.slice(path.lastIndexOf('/') + 1)}`;
+    await Deno.writeFile(local, new Uint8Array(await res.arrayBuffer()));
+    const { cmd, stop } = await emsCommand();
+    try {
+      const result = await probe(cmd, local, { raw: ['exiftool'] });
+      return (result.raw.exiftool ?? {}) as { ImageWidth: number; ImageHeight: number; Rotation?: number };
+    } finally {
+      await stop();
+    }
+  };
+
+  /** A rendition's pixel size. */
   const dimensionsOf = async (path: string): Promise<[number, number]> => {
-    const [tags] = await client.execJson<{ ImageWidth: number; ImageHeight: number }[]>(`exiftool ${path}`, { timeout: 60_000 });
+    const tags = await tagsOf(path);
     return [tags.ImageWidth, tags.ImageHeight];
   };
 
@@ -230,12 +244,7 @@ containerTest('media pipeline fan-out E2E', async (t) => {
         await new Promise((r) => setTimeout(r, 1000));
       }
 
-      const clipRes = await fetch(`${baseUrl}/file${ALBUMS_ROOT}/e2e/rotated.mp4/thumbnails/1920x1080.mp4`, { headers: { cookie } });
-      assertEquals(clipRes.status, 200);
-      const [tags] = await client.execJson<{ ImageWidth: number; ImageHeight: number; Rotation?: number }[]>(
-        `exiftool ${ALBUMS_ROOT}/e2e/rotated.mp4/thumbnails/1920x1080.mp4`,
-        { timeout: 60_000 },
-      );
+      const tags = await tagsOf(`${ALBUMS_ROOT}/e2e/rotated.mp4/thumbnails/1920x1080.mp4`);
       assertEquals(tags.ImageHeight > tags.ImageWidth, true, `transcode is not portrait: ${tags.ImageWidth}x${tags.ImageHeight}`);
 
       // The rotation is in the pixels, not deferred to the player: a rendition that still
