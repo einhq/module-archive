@@ -14,9 +14,11 @@
  *   photo to the location containing it.
  *
  * - **A track's trips** (`<track>/.trips`) depend on its fixes, on how it travels and in which
- *   timezone (its attrs `kind` and `timezone`), and on its homes. Points appended to a device's
- *   track under `/dev` (a content write), one of those attrs changing, or a home added or taken off
- *   (a link in its `homes/`) is `track.changed`, and `track-trips` derives them again.
+ *   timezone (its attrs `kind` and `timezone`, and its device's `class`, which is how it travels
+ *   when it has no `kind`), and on its homes. Points appended to a device's track under `/dev` (a
+ *   content write), one of those attrs changing, or a home added or taken off (a link in its
+ *   `homes/`) is `track.changed`, and `track-trips` derives them again; a device's `class`
+ *   changing is `track.changed` for each of its tracks.
  *
  * Rules read fresh state rather than trusting the payload, so a
  * fact is right whichever order messages arrive in. A spurious fact is cheap:
@@ -61,6 +63,7 @@ export const LOCATION_BRIDGE_ROUTING_KEYS = [
   'system.vfs.softlink.created',
   'system.vfs.softlink.deleted',
   'system.vfs.track.updated',
+  'system.vfs.device.updated',
 ];
 
 /**
@@ -71,6 +74,9 @@ const LOCATION_INPUT_ATTRS = new Set(['address', 'displayName', 'name', 'locatio
 
 /** The track attrs its trips are derived from. `tripEdits` is not one: `trip-edit` derives them itself. */
 const TRACK_TRIP_ATTRS = new Set(['kind', 'timezone']);
+
+/** The device attr its tracks' trips are derived from: how they travel when they have no `kind`. */
+const DEVICE_TRIP_ATTR = 'class';
 
 export type VfsEventInput = {
   type: string;
@@ -92,6 +98,8 @@ export type LocationRuleContext = {
   hasPoint(path: string): Promise<boolean>;
   /** The node at `path`, or undefined when there is none. */
   getNode(path: string): Promise<{ type: string } | undefined>;
+  /** The tracks among the endpoints of the device at `path`. */
+  tracksOf(path: string): Promise<{ path: string; nodeId: string }[]>;
 };
 
 type Fact = Omit<DomainEvent, 'id'>;
@@ -146,6 +154,11 @@ export async function deriveLocationEvents(event: VfsEventInput, ctx: LocationRu
     if (event.type !== 'updated' || !inDevices(event.path) || event.changedAttrs === undefined) return [];
     if (event.changedAttrs.length === 0) return [fact(LOCATION_EVENTS.trackChanged, event.path, event.nodeId, 'points')];
     return event.changedAttrs.some((name) => TRACK_TRIP_ATTRS.has(name)) ? [fact(LOCATION_EVENTS.trackChanged, event.path, event.nodeId, 'attrs')] : [];
+  }
+
+  if (event.nodeType === 'device') {
+    if (event.type !== 'updated' || parentOf(event.path) !== DEV_PATH || !event.changedAttrs?.includes(DEVICE_TRIP_ATTR)) return [];
+    return (await ctx.tracksOf(event.path)).map((track) => fact(LOCATION_EVENTS.trackChanged, track.path, track.nodeId, 'class'));
   }
 
   // A person's residences are links in a `homes/` too; only a track's are its home bases.

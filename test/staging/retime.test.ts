@@ -38,6 +38,7 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
       exists: (path) => vfs.exists(ADMIN_ACCESS, path),
       getLink: () => Promise.resolve(undefined),
       hasPoint: () => Promise.resolve(false),
+      tracksOf: () => Promise.resolve([]),
     };
     const node = await vfs.get(ADMIN_ACCESS, to);
     const facts = await deriveArchiveEvents({ type: 'moved', path: to, fromPath: from, nodeId: node.id, nodeType: 'directory', timestamp: 1 }, ctx, 1);

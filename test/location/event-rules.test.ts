@@ -13,7 +13,12 @@ const SHAPE = `${LOCATION}/position`;
 const LINK = `${ALBUMS_ROOT}/trip/files/a.jpg/location`;
 
 const ctx = (
-  opts: { points?: string[]; links?: Record<string, { target: string; attrs?: Record<string, unknown> }>; types?: Record<string, string> } = {},
+  opts: {
+    points?: string[];
+    links?: Record<string, { target: string; attrs?: Record<string, unknown> }>;
+    types?: Record<string, string>;
+    tracks?: Record<string, string[]>;
+  } = {},
 ): LocationRuleContext => ({
   hasPoint: (path) => Promise.resolve(opts.points?.includes(path) ?? false),
   getLink: (path) => {
@@ -21,6 +26,7 @@ const ctx = (
     return Promise.resolve(link ? { id: 'l1', target: link.target, attrs: link.attrs ?? {} } : undefined);
   },
   getNode: (path) => Promise.resolve(opts.types?.[path] ? { type: opts.types[path] } : undefined),
+  tracksOf: (path) => Promise.resolve((opts.tracks?.[path] ?? []).map((track) => ({ path: track, nodeId: 't1' }))),
 });
 
 const event = (nodeType: string, path: string, type: string, changedAttrs?: string[]): VfsEventInput => ({
@@ -112,4 +118,15 @@ Deno.test('rule: a home added to or taken off a track is announced, a person mov
   assertEquals(await types(event('softlink', `${TRACK}/homes/the-berth`, 'deleted'), context), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`]);
   assertEquals(await types(event('softlink', `${PEOPLE_ROOT}/anna/homes/the-house`, 'created'), context), []);
   assertEquals(await types(event('softlink', `${ALBUMS_ROOT}/trip/homes/x`, 'created'), context), []);
+});
+
+Deno.test("rule: a device's class changing is announced for each of its tracks, its other attrs are not", async () => {
+  const context = ctx({ tracks: { '/dev/the-sailboat': [TRACK, '/dev/the-sailboat/log'] } });
+  const device = (changedAttrs?: string[], path = '/dev/the-sailboat') => types(event('device', path, 'updated', changedAttrs), context);
+  assertEquals(await device(['class', 'label']), [`${LOCATION_EVENTS.trackChanged} ${TRACK}`, `${LOCATION_EVENTS.trackChanged} /dev/the-sailboat/log`]);
+  assertEquals(await device(['label']), []);
+  assertEquals(await device(), []);
+  // A device without a track, or a node of that type outside /dev, is not.
+  assertEquals(await device(['class'], '/dev/the-lamp'), []);
+  assertEquals(await device(['class'], '/home/someone/the-sailboat'), []);
 });

@@ -72,6 +72,7 @@ const context = (nodes: Record<string, NodeSnapshot>) => {
     exists: (path) => Promise.resolve(path in tree || path in read(nodes)),
     getLink: () => Promise.resolve(undefined),
     hasPoint: () => Promise.resolve(false),
+    tracksOf: () => Promise.resolve([]),
   };
   return { ctx, categoryReads };
 };

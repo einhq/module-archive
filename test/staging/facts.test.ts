@@ -41,6 +41,7 @@ const context = () => {
     exists: (path) => Promise.resolve(path in tree),
     getLink: () => Promise.resolve(undefined),
     hasPoint: () => Promise.resolve(false),
+    tracksOf: () => Promise.resolve([]),
   };
   return { ctx, reads };
 };

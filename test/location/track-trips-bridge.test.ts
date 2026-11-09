@@ -1,7 +1,7 @@
 /**
  * The booted chain behind a track's trips: points appended to a device's track under `/dev`, by
- * hand or by its driver reading what is written to the device, reach archive-bridge, which
- * announces `track.changed` for the track on /dev/events.
+ * hand or by its driver reading what is written to the device, and its device's class changing,
+ * reach archive-bridge, which announces `track.changed` for the track on /dev/events.
  */
 
 import { LOCATION_EVENTS } from '@archive/location/event-rules';
@@ -55,6 +55,11 @@ Deno.test({
       const fix = JSON.stringify({ lat: 59.2, lng: 18.2, ts: '2025-06-01T11:00:00Z' });
       const fact = await nextChange(() => client.exec(`echo '${fix}' > ${deviceAt('the-tracker')}`));
       assertEquals([fact?.subject, fact?.data?.cause], [track, 'points']);
+    });
+
+    await t.step("its device's class changing announces track.changed for its track", async () => {
+      const fact = await nextChange(() => client.exec(`attrs ${deviceAt('the-tracker')} -s class=boat`));
+      assertEquals([fact?.subject, fact?.data?.cause], [track, 'class']);
     });
   } finally {
     await testCtx.teardown();

@@ -114,6 +114,7 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
     exists: (path) => vfs.exists(ADMIN_ACCESS, path),
     getLink: () => Promise.resolve(undefined),
     hasPoint: () => Promise.resolve(false),
+    tracksOf: () => Promise.resolve([]),
   };
   /** The `media.duplicates.stale` facts the bridge derives from the moves `act` makes, by subject. */
   const staleFrom = async (act: () => Promise<unknown>): Promise<string[]> => {

@@ -26,6 +26,7 @@ const ctx: ArchiveRuleContext = {
   exists: (path) => Promise.resolve(path in nodes),
   getLink: () => Promise.resolve(undefined),
   hasPoint: (path) => Promise.resolve(path === POINT),
+  tracksOf: () => Promise.resolve([]),
 };
 
 const event = (type: string, changedAttrs?: string[]): VfsEventInput => ({

@@ -6,7 +6,8 @@
  * location rules care about, applies `@archive/event-rules`, and writes the
  * resulting facts to /dev/events for the pipeline engine to trigger on: a media
  * file to index or a stage of it done, an album whose members changed, a location
- * whose position may be out of date, a photo point that may belong to a location.
+ * whose position may be out of date, a photo point that may belong to a location, a track whose
+ * trips may be out of date.
  * A fact about a file in a staging category of the bulk lane says so (`lane: 'bulk'`), and
  * the work it starts runs below everything else.
  *
@@ -78,6 +79,11 @@ const archiveBridge = async (cmd: Command): CmdReturn => {
         return undefined;
       }
     },
+    // Its endpoints only: a lookup that fails nacks the message, which is redelivered.
+    tracksOf: async (path) =>
+      (await cmd.sys.vfs.query(cmd.access, { within: path, types: ['track'], limit: 100 }))
+        .filter((row) => row.absPath.slice(0, row.absPath.lastIndexOf('/')) === path)
+        .map((row) => ({ path: row.absPath, nodeId: row.node.id })),
     hasPoint: async (path) => {
       try {
         const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
