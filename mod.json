@@ -28,7 +28,7 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.12.0",
+    "ems": "^0.13.0",
     "media": "^0.3.0"
   },
   "imports": {
