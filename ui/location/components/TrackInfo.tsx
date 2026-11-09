@@ -4,13 +4,14 @@ import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import type { TrackDetail } from '../hooks/useTrackDetail.ts';
 import { TrackHomes } from './TrackHomes.tsx';
+import { formatDate } from '@ein/ui/lib';
 
-const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+const DAY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
 
 /** `12 Jun 2025 – 3 Aug 2025`, or the one day. */
 const span = (first: string, last?: string): string => {
-  const from = dayFormat.format(new Date(first));
-  const to = last ? dayFormat.format(new Date(last)) : from;
+  const from = formatDate(first, DAY);
+  const to = last ? formatDate(last, DAY) : from;
   return from === to ? from : `${from} – ${to}`;
 };
 

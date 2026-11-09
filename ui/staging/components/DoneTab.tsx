@@ -1,6 +1,6 @@
 import type { StagingJournalEntry, StagingJournalPage, StagingUndoResult } from '@archive/staging/api';
 import { EmptyState, PageLoader, TablerIcon } from '@ein/ui/components';
-import { shq } from '@ein/ui/lib';
+import { formatDateTime, shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
 import { Alert, Anchor, Badge, Box, Button, Group, SegmentedControl, Stack, Text, Tooltip } from '@mantine/core';
 import { useCallback, useEffect, useState } from 'react';
@@ -27,7 +27,7 @@ type Props = {
   onChanged: () => void;
 };
 
-const time = (at: string) => new Date(at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const time = (at: string) => formatDateTime(at, { dateStyle: 'medium', timeStyle: 'short' });
 
 /** Everything decided, or only the changes of the groups (`--action edit`). */
 type Shown = 'all' | 'edit';

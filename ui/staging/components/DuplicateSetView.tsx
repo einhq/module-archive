@@ -1,13 +1,13 @@
 import type { DuplicateMember, DuplicateSet } from '@archive/media/api';
 import { TablerIcon } from '@ein/ui/components';
-import { formatBytes, gridUrl, thumbnailUrl } from '@ein/ui/lib';
+import { formatBytes, formatDateTime, gridUrl, thumbnailUrl } from '@ein/ui/lib';
 import { Badge, Box, Button, Card, Group, Image, Stack, Text } from '@mantine/core';
 import { blockedLine, copiesWord, flagLines, gainsLine, keepLine, scoreLine } from '../lib/duplicate-sets.ts';
 
 /** A tile's side, in pixels. */
 const TILE = 168;
 
-const when = (takenAt: string | undefined) => takenAt ? new Date(takenAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null;
+const when = (takenAt: string | undefined) => takenAt ? formatDateTime(takenAt, { dateStyle: 'medium', timeStyle: 'short' }) : null;
 
 type Props = {
   set: DuplicateSet;

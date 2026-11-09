@@ -240,13 +240,12 @@ function kenBurnsClassForIndex(index: number, enabled: boolean): string | undefi
  * Capture weekday, date and clock for the strip above the picture.
  *
  * Delegates to `formatTakenParts`, which renders exactly the precision the stored value has,
- * so a file known only to a year never shows a fabricated day and hour. The month is written
- * out in English, day first, the way the grid's date headers say it, so the two never
- * disagree about the same picture.
+ * so a file known only to a year never shows a fabricated day and hour, in the reader's date and
+ * time format. The month is written out, as the grid's date headers say it.
  * `short` abbreviates the day and month names ("Sat, 28 Feb 2026") for a narrow bar.
  */
 function formatLightboxTaken(iso?: string, short = false): TakenParts {
-  return formatTakenParts(iso, 'en-GB', short ? { seconds: true, weekday: 'short' } : { seconds: true, weekday: true, long: true });
+  return formatTakenParts(iso, undefined, short ? { seconds: true, weekday: 'short' } : { seconds: true, weekday: true, long: true });
 }
 
 /** Prefer a named location, then the best human-readable reverse-geocoded location. */

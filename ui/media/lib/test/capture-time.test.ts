@@ -48,6 +48,7 @@ Deno.test('nothing is rendered that the value does not claim', async (t) => {
     assertEquals(formatTaken('2003-04-30T14:03:11', 'en-GB'), '30 Apr 2003, 14:03');
     assertEquals(formatTaken('2003-04-30T14:03:11', 'en-GB', { seconds: true }), '30 Apr 2003, 14:03:11');
     assertEquals(formatTaken('2003-04-30T14:03', 'en-GB', { seconds: true }), '30 Apr 2003, 14:03');
+    assertEquals(formatTaken('2003-04-30T14:03', 'en-US'), 'Apr 30, 2003, 02:03 PM');
   });
 
   await t.step('the weekday is named once the value reaches a day', () => {

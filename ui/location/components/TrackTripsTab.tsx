@@ -9,11 +9,12 @@ import { albumRoute } from '../../media/lib/album-path.ts';
 import { useTrackTrips } from '../hooks/useTrackTrips.ts';
 import { AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
 import { TripMoveDialog } from './TripMoveDialog.tsx';
+import { dateTimeFormat, formatDate } from '@ein/ui/lib';
 
-const dayFormat = new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const DAY: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' };
 
 /** A local day, `YYYY-MM-DD`, as a date; the day is already the track's, so it is read as UTC. */
-const showDay = (day: string): string => dayFormat.format(new Date(`${day}T00:00:00Z`));
+const showDay = (day: string): string => formatDate(`${day}T00:00:00Z`, DAY);
 
 const span = (trip: Trip): string => trip.days.length === 1 ? showDay(trip.day) : `${showDay(trip.day)} – ${showDay(trip.days[trip.days.length - 1])}`;
 
@@ -127,7 +128,7 @@ function TripCard(
   const [moving, setMoving] = useState(false);
   const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay];
   // The legs' days are the track's, so their times are told on its clock too.
-  const timeFormat = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: list.timezone ?? 'UTC' });
+  const timeFormat = dateTimeFormat({ hour: '2-digit', minute: '2-digit', timeZone: list.timezone ?? 'UTC' });
   return (
     <Card radius='md' withBorder>
       <Stack gap='xs'>

@@ -20,7 +20,11 @@
  * noon photograph; converting it to the viewer's own zone makes it a 4am one. So when `takenAt`
  * carries an offset it is rendered *in that offset*, and the viewer's locale is the fallback
  * for the files — most of them — that carry none.
+ *
+ * Written in the reader's date and time format (`dateTimeFormat`) unless a locale is given.
  */
+
+import { dateTimeFormat } from '@ein/ui/lib';
 
 type TimePrecision = 'year' | 'month' | 'day' | 'minute' | 'second';
 
@@ -64,11 +68,13 @@ export const isVague = (value?: string): boolean => {
 const formats = new Map<string, Intl.DateTimeFormat>();
 
 /**
- * An `Intl.DateTimeFormat` for `locale` and `options`, made once: making one takes far longer than
- * formatting with it, and the lightbox formats a time for every picture it steps to.
+ * An `Intl.DateTimeFormat` for `locale` and `options`, the reader's own without one, made once:
+ * making one takes far longer than formatting with it, and the lightbox formats a time for every
+ * picture it steps to.
  */
 function dateFormat(locale: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
-  const key = `${locale ?? ''}|${JSON.stringify(options)}`;
+  if (!locale) return dateTimeFormat(options);
+  const key = `${locale}|${JSON.stringify(options)}`;
   let format = formats.get(key);
   if (!format) formats.set(key, format = new Intl.DateTimeFormat(locale, options));
   return format;
@@ -127,10 +133,12 @@ export function formatTakenParts(value?: string, locale?: string, options: Forma
   const date = options.weekday ? `${dateFormat(locale, { weekday, timeZone: 'UTC' }).format(day)}, ${calendar}` : calendar;
   if (parts.precision === 'day') return { date };
 
-  // Below a day the wall clock is printed as written, not reformatted: it is already in the
-  // zone it should be read in, and passing it through a Date would convert it into the
-  // viewer's.
-  const clock = options.seconds && parts.second !== undefined ? `${parts.hour}:${parts.minute}:${parts.second}` : `${parts.hour}:${parts.minute}`;
+  // Below a day the wall clock is the one written, never converted: it is already in the zone it
+  // should be read in, so it is built and formatted as UTC, which only writes it in the reader's
+  // clock (14:03 or 2:03 PM).
+  const seconds = options.seconds && parts.second !== undefined;
+  const at = new Date(Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), Number(parts.hour), Number(parts.minute), seconds ? Number(parts.second) : 0));
+  const clock = dateFormat(locale, { hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}), timeZone: 'UTC' }).format(at);
   return { date, clock };
 }
 
@@ -166,7 +174,7 @@ export function viewerLocalTime(takenAt?: string, takenAtUtc?: string, locale?: 
   // `getTimezoneOffset` counts minutes *behind* UTC, hence the sign flip.
   if (-at.getTimezoneOffset() * 60 === captureOffset) return undefined;
 
-  return dateFormat(locale, { dateStyle: 'medium', timeStyle: 'short', hour12: false }).format(at);
+  return dateFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(at);
 }
 
 /** How a source is worth naming to a reader. */

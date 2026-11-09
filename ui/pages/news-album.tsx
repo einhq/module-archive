@@ -1,7 +1,7 @@
 import { Box, Image, Stack, Text } from '@mantine/core';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useElementWidth } from '@ein/ui/hooks';
-import { gridUrl, thumbnailUrl } from '@ein/ui/lib';
+import { formatDate, gridUrl, thumbnailUrl } from '@ein/ui/lib';
 import { albumRoute } from '../media/lib/album-path.ts';
 
 const TILE = 76;
@@ -27,7 +27,7 @@ const agoLabel = (at: number, now: number): string => {
   if (days < 7) return `${days} days ago`;
   if (days < 31) return `${Math.round(days / 7)} weeks ago`;
 
-  return new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDate(at, { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
 /**

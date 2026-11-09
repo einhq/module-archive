@@ -69,7 +69,7 @@ export function EvidencePeek({ filePath, takenAt, extra, children }: PeekProps) 
         <Portal>
           <PeekCard anchor={anchor}>
             {filePath && <Picture path={filePath} />}
-            {takenAt && <Text size='sm' fw={500}>{formatTaken(takenAt, 'en-GB', { weekday: 'short' })}</Text>}
+            {takenAt && <Text size='sm' fw={500}>{formatTaken(takenAt, undefined, { weekday: 'short' })}</Text>}
             {filePath && <Text size='xs' c='dimmed' style={{ wordBreak: 'break-all' }}>{filePath}</Text>}
             {extra && <Text size='xs' c='dimmed'>{extra}</Text>}
           </PeekCard>

@@ -1,7 +1,7 @@
 import { Anchor, Badge, Button, Card, Group, Stack, Table, Text } from '@mantine/core';
 import { TablerIcon } from '@ein/ui/components';
 import { type StatNode, useAccessIds, useIdentities, useNodeEvents } from '@ein/ui/hooks';
-import { canWrite, shq } from '@ein/ui/lib';
+import { canWrite, dateTimeFormat, formatDate, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -15,10 +15,10 @@ import { EventModal } from '../../people/components/EventModal.tsx';
 import { type AlbumEvent, useAlbumEvents } from '../hooks/useAlbumEvents.ts';
 import { AlbumEventNote } from './AlbumEventNote.tsx';
 
-const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+const DAY: Intl.DateTimeFormatOptions = { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' };
 
 /** A local day, `YYYY-MM-DD`, as a date; the day is already the track's, so it is read as UTC. */
-const showDay = (day: string): string => dayFormat.format(new Date(`${day}T00:00:00Z`));
+const showDay = (day: string): string => formatDate(`${day}T00:00:00Z`, DAY);
 
 const slugOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
@@ -31,9 +31,9 @@ const DAY_AND_CLOCK: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'shor
  */
 const formatIn = (timezone: string | undefined, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
   try {
-    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: timezone ?? 'UTC' });
+    return dateTimeFormat({ ...options, timeZone: timezone ?? 'UTC' });
   } catch {
-    return new Intl.DateTimeFormat(undefined, { ...options, timeZone: 'UTC' });
+    return dateTimeFormat({ ...options, timeZone: 'UTC' });
   }
 };
 

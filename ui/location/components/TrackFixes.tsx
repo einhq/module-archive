@@ -1,5 +1,5 @@
 import { MapMarkers, MapTracks, type MapTrackSpec, TablerIcon, useMap } from '@ein/ui/components';
-import { shq } from '@ein/ui/lib';
+import { formatDateTime, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { ActionIcon, Button, Group, Text } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -193,7 +193,7 @@ export function FixPanel({ path, fix, runs, editable, onMarked, onClose }: FixPa
 
   const reject = () => mark('reject', swept > 1 ? `${daySpan(dayOf(fix))} --near=${fix.lat},${fix.lng} --within=${CLUSTER_M} --reject` : `${spanOf([fix])} --reject`);
 
-  const when = fix.ts ? new Date(fix.ts).toLocaleString() : '';
+  const when = fix.ts ? formatDateTime(fix.ts) : '';
 
   return (
     <Group justify='space-between' gap='xs'>

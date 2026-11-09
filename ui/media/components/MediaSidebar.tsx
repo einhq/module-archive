@@ -23,7 +23,7 @@ import { CoverAvatar, Dialog, DialogActions, HatField, MapShape, MapView, Scroll
 import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
-import { canWrite, fileUrl, formatBytes, formatClock, isGuest, thumbnailUrl } from '@ein/ui/lib';
+import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
 import type { CommentEntry, MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
@@ -49,11 +49,11 @@ export const SIDEBAR_WIDTH = 400;
 /** The comment author's picture beside their name, in px. */
 const COMMENT_AVATAR = 20;
 
-/** In the viewer's locale on a 24-hour clock, as the lightbox's other times are. */
-const TIMESTAMP = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', hour12: false });
+/** In the reader's date and time format, as the lightbox's other times are. */
+const TIMESTAMP: Intl.DateTimeFormatOptions = { dateStyle: 'medium', timeStyle: 'short' };
 
 function formatTimestamp(ts?: number): string {
-  return ts ? TIMESTAMP.format(ts) : '';
+  return ts ? formatDateTime(ts, TIMESTAMP) : '';
 }
 
 /** Shutter speed reads as a fraction below a second, which is how every camera writes it. */
