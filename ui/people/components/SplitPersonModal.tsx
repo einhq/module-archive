@@ -3,13 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import { useSubclusters } from '../hooks/useSubclusters.ts';
 import { cutAtSimilarity, cutIntoK, cutRange, groupsFrom } from '../lib/face-cut.ts';
-import { closeLightboxWithoutReturn, execCommand, isLightboxOpen, MediaItem, openMediaAt } from '@ein/ui/signals';
-import { mediaItemFrom } from '@ein/ui/lib';
+import { execCommand } from '@ein/ui/signals';
 import { type DetachDestination, detachFromPerson } from '../lib/person-detach.ts';
 import type { AppliedFaceChange } from '../lib/face-change.ts';
 import { Dialog, DialogActions, PageLoader, TablerIcon } from '@ein/ui/components';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
 import { FaceCrop } from './FaceCrop.tsx';
+import { FacePhotoDialog, type PhotoView, photoViewOf } from './FacePhotoDialog.tsx';
 
 const CROP_SIZE = 56;
 
@@ -95,28 +95,16 @@ export function SplitPersonModal({ personPath, personName, named, onClose, onApp
   const setAction = (index: number, action: Action) => setActions((prev) => ({ ...prev, [index]: action }));
 
   /**
-   * Open the photo a crop was cut from, with the lightbox's arrows walking that
-   * *group* rather than the whole person.
+   * Open the photo a crop was cut from, with the arrows walking that *group*
+   * rather than the whole person.
    *
    * A crop is 56 pixels of a face and the question here is whether a group is
    * somebody else — which is often only answerable from the photo. Scoping the
    * walk to the group is what makes it a way to check the group: flick through
    * and see whether the same person keeps turning up.
    */
-  const openPhoto = (group: number[], face: number) => {
-    const seen = new Set<string>();
-    const items: MediaItem[] = [];
-    for (const member of group) {
-      const path = faces[member].filePath;
-      if (!path || seen.has(path)) continue;
-      seen.add(path);
-      // Faces only come from images, and the display derivative is already in
-      // the display frame, so neither kind nor dimensions need asking for.
-      items.push(mediaItemFrom({ path, type: 'photo' }));
-    }
-    const index = items.findIndex((item) => item.path === faces[face].filePath);
-    if (index >= 0) openMediaAt(index, items);
-  };
+  const [photo, setPhoto] = useState<PhotoView | null>(null);
+  const openPhoto = (group: number[], face: number) => setPhoto(photoViewOf(group.map((member) => faces[member]), faces[face].filePath));
 
   /** A group of one is nobody: it can stay or go, but it cannot become a person. */
   const isSingleton = (group: number[]) => group.length === 1;
@@ -137,36 +125,32 @@ export function SplitPersonModal({ personPath, personName, named, onClose, onApp
     setMergeTargets({});
     setExpanded({});
     setActionError(null);
+    setPhoto(null);
     onClose();
   };
 
   /**
-   * Escape belongs to the lightbox while it is up.
+   * Escape belongs to the photo while it is up.
    *
-   * Several listeners answer Escape (this modal's, the lightbox's `useHotkeys`,
-   * the lightbox modal's own `closeOnEscape`), so checking a signal and returning
-   * early would let one press close *both* dialogs and throw away every group
-   * decision made so far. This consumes the event instead: when the lightbox is
-   * up it closes only the lightbox and stops the key there.
+   * Both dialogs answer Escape, so one press would close *both* and throw away
+   * every group decision made so far. This consumes the event instead: when the
+   * photo is up it closes only the photo and stops the key there.
    *
    * **On `window`, capture phase** — not `document`. Window is the outermost
    * target in the capture path; a document-capture listener runs after
    * Mantine's window ones, too late to stop them.
    *
-   * `closeOnEscape` is off on the modal below for a related reason: reading a
-   * signal during render does not subscribe React to it, so that prop would hold
-   * whatever was true at the last render.
+   * `closeOnEscape` is off on the modal below for the same reason.
    */
-  const closeRef = useRef(close);
-  closeRef.current = close;
+  const escapeRef = useRef(close);
+  escapeRef.current = photo ? () => setPhoto(null) : close;
   useEffect(() => {
     if (!personPath) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (isLightboxOpen.value) closeLightboxWithoutReturn();
-      else closeRef.current();
+      escapeRef.current();
     };
     globalThis.addEventListener('keydown', onKeyDown, true);
     return () => globalThis.removeEventListener('keydown', onKeyDown, true);
@@ -236,7 +220,7 @@ export function SplitPersonModal({ personPath, personName, named, onClose, onApp
       icon='cut'
       pattern='person'
       size='xl'
-      // Handled above instead, so the lightbox can keep Escape for itself.
+      // Handled above instead, so the photo can have Escape first.
       closeOnEscape={false}
     >
       <Stack gap='md'>
@@ -397,6 +381,7 @@ export function SplitPersonModal({ personPath, personName, named, onClose, onApp
           Apply to {leaving.length} {leaving.length === 1 ? 'group' : 'groups'}
         </Button>
       </DialogActions>
+      <FacePhotoDialog view={photo} onChange={setPhoto} />
     </Dialog>
   );
 }

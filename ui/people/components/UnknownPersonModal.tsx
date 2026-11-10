@@ -1,5 +1,6 @@
 import { Alert, Badge, Box, Button, Center, Checkbox, Group, Loader, Paper, Slider, Stack, Switch, Text } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
+import { useSignals } from '@preact/signals-react/runtime';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import type { UnknownPeopleFaceChange, UnknownPerson } from '../hooks/useUnknownPeople.ts';
@@ -10,11 +11,12 @@ import { cutAtSimilarity, cutIntoK, cutRange, groupsFrom } from '../lib/face-cut
 import { stopClip } from '../lib/clip-player.ts';
 import { useSelection } from '@ein/ui/hooks';
 import { mediaItemFrom } from '@ein/ui/lib';
-import { closeLightboxWithoutReturn, isLightboxOpen, type MediaItem, notify, openMediaAt } from '@ein/ui/signals';
+import { closeLightboxWithoutReturn, isLightboxOpen, notify, openMediaAt } from '@ein/ui/signals';
 import { Dialog, DialogActions, PageLoader, TablerIcon } from '@ein/ui/components';
 import { type EvidenceChange, EvidenceSelectionBar } from './EvidenceSelectionBar.tsx';
 import { EvidencePeek, YearMark } from './EvidencePeek.tsx';
 import { FaceCrop } from './FaceCrop.tsx';
+import { FacePhotoDialog, type PhotoView, photoViewOf } from './FacePhotoDialog.tsx';
 import { QuickName } from './QuickName.tsx';
 import { VoiceTile } from './VoiceTile.tsx';
 
@@ -44,20 +46,6 @@ type Props = {
   onFacesChanged?: (change: UnknownPeopleFaceChange | null) => void;
   /** This dialog is above an existing lightbox, so Escape closes this layer first. */
   overLightbox?: boolean;
-};
-
-/** The photos behind faces, in the order shown and without repeats, for the lightbox to walk. */
-const photosOf = (faces: PersonFace[]): MediaItem[] => {
-  const seen = new Set<string>();
-  const items: MediaItem[] = [];
-  for (const face of faces) {
-    if (!face.filePath || seen.has(face.filePath)) continue;
-    seen.add(face.filePath);
-    // Faces only ever come from images, and the display derivative is already in the display
-    // frame, so neither kind nor dimensions need asking for.
-    items.push(mediaItemFrom({ path: face.filePath, type: 'photo' }));
-  }
-  return items;
 };
 
 type FaceTileProps = {
@@ -208,6 +196,7 @@ function Groups<T>({ grouping, loadingLabel, noun, ungrouped, keyOf, selection, 
  * many of its faces are loaded.
  */
 export function UnknownPersonModal({ person, named, onClose, onName, onMerge, onDiscard, onFacesChanged, overLightbox = false }: Props) {
+  useSignals();
   const personPath = person?.path ?? null;
   const { faces, total, loading, loadingMore, hasMore, loadMore, error, refetch, removeFaces } = usePersonFaces(personPath);
   const { voices, total: voiceTotal, loading: voicesLoading, refetch: refetchVoices, removeVoices } = usePersonVoices(personPath);
@@ -215,6 +204,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
   const [confirming, setConfirming] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [discardBusy, setDiscardBusy] = useState(false);
+  const [photo, setPhoto] = useState<PhotoView | null>(null);
 
   const faceGroups = useGrouping('faces', personPath);
   const voiceGroups = useGrouping('voices', personPath);
@@ -231,30 +221,27 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
 
   const close = () => {
     selection.clear();
+    setPhoto(null);
     stopClip();
     onClose();
   };
 
-  /** Open a face's photo, the lightbox walking the faces it was shown among — a group, or all. */
-  const openPhoto = (among: PersonFace[], filePath?: string) => {
-    const photos = photosOf(among);
-    const index = photos.findIndex((item) => item.path === filePath);
-    if (index < 0) return;
-    // Over the lightbox, the lightbox is the photo layer: this dialog goes before its list changes.
-    if (overLightbox) close();
-    openMediaAt(index, photos);
-  };
-
+  /**
+   * A recording opens in the lightbox, which is drawn under every dialog. Over the lightbox this
+   * dialog goes before its list changes; over a page it steps aside while the lightbox is up and
+   * comes back as it was.
+   */
   const openRecording = (filePath: string, atSeconds: number) => {
     stopClip();
     if (overLightbox) close();
     // `atSeconds` is what the lightbox seeks to on load, as a moment-level search hit does.
     openMediaAt(0, [mediaItemFrom({ path: filePath, atSeconds })]);
   };
+  const steppedAside = !overLightbox && isLightboxOpen.value;
 
   /**
-   * Escape, in the order the reviewer means it: the photo on top of everything, then what is
-   * picked, then the dialog itself.
+   * Escape, in the order the reviewer means it: the photo or recording on top of everything, then
+   * what is picked, then the dialog itself.
    *
    * A window capture listener, because several listeners answer Escape (this dialog's own
    * `closeOnEscape`, the lightbox's `useHotkeys`, the lightbox modal's) and one press would
@@ -265,7 +252,8 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
    */
   const onEscapeRef = useRef(() => {});
   onEscapeRef.current = () => {
-    if (overLightbox) close();
+    if (photo) setPhoto(null);
+    else if (overLightbox) close();
     else if (isLightboxOpen.value) closeLightboxWithoutReturn();
     else if (selection.active) selection.clear();
     else close();
@@ -284,7 +272,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
   }, [person, confirmOpen, overLightbox]);
 
   // Mantine's own hotkeys ignore text fields, so this stays out of the name box.
-  useHotkeys([['mod+A', () => person && !confirmOpen && !isLightboxOpen.value && selection.selectAll()]]);
+  useHotkeys([['mod+A', () => person && !confirmOpen && !photo && !isLightboxOpen.value && selection.selectAll()]]);
 
   useEffect(() => stopClip, []);
 
@@ -352,7 +340,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
       picked={selection.isSelected(face.facePath)}
       picking={selection.active}
       onPick={(event) => pick(face.facePath, event)}
-      onOpen={() => openPhoto(among, face.filePath)}
+      onOpen={() => setPhoto(photoViewOf(among, face.filePath))}
     />
   );
 
@@ -368,7 +356,9 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
 
   return (
     <Dialog
-      opened={!!person}
+      opened={!!person && !steppedAside}
+      // Stepped aside, what is typed and chosen in it stays.
+      keepMounted={steppedAside}
       onClose={close}
       title={person?.name}
       icon='user-question'
@@ -384,7 +374,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
         </>
       }
       size='min(1200px, 96vw)'
-      // Handled above instead, so the lightbox and the picks can have it first.
+      // Handled above instead, so the photo, the lightbox and the picks can have it first.
       closeOnEscape={false}
     >
       <Stack gap='lg'>
@@ -525,6 +515,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
           <Button color='orange' onClick={discard}>Not a person</Button>
         </DialogActions>
       </Dialog>
+      <FacePhotoDialog view={photo} onChange={setPhoto} />
     </Dialog>
   );
 }
