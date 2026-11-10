@@ -133,6 +133,54 @@ const readVector = async (vfs: Vfs, access: Access, path: string): Promise<Uint8
  * The redo announces what it writes — a new embedding is a new `media.face.detected` — so a face
  * that went is skipped as one that was never there (ein/core#987).
  */
+/**
+ * The person a face's vector votes for: its `k` nearest stored faces that belong to someone, each
+ * a vote as strong as their likeness, decided by the same rules as every assignment
+ * (`propagateLabels`). `faceId` is the face's own embedding, never its own neighbour; `counts` says
+ * which neighbours may vote. Undefined when no person wins clearly enough.
+ */
+const voteForPerson = async (
+  vfs: Vfs,
+  access: Access,
+  vector: Uint8Array,
+  faceId: string,
+  opts: Pick<AssignOptions, 'k' | 'voteThreshold' | 'margin' | 'attachThreshold'>,
+  counts: (neighbour: FaceAttrs & { personId: string }) => boolean,
+  rejected?: string[],
+): Promise<{ personId: string; confidence: number } | undefined> => {
+  const matches = (await vfs.findSimilar(access, FACE_EMBEDDING_TYPE, vector, opts.k, opts.voteThreshold)).filter((m) => m.id !== faceId);
+  const regionOf = await regionsOfEmbeddings(vfs, access, matches.map((m) => m.id));
+  const regionIds = [...new Set(regionOf.values())];
+  const neighbours = regionIds.length > 0 ? await vfs.getNodesByIds<FaceAttrs>(access, regionIds) : new Map();
+  const labeled = new Map<string, string>();
+  const edges: FaceEdge[] = [];
+  for (const m of matches) {
+    const regionId = regionOf.get(m.id);
+    const node = regionId ? neighbours.get(regionId) : undefined;
+    if (!node) continue;
+    const personId = node.attrs.personId;
+    if (!occ(personId) || !counts({ ...node.attrs, personId })) continue;
+    labeled.set(m.id, personId);
+    edges.push({ a: m.id, b: faceId, sim: m.similarity });
+  }
+  const { assignments } = propagateLabels(edges, labeled, {
+    threshold: opts.voteThreshold,
+    minMargin: opts.margin,
+    minVotes: opts.attachThreshold,
+    rejected: rejected ? new Map([[faceId, new Set(rejected)]]) : undefined,
+  });
+  const winner = assignments.find((a) => a.faceId === faceId);
+  return winner ? { personId: winner.personId, confidence: winner.confidence } : undefined;
+};
+
+/**
+ * The person a face seen elsewhere than in a stored file is, such as a camera's live picture: its
+ * vector (TransFace's, unit length) voted on by the stored faces as a photo's would be. Undefined
+ * when nobody wins.
+ */
+export const matchFace = async (vfs: Vfs, access: Access, vector: number[]): Promise<{ personId: string; confidence: number } | undefined> =>
+  await voteForPerson(vfs, access, new TextEncoder().encode(JSON.stringify(vector)), 'live', DEFAULT_ASSIGN_OPTIONS, () => true);
+
 const vanished = async (vfs: Vfs, access: Access, facePath: string, embeddingId: string, error: unknown): Promise<boolean> =>
   error instanceof NodeNotFoundError &&
   await vfs.get(access, faceEmbeddingPathOf(facePath)).then((embedding) => embedding.id !== embeddingId, () => true);
@@ -241,36 +289,17 @@ export const assignFacesForFile = async (
         return { facePath, faceId, personId: null, created: false, confidence: 0, reason: 'skipped-no-vector' };
       }
 
-      const matches = (await vfs.findSimilar(access, FACE_EMBEDDING_TYPE, vector, opts.k, opts.voteThreshold)).filter((m) => m.id !== embeddingId);
-      const regionOf = await regionsOfEmbeddings(vfs, access, matches.map((m) => m.id));
-      const regionIds = [...new Set(regionOf.values())];
-      const neighbours = regionIds.length > 0 ? await vfs.getNodesByIds<FaceAttrs>(access, regionIds) : new Map();
-
       // Only neighbours that already belong to someone can vote, and only from other files:
       // two faces in one photo are different people, and a video's other faces are no evidence.
-      const labeled = new Map<string, string>();
-      const edges: FaceEdge[] = [];
-      for (const m of matches) {
-        const regionId = regionOf.get(m.id);
-        const node = regionId ? neighbours.get(regionId) : undefined;
-        if (!node) continue;
-        const personId = node.attrs.personId;
-        if (!occ(personId)) continue;
-        if (node.attrs.fileId && node.attrs.fileId === attrs.fileId) continue;
-        if (!opts.allowDuplicatePerson && takenPersonIds.has(personId)) continue;
-        labeled.set(m.id, personId);
-        edges.push({ a: m.id, b: embeddingId, sim: m.similarity });
-      }
-
-      // Same voting rules as the batch path, over this face's neighbourhood.
-      const rejected = Array.isArray(attrs.rejectedPersonIds) ? new Map([[embeddingId, new Set(attrs.rejectedPersonIds)]]) : undefined;
-      const { assignments } = propagateLabels(edges, labeled, {
-        threshold: opts.voteThreshold,
-        minMargin: opts.margin,
-        minVotes: opts.attachThreshold,
-        rejected,
-      });
-      const winner = assignments.find((a) => a.faceId === embeddingId);
+      const winner = await voteForPerson(
+        vfs,
+        access,
+        vector,
+        embeddingId,
+        opts,
+        (neighbour) => !(neighbour.fileId && neighbour.fileId === attrs.fileId) && (opts.allowDuplicatePerson || !takenPersonIds.has(neighbour.personId)),
+        Array.isArray(attrs.rejectedPersonIds) ? attrs.rejectedPersonIds : undefined,
+      );
 
       if (winner) {
         if (!opts.dryRun) {

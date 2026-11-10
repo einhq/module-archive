@@ -1,0 +1,5 @@
+{
+  "description": "Has the media service watch every camera for faces: a face's person, or unknown, on the camera's faces log, and its picture filed under the camera for the archive to assign",
+  "restartPolicy": "on-failure",
+  "workClass": "background"
+}

@@ -35,6 +35,7 @@
     "@archive/media/album-profile": "./lib/media/album-profile.ts",
     "@archive/media/album-span": "./lib/media/album-span.ts",
     "@archive/media/api": "./lib/media/api.ts",
+    "@archive/media/camera-faces": "./lib/media/camera-faces.ts",
     "@archive/media/capture-resolve": "./lib/media/capture-resolve.ts",
     "@archive/media/duplicate-clusters": "./lib/media/duplicate-clusters.ts",
     "@archive/media/event-rules": "./lib/media/event-rules.ts",
