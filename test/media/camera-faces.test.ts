@@ -1,8 +1,9 @@
 /**
  * The camera-faces service against a stub EMS and a stub camera driver: a camera's smallest stream
  * given to EMS as a watch at the address its driver names, a face nobody's told on the camera's
- * `faces` log as unknown, a face gone filed as a picture under a camera node made for the device
- * and linked to it, and the watch stopped once the camera is forgotten.
+ * `faces` log as unknown, a known face by its person's name and an unnamed person's as unknown, a
+ * face gone filed as a picture under a camera node made for the device and linked to it, and the
+ * watch stopped once the camera is forgotten.
  */
 
 import { assert, assertEquals } from '@std/assert';
@@ -60,6 +61,33 @@ Deno.test({ name: 'camera-faces', sanitizeResources: false, sanitizeOps: false }
         (answer) => answer.readings.length > 0,
       );
       assertEquals(history.readings.map((reading) => reading.value), [UNKNOWN_FACE]);
+    });
+
+    await t.step("a known face is told by its person's name, and an unnamed person's as unknown", async () => {
+      const vfs = testCtx.harness.instance!.vfs;
+      await admin.execString('mknode -p -t person /archive/people/anna-andersson --as name="Anna Andersson"');
+      const anna = (await admin.execJson<{ id: string }>('stat /archive/people/anna-andersson')).id;
+      await admin.execString('mknode -t file /home/admin/photo.jpg --as mimetype=image/jpeg && mkdir /home/admin/photo.jpg/regions');
+      // Anna's one stored face, its vector [0, 1, 0].
+      await admin.execString(`mknode -t media-region /home/admin/photo.jpg/regions/face-0 --as personId=${anna}`);
+      await admin.execString('mknode -t embedding /home/admin/photo.jpg/regions/face-0/embedding --as embeddingType=face_transface --an capacity=3');
+      const handle = await vfs.open(ADMIN_ACCESS, '/home/admin/photo.jpg/regions/face-0/embedding', { mode: 'w' });
+      try {
+        await handle.write(new TextEncoder().encode(JSON.stringify([0, 1, 0])));
+      } finally {
+        await handle.close();
+      }
+      const told = async (count: number) =>
+        (await until(
+          'the face on the log',
+          () => admin.execJson<{ readings: { value: unknown }[] }>(`device-history front-door/${FACES_ENDPOINT}`),
+          (answer) => answer.readings.length >= count,
+        )).readings.at(-1)?.value;
+      ems.tell(id, { type: 'face', track: 2, box: { x: 0.4, y: 0.2, width: 0.1, height: 0.2 }, confidence: 0.9, frame: { width: 640, height: 360 }, embedding: [0, 1, 0] });
+      assertEquals(await told(2), 'Anna Andersson');
+      await admin.execString('attrs -J unnamed=true /archive/people/anna-andersson');
+      ems.tell(id, { type: 'face', track: 3, box: { x: 0.4, y: 0.2, width: 0.1, height: 0.2 }, confidence: 0.9, frame: { width: 640, height: 360 }, embedding: [0, 1, 0] });
+      assertEquals(await told(3), UNKNOWN_FACE);
     });
 
     await t.step('a face gone is filed under a camera node made for the device and linked to it', async () => {

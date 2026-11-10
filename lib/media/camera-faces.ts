@@ -9,7 +9,8 @@
  *
  * - **a face**, within a second or so of its coming: voted on by every stored face that belongs to
  *   someone, as a photo's face is (`matchFace`), and appended to the camera's `faces` log as that
- *   person's name, or `unknown`: `dev.<device>.faces`, which automations take.
+ *   person's name, or `unknown` for nobody or an unnamed person: `dev.<device>.faces`, which
+ *   automations take.
  * - **the face gone**: its best crop filed as a picture under the camera's archive node
  *   (`/archive/cameras/<camera>/faces/<day>/<time>-<track>.jpg`, the node made and linked to the
  *   device when the camera has none), where the archive finds the face and assigns it like any
@@ -107,12 +108,15 @@ const fileFace = async (cmd: Command, camera: string, at: Date, track: number, j
   return `${folder}/${name}`;
 };
 
-/** What a face is called on the camera's log: the person's name, or `unknown`. */
+/**
+ * What a face is called on the camera's log: the person's name, or `unknown` for nobody and for an
+ * unnamed person, whom recognition knows again but the household has not named.
+ */
 const faceName = async (cmd: Command, embedding: number[]): Promise<string> => {
   const match = embedding.length > 0 ? await matchFace(cmd.sys.vfs, ADMIN_ACCESS, embedding) : undefined;
   if (!match) return UNKNOWN_FACE;
-  const person = (await cmd.sys.vfs.getNodesByIds<{ name?: string }>(ADMIN_ACCESS, [match.personId])).get(match.personId);
-  return person?.attrs.name || UNKNOWN_FACE;
+  const person = (await cmd.sys.vfs.getNodesByIds<{ name?: string; unnamed?: boolean }>(ADMIN_ACCESS, [match.personId])).get(match.personId);
+  return person && !person.attrs.unnamed && person.attrs.name ? person.attrs.name : UNKNOWN_FACE;
 };
 
 /**
