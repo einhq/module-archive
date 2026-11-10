@@ -3,7 +3,7 @@ import { useHotkeys } from '@mantine/hooks';
 import { useState } from 'react';
 import { Dialog, TablerIcon } from '@ein/ui/components';
 import { usePhone } from '@ein/ui/hooks';
-import { gridUrl, mediaItemFrom } from '@ein/ui/lib';
+import { displayDims, gridUrl, mediaItemFrom, posterUrl } from '@ein/ui/lib';
 import type { PersonFace } from '../hooks/usePersonFaces.ts';
 import { formatTaken } from '../../media/lib/capture-time.ts';
 
@@ -30,7 +30,8 @@ type Props = {
 };
 
 /**
- * The photo a face was cut from, large, over the dialog the face was picked in: the lightbox is a
+ * The photo a face was cut from, large, over the dialog the face was picked in (a video's face, the
+ * video to play): the lightbox is a
  * full-screen route under every dialog, so a review cannot open it and stay in sight. The arrows,
  * and ← →, step through the photos of the faces it was opened among — a group, or all of them —
  * so a group can be checked by flicking through it. Escape is the review dialog's to hand out:
@@ -54,7 +55,7 @@ export function FacePhotoDialog({ view, onChange }: Props) {
       title={face?.filePath?.split('/').pop()}
       subtitle={face?.takenAt ? formatTaken(face.takenAt, undefined, { weekday: 'short' }) : undefined}
       aside={count > 1 && view && <Badge variant='light'>{view.index + 1} of {count}</Badge>}
-      icon='photo'
+      icon={face?.mimetype?.startsWith('video/') ? 'movie' : 'photo'}
       pattern='media'
       size='min(1200px, 96vw)'
       zIndex={300}
@@ -80,11 +81,26 @@ export function FacePhotoDialog({ view, onChange }: Props) {
   );
 }
 
-/** The photo's display size, then its grid size, then nothing: a file may have neither. Keyed by the photo, so each starts at the top. */
+/**
+ * The photo's display size, then its grid size, then nothing: a file may have neither. A video is
+ * played from its poster. Keyed by the file, so each starts at the top.
+ */
 function Photo({ face }: { face: PersonFace }) {
   // The stored size picks the largest display size the photo has, rather than one never made for a small source.
-  const item = mediaItemFrom({ path: face.filePath!, type: 'photo', width: face.width, height: face.height, angle: face.angle });
+  const ref = { path: face.filePath!, mimetype: face.mimetype, width: face.width, height: face.height, angle: face.angle };
+  const item = mediaItemFrom(ref);
   const [fallback, setFallback] = useState(0);
+  if (item.type === 'video') {
+    return (
+      <video
+        src={item.fullUrl}
+        poster={posterUrl(item.path, 'video', true, displayDims(ref)) || undefined}
+        controls
+        preload='metadata'
+        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+      />
+    );
+  }
   if (fallback > 1) return <TablerIcon name='photo-off' size={48} color='var(--mantine-color-gray-6)' />;
   const src = fallback === 0 ? item.fullUrl : gridUrl(item.path, true);
   return (
