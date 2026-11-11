@@ -179,7 +179,7 @@ Deno.test({
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/s/LONE.NEF'), true);
     });
 
-    await t.step('--sort on an album files the RAWs it links to where they live, and the links follow', async () => {
+    await t.step('--sort on an album files the RAWs it links to where they live; the links follow, the cover goes to the picture', async () => {
       await client.exec(`mkdir -p /staged && mkdir -p ${ALBUMS_ROOT}`);
       await seed('/staged/IMG_9.CR2', 'image/x-canon-cr2');
       await seed('/staged/IMG_9.JPG', 'image/jpeg');
@@ -190,6 +190,7 @@ Deno.test({
         });
       await link('raw', '/staged/IMG_9.CR2');
       await link('jpg', '/staged/IMG_9.JPG');
+      await link('coverPhoto', '/staged/IMG_9.CR2');
 
       const report = await client.execJson<ScanResult>(`raw ${ALBUMS_ROOT}/suggested`);
       assertEquals(report.pairs.map((p) => p.raw), ['/staged/IMG_9.CR2']);
@@ -198,6 +199,9 @@ Deno.test({
       assertEquals(res.sorted, [{ raw: '/staged/IMG_9.CR2', dest: '/staged/IMG_9.JPG/versions/IMG_9.CR2' }]);
       const moved = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/suggested/raw`, { follow: false });
       assertEquals(moved.props.softlink, '/staged/IMG_9.JPG/versions/IMG_9.CR2');
+      // The cover shows the picture the RAW went under, not the hidden version.
+      const cover = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/suggested/coverPhoto`, { follow: false });
+      assertEquals(cover.props.softlink, '/staged/IMG_9.JPG');
       // Its RAW filed, the album has none left to offer.
       assertEquals((await client.execJson<ScanResult>(`raw ${ALBUMS_ROOT}/suggested`)).count, 0);
     });

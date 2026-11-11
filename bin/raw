@@ -19,7 +19,8 @@
  * base name, and no other ties with it, is moved under that partner's
  * `versions/` directory as a frozen version with a sourceId (the same layout the
  * old-system importer produced): the pipeline skips it, search and albums leave
- * it out, and it stays on the durable disk tier. Softlinks to it follow it. Its
+ * it out, and it stays on the durable disk tier. Softlinks to it follow it, but a
+ * cover that showed it shows the partner instead. Its
  * regions are deleted, and their people tidied, so a face on the RAW no longer
  * counts beside the same face on its partner. A RAW with no such partner, or
  * with several equally-likely ones, is left as is. Sorting a non-RAW file sorts
@@ -30,7 +31,7 @@
  */
 
 import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
-import { isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MIMETYPES } from '@ein/client';
+import { COVER_LINK_NAME, isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MIMETYPES, setCover } from '@ein/client';
 import { basename, dirname, extname, join } from '@std/path';
 import type { RawFileReport, RawFileSort, RawPartner, RawScanReport, RawSortOutcome, RawSortReport, RawUnmatchedReport } from '@archive/media/api';
 import { albumMembers } from '@archive/media/album-members';
@@ -193,6 +194,10 @@ async function sortRaw(cmd: Command, target: FileMeta): Promise<RawSortOutcome> 
     const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: true, relink: true });
     if (moved.status === 'rejected') throw moved.reason;
     await cmd.sys.vfs.update(cmd.access, dest, { attrs: { sourceId: partnerNode.id, frozen: true } });
+    // A cover that showed the RAW shows its partner, since the version is left out of every listing.
+    for (const link of await cmd.sys.vfs.findLinks(cmd.access, dest)) {
+      if (basename(link.absPath) === COVER_LINK_NAME) await setCover(cmd.sys.vfs, cmd.access, dirname(link.absPath), best.path, { attrs: link.node.attrs });
+    }
     const regions = await dropRegions(cmd, dest);
     return { action: 'sorted', partner: best.path, dest, regions };
   } catch (e) {
