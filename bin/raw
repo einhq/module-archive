@@ -46,7 +46,6 @@ type FileMeta = { path: string; name: string } & FileAttrsView;
 type Candidate = RawPartner & { meta: FileMeta };
 
 const SCAN_LIMIT = 1_000_000;
-const TAKEN_AT_CANDIDATES = 200;
 
 /** Basename without extension, lowercased — the pairing key for filename matching. */
 function stem(name: string): string {
@@ -72,8 +71,58 @@ function metaFrom(path: string, attrs: FileAttrsView): FileMeta {
 
 const partnerOf = ({ path, score, reasons }: Candidate): RawPartner => ({ path, score, reasons });
 
+/** What pairing reads besides the files paired: the originals of each capture time, and each folder's files. */
+type PartnerSource = {
+  sameTime(takenAt: string): FileMeta[];
+  folder(dir: string): Promise<FileMeta[]>;
+};
+
+/**
+ * The partner source for `targets`: the originals sharing a capture time with any of them, read in
+ * one query, and each folder listed the first time a target in it asks.
+ */
+async function partnerSource(cmd: Command, targets: FileMeta[]): Promise<PartnerSource> {
+  const times = [...new Set(targets.flatMap((t) => t.takenAt ? [t.takenAt] : []))];
+  const byTime = new Map<string, FileMeta[]>();
+  if (times.length > 0) {
+    const rows = await cmd.sys.vfs.query(cmd.access, {
+      types: ['file'],
+      where: [
+        { ref: 'takenAt', op: 'in', value: times },
+        { ref: 'sourceId', op: 'missing' },
+      ],
+      limit: SCAN_LIMIT,
+    });
+    for (const row of rows) {
+      const meta = metaFrom(row.absPath, row.node.attrs as FileAttrsView);
+      byTime.set(meta.takenAt!, [...byTime.get(meta.takenAt!) ?? [], meta]);
+    }
+  }
+
+  const folders = new Map<string, Promise<FileMeta[]>>();
+  const list = async (dir: string): Promise<FileMeta[]> => {
+    let entries: NodeChildEntry[];
+    try {
+      entries = await cmd.sys.vfs.children(cmd.access, dir);
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((entry) => entry.node.type === 'file')
+      .map((entry) => metaFrom(join(dir, entry.name), entry.node.attrs as FileAttrsView));
+  };
+
+  return {
+    sameTime: (takenAt) => byTime.get(takenAt) ?? [],
+    folder: (dir) => {
+      if (!folders.has(dir)) folders.set(dir, list(dir));
+      return folders.get(dir)!;
+    },
+  };
+}
+
 /** Every opposite-class (RAW↔non-RAW) file likely related to `target`, best first. */
-async function findPartners(cmd: Command, target: FileMeta): Promise<Candidate[]> {
+async function findPartners(source: PartnerSource, target: FileMeta): Promise<Candidate[]> {
   const targetIsRaw = isRaw(target);
   const dir = dirname(target.path);
   const targetStem = stem(target.name);
@@ -82,33 +131,16 @@ async function findPartners(cmd: Command, target: FileMeta): Promise<Candidate[]
 
   // Metadata candidates: originals sharing the capture timestamp.
   if (target.takenAt) {
-    const rows = await cmd.sys.vfs.query(cmd.access, {
-      types: ['file'],
-      where: [
-        { ref: 'takenAt', op: 'eq', value: target.takenAt },
-        { ref: 'sourceId', op: 'missing' },
-      ],
-      limit: TAKEN_AT_CANDIDATES,
-    });
-    for (const row of rows) {
-      if (row.absPath === target.path) continue;
-      candidates.set(row.absPath, metaFrom(row.absPath, row.node.attrs as FileAttrsView));
+    for (const meta of source.sameTime(target.takenAt)) {
+      if (meta.path !== target.path) candidates.set(meta.path, meta);
     }
   }
 
   // Filename candidates: siblings in the same directory with the same stem.
-  let siblings: NodeChildEntry[];
-  try {
-    siblings = await cmd.sys.vfs.children(cmd.access, dir);
-  } catch {
-    siblings = [];
-  }
-  for (const entry of siblings) {
-    if (entry.node.type !== 'file') continue;
-    if (stem(entry.name) !== targetStem) continue;
-    const path = join(dir, entry.name);
-    if (path === target.path || candidates.has(path)) continue;
-    candidates.set(path, metaFrom(path, entry.node.attrs as FileAttrsView));
+  for (const meta of await source.folder(dir)) {
+    if (stem(meta.name) !== targetStem) continue;
+    if (meta.path === target.path || candidates.has(meta.path)) continue;
+    candidates.set(meta.path, meta);
   }
 
   const partners: Candidate[] = [];
@@ -164,8 +196,8 @@ async function dropRegions(cmd: Command, filePath: string): Promise<number> {
  * never sorted under. Leaves the RAW untouched when there is no such partner, or when the top
  * two tie (ambiguous).
  */
-async function sortRaw(cmd: Command, target: FileMeta): Promise<RawSortOutcome> {
-  const partners = (await findPartners(cmd, target)).filter((p) => p.reasons.includes('stem'));
+async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): Promise<RawSortOutcome> {
+  const partners = (await findPartners(source, target)).filter((p) => p.reasons.includes('stem'));
   if (partners.length === 0) return { action: 'left' };
   if (partners.length >= 2 && partners[1].score === partners[0].score) {
     return { action: 'ambiguous', partner: partners[0].path };
@@ -228,10 +260,10 @@ async function single(cmd: Command, target: FileMeta, limit: number, sort: boole
   if (!isRaw(target)) {
     // The RAWs of this file's name, each sorted on its own terms: it goes under this file only
     // when this file is its best partner.
-    const raws = (await findPartners(cmd, target)).filter((p) => p.reasons.includes('stem')).map((p) => p.meta);
+    const raws = (await findPartners(await partnerSource(cmd, [target]), target)).filter((p) => p.reasons.includes('stem')).map((p) => p.meta);
     return await sortAll(cmd, target.path, raws, verbose);
   }
-  const outcome = await sortRaw(cmd, target);
+  const outcome = await sortRaw(cmd, await partnerSource(cmd, [target]), target);
   if (cmd.json) await cmd.writeJSON({ path: target.path, raw: true, mimetype: target.mimetype ?? null, ...outcome } satisfies RawFileSort);
   else await writeSortHuman(cmd, target.path, outcome);
   return outcome.action === 'error' ? 1 : 0;
@@ -239,7 +271,7 @@ async function single(cmd: Command, target: FileMeta, limit: number, sort: boole
 
 async function report(cmd: Command, target: FileMeta, limit: number): Promise<number> {
   const raw = isRaw(target);
-  const partners = (await findPartners(cmd, target)).slice(0, limit).map(partnerOf);
+  const partners = (await findPartners(await partnerSource(cmd, [target]), target)).slice(0, limit).map(partnerOf);
 
   if (cmd.json) {
     await cmd.writeJSON({ path: target.path, raw, mimetype: target.mimetype ?? null, partners } satisfies RawFileReport);
@@ -282,9 +314,12 @@ async function albumRaws(cmd: Command, albumPath: string): Promise<FileMeta[]> {
 async function sortAll(cmd: Command, scope: string, raws: FileMeta[], verbose: boolean): Promise<number> {
   if (verbose) await cmd.writeError(`raw: sorting ${raws.length} RAW file(s) in ${scope}\n`);
 
+  // Sorting moves only RAWs, and a RAW's partners are non-RAW files, so what the source read
+  // before the first move holds for every RAW after it.
+  const source = await partnerSource(cmd, raws);
   const answer: RawSortReport = { scope, count: raws.length, sorted: [], ambiguous: [], left: [], errors: [] };
   for (const r of raws) {
-    const outcome = await sortRaw(cmd, r);
+    const outcome = await sortRaw(cmd, source, r);
     if (outcome.action === 'sorted') answer.sorted.push({ raw: r.path, dest: outcome.dest! });
     else if (outcome.action === 'ambiguous') answer.ambiguous.push(r.path);
     else if (outcome.action === 'error') answer.errors.push({ raw: r.path, error: outcome.error! });
@@ -311,8 +346,9 @@ async function scanReport(cmd: Command, scope: string, raws: FileMeta[], limit: 
 
   const pairs: RawScanReport['pairs'] = [];
   const unmatched: string[] = [];
+  const source = await partnerSource(cmd, raws);
   for (const r of raws) {
-    const partners = (await findPartners(cmd, r)).slice(0, limit).map(partnerOf);
+    const partners = (await findPartners(source, r)).slice(0, limit).map(partnerOf);
     if (partners.length === 0) unmatched.push(r.path);
     else pairs.push({ raw: r.path, mimetype: r.mimetype ?? null, partners });
   }

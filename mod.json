@@ -561,6 +561,13 @@
       ]
     },
     {
+      "name": "taken_at",
+      "on": [
+        "takenAt"
+      ],
+      "partial": "takenAt"
+    },
+    {
       "name": "mime_taken_utc",
       "on": [
         "mimetype",
