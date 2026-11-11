@@ -5,6 +5,7 @@ import { UserText } from '../../components/UserText.tsx';
 import type { CameraDetail, CameraOwner } from '../hooks/useCamera.ts';
 import { CameraOwners } from './CameraOwners.tsx';
 import { CameraDevice } from './CameraDevice.tsx';
+import { DEFAULT_CLIP_DAYS } from '@archive/camera/api';
 
 type CameraInfoProps = {
   camera: CameraDetail;
@@ -43,6 +44,13 @@ export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, on
         {camera.quicktimeUtc && (
           <InfoFact label='Video times'>
             <Badge size='sm' variant='light' color='gray'>UTC</Badge>
+          </InfoFact>
+        )}
+        {camera.streams && (
+          <InfoFact label='Clips'>
+            {camera.clips === 'off'
+              ? 'Off'
+              : `Around a face${camera.clips === 'motion' ? ' or motion' : ''}, kept ${camera.clipDays === '0' ? 'for good' : `${camera.clipDays || DEFAULT_CLIP_DAYS} days`}`}
           </InfoFact>
         )}
         {!recorded && <Text size='sm' c='dimmed'>Nothing recorded beyond the name.</Text>}

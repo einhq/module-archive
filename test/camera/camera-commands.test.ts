@@ -75,6 +75,15 @@ Deno.test({
       await cmd.shouldFail(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --timezone Mars/Olympus`);
     });
 
+    await t.step('camera-update keeps clip days as a number, and refuses an unknown trigger or days that are no whole number', async () => {
+      await cmd.shouldSucceed(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --clips motion --clip-days 7`);
+      const attrs = await client.execJson<{ clips?: string; clipDays?: unknown }>(`attrs ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III`);
+      assertEquals([attrs.clips, attrs.clipDays], ['motion', 7]);
+      await cmd.shouldFailWith(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --clips always`, 'unknown --clips');
+      await cmd.shouldFailWith(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --clip-days 1.5`, 'whole number');
+      await cmd.shouldSucceed(`camera-update ${CAMERAS_ROOT}/Canon_EOS_5D_Mark_III --clear clips --clear clip-days`);
+    });
+
     await t.step('camera-create refuses a timezone ICU does not know, and makes nothing', async () => {
       await cmd.shouldFailWith('camera-create --name "Mars Rover" --timezone Mars/Olympus', 'unknown timezone');
       assertEquals(await vfs.exists(ADMIN_ACCESS, `${CAMERAS_ROOT}/Mars_Rover`), false);

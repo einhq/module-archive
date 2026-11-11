@@ -16,6 +16,9 @@ export type CameraFields = {
   description: string;
   digitizer: boolean;
   quicktimeUtc: boolean;
+  /** For a camera linking a device with a stream: what opens a clip of it, and how many days clips are kept; empty for the default. */
+  clips: string;
+  clipDays: string;
 };
 
 export type CameraDetail = CameraFields & {
@@ -25,6 +28,8 @@ export type CameraDetail = CameraFields & {
   /** The path of the device it is part of (its child softlink `device`), when it links one, and its label. */
   device?: string;
   deviceName?: string;
+  /** Whether that device has a stream, whose clips the camera's `clips` and `clipDays` are about. */
+  streams?: boolean;
 };
 
 export type CameraOwner = {
@@ -57,7 +62,7 @@ type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-const EMPTY: CameraFields = { name: '', make: '', model: '', serial: '', timezone: '', description: '', digitizer: false, quicktimeUtc: false };
+const EMPTY: CameraFields = { name: '', make: '', model: '', serial: '', timezone: '', description: '', digitizer: false, quicktimeUtc: false, clips: '', clipDays: '' };
 
 /** Flag name for each field, as `camera-update` spells it. */
 type TextCameraField = Exclude<keyof CameraFields, 'digitizer' | 'quicktimeUtc'>;
@@ -68,6 +73,8 @@ const FLAGS: Record<TextCameraField, string> = {
   serial: 'serial',
   timezone: 'timezone',
   description: 'description',
+  clips: 'clips',
+  clipDays: 'clip-days',
 };
 
 /**
@@ -107,6 +114,8 @@ export function useCamera(id: string | undefined): UseCameraResult {
       // A camera that is part of no device has no `device` link, which is not an error.
       const device = await execCommand<{ softlink?: string }>(`props -L ${shq(`${path}/device`)}`).then((props) => props.softlink, () => undefined);
       const deviceName = device && await execCommand<StatNode>(`stat ${shq(device)}`).then((node) => str(node.attrs.label) || undefined, () => undefined);
+      const streams = device &&
+        await execCommand<NodeChildEntry[]>(`ls -l ${shq(device)}`).then((endpoints) => endpoints.some((each) => each.node.type === 'stream'), () => false);
       setCamera({
         id,
         path,
@@ -118,9 +127,12 @@ export function useCamera(id: string | undefined): UseCameraResult {
         description: str(attrs.description),
         digitizer: attrs.digitizer === true,
         quicktimeUtc: attrs.quicktimeUtc === true,
+        clips: str(attrs.clips),
+        clipDays: typeof attrs.clipDays === 'number' ? String(attrs.clipDays) : '',
         ownership: { mode: entry.node.props.mode, uid: entry.node.props.uid, gid: entry.node.props.gid },
         ...(device ? { device } : {}),
         ...(deviceName ? { deviceName } : {}),
+        ...(streams ? { streams } : {}),
       });
 
       // The camera itself is enough to draw the page, so stop blocking here. What

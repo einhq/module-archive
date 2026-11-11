@@ -2,8 +2,9 @@
 /**
  * camera-faces — the camera-faces service: has the media service watch every camera under /dev for
  * faces, appends each face's person (or `unknown`) to the camera's `faces` log, and files each
- * face's picture under the camera's archive node, where the archive assigns it like a photo's
- * (@archive/media/camera-faces). It runs until stopped.
+ * face's picture and each clip around it under the camera's archive node, where the archive takes
+ * them like a photo and a video, removing clips past the camera's days (@archive/media/camera-faces).
+ * It runs until stopped.
  */
 
 import type { CmdReturn, Command } from '@ein/client';
@@ -27,7 +28,7 @@ cameraFaces.spec = {
   effect: 'write' as const,
   json: false,
   description:
-    "Have the media service watch every camera for faces, and file what it sees: the person on the camera's faces log, the face's picture under the camera (the camera-faces service)",
+    "Have the media service watch every camera for faces, and file what it sees: the person on the camera's faces log, the face's picture and a clip around it under the camera (the camera-faces service)",
   examples: ['service restart camera-faces'],
 };
 

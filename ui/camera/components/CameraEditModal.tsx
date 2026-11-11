@@ -1,4 +1,4 @@
-import { Alert, Button, Select, SimpleGrid, Stack, Switch, TextInput } from '@mantine/core';
+import { Alert, Button, NumberInput, Select, SimpleGrid, Stack, Switch, TextInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type { RelinkResult } from '@archive/camera/api';
 import { Dialog, DialogActions, MarkdownEditor, TablerIcon } from '@ein/ui/components';
@@ -29,7 +29,17 @@ type CameraEditModalProps = {
   onSaved: (message?: string) => void;
 };
 
-/** A camera's settings: its name, what matches files to it, how its dates are read, and its labels. */
+/** What opens a clip of a camera's device's stream. */
+const CLIP_OPTIONS = [
+  { value: 'face', label: 'Around a face' },
+  { value: 'motion', label: 'Around a face or motion' },
+  { value: 'off', label: 'Off' },
+];
+
+/**
+ * A camera's settings: its name, what matches files to it, how its dates are read, its clips when
+ * it is part of a device, and its labels.
+ */
 export function CameraEditModal({ opened, onClose, camera, save, onSaved }: CameraEditModalProps) {
   const [draft, setDraft] = useState<CameraFields>({ ...camera });
   const labels = useLabelsDraft(camera.path, opened);
@@ -116,6 +126,28 @@ export function CameraEditModal({ opened, onClose, camera, save, onSaved }: Came
           checked={draft.quicktimeUtc ?? false}
           onChange={(event) => setDraft((prev) => ({ ...prev, quicktimeUtc: event.currentTarget.checked }))}
         />
+        {camera.streams && (
+          <SimpleGrid cols={{ base: 1, sm: 2 }}>
+            <Select
+              label='Clips'
+              description='When a video of its stream is kept.'
+              data={CLIP_OPTIONS}
+              value={field('clips') || 'face'}
+              onChange={(value) => setField('clips', value ?? '')}
+              allowDeselect={false}
+            />
+            <NumberInput
+              label='Keep clips (days)'
+              description='0 keeps them.'
+              placeholder='30'
+              min={0}
+              allowDecimal={false}
+              allowNegative={false}
+              value={field('clipDays')}
+              onChange={(value) => setField('clipDays', value === '' ? '' : String(value))}
+            />
+          </SimpleGrid>
+        )}
         <MarkdownEditor label='Description' placeholder='Optional' minRows={3} value={field('description')} onChange={(value) => setField('description', value)} />
         <LabelsField draft={labels} />
         {error && <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />} variant='light'>{error}</Alert>}

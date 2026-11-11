@@ -7,6 +7,10 @@
  * not the node's, `--serial` writes `serialNumber`, and a timezone is checked
  * against ICU before it is stored rather than sitting there unusable.
  *
+ * For a camera linking a device with a stream, `--clips` says what opens a clip of it (`face`, the
+ * default; `motion`, a face or motion; `off`) and `--clip-days` how many days its clips are kept
+ * (30 by default, 0 keeps them).
+ *
  * A changed make, model or serial links the media already in the archive that carry the new
  * fingerprint, and a changed clock setting re-dates the media already linked, both through
  * `camera-relink`.
@@ -19,7 +23,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { parseArgs, shq } from '@ein/client';
 import { resolve } from '@std/path';
 import { isKnownTimezone, NODE_TYPE_CAMERA } from '@archive/camera/camera';
-import type { RelinkResult } from '@archive/camera/api';
+import { CLIP_TRIGGERS, type RelinkResult } from '@archive/camera/api';
 
 /** Flag → attr name. `serial` is the flag; `serialNumber` is what the node carries. */
 const FIELDS: Record<string, string> = {
@@ -31,14 +35,18 @@ const FIELDS: Record<string, string> = {
   description: 'description',
   digitizer: 'digitizer',
   'quicktime-utc': 'quicktimeUtc',
+  clips: 'clips',
+  'clip-days': 'clipDays',
 };
 
 /** The switches among `FIELDS`: set with the bare flag, unset with `--clear`. */
 const SWITCHES = ['digitizer', 'quicktime-utc'];
+/** The numbers among `FIELDS`, stored as numbers. */
+const NUMBERS = ['clip-days'];
 
 const cameraUpdate = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, {
-    string: ['name', 'make', 'model', 'serial', 'timezone', 'description'],
+    string: ['name', 'make', 'model', 'serial', 'timezone', 'description', 'clips', 'clip-days'],
     boolean: SWITCHES,
     collect: ['clear'],
   });
@@ -64,6 +72,17 @@ const cameraUpdate = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
+  const clips = flags.clips as string | undefined;
+  if (clips !== undefined && !(CLIP_TRIGGERS as readonly string[]).includes(clips)) {
+    await cmd.writeError(`camera-update: unknown --clips '${clips}' (expected: ${CLIP_TRIGGERS.join(', ')})\n`);
+    return 1;
+  }
+  const clipDays = flags['clip-days'] as string | undefined;
+  if (clipDays !== undefined && !/^\d+$/.test(clipDays)) {
+    await cmd.writeError(`camera-update: --clip-days takes a whole number of days, 0 to keep them (got '${clipDays}')\n`);
+    return 1;
+  }
+
   let node;
   try {
     node = await cmd.sys.vfs.get(cmd.access, path);
@@ -82,7 +101,7 @@ const cameraUpdate = async (cmd: Command): CmdReturn => {
   for (const [flag, attr] of Object.entries(FIELDS).filter(([flag]) => !SWITCHES.includes(flag))) {
     const value = flags[flag as keyof typeof flags] as string | undefined;
     if (value === undefined) continue;
-    parts.push(`-s ${shq(`${attr}=${value}`)}`);
+    parts.push(NUMBERS.includes(flag) ? `-J ${shq(`${attr}=${Number(value)}`)}` : `-s ${shq(`${attr}=${value}`)}`);
     changed.push(attr);
   }
 
@@ -167,6 +186,8 @@ cameraUpdate.spec = {
     { name: 'digitizer', type: 'bool' as const, description: 'mark as a scanner and suppress its camera dates on linked media' },
     { name: 'quicktime-utc', type: 'bool' as const, description: "read its videos' QuickTime CreateDate as UTC (phones), not local time" },
     { name: 'description', type: 'string' as const, description: 'free-text note' },
+    { name: 'clips', type: 'string' as const, description: "what opens a clip of its device's stream: face (the default), motion (a face or motion) or off" },
+    { name: 'clip-days', type: 'string' as const, description: 'days its clips are kept (30); 0 keeps them' },
     { name: 'clear', type: 'string' as const, description: 'remove a field (repeatable)' },
   ],
 };

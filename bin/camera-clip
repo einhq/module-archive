@@ -1,0 +1,49 @@
+#!ts
+/**
+ * camera-clip — a clip of a camera's stream now: the media service records from a little before
+ * until `--post` seconds on (or lengthens the clip it has open), and the camera-faces service files
+ * it under the camera's archive node, as it files a clip around a face (@archive/media/camera-faces).
+ * Answers the clip's id; the file comes once it is cut.
+ */
+
+import { basename } from '@std/path';
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { deviceOf } from '@archive/location/track';
+import { cameraClip } from '@archive/media/camera-faces';
+
+const cameraClipCommand = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['post'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const [target, ...rest] = flags._.map(String);
+  const post = flags.post === undefined ? undefined : Number(flags.post);
+  if (!target || rest.length > 0 || (post !== undefined && !(post >= 1 && post <= 60))) {
+    await cmd.writeError('camera-clip: usage: camera-clip <device> [--post <seconds, 1 to 60>]\n');
+    return 1;
+  }
+  try {
+    const device = basename((await deviceOf(cmd, target)).path);
+    const clip = await cameraClip(cmd, device, post);
+    if (cmd.json) await cmd.writeJSON({ ok: true, clip });
+    else await cmd.writeLn(clip);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`camera-clip: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+};
+
+cameraClipCommand.spec = {
+  name: 'camera-clip',
+  effect: 'write' as const,
+  description: "Record a clip of a camera's stream now, filed under the camera like a clip around a face",
+  args: [
+    { name: 'device', type: 'path' as const, description: 'the camera, by its device name or path' },
+  ],
+  flags: [
+    { name: 'post', type: 'string' as const, description: 'seconds from now the clip lasts, 1 to 60 (10)' },
+  ],
+  examples: ['camera-clip front-door', 'camera-clip /dev/front-door --post 30'],
+};
+
+export default cameraClipCommand;

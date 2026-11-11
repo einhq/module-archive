@@ -2,14 +2,16 @@
  * The camera-faces service against a stub EMS and a stub camera driver: a camera's smallest stream
  * given to EMS as a watch at the address its driver names, a face nobody's told on the camera's
  * `faces` log as unknown, a known face by its person's name and an unnamed person's as unknown, a
- * face gone filed as a picture under a camera node made for the device and linked to it, and the
- * watch stopped once the camera is forgotten.
+ * face gone filed as a picture under a camera node made for the device and linked to it, a clip of
+ * the largest stream filed beside it and dropped from EMS, a clip asked for, the camera's clip
+ * settings in the watch, its clip days past its `clipDays` removed, and the watch stopped once the
+ * camera is forgotten.
  */
 
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
-import { FACES_ENDPOINT, UNKNOWN_FACE, watchId } from '@archive/media/camera-faces';
+import { CLIPS_DIR, FACES_ENDPOINT, UNKNOWN_FACE, watchId } from '@archive/media/camera-faces';
 
 /** A JPEG's start and end, which is all the service reads of a crop: it files the bytes it is given. */
 const CROP = btoa(String.fromCharCode(0xff, 0xd8, 0xff, 0xd9));
@@ -49,6 +51,7 @@ Deno.test({ name: 'camera-faces', sanitizeResources: false, sanitizeOps: false }
     await t.step('the smallest stream is watched, at the address its driver names', async () => {
       const spec = await until('the watch', () => Promise.resolve(ems.watches.get(id)), Boolean);
       assertEquals(spec?.source, 'rtsp://ein:secret@192.0.2.1:8554/front-door-sub');
+      assertEquals(spec?.clips, { on: ['face'], pre: 5, post: 10, source: 'rtsp://ein:secret@192.0.2.1:8554/front-door-main' });
       assertEquals([...ems.watches.keys()], [id]);
     });
 
@@ -111,6 +114,49 @@ Deno.test({ name: 'camera-faces', sanitizeResources: false, sanitizeOps: false }
       assert(/\/archive\/cameras\/Front_door\/faces\/\d{4}-\d{2}-\d{2}\/\d{6}-1\.jpg$/.test(picture), picture);
       assertEquals((await admin.execJson<{ attrs: { size: number; mimetype: string } }>(`stat ${picture}`)).attrs.size, 4);
       assertEquals((await admin.execJson<{ softlink: string }>('props -L /archive/cameras/Front_door/device')).softlink, '/dev/front-door');
+    });
+
+    await t.step('a clip is filed beside the faces as a video, and dropped from EMS', async () => {
+      ems.clips.set(`${id}/c1`, new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]));
+      const start = new Date();
+      ems.tell(id, { type: 'clip', clip: 'c1', start: start.toISOString(), end: start.toISOString(), duration: 16, size: 8, reasons: ['face'] });
+      const clips = await until(
+        'the clip',
+        () => admin.execJson<{ path: string }[]>(`find /archive/cameras/Front_door/${CLIPS_DIR} -name "*.mp4"`),
+        (found) => found.length > 0,
+      );
+      assert(/\/archive\/cameras\/Front_door\/clips\/\d{4}-\d{2}-\d{2}\/\d{6}\.mp4$/.test(clips[0].path), clips[0].path);
+      const stat = await admin.execJson<{ attrs: { size: number; mimetype: string } }>(`stat ${clips[0].path}`);
+      assertEquals([stat.attrs.size, stat.attrs.mimetype], [8, 'video/mp4']);
+      await until('the clip dropped', () => Promise.resolve(ems.clips.size), (size) => size === 0);
+    });
+
+    await t.step("a clip is asked for by the camera's device", async () => {
+      assertEquals((await admin.execJson<{ clip: string }>('camera-clip front-door --post 20')).clip, 'asked-1');
+      assertEquals(ems.clips.has(`${id}/asked-1`), true);
+      ems.clips.clear();
+    });
+
+    await t.step("the camera's clip settings reach the watch", async () => {
+      await admin.execString('camera-update /archive/cameras/Front_door --clips motion');
+      await admin.execString('service restart camera-faces');
+      await until('clips on motion', () => Promise.resolve(ems.watches.get(id)?.clips as { on?: string[] } | undefined), (clips) => clips?.on?.length === 2);
+      await admin.execString('camera-update /archive/cameras/Front_door --clips off');
+      await admin.execString('service restart camera-faces');
+      await until('no clips', () => Promise.resolve(ems.watches.get(id)), (spec) => spec !== undefined && !('clips' in spec));
+    });
+
+    await t.step("clip days past the camera's clipDays are removed", async () => {
+      await admin.execString(`mkdir -p /archive/cameras/Front_door/${CLIPS_DIR}/2001-02-03`);
+      await admin.execString('camera-update /archive/cameras/Front_door --clip-days 2');
+      assertEquals((await admin.execJson<{ attrs: { clipDays: unknown } }>('stat /archive/cameras/Front_door')).attrs.clipDays, 2);
+      await admin.execString('service restart camera-faces');
+      const days = await until(
+        'the old day gone',
+        () => admin.execJson<{ name: string }[]>(`ls -l /archive/cameras/Front_door/${CLIPS_DIR}`),
+        (found) => !found.some((day) => day.name === '2001-02-03'),
+      );
+      assertEquals(days.length, 1);
     });
 
     await t.step('a camera forgotten is no longer watched', async () => {

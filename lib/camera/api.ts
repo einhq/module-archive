@@ -1,5 +1,6 @@
 /**
- * What the camera area's commands answer with under `JSON_OUTPUT=1`, as types (`@archive/camera/api`).
+ * What the camera area's commands answer with under `JSON_OUTPUT=1`, as types (`@archive/camera/api`),
+ * and the values a camera's clip settings take.
  *
  * The UI and other modules import these instead of restating the shapes, and each command checks
  * its answer against them. Imports only other type-only files, so a browser can import it
@@ -8,6 +9,15 @@
 
 import type { NodeOwnership } from '@ein/api';
 import type { TimelineEntry } from '@archive/timeline/api';
+
+/**
+ * What opens a clip of the stream of the device a camera links (its `clips`): a face, a face or
+ * motion, or nothing. A face when it says nothing.
+ */
+export const CLIP_TRIGGERS = ['face', 'motion', 'off'] as const;
+export type ClipTrigger = typeof CLIP_TRIGGERS[number];
+/** How many days its clips are kept when it says nothing (`clipDays`); 0 keeps them. */
+export const DEFAULT_CLIP_DAYS = 30;
 
 /** `camera-timeline`: what happened with one camera, in the corpus-wide feed's entries. */
 export type CameraTimeline = {

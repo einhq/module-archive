@@ -1,11 +1,11 @@
 /**
- * Every camera's faces: what the media service sees on each camera under /dev, matched to the
- * archive's people.
+ * Every camera's faces and clips: what the media service sees on each camera under /dev, matched
+ * to the archive's people, and the video around it.
  *
  * A camera is a device with a `stream` endpoint. Its smallest stream is given to EMS as a watch,
- * `ein-<device>-<endpoint>`, at the address its driver names (`streamSource`); every minute the
- * watches are stated again, as after EMS started anew, and those of cameras gone are stopped.
- * What a watch tells:
+ * `ein-<device>-<endpoint>`, at the address its driver names (`streamSource`), its largest to be
+ * recorded for clips; every minute the watches are stated again, as after EMS started anew, and
+ * those of cameras gone are stopped. What a watch tells:
  *
  * - **a face**, within a second or so of its coming: voted on by every stored face that belongs to
  *   someone, as a photo's face is (`matchFace`), and appended to the camera's `faces` log as that
@@ -15,6 +15,11 @@
  *   (`/archive/cameras/<camera>/faces/<day>/<time>-<track>.jpg`, the node made and linked to the
  *   device when the camera has none), where the archive finds the face and assigns it like any
  *   photo's: to a person, or to a new unnamed one in `/archive/people/unknown`, named there.
+ * - **a clip**, the stream from a little before a face (or motion, as the camera node's `clips`
+ *   says) until a little after it: filed as a video beside the faces
+ *   (`<camera>/clips/<day>/<time>.mp4`), where the archive's pipeline takes it as any video, and
+ *   dropped from EMS. A camera's clips are kept for its `clipDays`, each hour's sweep removing the
+ *   days past that.
  *
  * Everything runs as the administrator, the service's account.
  */
@@ -23,7 +28,9 @@ import type { DeviceAttrs, EndpointAttrs } from '@ein/api';
 import { ADMIN_ACCESS, type Command, shq } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
 import { basename, dirname } from '@std/path';
-import { deleteWatch, listWatches, putWatch, type WatchEvent, watchEvents, type WatchSpec } from '@ems/client';
+import { clipBody, deleteWatch, dropClip, listWatches, putWatch, requestClip, type WatchEvent, watchEvents, type WatchSpec } from '@ems/client';
+import type { CameraAttrs } from '@archive/camera/types';
+import { CLIP_TRIGGERS, type ClipTrigger, DEFAULT_CLIP_DAYS } from '@archive/camera/api';
 import { CAMERAS_ROOT, NODE_TYPE_CAMERA, slugifyCameraName } from '@archive/camera/camera';
 import { CAMERA_DEVICE_LINK } from '@archive/location/track';
 import { matchFace } from '@archive/media/face-assign';
@@ -34,40 +41,73 @@ const WATCH_PREFIX = 'ein-';
 export const FACES_ENDPOINT = 'faces';
 /** What the log says of a face no person won. */
 export const UNKNOWN_FACE = 'unknown';
+/** The folder of a camera node its clips are filed in, by day. */
+export const CLIPS_DIR = 'clips';
 
 const RESTATE_EVERY_MS = 60_000;
 const MIN_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 60_000;
 /** Frames a second EMS looks at. */
 const FACES_FPS = 3;
+/** Seconds of a clip before what opened it, and after it ended. */
+const CLIP_PRE = 5;
+const CLIP_POST = 10;
+const SWEEP_EVERY_MS = 3_600_000;
 
 /** One stream to watch: the camera's device, its endpoint, and the watch's id. */
 type Wanted = { device: string; endpoint: string; id: string; spec: WatchSpec };
+/** A device with streams: the smallest, watched, and the largest, recorded. */
+type Camera = { device: string; endpoint: string; largest: string };
 
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 /** The watch id of a camera's stream. */
 export const watchId = (device: string, endpoint: string): string => `${WATCH_PREFIX}${device}-${endpoint}`;
 
-/** Each device with a stream, and its smallest one: the fewest pixels, which costs EMS the least to read. */
-const cameras = async (cmd: Command): Promise<{ device: string; endpoint: string }[]> => {
+/**
+ * Each device with a stream, its smallest one (the fewest pixels, which costs EMS the least to
+ * read) and its largest.
+ */
+const cameras = async (cmd: Command): Promise<Camera[]> => {
   const out = [];
   for (const child of await cmd.sys.vfs.children<DeviceAttrs>(ADMIN_ACCESS, DEV_PATH).catch(() => [])) {
     if (child.node.type !== 'device') continue;
     const streams = (await cmd.sys.vfs.children<EndpointAttrs>(ADMIN_ACCESS, devicePath(child.name)).catch(() => []))
       .filter((endpoint) => endpoint.node.type === 'stream' && !endpoint.node.attrs.retired);
     const pixels = (attrs: EndpointAttrs) => (attrs.width ?? Infinity) * (attrs.height ?? 1);
-    const smallest = streams.sort((a, b) => pixels(a.node.attrs) - pixels(b.node.attrs))[0];
-    if (smallest) out.push({ device: child.name, endpoint: smallest.name });
+    streams.sort((a, b) => pixels(a.node.attrs) - pixels(b.node.attrs));
+    if (streams.length > 0) out.push({ device: child.name, endpoint: streams[0].name, largest: streams.at(-1)!.name });
   }
   return out;
 };
 
-/** The archive's camera that links the device, made and linked when there is none. Answers its path. */
-const cameraNodeOf = async (cmd: Command, device: string): Promise<string> => {
+/** The watch of a device's camera: of its smallest stream. Throws for a device with none. */
+const cameraWatch = async (cmd: Command, device: string): Promise<string> => {
+  const camera = (await cameras(cmd)).find((each) => each.device === device);
+  if (!camera) throw new Error(`${device} is not a camera: it has no stream`);
+  return watchId(camera.device, camera.endpoint);
+};
+
+/** Open a clip of a device's camera now, or lengthen the open one: filed once EMS has cut it. Answers its id. */
+export const cameraClip = async (cmd: Command, device: string, post?: number): Promise<string> => await requestClip(cmd, await cameraWatch(cmd, device), post);
+
+/** The archive's camera that links the device, when one does. */
+const linkedCamera = async (cmd: Command, device: string): Promise<string | undefined> => {
   const links = (await cmd.sys.vfs.findLinks(ADMIN_ACCESS, [devicePath(device)])).filter((link) => basename(link.absPath) === CAMERA_DEVICE_LINK);
   const linked = links.find((link) => dirname(dirname(link.absPath)) === CAMERAS_ROOT);
-  if (linked) return dirname(linked.absPath);
+  return linked ? dirname(linked.absPath) : undefined;
+};
+
+/** What opens a clip of a camera node's device, and how many days its clips are kept: its `clips` and `clipDays`, or the defaults. */
+const clipSettings = (attrs: Partial<CameraAttrs> | undefined): { trigger: ClipTrigger; days: number } => ({
+  trigger: CLIP_TRIGGERS.find((each) => each === attrs?.clips) ?? 'face',
+  days: typeof attrs?.clipDays === 'number' && attrs.clipDays >= 0 ? attrs.clipDays : DEFAULT_CLIP_DAYS,
+});
+
+/** The archive's camera that links the device, made and linked when there is none. Answers its path. */
+const cameraNodeOf = async (cmd: Command, device: string): Promise<string> => {
+  const linked = await linkedCamera(cmd, device);
+  if (linked) return linked;
   const label = (await cmd.sys.vfs.get<DeviceAttrs>(ADMIN_ACCESS, devicePath(device))).attrs.label || device;
   const path = `${CAMERAS_ROOT}/${slugifyCameraName(label)}`;
   const existing = await cmd.sys.vfs.get(ADMIN_ACCESS, path).catch(() => undefined);
@@ -89,23 +129,65 @@ const dayAndTime = (at: Date): { day: string; time: string } => {
   return { day: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}${parts.minute}${parts.second}` };
 };
 
-/** A face's crop filed as a picture under the camera's archive node. Answers its path. */
-const fileFace = async (cmd: Command, camera: string, at: Date, track: number, jpeg: Uint8Array): Promise<string> => {
+/**
+ * A file under the camera's archive node, in `<camera>/<kind>/<day>/`, named by the time of day
+ * and `tag`, `-2` and on when that is taken, and `ext`. A file whose bytes do not all arrive is removed.
+ * Answers its path.
+ */
+const fileUnder = async (
+  cmd: Command,
+  camera: string,
+  kind: string,
+  at: Date,
+  tag: string,
+  ext: string,
+  mimetype: string,
+  bytes: Uint8Array | ReadableStream<Uint8Array>,
+): Promise<string> => {
   const vfs = cmd.sys.vfs;
   const { day, time } = dayAndTime(at);
-  await vfs.ensure(ADMIN_ACCESS, 'directory', camera, FACES_ENDPOINT);
-  await vfs.ensure(ADMIN_ACCESS, 'directory', `${camera}/${FACES_ENDPOINT}`, day);
-  const folder = `${camera}/${FACES_ENDPOINT}/${day}`;
-  let name = `${time}-${track}.jpg`;
-  for (let n = 2; await vfs.exists(ADMIN_ACCESS, `${folder}/${name}`); n++) name = `${time}-${track}-${n}.jpg`;
-  await vfs.create(ADMIN_ACCESS, 'file', folder, name, { attrs: { mimetype: 'image/jpeg' } });
-  const handle = await vfs.open(ADMIN_ACCESS, `${folder}/${name}`, { mode: 'w' });
+  await vfs.ensure(ADMIN_ACCESS, 'directory', camera, kind);
+  await vfs.ensure(ADMIN_ACCESS, 'directory', `${camera}/${kind}`, day);
+  const folder = `${camera}/${kind}/${day}`;
+  let name = `${time}${tag}.${ext}`;
+  for (let n = 2; await vfs.exists(ADMIN_ACCESS, `${folder}/${name}`); n++) name = `${time}${tag}-${n}.${ext}`;
+  await vfs.create(ADMIN_ACCESS, 'file', folder, name, { attrs: { mimetype } });
+  const path = `${folder}/${name}`;
   try {
-    await handle.write(jpeg);
-  } finally {
-    await handle.close();
+    const handle = await vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+    try {
+      if (bytes instanceof Uint8Array) await handle.write(bytes);
+      else for await (const chunk of bytes) await handle.write(chunk);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    await cmd.execute(`rm ${shq(path)}`);
+    throw error;
   }
-  return `${folder}/${name}`;
+  return path;
+};
+
+/**
+ * Each camera's clip days older than its `clipDays` removed: the folders under `<camera>/clips`
+ * named for a day before that many days ago.
+ */
+const sweepClips = async (cmd: Command, now = new Date()): Promise<string[]> => {
+  const removed: string[] = [];
+  for (const camera of await cmd.sys.vfs.children<CameraAttrs>(ADMIN_ACCESS, CAMERAS_ROOT).catch(() => [])) {
+    if (camera.node.type !== NODE_TYPE_CAMERA) continue;
+    const { days } = clipSettings(camera.node.attrs);
+    if (days === 0) continue;
+    const folder = `${CAMERAS_ROOT}/${camera.name}/${CLIPS_DIR}`;
+    const oldest = dayAndTime(new Date(now.getTime() - days * 86_400_000)).day;
+    for (const day of await cmd.sys.vfs.children(ADMIN_ACCESS, folder).catch(() => [])) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day.name) || day.name >= oldest) continue;
+      const result = await cmd.execute(`rm -r ${shq(`${folder}/${day.name}`)}`);
+      if (result.code !== 0) throw new Error(`${folder}/${day.name}: ${result.stderr.trim() || `exit ${result.code}`}`);
+      removed.push(`${folder}/${day.name}`);
+    }
+  }
+  return removed;
 };
 
 /**
@@ -141,7 +223,13 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
     } else if (event.type === 'face.end' && event.crop) {
       const camera = await cameraNodeOf(cmd, wanted.device);
       const jpeg = Uint8Array.from(atob(event.crop.data), (char) => char.charCodeAt(0));
-      await fileFace(cmd, camera, new Date(event.at), event.track, jpeg);
+      await fileUnder(cmd, camera, FACES_ENDPOINT, new Date(event.at), `-${event.track}`, 'jpg', 'image/jpeg', jpeg);
+    } else if (event.type === 'clip') {
+      const camera = await cameraNodeOf(cmd, wanted.device);
+      await fileUnder(cmd, camera, CLIPS_DIR, new Date(event.start), '', 'mp4', 'video/mp4', await clipBody(cmd, wanted.id, event.clip));
+      await dropClip(cmd, wanted.id, event.clip);
+    } else if (event.type === 'clip.failed') {
+      log(`${wanted.device}: a clip: ${event.reason}`);
     }
   };
 
@@ -166,10 +254,19 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
 
   const restate = async () => {
     const wanted: Wanted[] = [];
-    for (const { device, endpoint } of await cameras(cmd)) {
+    for (const { device, endpoint, largest } of await cameras(cmd)) {
       try {
         const source = await devices.streamSource(ADMIN_ACCESS, device, endpoint);
-        wanted.push({ device, endpoint, id: watchId(device, endpoint), spec: { source, faces: { fps: FACES_FPS }, motion: true, crops: true } });
+        const camera = await linkedCamera(cmd, device);
+        const { trigger } = clipSettings(camera ? (await cmd.sys.vfs.get<CameraAttrs>(ADMIN_ACCESS, camera)).attrs : undefined);
+        const clips: WatchSpec['clips'] = trigger === 'off' ? undefined : {
+          on: trigger === 'motion' ? ['face', 'motion'] : ['face'],
+          pre: CLIP_PRE,
+          post: CLIP_POST,
+          source: largest === endpoint ? source : await devices.streamSource(ADMIN_ACCESS, device, largest),
+        };
+        const spec: WatchSpec = { source, faces: { fps: FACES_FPS }, motion: true, crops: true, ...(clips ? { clips } : {}) };
+        wanted.push({ device, endpoint, id: watchId(device, endpoint), spec });
         said.delete(`source ${device}`);
       } catch (error) {
         once(`source ${device}`, `${device}: not watched: ${message(error)}`);
@@ -199,8 +296,13 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
   };
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let swept = 0;
   const loop = async () => {
     await restate().catch((error) => log(`cameras: ${message(error)}`));
+    if (Date.now() - swept >= SWEEP_EVERY_MS) {
+      swept = Date.now();
+      await sweepClips(cmd).catch((error) => log(`clips: ${message(error)}`));
+    }
     timer = setTimeout(loop, RESTATE_EVERY_MS);
   };
   await loop();
