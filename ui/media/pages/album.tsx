@@ -13,12 +13,13 @@ import { Badge, Box, Button, Group, SimpleGrid, Stack, Tabs, Text, Tooltip } fro
 import { useSignals } from '@preact/signals-react/runtime';
 import { AlbumSortSelect, useAlbumSort } from '../components/AlbumSort.tsx';
 import { DIRECTORY_GRID_COLS, DirectoryCard } from '../components/DirectoryCard.tsx';
-import type { AlbumScores } from '@archive/media/api';
+import type { AlbumScores, RawSortReport } from '@archive/media/api';
 import { setAutoAlbumPinned, useAutoAlbum } from '../hooks/useAutoAlbums.ts';
-import { useSubjectFacets } from '../../hooks/useSubjectFacets.ts';
+import { forgetSubjectFacets, useSubjectFacets } from '../../hooks/useSubjectFacets.ts';
 import { MEDIA_KIND_FILTERS, type SearchKind, useAccessIds } from '@ein/ui/hooks';
 import { useAlbumDirectories } from '../hooks/useAlbumDirectories.ts';
 import { useAlbumInfo } from '../hooks/useAlbumInfo.ts';
+import { useAlbumRaw } from '../hooks/useAlbumRaw.ts';
 import { useAlbumSeries } from '../hooks/useAlbumSeries.ts';
 import { useFreeEventDate } from '../hooks/useFreeEventDate.ts';
 import { AlbumEditModal } from '../components/AlbumEditModal.tsx';
@@ -27,8 +28,8 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { albumRoute, stagingGroupRoute } from '../lib/album-path.ts';
 import { MediaFilters } from '../components/MediaFilters.tsx';
 import { mediaTypeFilter } from '../signals/album.ts';
-import { canWrite, isGuest } from '@ein/ui/lib';
-import { currentUser, sharingChanged } from '@ein/ui/signals';
+import { canWrite, isGuest, shq } from '@ein/ui/lib';
+import { currentUser, execCommand, notify, sharingChanged } from '@ein/ui/signals';
 
 /**
  * The per-signal breakdown behind the overall match, in the order it is worth
@@ -103,6 +104,29 @@ export default function AlbumDetailPage() {
     setListChanges((n) => n + 1);
     refetchDirectories();
   }, [refetchDirectories]);
+
+  // Camera RAWs that have a picture of the same name are offered to be filed under it, as a
+  // version, which takes them out of the album, its search and its people.
+  const { sortable: rawSortable, refetch: refetchRaw } = useAlbumRaw(albumPath, editable);
+  const hideRaw = async () => {
+    try {
+      const report = await execCommand<RawSortReport>(`raw --sort ${shq(albumPath)}`);
+      const kept = report.left.length + report.ambiguous.length;
+      notify({
+        message: [
+          `${report.sorted.length} RAW ${report.sorted.length === 1 ? 'file' : 'files'} filed under ${report.sorted.length === 1 ? 'its picture' : 'their pictures'}`,
+          ...(kept ? [`${kept} without a picture of the same name ${kept === 1 ? 'stays' : 'stay'}`] : []),
+          ...(report.errors.length ? [`${report.errors.length} could not be moved: ${report.errors[0].error}`] : []),
+        ].join('; '),
+        color: report.errors.length ? 'red' : undefined,
+      });
+    } catch (err) {
+      notify({ message: err instanceof Error ? err.message : String(err), color: 'red' });
+    }
+    setListChanges((n) => n + 1);
+    forgetSubjectFacets();
+    refetchRaw();
+  };
 
   // The chip under the title says how the album is shared, and the locks on its tiles which of
   // what it holds keeps its own sharing; both are read again when the sharing of the album, of a
@@ -245,6 +269,7 @@ export default function AlbumDetailPage() {
             edit: () => setEditing(true),
             items: [
               { label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) },
+              ...(rawSortable > 0 ? [{ label: `Hide RAW files (${rawSortable})`, icon: 'stack-back', onClick: () => void hideRaw() }] : []),
               ...(suggested
                 ? [{ label: suggested.pinned ? 'Let the organizer manage album' : 'Keep album as is', icon: suggested.pinned ? 'pinned-off' : 'pin', onClick: togglePinned }]
                 : []),

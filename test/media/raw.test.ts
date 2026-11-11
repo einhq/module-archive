@@ -1,9 +1,13 @@
 /**
  * raw: RAW detection and RAW↔non-RAW pairing by metadata (capture timestamp,
- * camera) and filename stem. Report-only.
+ * camera) and filename stem; --sort files a RAW under its same-named partner's
+ * versions/, follows an album's links, and drops the RAW's regions.
  */
 
 import { assert, assertEquals } from '@std/assert';
+import { parse as parseYaml } from '@std/yaml';
+import { ALBUMS_ROOT } from '@archive/paths';
+import { RAW_IMAGE_MIMETYPES } from '@ein/client';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext } from '@ein/testing';
 
@@ -28,6 +32,7 @@ type SortSingle = {
   error?: string;
   note?: string;
 };
+type Added = { facePath: string; personPath: string };
 type SortScan = {
   scope: string;
   count: number;
@@ -79,13 +84,16 @@ Deno.test({
     // clean pair → sorted under the JPEG's versions/
     await seed('/s1/SHOT.CR2', 'image/x-canon-cr2', TS4);
     await seed('/s1/SHOT.JPG', 'image/jpeg', TS4);
-    // /s: a clean pair, a lone RAW, and an ambiguous RAW (two equal-scoring JPEGs)
+    // /s: a clean pair, a lone RAW, an ambiguous RAW (two equal-scoring partners of its name),
+    // and a RAW whose only partner shares its time and folder but not its name
     await seed('/s/PIC_1.CR2', 'image/x-canon-cr2', TS1);
     await seed('/s/PIC_1.JPG', 'image/jpeg', TS1);
     await seed('/s/LONE.NEF', 'image/x-nikon-nef', TS2);
     await seed('/s/AMB.CR2', 'image/x-canon-cr2', TS3);
-    await seed('/s/x1.jpg', 'image/jpeg', TS3); // same dir + takenAt as AMB, no stem match
-    await seed('/s/x2.jpg', 'image/jpeg', TS3); // → ties x1, so AMB is ambiguous
+    await seed('/s/AMB.jpg', 'image/jpeg', TS3);
+    await seed('/s/AMB.png', 'image/png', TS3); // → ties AMB.jpg, so AMB.CR2 is ambiguous
+    await seed('/s/NAMELESS.ARW', 'image/x-sony-arw', '2021-05-05T14:00:00');
+    await seed('/s/x1.jpg', 'image/jpeg', '2021-05-05T14:00:00');
 
     await t.step('single RAW → its same-shot JPEG (stem + time)', async () => {
       const res = await client.execJson<SingleResult>('raw /a/IMG_1.CR2');
@@ -137,27 +145,86 @@ Deno.test({
       assertEquals((version.attrs as { frozen?: boolean }).frozen, true);
     });
 
-    await t.step('--sort single on non-RAW: nothing to do', async () => {
-      const res = await client.execJson<SortSingle>('raw /s1/SHOT.JPG --sort');
-      assertEquals(res.action, 'skip');
-      assertEquals(res.raw, false);
+    await t.step('--sort on a non-RAW with no RAW of its name left: nothing to do', async () => {
+      const res = await client.execJson<SortScan>('raw /s1/SHOT.JPG --sort');
+      assertEquals(res.scope, '/s1/SHOT.JPG');
+      assertEquals(res.count, 0);
+    });
+
+    await t.step('--sort on a non-RAW files the RAW of its name that came first', async () => {
+      await client.exec('mkdir -p /late');
+      await seed('/late/LATE.CR2', 'image/x-canon-cr2');
+      await seed('/late/LATE.JPG', 'image/jpeg');
+      const res = await client.execJson<SortScan>('raw /late/LATE.JPG --sort');
+      assertEquals(res.sorted, [{ raw: '/late/LATE.CR2', dest: '/late/LATE.JPG/versions/LATE.CR2' }]);
+    });
+
+    await t.step('--sort leaves a RAW whose only partner shares its time, not its name', async () => {
+      const res = await client.execJson<SortSingle>('raw /b/rawshot.dng --sort');
+      assertEquals(res.action, 'left');
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/b/rawshot.dng'), true);
     });
 
     await t.step('--sort scan: sorts clear pairs, leaves lone + ambiguous', async () => {
       const res = await client.execJson<SortScan>('raw /s --sort');
       assertEquals(res.sorted.map((s) => s.dest), ['/s/PIC_1.JPG/versions/PIC_1.CR2']);
       assertEquals(res.sorted.map((s) => s.raw), ['/s/PIC_1.CR2']);
-      assertEquals(res.left, ['/s/LONE.NEF']); // no partner → left as is
-      assertEquals(res.ambiguous, ['/s/AMB.CR2']); // two equal-scoring JPEGs → left as is
+      assertEquals(res.left, ['/s/LONE.NEF', '/s/NAMELESS.ARW']); // no partner of its name → left as is
+      assertEquals(res.ambiguous, ['/s/AMB.CR2']); // two equal-scoring partners → left as is
       assertEquals(res.errors, []);
-      assertEquals(res.count, 3);
+      assertEquals(res.count, 4);
       // the ambiguous + lone RAW are untouched, the paired one moved
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/s/PIC_1.CR2'), false);
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/s/AMB.CR2'), true);
       assertEquals(await vfs.exists(ADMIN_ACCESS, '/s/LONE.NEF'), true);
     });
+
+    await t.step('--sort on an album files the RAWs it links to where they live, and the links follow', async () => {
+      await client.exec(`mkdir -p /staged && mkdir -p ${ALBUMS_ROOT}`);
+      await seed('/staged/IMG_9.CR2', 'image/x-canon-cr2');
+      await seed('/staged/IMG_9.JPG', 'image/jpeg');
+      await vfs.create(ADMIN_ACCESS, 'album', ALBUMS_ROOT, 'suggested', { attrs: { name: 'Suggested' } });
+      const link = (name: string, target: string) =>
+        vfs.create(ADMIN_ACCESS, 'softlink', `${ALBUMS_ROOT}/suggested`, name, {
+          props: { uid: ADMIN_ACCESS.uid, gid: ADMIN_ACCESS.gid, mode: 0o777, softlink: target },
+        });
+      await link('raw', '/staged/IMG_9.CR2');
+      await link('jpg', '/staged/IMG_9.JPG');
+
+      const report = await client.execJson<ScanResult>(`raw ${ALBUMS_ROOT}/suggested`);
+      assertEquals(report.pairs.map((p) => p.raw), ['/staged/IMG_9.CR2']);
+
+      const res = await client.execJson<SortScan>(`raw ${ALBUMS_ROOT}/suggested --sort`);
+      assertEquals(res.sorted, [{ raw: '/staged/IMG_9.CR2', dest: '/staged/IMG_9.JPG/versions/IMG_9.CR2' }]);
+      const moved = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/suggested/raw`, { follow: false });
+      assertEquals(moved.props.softlink, '/staged/IMG_9.JPG/versions/IMG_9.CR2');
+      // Its RAW filed, the album has none left to offer.
+      assertEquals((await client.execJson<ScanResult>(`raw ${ALBUMS_ROOT}/suggested`)).count, 0);
+    });
+
+    await t.step("--sort deletes the RAW's regions and lets go of a person left with none", async () => {
+      await client.exec('mkdir -p /faces');
+      await seed('/faces/FACE.CR2', 'image/x-canon-cr2');
+      await seed('/faces/FACE.JPG', 'image/jpeg');
+      await vfs.update(ADMIN_ACCESS, '/faces/FACE.CR2', { attrs: { width: 1200, height: 800 } });
+      const face = await client.execJson<Added>('face-add /faces/FACE.CR2 --box 0.1,0.2,0.3,0.4 --no-crop');
+      assertEquals(await vfs.exists(ADMIN_ACCESS, face.personPath), true);
+
+      const res = await client.execJson<SortSingle & { regions?: number }>('raw /faces/FACE.CR2 --sort');
+      assertEquals(res.action, 'sorted');
+      assertEquals(res.regions, 1);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/faces/FACE.JPG/versions/FACE.CR2/regions'), false);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, face.personPath), false);
+    });
   } finally {
     client.close();
     await testCtx.teardown();
   }
+});
+
+Deno.test('media-raw triggers on every RAW mimetype core knows', async () => {
+  const definition = parseYaml(await Deno.readTextFile(new URL('../../pipelines/media-raw.yaml', import.meta.url))) as {
+    trigger: { match: { mimetype: string[] } };
+  };
+  assertEquals([...definition.trigger.match.mimetype].sort(), [...RAW_IMAGE_MIMETYPES].sort());
 });

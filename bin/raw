@@ -8,17 +8,22 @@
  * filename: a RAW and its JPEG from the same exposure share a capture timestamp
  * (takenAt) and camera, and usually a base filename.
  *
- * Path semantics (like `duplicates`):
+ * Path semantics:
  *   (no path)   scan the whole library
+ *   <album>     the album's members, files it links to included
  *   <directory> scan that subtree
  *   <file>      a single file: if RAW show its non-RAW partner(s); if non-RAW,
  *               show its RAW partner(s)
  *
- * Default is report-only. With --sort, each RAW that has a clear non-RAW partner
- * is moved under that partner's `versions/` directory as a frozen version with a
- * sourceId (the same layout the old-system importer produced — the pipeline skips
- * it and it stays on the durable disk tier). A RAW with no partner is left as is;
- * one with several equally-likely partners is left as is too (ambiguous).
+ * Default is report-only. With --sort, each RAW whose best partner has the same
+ * base name, and no other ties with it, is moved under that partner's
+ * `versions/` directory as a frozen version with a sourceId (the same layout the
+ * old-system importer produced): the pipeline skips it, search and albums leave
+ * it out, and it stays on the durable disk tier. Softlinks to it follow it. Its
+ * regions are deleted, and their people tidied, so a face on the RAW no longer
+ * counts beside the same face on its partner. A RAW with no such partner, or
+ * with several equally-likely ones, is left as is. Sorting a non-RAW file sorts
+ * the RAWs of its name that belong under it.
  *
  * Scan enumerates RAW files by their stored mimetype. Single-file mode also
  * detects by extension.
@@ -27,19 +32,17 @@
 import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
 import { isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MIMETYPES } from '@ein/client';
 import { basename, dirname, extname, join } from '@std/path';
+import type { RawFileReport, RawFileSort, RawPartner, RawScanReport, RawSortOutcome, RawSortReport, RawUnmatchedReport } from '@archive/media/api';
+import { albumMembers } from '@archive/media/album-members';
+import { REGION_TYPE, type RegionAttrs, regionsPathOf } from '@archive/media/regions';
+import { NODE_TYPE_ALBUM } from '@archive/media/types';
+import { releasePerson } from '@archive/people/person';
 
 type FileAttrsView = { mimetype?: string; takenAt?: string; cameraPath?: string; sourceId?: string };
 
 type FileMeta = { path: string; name: string } & FileAttrsView;
 
-type Partner = { path: string; score: number; reasons: string[] };
-
-type SortOutcome = {
-  action: 'sorted' | 'left' | 'ambiguous' | 'error';
-  dest?: string;
-  partner?: string;
-  error?: string;
-};
+type Candidate = RawPartner & { meta: FileMeta };
 
 const SCAN_LIMIT = 1_000_000;
 const TAKEN_AT_CANDIDATES = 200;
@@ -66,8 +69,10 @@ function metaFrom(path: string, attrs: FileAttrsView): FileMeta {
   };
 }
 
-/** Rank the opposite-class (RAW↔non-RAW) files most likely related to `target`. */
-async function findPartners(cmd: Command, target: FileMeta, limit: number): Promise<Partner[]> {
+const partnerOf = ({ path, score, reasons }: Candidate): RawPartner => ({ path, score, reasons });
+
+/** Every opposite-class (RAW↔non-RAW) file likely related to `target`, best first. */
+async function findPartners(cmd: Command, target: FileMeta): Promise<Candidate[]> {
   const targetIsRaw = isRaw(target);
   const dir = dirname(target.path);
   const targetStem = stem(target.name);
@@ -105,13 +110,13 @@ async function findPartners(cmd: Command, target: FileMeta, limit: number): Prom
     candidates.set(path, metaFrom(path, entry.node.attrs as FileAttrsView));
   }
 
-  const partners: Partner[] = [];
+  const partners: Candidate[] = [];
   for (const c of candidates.values()) {
     if (c.sourceId) continue; // never pair with a rendition/version
     if (isRaw(c) === targetIsRaw) continue; // RAW pairs only with non-RAW and vice-versa
 
     let score = 0;
-    const reasons: string[] = [];
+    const reasons: RawPartner['reasons'] = [];
     if (stem(c.name) === targetStem) {
       score += 100;
       reasons.push('stem');
@@ -128,20 +133,38 @@ async function findPartners(cmd: Command, target: FileMeta, limit: number): Prom
       score += 20;
       reasons.push('camera');
     }
-    partners.push({ path: c.path, score, reasons });
+    partners.push({ path: c.path, score, reasons, meta: c });
   }
 
   partners.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
-  return partners.slice(0, limit);
+  return partners;
+}
+
+/** Delete the regions on `filePath` and tidy the people they named; returns how many went. */
+async function dropRegions(cmd: Command, filePath: string): Promise<number> {
+  const vfs = cmd.sys.vfs;
+  const regionsPath = regionsPathOf(filePath);
+  if (!await vfs.exists(cmd.access, regionsPath)) return 0;
+  const entries = await vfs.children<RegionAttrs>(cmd.access, regionsPath, { follow: false });
+  const regions = entries.filter((entry) => entry.node.type === REGION_TYPE);
+  const gone = new Map<string, Set<string>>();
+  for (const { node } of regions) {
+    const personId = node.attrs.personId;
+    if (personId) gone.set(personId, (gone.get(personId) ?? new Set()).add(node.id));
+  }
+  await vfs.unlink(cmd.access, regionsPath, filePath, { recursive: true });
+  for (const [personId, ids] of gone) await releasePerson(vfs, cmd.access, personId, ids);
+  return regions.length;
 }
 
 /**
- * Move a RAW under its best partner's `versions/` dir as a frozen version.
- * Leaves it untouched when there is no partner, or when the top match is a tie
- * (several equally-likely partners → ambiguous).
+ * Move a RAW under its best partner's `versions/` dir as a frozen version and drop its regions.
+ * Only a partner of the same base name counts: one matched by time and folder alone is reported,
+ * never sorted under. Leaves the RAW untouched when there is no such partner, or when the top
+ * two tie (ambiguous).
  */
-async function sortRaw(cmd: Command, target: FileMeta): Promise<SortOutcome> {
-  const partners = await findPartners(cmd, target, 5);
+async function sortRaw(cmd: Command, target: FileMeta): Promise<RawSortOutcome> {
+  const partners = (await findPartners(cmd, target)).filter((p) => p.reasons.includes('stem'));
   if (partners.length === 0) return { action: 'left' };
   if (partners.length >= 2 && partners[1].score === partners[0].score) {
     return { action: 'ambiguous', partner: partners[0].path };
@@ -167,23 +190,24 @@ async function sortRaw(cmd: Command, target: FileMeta): Promise<SortOutcome> {
     // frozen + sourceId. frozen keeps it on the durable disk tier despite sourceId,
     // and both attrs are set in one update so it is never transiently 'volatile'.
     await cmd.sys.vfs.ensure(cmd.access, 'directory', best.path, 'versions', { props: { mode: 0o770 } });
-    await cmd.sys.vfs.rename(cmd.access, dirname(target.path), name, versionsDir, name, { failIfExists: true });
+    const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: true, relink: true });
+    if (moved.status === 'rejected') throw moved.reason;
     await cmd.sys.vfs.update(cmd.access, dest, { attrs: { sourceId: partnerNode.id, frozen: true } });
+    const regions = await dropRegions(cmd, dest);
+    return { action: 'sorted', partner: best.path, dest, regions };
   } catch (e) {
     return { action: 'error', partner: best.path, error: e instanceof Error ? e.message : String(e) };
   }
-
-  return { action: 'sorted', partner: best.path, dest };
 }
 
-async function writeSortHuman(cmd: Command, rawPath: string, outcome: SortOutcome): Promise<void> {
+async function writeSortHuman(cmd: Command, rawPath: string, outcome: RawSortOutcome): Promise<void> {
   await cmd.writeLn(rawPath);
   switch (outcome.action) {
     case 'sorted':
-      await cmd.writeLn(`  sorted -> ${outcome.dest}`);
+      await cmd.writeLn(`  sorted -> ${outcome.dest}${outcome.regions ? ` (${outcome.regions} region(s) removed)` : ''}`);
       break;
     case 'left':
-      await cmd.writeLn('  left as is (no partner)');
+      await cmd.writeLn('  left as is (no partner of the same name)');
       break;
     case 'ambiguous':
       await cmd.writeLn('  left as is (ambiguous — several equally-likely partners)');
@@ -194,33 +218,26 @@ async function writeSortHuman(cmd: Command, rawPath: string, outcome: SortOutcom
   }
 }
 
-async function single(cmd: Command, target: FileMeta, limit: number, sort: boolean): Promise<number> {
-  if (sort) {
-    if (!isRaw(target)) {
-      if (cmd.json) {
-        await cmd.writeJSON({ path: target.path, raw: false, mimetype: target.mimetype ?? null, action: 'skip', note: 'sort acts on RAW files' });
-        return 0;
-      }
-      await cmd.writeLn(`${target.path}  (non-RAW) — sort acts on RAW files; nothing to do`);
-      return 0;
-    }
-    const outcome = await sortRaw(cmd, target);
-    if (cmd.json) {
-      await cmd.writeJSON({ path: target.path, raw: true, mimetype: target.mimetype ?? null, ...outcome });
-      return 0;
-    }
-    await writeSortHuman(cmd, target.path, outcome);
-    return 0;
+async function single(cmd: Command, target: FileMeta, limit: number, sort: boolean, verbose: boolean): Promise<number> {
+  if (!sort) return await report(cmd, target, limit);
+  if (!isRaw(target)) {
+    // The RAWs of this file's name, each sorted on its own terms: it goes under this file only
+    // when this file is its best partner.
+    const raws = (await findPartners(cmd, target)).filter((p) => p.reasons.includes('stem')).map((p) => p.meta);
+    return await sortAll(cmd, target.path, raws, verbose);
   }
-  return await report(cmd, target, limit);
+  const outcome = await sortRaw(cmd, target);
+  if (cmd.json) await cmd.writeJSON({ path: target.path, raw: true, mimetype: target.mimetype ?? null, ...outcome } satisfies RawFileSort);
+  else await writeSortHuman(cmd, target.path, outcome);
+  return outcome.action === 'error' ? 1 : 0;
 }
 
 async function report(cmd: Command, target: FileMeta, limit: number): Promise<number> {
   const raw = isRaw(target);
-  const partners = await findPartners(cmd, target, limit);
+  const partners = (await findPartners(cmd, target)).slice(0, limit).map(partnerOf);
 
   if (cmd.json) {
-    await cmd.writeJSON({ path: target.path, raw, mimetype: target.mimetype ?? null, partners });
+    await cmd.writeJSON({ path: target.path, raw, mimetype: target.mimetype ?? null, partners } satisfies RawFileReport);
     return 0;
   }
   await cmd.writeLn(`${target.path}  (${raw ? 'RAW' : 'non-RAW'}${target.mimetype ? `, ${target.mimetype}` : ''})`);
@@ -232,64 +249,72 @@ async function report(cmd: Command, target: FileMeta, limit: number): Promise<nu
   return 0;
 }
 
-/** Enumerate RAW originals (by stored mimetype, no sourceId) in scope. */
-async function enumerateRaws(cmd: Command, scopePrefix: string | null): Promise<FileMeta[]> {
+/** RAW originals (by stored mimetype, no sourceId) in a directory's tree, or the whole library. */
+async function enumerateRaws(cmd: Command, within: string | null): Promise<FileMeta[]> {
   const rows = await cmd.sys.vfs.query(cmd.access, {
     types: ['file'],
     where: [
       { ref: 'mimetype', op: 'in', value: [...RAW_IMAGE_MIMETYPES] },
       { ref: 'sourceId', op: 'missing' },
     ],
+    ...(within ? { within } : {}),
     limit: SCAN_LIMIT,
   });
   return rows
-    .filter((r) => !scopePrefix || r.absPath.startsWith(scopePrefix))
     .map((r) => metaFrom(r.absPath, r.node.attrs as FileAttrsView))
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-async function scanSort(cmd: Command, scopePrefix: string | null, verbose: boolean): Promise<number> {
-  const raws = await enumerateRaws(cmd, scopePrefix);
-  if (verbose) await cmd.writeError(`raw: sorting ${raws.length} RAW file(s)${scopePrefix ? ` under ${scopePrefix}` : ''}\n`);
+/** An album's RAW members, where they are: a member it links to is paired in its own folder. */
+async function albumRaws(cmd: Command, albumPath: string): Promise<FileMeta[]> {
+  const { members } = await albumMembers(cmd, albumPath);
+  return members
+    .map((member) => metaFrom(member.path, member.node.attrs as FileAttrsView))
+    .filter(isRaw)
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
 
-  const sorted: { raw: string; dest: string }[] = [];
-  const ambiguous: string[] = [];
-  const left: string[] = [];
-  const errors: { raw: string; error: string }[] = [];
+async function sortAll(cmd: Command, scope: string, raws: FileMeta[], verbose: boolean): Promise<number> {
+  if (verbose) await cmd.writeError(`raw: sorting ${raws.length} RAW file(s) in ${scope}\n`);
+
+  const answer: RawSortReport = { scope, count: raws.length, sorted: [], ambiguous: [], left: [], errors: [] };
   for (const r of raws) {
     const outcome = await sortRaw(cmd, r);
-    if (outcome.action === 'sorted') sorted.push({ raw: r.path, dest: outcome.dest! });
-    else if (outcome.action === 'ambiguous') ambiguous.push(r.path);
-    else if (outcome.action === 'error') errors.push({ raw: r.path, error: outcome.error! });
-    else left.push(r.path);
+    if (outcome.action === 'sorted') answer.sorted.push({ raw: r.path, dest: outcome.dest! });
+    else if (outcome.action === 'ambiguous') answer.ambiguous.push(r.path);
+    else if (outcome.action === 'error') answer.errors.push({ raw: r.path, error: outcome.error! });
+    else answer.left.push(r.path);
   }
 
   if (cmd.json) {
-    await cmd.writeJSON({ scope: scopePrefix ?? '/', count: raws.length, sorted, ambiguous, left, errors });
-    return 0;
+    await cmd.writeJSON(answer satisfies RawSortReport);
+  } else {
+    await cmd.writeLn(
+      `${raws.length} RAW file(s): ${answer.sorted.length} sorted, ${answer.left.length} left, ${answer.ambiguous.length} ambiguous, ${answer.errors.length} error(s)`,
+    );
+    for (const s of answer.sorted) await cmd.writeLn(`  sorted  ${s.raw} -> ${s.dest}`);
+    for (const p of answer.ambiguous) await cmd.writeLn(`  ambig   ${p}`);
+    for (const e of answer.errors) await cmd.writeLn(`  error   ${e.raw}: ${e.error}`);
   }
-  await cmd.writeLn(`${raws.length} RAW file(s): ${sorted.length} sorted, ${left.length} left, ${ambiguous.length} ambiguous, ${errors.length} error(s)`);
-  for (const s of sorted) await cmd.writeLn(`  sorted  ${s.raw} -> ${s.dest}`);
-  for (const p of ambiguous) await cmd.writeLn(`  ambig   ${p}`);
-  for (const e of errors) await cmd.writeLn(`  error   ${e.raw}: ${e.error}`);
-  return errors.length > 0 ? 1 : 0;
+  // Failing only when nothing moved: the API shell drops the answer of a command that exits
+  // non-zero, and a partly made sort must still say what it moved.
+  return answer.errors.length > 0 && answer.sorted.length === 0 ? 1 : 0;
 }
 
-async function scanReport(cmd: Command, scopePrefix: string | null, limit: number, unmatchedOnly: boolean, verbose: boolean): Promise<number> {
-  const raws = await enumerateRaws(cmd, scopePrefix);
-  if (verbose) await cmd.writeError(`raw: ${raws.length} RAW file(s) found${scopePrefix ? ` under ${scopePrefix}` : ''}\n`);
+async function scanReport(cmd: Command, scope: string, raws: FileMeta[], limit: number, unmatchedOnly: boolean, verbose: boolean): Promise<number> {
+  if (verbose) await cmd.writeError(`raw: ${raws.length} RAW file(s) found in ${scope}\n`);
 
-  const pairs: { raw: string; mimetype: string | null; partners: Partner[] }[] = [];
+  const pairs: RawScanReport['pairs'] = [];
   const unmatched: string[] = [];
   for (const r of raws) {
-    const partners = await findPartners(cmd, r, limit);
+    const partners = (await findPartners(cmd, r)).slice(0, limit).map(partnerOf);
     if (partners.length === 0) unmatched.push(r.path);
     else pairs.push({ raw: r.path, mimetype: r.mimetype ?? null, partners });
   }
 
   if (cmd.json) {
-    const scope = scopePrefix ?? '/';
-    await cmd.writeJSON(unmatchedOnly ? { scope, count: unmatched.length, unmatched } : { scope, count: raws.length, pairs, unmatched });
+    if (unmatchedOnly) await cmd.writeJSON({ scope, count: unmatched.length, unmatched } satisfies RawUnmatchedReport);
+    else await cmd.writeJSON({ scope, count: raws.length, pairs, unmatched } satisfies RawScanReport);
     return 0;
   }
 
@@ -332,6 +357,8 @@ const raw = async (cmd: Command): CmdReturn => {
 
   const rawPath = flags._[0] as string | undefined;
 
+  let scope = '/';
+  let raws: FileMeta[];
   if (rawPath) {
     let node;
     try {
@@ -341,14 +368,15 @@ const raw = async (cmd: Command): CmdReturn => {
       return 1;
     }
     if (node.type === 'file') {
-      return await single(cmd, metaFrom(rawPath, node.attrs as FileAttrsView), limit, sort);
+      return await single(cmd, metaFrom(rawPath, node.attrs as FileAttrsView), limit, sort, flags.v);
     }
-    const scope = rawPath.replace(/\/+$/, '');
-    const scopePrefix = scope === '' ? '/' : `${scope}/`;
-    return sort ? await scanSort(cmd, scopePrefix, flags.v) : await scanReport(cmd, scopePrefix, limit, flags.unmatched, flags.v);
+    scope = rawPath.replace(/\/+$/, '') || '/';
+    raws = node.type === NODE_TYPE_ALBUM ? await albumRaws(cmd, scope) : await enumerateRaws(cmd, scope);
+  } else {
+    raws = await enumerateRaws(cmd, null);
   }
 
-  return sort ? await scanSort(cmd, null, flags.v) : await scanReport(cmd, null, limit, flags.unmatched, flags.v);
+  return sort ? await sortAll(cmd, scope, raws, flags.v) : await scanReport(cmd, scope, raws, limit, flags.unmatched, flags.v);
 };
 
 raw.spec = {
@@ -356,18 +384,25 @@ raw.spec = {
   effect: 'read' as const,
   description: 'Detect RAW image files and report (or --sort) the non-RAW file(s) they are related to',
   args: [
-    { name: 'path', type: 'path' as const, description: 'file, subtree, or omit for the whole library' },
+    { name: 'path', type: 'path' as const, description: 'file, album, subtree, or omit for the whole library' },
   ],
   flags: [
-    { name: 'sort', writes: true, type: 'bool' as const, description: 'move each RAW under its partner’s versions/ dir (frozen version); RAW with no partner is left as is' },
+    {
+      name: 'sort',
+      writes: true,
+      type: 'bool' as const,
+      description:
+        'move each RAW under the versions/ dir of its partner of the same name, and delete its regions; a RAW with no such partner is left as is. On a non-RAW file, sort its RAWs under it',
+    },
     { name: 'n', type: 'string' as const, description: 'max partner candidates per file (default 5)' },
     { name: 'unmatched', type: 'bool' as const, description: 'scan: list only RAW files with no partner found' },
     { name: 'v', type: 'bool' as const, description: 'verbose output' },
   ],
   examples: [
     'raw /archive/albums/Exempelalbum_2019/files/DSC_0001.NEF',
+    'raw --sort /archive/albums/Exempelalbum_2019',
   ],
-  returns: 'the non-RAW files the RAW is related to.',
+  returns: 'the non-RAW files the RAW is related to; with --sort, what became of each RAW.',
 };
 
 export default raw;

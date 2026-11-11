@@ -1144,8 +1144,13 @@ much identity as a hand-drawn one. Also `people/<slug>` softlinks
 (a tagged person with no box — never written beside a box for the same person, since
 `media-details` resolves a link ahead of a face), `photographer` softlink (`file-set-photographer` / import), `camera`
 softlink (+ `cameraPath` attr), `location` softlink (manual link to a `/locations` node — distinct from the
-lat/lng `position` child), and `versions/<name>` (related originals, e.g. RAW; frozen + `derived=true`
-so the pipeline skips them). Every one of these points _outwards_ only; `vfs.findLinks(target)` is the
+lat/lng `position` child), and `versions/<name>` (related originals, e.g. RAW; frozen, with the
+file's id as `sourceId`, so the pipeline, search and the album listings skip them). The import
+brings them in place; a RAW uploaded since is filed there by the `media-raw` pipeline, which runs
+`raw --sort` on it two minutes after it arrives so the JPEG of its name can land first, and by
+**Hide RAW files** in an album's menu (`raw --sort <album>`) for one whose JPEG came later. Only a
+partner of the same base name is sorted under, and the RAW's regions are deleted on the way, so its
+faces never count beside the same faces on its JPEG. Every one of these points _outwards_ only; `vfs.findLinks(target)` is the
 backlink lookup that answers "what refers to this person/location?", served by an index on the softlink
 column that stores the target. Archive's `subject-person` / `subject-location`, which `search --subject` asks, are built on it. Manual time/position overrides live in the `whenManual` /
 `positionManual` attrs. A file's `name` attr is its **filename, which is not its node name**: the

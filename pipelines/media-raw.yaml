@@ -1,0 +1,47 @@
+name: media-raw
+description: File a camera RAW under the JPEG of the same shot, as a version
+
+# Subject is a RAW as it arrives (`media.file.discovered`, the first fact a media file gives).
+# `raw --sort` moves it under `<partner>/versions/` when a non-RAW file of the same name is its
+# one best partner, and leaves it as a picture of its own otherwise. Once moved it carries the
+# partner's id as `sourceId`, so nothing else runs on it: work still queued for it finds its path
+# gone and is dropped, and the regions a detection made in the meantime go with the move.
+trigger:
+  on: media.file.discovered
+  wants: archive
+  match:
+    mimetype:
+      - image/x-canon-cr2
+      - image/x-canon-cr3
+      - image/x-canon-crw
+      - image/x-nikon-nef
+      - image/x-nikon-nrw
+      - image/x-sony-arw
+      - image/x-sony-sr2
+      - image/x-adobe-dng
+      - image/x-olympus-orf
+      - image/x-fujifilm-raf
+      - image/x-panasonic-rw2
+      - image/x-panasonic-raw
+      - image/x-pentax-pef
+      - image/x-sigma-x3f
+      - image/x-minolta-mrw
+      - image/x-kodak-dcr
+      - image/x-kodak-kdc
+      - image/x-hasselblad-3fr
+      - image/x-phaseone-iiq
+      - image/x-epson-erf
+      - image/x-samsung-srw
+      - image/x-leica-rwl
+
+steps:
+  sort:
+    command: raw --sort $NODE_PATH
+    description: Move the RAW under its same-named JPEG's versions/ and drop its regions
+
+options:
+  # An upload sends a shot's RAW and JPEG together, the RAW usually first (`.CR2` sorts before
+  # `.JPG`); the hold lets the JPEG land before the RAW looks for it.
+  debounceMs: 120000
+  maxAttempts: 2
+  priority: 5

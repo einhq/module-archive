@@ -67,6 +67,49 @@ export type FingerprintRef = { name: string; computedAt?: string; computedBy?: s
 /** Another form of the same picture kept under `<file>/versions/`: a camera RAW beside its JPEG, say. */
 export type MediaVersion = { name: string; path: string; mimetype?: string; size?: number };
 
+/** A file `raw` reckons is of the same shot, with the score and the signals behind it. */
+export type RawPartner = { path: string; score: number; reasons: ('stem' | 'dir' | 'time' | 'camera')[] };
+
+/** `raw <file>`: whether it is a RAW, and the files of the other kind of the same shot, best first. */
+export type RawFileReport = { path: string; raw: boolean; mimetype: string | null; partners: RawPartner[] };
+
+/** `raw <album|dir>`: each RAW with its partners, and those with none. */
+export type RawScanReport = {
+  scope: string;
+  count: number;
+  pairs: { raw: string; mimetype: string | null; partners: RawPartner[] }[];
+  unmatched: string[];
+};
+
+/** `raw --unmatched <album|dir>`: the RAWs with no partner. */
+export type RawUnmatchedReport = { scope: string; count: number; unmatched: string[] };
+
+/**
+ * What `raw --sort` did with one RAW: filed under its partner's `versions/` (with the number of
+ * regions it lost), left with no partner of the same name, left between partners that tie, or
+ * failed.
+ */
+export type RawSortOutcome = {
+  action: 'sorted' | 'left' | 'ambiguous' | 'error';
+  dest?: string;
+  partner?: string;
+  regions?: number;
+  error?: string;
+};
+
+/** `raw --sort <RAW>`. */
+export type RawFileSort = { path: string; raw: true; mimetype: string | null } & RawSortOutcome;
+
+/** `raw --sort <album|dir|non-RAW file>`: what became of each RAW in scope, or of a file's RAWs. */
+export type RawSortReport = {
+  scope: string;
+  count: number;
+  sorted: { raw: string; dest: string }[];
+  ambiguous: string[];
+  left: string[];
+  errors: { raw: string; error: string }[];
+};
+
 /**
  * The content hashes the node happens to carry. `file-sync` writes `sha256`;
  * the legacy import brought `md5`/`sha1` and never wrote one.

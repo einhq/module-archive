@@ -28,6 +28,7 @@ const FAMILIES: Record<string, string[]> = {
   'media-geocode': ['archive'],
   'media-weather': ['archive'],
   'media-duplicates': ['archive'],
+  'media-raw': ['archive'],
 };
 
 /** The pipelines that name no family, and why. */
