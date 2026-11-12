@@ -42,6 +42,7 @@ import { MediaEditModal } from './MediaEditModal.tsx';
 import { RESTORABLE, RestoreDialog } from './RestoreDialog.tsx';
 import type { FileRestoreAnswer } from '@media/api';
 import { RestoredCompare, restoredSteps } from './RestoredCompare.tsx';
+import { BlemishDialog } from './BlemishDialog.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
 import { UserText } from '../../components/UserText.tsx';
@@ -347,7 +348,7 @@ function VersionsSection({ versions, onCompare }: { versions: MediaVersion[]; on
           </Text>
           {version.restored && (
             <Group gap={6} wrap='nowrap'>
-              <Text size='xs' c='dimmed'>Restored: {restoredSteps(version.restored.ops)}</Text>
+              <Text size='xs' c='dimmed'>Restored: {restoredSteps(version.restored.steps)}</Text>
               <Anchor component='button' size='xs' onClick={() => onCompare(version)}>Compare</Anchor>
             </Group>
           )}
@@ -448,6 +449,7 @@ export function MediaSidebar(
   useLayoutEffect(() => fitComment(commentRef.current, draft), [draft]);
   const [editing, setEditing] = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const [blemishing, setBlemishing] = useState(false);
   /** The restored copy shown beside the picture. */
   const [comparing, setComparing] = useState<MediaVersion | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -463,6 +465,7 @@ export function MediaSidebar(
     setPosting(false);
     setEditing(false);
     setRestoring(false);
+    setBlemishing(false);
     setComparing(null);
     setMenuOpen(false);
     setAsking(null);
@@ -481,9 +484,10 @@ export function MediaSidebar(
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || restoring || comparing !== null || sharing || asking !== null || menuOpen || deleting !== null), [
+  useEffect(() => onLayer(editing || restoring || blemishing || comparing !== null || sharing || asking !== null || menuOpen || deleting !== null), [
     editing,
     restoring,
+    blemishing,
     comparing,
     sharing,
     asking,
@@ -506,9 +510,10 @@ export function MediaSidebar(
       mimetype: answer.path.endsWith('.tif') ? 'image/tiff' : 'image/png',
       thumbnails: true,
       restored: {
-        ops: answer.restoration.steps.map((step) => step.op),
+        steps: answer.restoration.steps.map((step) => ({ op: step.op, params: step.params })),
         at: answer.restoration.at,
         ...(answer.restoration.marked !== undefined ? { marked: answer.restoration.marked } : {}),
+        ...(answer.mask ? { mask: answer.mask } : {}),
         ...(answer.marks ? { marks: answer.marks } : {}),
       },
     });
@@ -690,6 +695,14 @@ export function MediaSidebar(
                     onClick={() => setRestoring(true)}
                   >
                     Restore…
+                  </Menu.Item>
+                )}
+                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && Boolean(media.width && media.height) && (
+                  <Menu.Item
+                    leftSection={<TablerIcon name='brush' size={menuIcon} />}
+                    onClick={() => setBlemishing(true)}
+                  >
+                    Remove a blemish…
                   </Menu.Item>
                 )}
                 {canEdit && canOrient && (
@@ -1040,7 +1053,15 @@ export function MediaSidebar(
         digitized={details?.digitized}
         onRestored={restored(media.path)}
       />
-      <RestoredCompare version={comparing} original={media} onClose={() => setComparing(null)} onDiscarded={() => void result.refetch()} />
+      {blemishing && <BlemishDialog opened onClose={() => setBlemishing(false)} media={media} mirror={details?.mirror ?? false} onRestored={restored(media.path)} />}
+      <RestoredCompare
+        version={comparing}
+        original={media}
+        mirror={details?.mirror ?? false}
+        onClose={() => setComparing(null)}
+        onDiscarded={() => void result.refetch()}
+        onReplaced={restored(media.path)}
+      />
       {details && (
         <MediaEditModal
           opened={editing}

@@ -80,11 +80,18 @@ export type MediaVersion = {
 };
 
 /**
- * How a restored copy was made: the EMS ops that ran, in order, and when. `marked` is the share
- * of the picture the defect finder took for damage, and `marks` its marks in the picture's display
- * frame, white on black, for a page to lay over the original.
+ * How a restored copy was made: the EMS ops that ran, in order, with what each was asked, and
+ * when. `marked` is the share of the picture taken for damage, `mask` the mask that was filled, at
+ * full size as the picture is stored, and `marks` the same in the picture's display frame, white
+ * on black, for a page to lay over the original.
  */
-type VersionRestoration = { ops: string[]; at?: string; marked?: number; marks?: string };
+type VersionRestoration = {
+  steps: { op: string; params: Record<string, unknown> }[];
+  at?: string;
+  marked?: number;
+  mask?: string;
+  marks?: string;
+};
 
 /** A file `raw` reckons is of the same shot, with the score and the signals behind it. */
 export type RawPartner = { path: string; score: number; reasons: ('stem' | 'dir' | 'time' | 'camera')[] };

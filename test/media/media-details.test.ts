@@ -447,10 +447,10 @@ Deno.test({
       const print = `${ALBUMS_ROOT}/a/files/print.jpg`;
       await cmd.shouldSucceed(`mkfile ${print} && mkdir -p ${print}/versions`);
       await cmd.shouldSucceed(`mkfile ${print}/versions/restored-1.png && mkdir -p ${print}/versions/restored-1.png/thumbnails`);
-      await cmd.shouldSucceed(`mkfile ${print}/versions/restored-1.png/marks.png`);
+      await cmd.shouldSucceed(`mkfile ${print}/versions/restored-1.png/mask.png && mkfile ${print}/versions/restored-1.png/marks.png`);
       await cmd.shouldSucceed(`mkfile ${print}/versions/.tmprestore-1-unfade.png`);
       const restoration = {
-        steps: [{ op: 'image.unfade', params: {}, producer: 'unfade/1' }, { op: 'image.defects', params: {}, producer: 'd' }],
+        steps: [{ op: 'image.unfade', params: {}, producer: 'unfade/1' }, { op: 'image.inpaint', params: { method: 'lama', given: true }, producer: 'i' }],
         at: '2026-11-12T18:00:00Z',
         marked: 0.002,
       };
@@ -460,9 +460,10 @@ Deno.test({
       assertEquals(versions.map((version) => version.name), ['restored-1.png']);
       assertEquals(versions[0].thumbnails, true);
       assertEquals(versions[0].restored, {
-        ops: ['image.unfade', 'image.defects'],
+        steps: [{ op: 'image.unfade', params: {} }, { op: 'image.inpaint', params: { method: 'lama', given: true } }],
         at: '2026-11-12T18:00:00Z',
         marked: 0.002,
+        mask: `${print}/versions/restored-1.png/mask.png`,
         marks: `${print}/versions/restored-1.png/marks.png`,
       });
     });

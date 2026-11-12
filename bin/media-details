@@ -520,7 +520,9 @@ const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise
 /** The files under `<path>/versions`, by name, and of a restored copy how it was made. */
 const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<MediaVersion[]> => {
   try {
-    const entries = await vfs.children<{ mimetype?: string; size?: number; restoration?: { steps?: { op?: string }[]; at?: string; marked?: number } }>(
+    const entries = await vfs.children<
+      { mimetype?: string; size?: number; restoration?: { steps?: { op?: string; params?: Record<string, unknown> }[]; at?: string; marked?: number } }
+    >(
       access,
       `${path}/versions`,
     );
@@ -541,9 +543,10 @@ const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<Med
             ...(restoration
               ? {
                 restored: {
-                  ops: (restoration.steps ?? []).map((step) => String(step.op ?? '')),
+                  steps: (restoration.steps ?? []).map((step) => ({ op: String(step.op ?? ''), params: step.params ?? {} })),
                   ...(restoration.at ? { at: restoration.at } : {}),
                   ...(typeof restoration.marked === 'number' ? { marked: restoration.marked } : {}),
+                  ...(below.has('mask.png') ? { mask: `${versionPath}/mask.png` } : {}),
                   ...(below.has('marks.png') ? { marks: `${versionPath}/marks.png` } : {}),
                 },
               }
