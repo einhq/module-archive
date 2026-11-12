@@ -1,5 +1,5 @@
 import { Avatar, Group, Skeleton, Stack, Text } from '@mantine/core';
-import { CoverAvatar, TablerIcon } from '@ein/ui/components';
+import { CoverAvatar, RollingList, TablerIcon } from '@ein/ui/components';
 import { useLocalDay, usePolledCommand } from '@ein/ui/hooks';
 import { useSearchParams } from 'react-router-dom';
 import type { AnniversaryEntry } from '../../lib/timeline/api.ts';
@@ -10,7 +10,8 @@ const whenText = (days: number): string => days === 0 ? 'Today' : days === 1 ? '
 /**
  * `/cards/archive/birthdays`: the birthdays coming up — and wedding anniversaries and memorials
  * too when `kinds` says — nearest first: the first large, its face and sentence, the rest as rows
- * with their faces; a milestone in bold, today's in the accent. Read on the viewer's own day.
+ * with their faces, rolling by under it when they do not all fit; a milestone in bold, today's in
+ * the accent. Read on the viewer's own day.
  */
 export default function BirthdaysCard() {
   const [params] = useSearchParams();
@@ -34,7 +35,7 @@ export default function BirthdaysCard() {
   const tone = (entry: AnniversaryEntry) => (entry.daysAway === 0 ? 'color-mix(in srgb, var(--dash-accent, var(--mrx-accent)) 75%, white)' : 'dimmed');
 
   return (
-    <Stack gap='0.7em' h='100%' style={{ overflow: 'auto', fontSize: 'clamp(0.85rem, 4.2cqmin, 1.4rem)' }}>
+    <Stack gap='0.7em' h='100%' style={{ overflow: 'hidden', fontSize: 'clamp(0.85rem, 4.2cqmin, 1.4rem)' }}>
       <Group gap='md' wrap='nowrap'>
         <Avatar.Group spacing={10}>
           {first.people.map((face) => <CoverAvatar key={face} path={face} size={56} color='grape' alt='' fallback={<TablerIcon name='user' size={24} />} />)}
@@ -44,15 +45,17 @@ export default function BirthdaysCard() {
           <Text inherit size='0.85em' c={tone(first)} fw={first.daysAway === 0 ? 650 : 500}>{whenText(first.daysAway)}</Text>
         </Stack>
       </Group>
-      {rest.map((entry) => (
-        <Group key={`${entry.path}\n${entry.date}`} gap='sm' wrap='nowrap'>
-          <Avatar.Group spacing={8}>
-            {entry.people.map((face) => <CoverAvatar key={face} path={face} size={32} color='grape' alt='' fallback={<TablerIcon name='user' size={16} />} />)}
-          </Avatar.Group>
-          <Text inherit fw={entry.milestone ? 650 : undefined} lineClamp={1} style={{ flex: 1, minWidth: 0 }}>{entry.title}</Text>
-          <Text inherit size='0.8em' c={tone(entry)} style={{ flex: 'none' }}>{whenText(entry.daysAway)}</Text>
-        </Group>
-      ))}
+      <RollingList gap='0.7em' style={{ flex: 1, minHeight: 0, height: 'auto' }}>
+        {rest.map((entry) => (
+          <Group key={`${entry.path}\n${entry.date}`} gap='sm' wrap='nowrap'>
+            <Avatar.Group spacing={8}>
+              {entry.people.map((face) => <CoverAvatar key={face} path={face} size={32} color='grape' alt='' fallback={<TablerIcon name='user' size={16} />} />)}
+            </Avatar.Group>
+            <Text inherit fw={entry.milestone ? 650 : undefined} lineClamp={1} style={{ flex: 1, minWidth: 0 }}>{entry.title}</Text>
+            <Text inherit size='0.8em' c={tone(entry)} style={{ flex: 'none' }}>{whenText(entry.daysAway)}</Text>
+          </Group>
+        ))}
+      </RollingList>
     </Stack>
   );
 }
