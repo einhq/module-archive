@@ -3,7 +3,7 @@
   "version": "0.19.20",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.14.18",
+  "coreApi": "^0.14.19",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -438,6 +438,7 @@
   "nodeTypes": [
     {
       "type": "album",
+      "pattern": "album",
       "label": "Album",
       "category": "content",
       "root": "/archive/albums",
@@ -447,6 +448,7 @@
     },
     {
       "type": "person",
+      "pattern": "person",
       "label": "Person",
       "category": "content",
       "root": "/archive/people",
@@ -456,6 +458,8 @@
     },
     {
       "type": "location",
+      "noun": "place",
+      "pattern": "location",
       "label": "Location",
       "category": "content",
       "root": "/archive/locations",
@@ -465,6 +469,7 @@
     },
     {
       "type": "camera",
+      "pattern": "camera",
       "label": "Camera",
       "category": "content",
       "root": "/archive/cameras",
