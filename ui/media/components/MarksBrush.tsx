@@ -119,7 +119,7 @@ export function MarksBrush({ src, srcSet, marks, strokes, onStrokes, mode, radiu
             const image = event.currentTarget;
             if (image.naturalWidth > 0 && image.naturalHeight > 0) setAspect(image.naturalWidth / image.naturalHeight);
           }}
-          style={{ maxWidth: '100%', maxHeight: '70vh', width: 'auto', height: 'auto', display: 'block' }}
+          style={{ maxWidth: '100%', maxHeight: 'max(240px, calc(100dvh - 330px))', width: 'auto', height: 'auto', display: 'block' }}
         />
         <canvas
           ref={canvas}
