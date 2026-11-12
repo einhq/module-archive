@@ -1,0 +1,82 @@
+#!ts
+/**
+ * anniversaries — birthdays, memorials and wedding anniversaries around a day, nearest first,
+ * with the age or years married and whose faces each shows: what `events-anniversaries` gives Home,
+ * for a page that draws them its own way (a dashboard's Birthdays). The walk is
+ * `upcomingAnniversaries`.
+ */
+import { PEOPLE_ROOT } from '@archive/paths';
+import type { AnniversaryEntry, TimelineKind } from '@archive/timeline/api';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { CmdReturn, Command } from '@ein/client';
+import { upcomingAnniversaries } from '../lib/timeline/anniversaries.ts';
+
+const KINDS: TimelineKind[] = ['birthday', 'death', 'anniversary'];
+
+const count = (raw: string | undefined, fallback: number): number | undefined => {
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  return raw.trim() !== '' && Number.isInteger(value) && value >= 0 ? value : undefined;
+};
+
+const anniversaries = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['today', 'days-ahead', 'days-past', 'limit', 'kind', 'people'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const ahead = count(flags['days-ahead'], 30);
+  const past = count(flags['days-past'], 0);
+  const limit = count(flags.limit, 12);
+  if (ahead === undefined || past === undefined || limit === undefined) {
+    await cmd.writeError('anniversaries: --days-ahead, --days-past and --limit are whole numbers, 0 or more\n');
+    return 1;
+  }
+  const today = flags.today ?? new Date().toISOString().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(today) || Number.isNaN(Date.parse(`${today}T00:00:00Z`))) {
+    await cmd.writeError(`anniversaries: --today is YYYY-MM-DD, not '${today}'\n`);
+    return 1;
+  }
+  const kinds = flags.kind ? flags.kind.split(',').map((kind) => kind.trim()) : KINDS;
+  if (!kinds.every((kind) => (KINDS as string[]).includes(kind))) {
+    await cmd.writeError(`anniversaries: --kind is one or more of ${KINDS.join(', ')}\n`);
+    return 1;
+  }
+
+  // Asked for more than the limit, since --kind narrows what the walk found.
+  const found = await upcomingAnniversaries(cmd, { today, past, ahead, limit: limit * 4 + 20, peopleRoot: flags.people ?? PEOPLE_ROOT });
+  const shown: AnniversaryEntry[] = found
+    .filter((entry) => kinds.includes(entry.kind))
+    .sort((a, b) => a.daysAway - b.daysAway)
+    .slice(0, limit)
+    .map((entry) => ({
+      kind: entry.kind,
+      date: entry.date,
+      daysAway: entry.daysAway,
+      years: entry.years,
+      milestone: entry.milestone,
+      title: entry.title,
+      path: entry.ownerPath ?? entry.path,
+      people: entry.people?.length ? entry.people.slice(0, 2) : [entry.ownerPath ?? entry.path],
+    }));
+  if (cmd.json) await cmd.writeJSON(shown satisfies AnniversaryEntry[]);
+  else for (const entry of shown) await cmd.writeLn(`${entry.date}  ${entry.milestone ? '*' : ' '} ${entry.title}`);
+  return 0;
+};
+
+anniversaries.spec = {
+  name: 'anniversaries',
+  effect: 'read' as const,
+  description: 'Birthdays, memorials and wedding anniversaries around a day, nearest first, with the age or years married',
+  args: [],
+  flags: [
+    { name: 'today', type: 'string' as const, description: 'the day to look around, YYYY-MM-DD (default today, UTC)' },
+    { name: 'days-ahead', type: 'string' as const, description: 'days after it to look at (default 30)' },
+    { name: 'days-past', type: 'string' as const, description: 'days before it to look at (default 0)' },
+    { name: 'limit', type: 'string' as const, description: 'at most this many (default 12)' },
+    { name: 'kind', type: 'string' as const, description: `only these, separated by commas: ${KINDS.join(', ')} (death is a memorial, anniversary a wedding's)` },
+    { name: 'people', type: 'path' as const, description: "the folder of people to look in (default the archive's people)" },
+  ],
+  examples: ['anniversaries', 'anniversaries --kind birthday --days-ahead 60'],
+  returns: 'One entry per occurrence, nearest first: kind, date, daysAway, years, milestone, title, path, and people, whose faces it shows.',
+};
+
+export default anniversaries;

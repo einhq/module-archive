@@ -5,6 +5,7 @@ import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { createTestContext, testCommands } from '@ein/testing';
 import type { EventEntry, Provided } from '@ein/api';
+import type { AnniversaryEntry } from '@archive/timeline/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -188,6 +189,16 @@ Deno.test({
     await t.step("core's events gathers them, keeping the provider's milestones over the nearest", async () => {
       const events = await client.execJson<EventEntry[]>(`events --today ${TODAY} --limit 2`);
       assertEquals(events.map((entry) => [entry.source, entry.milestone]), [['anniversaries', true], ['anniversaries', true]]);
+    });
+
+    await t.step('anniversaries answers the same occurrences with ages and faces, nearest first, narrowed by kind', async () => {
+      const all = await client.execJson<AnniversaryEntry[]>(`anniversaries --today ${TODAY} --days-ahead 30 --limit 50`);
+      assertEquals(all.map((entry) => entry.daysAway), [...all.map((entry) => entry.daysAway)].sort((a, b) => a - b));
+      const tora = all.find((entry) => entry.path === `${PEOPLE_ROOT}/today`)!;
+      assertEquals([tora.kind, tora.daysAway, tora.years, tora.title, tora.people], ['birthday', 0, 40, 'Tora turns 40', [`${PEOPLE_ROOT}/today`]]);
+      const birthdays = await client.execJson<AnniversaryEntry[]>(`anniversaries --today ${TODAY} --days-ahead 30 --kind birthday`);
+      assertEquals(birthdays.every((entry) => entry.kind === 'birthday'), true);
+      await cmd.shouldFailWith('anniversaries --kind weddings', '--kind');
     });
   } finally {
     client.close();

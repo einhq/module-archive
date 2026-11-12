@@ -64,3 +64,26 @@ export type TimelineEntry = {
   eventType?: string;
   cover?: TimelineCover;
 };
+
+/**
+ * `anniversaries`: a birthday, a memorial or a wedding anniversary falling around a day, as
+ * `events-anniversaries` finds them for Home, with what a card needs to draw one of its own.
+ */
+export type AnniversaryEntry = {
+  /** `birthday`, `death` for a memorial, `anniversary` for a wedding. */
+  kind: TimelineKind;
+  /** The day it falls on this time, `YYYY-MM-DD`. */
+  date: string;
+  /** Signed days from the day asked about: negative has just passed, 0 is that day. */
+  daysAway: number;
+  /** Which one it is: the age, or the years married. */
+  years: number;
+  /** A round number, by the timeline's own milestone rule. */
+  milestone: boolean;
+  /** The sentence it is said in: "Anna Andersson turns 40". */
+  title: string;
+  /** The person it is about, or for a wedding the partnership. */
+  path: string;
+  /** Whose faces it shows: both partners for a wedding, else the person. */
+  people: string[];
+};
