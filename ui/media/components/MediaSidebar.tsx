@@ -697,7 +697,7 @@ export function MediaSidebar(
                     Restore…
                   </Menu.Item>
                 )}
-                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && Boolean(media.width && media.height) && (
+                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && Boolean(details?.width && details.height) && (
                   <Menu.Item
                     leftSection={<TablerIcon name='brush' size={menuIcon} />}
                     onClick={() => setBlemishing(true)}
@@ -1053,10 +1053,22 @@ export function MediaSidebar(
         digitized={details?.digitized}
         onRestored={restored(media.path)}
       />
-      {blemishing && <BlemishDialog opened onClose={() => setBlemishing(false)} media={media} mirror={details?.mirror ?? false} onRestored={restored(media.path)} />}
+      {blemishing && details?.width && details.height && (
+        <BlemishDialog
+          opened
+          onClose={() => setBlemishing(false)}
+          media={media}
+          angle={details.angle}
+          mirror={details.mirror}
+          width={details.width}
+          height={details.height}
+          onRestored={restored(media.path)}
+        />
+      )}
       <RestoredCompare
         version={comparing}
         original={media}
+        angle={details?.angle ?? 0}
         mirror={details?.mirror ?? false}
         onClose={() => setComparing(null)}
         onDiscarded={() => void result.refetch()}

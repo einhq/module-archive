@@ -26,6 +26,8 @@ type Details = {
   takenAt?: string;
   angle: number;
   mirror: boolean;
+  width?: number;
+  height?: number;
   mimetype?: string;
   size?: number;
   exif: {
@@ -209,6 +211,7 @@ Deno.test({
       assertEquals(details.exif?.width, 4000);
       assertEquals(details.exif?.displayWidth, 3000);
       assertEquals(details.exif?.displayHeight, 4000);
+      assertEquals([details.width, details.height], [4000, 3000]);
     });
 
     await t.step('the raw dump only travels with --fields raw', async () => {

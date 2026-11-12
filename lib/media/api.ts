@@ -275,6 +275,9 @@ export type MediaDetails = {
   /** Effective orientation of the display frame the face boxes are measured in. */
   angle: 0 | 90 | 180 | 270;
   mirror: boolean;
+  /** The picture's size as stored, before `angle` turns it. */
+  width?: number;
+  height?: number;
   mimetype?: string;
   size?: number;
   /**

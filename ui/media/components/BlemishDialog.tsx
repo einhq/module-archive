@@ -12,8 +12,12 @@ type Props = {
   onClose: () => void;
   /** The picture, as the lightbox shows it. */
   media: MediaItem;
-  /** The picture is shown flopped. */
+  /** How the picture is turned and flopped to be shown. */
+  angle: number;
   mirror: boolean;
+  /** The picture's size as stored. */
+  width: number;
+  height: number;
   /** The copy written, once `file-restore` has answered. */
   onRestored: (answer: FileRestoreAnswer) => void;
 };
@@ -23,7 +27,7 @@ type Props = {
  * by `file-restore --mask --fill lama`. The picture itself is never changed: the result is a copy
  * kept among its versions, as a restoration is.
  */
-export function BlemishDialog({ opened, onClose, media, mirror, onRestored }: Props) {
+export function BlemishDialog({ opened, onClose, media, angle, mirror, width, height, onRestored }: Props) {
   const [strokes, setStrokes] = useState<MaskStroke[]>([]);
   const [mode, setMode] = useState<MaskStroke['mode']>('paint');
   const [radius, setRadius] = useState(0.01);
@@ -45,9 +49,9 @@ export function BlemishDialog({ opened, onClose, media, mirror, onRestored }: Pr
       onRestored(
         await fillPainted({
           path: media.path,
-          width: media.width,
-          height: media.height,
-          angle: media.angle ?? 0,
+          width,
+          height,
+          angle,
           mirror,
           strokes,
           flags: ['--fill', 'lama'],

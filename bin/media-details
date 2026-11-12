@@ -893,6 +893,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     ...(node.attrs.whenManual ? { whenManual: node.attrs.whenManual } : {}),
     angle,
     mirror,
+    ...(Number(node.attrs.width) > 0 && Number(node.attrs.height) > 0 ? { width: Number(node.attrs.width), height: Number(node.attrs.height) } : {}),
     mimetype: node.attrs.mimetype,
     size: node.attrs.size,
     // Null is how a re-index clears the mark, so only a non-empty reason is a reason.

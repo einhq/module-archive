@@ -26,7 +26,8 @@ type Props = {
   version: MediaVersion | null;
   /** The picture it was restored from, as the lightbox shows it. */
   original: MediaItem;
-  /** The picture is shown flopped. */
+  /** How the picture is turned and flopped to be shown. */
+  angle: number;
   mirror: boolean;
   onClose: () => void;
   /** After the copy is deleted. */
@@ -70,7 +71,7 @@ function Picture({ src, srcSet, marks, label }: { src: string; srcSet?: string; 
  * again from them, in place of this one. Discarding deletes the copy; keeping leaves it among the
  * picture's versions.
  */
-export function RestoredCompare({ version, original, mirror, onClose, onDiscarded, onReplaced }: Props) {
+export function RestoredCompare({ version, original, angle, mirror, onClose, onDiscarded, onReplaced }: Props) {
   const [marks, setMarks] = useState(false);
   const [correcting, setCorrecting] = useState(false);
   const [strokes, setStrokes] = useState<MaskStroke[]>([]);
@@ -106,7 +107,7 @@ export function RestoredCompare({ version, original, mirror, onClose, onDiscarde
     try {
       const answer = await fillPainted({
         path: original.path,
-        angle: original.angle ?? 0,
+        angle,
         mirror,
         base: maskUrl,
         strokes,
