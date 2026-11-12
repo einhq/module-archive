@@ -26,7 +26,7 @@ import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
 import type { CommentEntry, MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
-import { MediaItem, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
+import { MediaItem, notify, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
@@ -39,6 +39,9 @@ import { FaceCrop } from '../../people/components/FaceCrop.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { StagedDuplicates } from '../../staging/components/StagedDuplicates.tsx';
 import { MediaEditModal } from './MediaEditModal.tsx';
+import { RESTORABLE, RestoreDialog } from './RestoreDialog.tsx';
+import type { FileRestoreAnswer } from '@media/api';
+import { RestoredCompare, restoredSteps } from './RestoredCompare.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
 import { UserText } from '../../components/UserText.tsx';
@@ -325,10 +328,10 @@ function CameraSection({ details, exif, onOpen }: {
 }
 
 /**
- * The file's other versions, such as the camera RAW of a JPEG: each a download, with its type and
- * size.
+ * The file's other versions, such as the camera RAW of a JPEG or a restored copy: each a download,
+ * with its type and size, and a restored copy what was done to it and a way to compare it.
  */
-function VersionsSection({ versions }: { versions: MediaVersion[] }) {
+function VersionsSection({ versions, onCompare }: { versions: MediaVersion[]; onCompare: (version: MediaVersion) => void }) {
   return (
     <SidebarSection id='versions' label='Versions' icon='versions' count={versions.length}>
       {versions.map((version) => (
@@ -342,6 +345,12 @@ function VersionsSection({ versions }: { versions: MediaVersion[] }) {
           <Text size='xs' c='dimmed'>
             {[version.mimetype, version.size !== undefined ? formatBytes(version.size) : ''].filter(Boolean).join(' · ')}
           </Text>
+          {version.restored && (
+            <Group gap={6} wrap='nowrap'>
+              <Text size='xs' c='dimmed'>Restored: {restoredSteps(version.restored.ops)}</Text>
+              <Anchor component='button' size='xs' onClick={() => onCompare(version)}>Compare</Anchor>
+            </Group>
+          )}
         </Box>
       ))}
     </SidebarSection>
@@ -438,6 +447,9 @@ export function MediaSidebar(
   const commentRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => fitComment(commentRef.current, draft), [draft]);
   const [editing, setEditing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  /** The restored copy shown beside the picture. */
+  const [comparing, setComparing] = useState<MediaVersion | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
@@ -450,6 +462,8 @@ export function MediaSidebar(
     setDraft('');
     setPosting(false);
     setEditing(false);
+    setRestoring(false);
+    setComparing(null);
     setMenuOpen(false);
     setAsking(null);
     setDeleting(null);
@@ -467,7 +481,38 @@ export function MediaSidebar(
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || sharing || asking !== null || menuOpen || deleting !== null), [editing, sharing, asking, menuOpen, deleting]);
+  useEffect(() => onLayer(editing || restoring || comparing !== null || sharing || asking !== null || menuOpen || deleting !== null), [
+    editing,
+    restoring,
+    comparing,
+    sharing,
+    asking,
+    menuOpen,
+    deleting,
+  ]);
+  /**
+   * A restoration done: its copy beside the picture, when that is still the one shown; a note
+   * otherwise, since the lightbox has moved on while it ran.
+   */
+  const restored = (from: string) => (answer: FileRestoreAnswer) => {
+    if (pathRef.current !== from) {
+      notify({ message: `The restored copy of ${from.split('/').pop()} is ready among its versions` });
+      return;
+    }
+    void result.refetch();
+    setComparing({
+      name: answer.name,
+      path: answer.path,
+      mimetype: answer.path.endsWith('.tif') ? 'image/tiff' : 'image/png',
+      thumbnails: true,
+      restored: {
+        ops: answer.restoration.steps.map((step) => step.op),
+        at: answer.restoration.at,
+        ...(answer.restoration.marked !== undefined ? { marked: answer.restoration.marked } : {}),
+        ...(answer.marks ? { marks: answer.marks } : {}),
+      },
+    });
+  };
   // Escape closes the edit menu, and not the lightbox beneath. Mantine's menu answers Escape only
   // with the focus inside it, and a click on its button leaves the focus on the button, so the key
   // is taken here, at the window, first.
@@ -637,6 +682,14 @@ export function MediaSidebar(
                 {canEdit && onEditSubtitles && (
                   <Menu.Item leftSection={<TablerIcon name='badge-cc' size={menuIcon} />} disabled={!details} onClick={onEditSubtitles}>
                     {details?.hasTranscript ? 'Edit subtitles' : 'Add subtitles'}
+                  </Menu.Item>
+                )}
+                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && (
+                  <Menu.Item
+                    leftSection={<TablerIcon name='wand' size={menuIcon} />}
+                    onClick={() => setRestoring(true)}
+                  >
+                    Restore…
                   </Menu.Item>
                 )}
                 {canEdit && canOrient && (
@@ -836,7 +889,7 @@ export function MediaSidebar(
           />
         )}
 
-        {versions.length > 0 && <VersionsSection versions={versions} />}
+        {versions.length > 0 && <VersionsSection versions={versions} onCompare={setComparing} />}
 
         {similar?.length !== 0 && (
           <SidebarSection id='similar' label='Similar' icon='photo-search'>
@@ -980,6 +1033,14 @@ export function MediaSidebar(
           <Button color='red' loading={deletingBusy} onClick={() => void confirmDelete()}>Delete</Button>
         </DialogActions>
       </Dialog>
+      <RestoreDialog
+        opened={restoring}
+        onClose={() => setRestoring(false)}
+        path={media.path}
+        digitized={details?.digitized}
+        onRestored={restored(media.path)}
+      />
+      <RestoredCompare version={comparing} original={media} onClose={() => setComparing(null)} onDiscarded={() => void result.refetch()} />
       {details && (
         <MediaEditModal
           opened={editing}

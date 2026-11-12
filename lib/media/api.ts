@@ -64,8 +64,27 @@ export type CameraRef = NodeRef & { make?: string; model?: string; owners: Owner
 /** A perceptual fingerprint child — provenance only, never the vector. */
 export type FingerprintRef = { name: string; computedAt?: string; computedBy?: string };
 
-/** Another form of the same picture kept under `<file>/versions/`: a camera RAW beside its JPEG, say. */
-export type MediaVersion = { name: string; path: string; mimetype?: string; size?: number };
+/**
+ * Another form of the same picture kept under `<file>/versions/`: a camera RAW beside its JPEG, or
+ * a copy `file-restore` made.
+ */
+export type MediaVersion = {
+  name: string;
+  path: string;
+  mimetype?: string;
+  size?: number;
+  /** It has renditions of its own under `thumbnails/`, so a page can show it. */
+  thumbnails?: true;
+  /** A restored copy: how it was made. */
+  restored?: VersionRestoration;
+};
+
+/**
+ * How a restored copy was made: the EMS ops that ran, in order, and when. `marked` is the share
+ * of the picture the defect finder took for damage, and `marks` its marks in the picture's display
+ * frame, white on black, for a page to lay over the original.
+ */
+export type VersionRestoration = { ops: string[]; at?: string; marked?: number; marks?: string };
 
 /** A file `raw` reckons is of the same shot, with the score and the signals behind it. */
 export type RawPartner = { path: string; score: number; reasons: ('stem' | 'dir' | 'time' | 'camera')[] };

@@ -517,19 +517,41 @@ const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise
   }
 };
 
-/** The files under `<path>/versions`, by name. */
+/** The files under `<path>/versions`, by name, and of a restored copy how it was made. */
 const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<MediaVersion[]> => {
   try {
-    const entries = await vfs.children<{ mimetype?: string; size?: number }>(access, `${path}/versions`);
-    return entries
-      .filter((entry) => entry.node.type === 'file')
-      .map((entry) => ({
-        name: entry.name,
-        path: `${path}/versions/${entry.name}`,
-        ...(entry.node.attrs.mimetype ? { mimetype: entry.node.attrs.mimetype } : {}),
-        ...(entry.node.attrs.size !== undefined ? { size: entry.node.attrs.size } : {}),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    const entries = await vfs.children<{ mimetype?: string; size?: number; restoration?: { steps?: { op?: string }[]; at?: string; marked?: number } }>(
+      access,
+      `${path}/versions`,
+    );
+    const versions = await Promise.all(
+      entries
+        .filter((entry) => entry.node.type === 'file' && !entry.name.startsWith('.'))
+        .map(async (entry): Promise<MediaVersion> => {
+          const versionPath = `${path}/versions/${entry.name}`;
+          const attrs = entry.node.attrs;
+          const below = new Set((await vfs.children(access, versionPath).catch(() => [])).map((child) => child.name));
+          const restoration = attrs.restoration;
+          return {
+            name: entry.name,
+            path: versionPath,
+            ...(attrs.mimetype ? { mimetype: attrs.mimetype } : {}),
+            ...(attrs.size !== undefined ? { size: attrs.size } : {}),
+            ...(below.has('thumbnails') ? { thumbnails: true as const } : {}),
+            ...(restoration
+              ? {
+                restored: {
+                  ops: (restoration.steps ?? []).map((step) => String(step.op ?? '')),
+                  ...(restoration.at ? { at: restoration.at } : {}),
+                  ...(typeof restoration.marked === 'number' ? { marked: restoration.marked } : {}),
+                  ...(below.has('marks.png') ? { marks: `${versionPath}/marks.png` } : {}),
+                },
+              }
+              : {}),
+          };
+        }),
+    );
+    return versions.sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return [];
   }

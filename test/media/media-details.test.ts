@@ -5,6 +5,7 @@
  */
 
 import { ALBUMS_ROOT, CAMERAS_ROOT, LOCATIONS_ROOT, PEOPLE_ROOT } from '@archive/paths';
+import type { MediaVersion } from '@archive/media/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, modeUnder, testCommands } from '@ein/testing';
 
@@ -51,7 +52,7 @@ type Details = {
   comments: { body: string; author: string }[];
   hashes: { sha256?: string; sha1?: string; md5?: string };
   fingerprints: { name: string; computedAt?: string; computedBy?: string }[];
-  versions: { name: string; path: string; mimetype?: string; size?: number }[];
+  versions: MediaVersion[];
   storyboard?: { name: string; sha256: string; interval: number; count: number; columns: number; tileWidth: number; tileHeight: number };
   chapters?: number[];
   albumStack?: {
@@ -440,6 +441,30 @@ Deno.test({
         { name: 'shot.dng', path: `${shot}/versions/shot.dng`, mimetype: versions[0].mimetype },
         { name: 'shot.nef', path: `${shot}/versions/shot.nef`, mimetype: 'image/x-nikon-nef' },
       ]);
+    });
+
+    await t.step('a restored copy says what was done to it, and whether it has renditions and marks', async () => {
+      const print = `${ALBUMS_ROOT}/a/files/print.jpg`;
+      await cmd.shouldSucceed(`mkfile ${print} && mkdir -p ${print}/versions`);
+      await cmd.shouldSucceed(`mkfile ${print}/versions/restored-1.png && mkdir -p ${print}/versions/restored-1.png/thumbnails`);
+      await cmd.shouldSucceed(`mkfile ${print}/versions/restored-1.png/marks.png`);
+      await cmd.shouldSucceed(`mkfile ${print}/versions/.tmprestore-1-unfade.png`);
+      const restoration = {
+        steps: [{ op: 'image.unfade', params: {}, producer: 'unfade/1' }, { op: 'image.defects', params: {}, producer: 'd' }],
+        at: '2026-11-12T18:00:00Z',
+        marked: 0.002,
+      };
+      await vfs.update(ADMIN_ACCESS, `${print}/versions/restored-1.png`, { attrs: { restoration } });
+
+      const versions = (await client.execJson<Details>(`media-details ${print}`)).versions;
+      assertEquals(versions.map((version) => version.name), ['restored-1.png']);
+      assertEquals(versions[0].thumbnails, true);
+      assertEquals(versions[0].restored, {
+        ops: ['image.unfade', 'image.defects'],
+        at: '2026-11-12T18:00:00Z',
+        marked: 0.002,
+        marks: `${print}/versions/restored-1.png/marks.png`,
+      });
     });
 
     await t.step("a video's storyboard sheet travels with how to read it; one half-written does not", async () => {
