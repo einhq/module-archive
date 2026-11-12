@@ -32,6 +32,7 @@ Deno.test('clampZoom collapses to the identity at or below 1x and caps at the ma
   assertEquals(clampZoom({ scale: 0.6, x: 40, y: 40 }, frame), ZOOM_IDENTITY);
   assertEquals(clampZoom({ scale: 1, x: 40, y: 40 }, frame), ZOOM_IDENTITY);
   assertEquals(clampZoom({ scale: 50, x: 0, y: 0 }, frame).scale, MAX_ZOOM);
+  assertEquals(clampZoom({ scale: 50, x: 0, y: 0 }, { ...frame, max: 20 }).scale, 20);
 });
 
 Deno.test('zoomAt keeps the picture point under the focal point where it was', () => {
@@ -76,6 +77,7 @@ Deno.test('wheelZoomScale zooms in on scroll up, out on scroll down, and stays i
   assert(wheelZoomScale(2, 100) < 2);
   assertEquals(wheelZoomScale(1, 100), 1);
   assertEquals(wheelZoomScale(MAX_ZOOM, -100), MAX_ZOOM);
+  assert(wheelZoomScale(MAX_ZOOM, -100, 20) > MAX_ZOOM);
 });
 
 Deno.test('pinchZoom scales by the spread of the fingers and follows their midpoint', () => {

@@ -20,6 +20,8 @@ export type ZoomFrame = {
   viewport: { width: number; height: number };
   /** The rendered (object-fit: contain) picture inside it, at scale 1. */
   content: { width: number; height: number };
+  /** The largest scale; `MAX_ZOOM` when absent. */
+  max?: number;
 };
 
 export type ZoomPoint = { x: number; y: number };
@@ -46,7 +48,7 @@ export function isZoomed(state: ZoomState): boolean {
   return state.scale > MIN_ZOOM + ZOOMED_EPSILON;
 }
 
-const clampScale = (scale: number): number => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+const clampScale = (scale: number, max = MAX_ZOOM): number => Math.min(max, Math.max(MIN_ZOOM, scale));
 
 const clampAxis = (offset: number, contentSize: number, viewportSize: number, scale: number): number => {
   const overflow = (contentSize * scale - viewportSize) / 2;
@@ -57,7 +59,7 @@ const clampAxis = (offset: number, contentSize: number, viewportSize: number, sc
 
 /** Keep the scale in range and the picture covering the box wherever it is larger than it. */
 export function clampZoom(state: ZoomState, frame: ZoomFrame): ZoomState {
-  const scale = clampScale(state.scale);
+  const scale = clampScale(state.scale, frame.max);
   if (scale <= MIN_ZOOM + ZOOMED_EPSILON) return ZOOM_IDENTITY;
   return {
     scale,
@@ -73,7 +75,7 @@ export function clampZoom(state: ZoomState, frame: ZoomFrame): ZoomState {
  * means t' = p - c * s', which is the translation below before clamping pulls it back in.
  */
 export function zoomAt(state: ZoomState, focal: ZoomPoint, scale: number, frame: ZoomFrame): ZoomState {
-  const next = clampScale(scale);
+  const next = clampScale(scale, frame.max);
   const ratio = next / state.scale;
   return clampZoom({
     scale: next,
@@ -106,8 +108,8 @@ export function stepZoom(state: ZoomState, direction: 1 | -1, frame: ZoomFrame):
  * Exponential in the delta so a notch feels the same at 1x and 4x, and so a trackpad pinch,
  * which arrives as many small ctrl+wheel deltas, integrates smoothly.
  */
-export function wheelZoomScale(scale: number, deltaY: number): number {
-  return clampScale(scale * Math.exp(-deltaY * WHEEL_SENSITIVITY));
+export function wheelZoomScale(scale: number, deltaY: number, max = MAX_ZOOM): number {
+  return clampScale(scale * Math.exp(-deltaY * WHEEL_SENSITIVITY), max);
 }
 
 /** The midpoint and spread of two fingers. */
