@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "ems": "^0.13.3",
-    "media": "^0.3.4"
+    "media": "^0.3.6"
   },
   "imports": {
     "@archive/camera/api": "./lib/camera/api.ts",

@@ -1,6 +1,6 @@
 import { assertEquals } from '@std/assert';
 import { pointDisplayToRaw } from '@media/orientation';
-import { type Affine, againFlags, crc32, displaySize, displayToStored, grayPng } from '../restore-mask.ts';
+import { type Affine, againFlags, crc32, displaySize, displayToStored, grayPng, invertAffine } from '../restore-mask.ts';
 
 const apply = ([a, b, c, d, e, f]: Affine, [x, y]: [number, number]): [number, number] => [a * x + c * y + e, b * x + d * y + f];
 
@@ -15,6 +15,16 @@ Deno.test('a point in the display frame lands where the orientation module puts 
         const [rx, ry] = pointDisplayToRaw(point, angle, mirror);
         assertEquals([Math.round(x * 1000) / 1000, Math.round(y * 1000) / 1000], [Math.round(rx * width * 1000) / 1000, Math.round(ry * height * 1000) / 1000]);
       }
+    }
+  }
+});
+
+Deno.test('the inverse turn takes a stored point back to where it was shown', () => {
+  for (const angle of [0, 90, 180, 270]) {
+    for (const mirror of [false, true]) {
+      const toStored = displayToStored(600, 400, angle, mirror);
+      const back = apply(invertAffine(toStored), apply(toStored, [123, 45]));
+      assertEquals(back.map((n) => Math.round(n * 1000) / 1000), [123, 45]);
     }
   }
 });

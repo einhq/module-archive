@@ -90,7 +90,16 @@ export function BlemishDialog({ opened, onClose, media, angle, mirror, width, he
           onUndo={strokes.length > 0 ? () => setStrokes(strokes.slice(0, -1)) : undefined}
           disabled={busy}
         />
-        <MarksBrush src={original.fullUrl} srcSet={original.srcSet} strokes={strokes} onStrokes={setStrokes} mode={mode} radius={radius} disabled={busy} />
+        <MarksBrush
+          src={original.fullUrl}
+          srcSet={original.srcSet}
+          path={original.path}
+          strokes={strokes}
+          onStrokes={setStrokes}
+          mode={mode}
+          radius={radius}
+          disabled={busy}
+        />
         {busy && <Text size='sm' c='dimmed'>Filling. A large scan takes a minute or two.</Text>}
         {error && <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />}>{error}</Alert>}
       </Stack>

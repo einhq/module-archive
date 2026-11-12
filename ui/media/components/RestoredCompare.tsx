@@ -188,7 +188,8 @@ export function RestoredCompare({ version, original: item, angle, mirror, canEdi
               <MarksBrush
                 src={original.fullUrl}
                 srcSet={original.srcSet}
-                marks={marksUrl}
+                path={original.path}
+                marks={maskUrl ? { src: maskUrl, angle, mirror } : undefined}
                 strokes={strokes}
                 onStrokes={setStrokes}
                 mode={mode}

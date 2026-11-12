@@ -25,6 +25,12 @@ export const displayToStored = (width: number, height: number, angle: number, mi
   return mirror ? multiply(turn, [-1, 0, 0, 1, display.width, 0]) : turn;
 };
 
+/** The transform that undoes `affine`. */
+export const invertAffine = ([a, b, c, d, e, f]: Affine): Affine => {
+  const det = a * d - b * c;
+  return [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det];
+};
+
 /** `outer` after `inner`: a point goes through `inner` first. */
 const multiply = ([a1, b1, c1, d1, e1, f1]: Affine, [a2, b2, c2, d2, e2, f2]: Affine): Affine => [
   a1 * a2 + c1 * b2,

@@ -1,7 +1,10 @@
 import { ActionIcon, Box, Group, SegmentedControl, Slider, Stack, Text, Tooltip } from '@mantine/core';
 import { type PointerEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { TablerIcon } from '@ein/ui/components';
-import { drawStroke, type MaskStroke } from '../lib/restore-mask.ts';
+import { fileUrl, shq, uuidv4 } from '@ein/ui/lib';
+import { execCommand } from '@ein/ui/signals';
+import type { FileCropAnswer } from '@media/api';
+import { displaySize, displayToStored, drawStroke, invertAffine, type MaskStroke } from '../lib/restore-mask.ts';
 import {
   isZoomed,
   panZoom,
@@ -19,17 +22,27 @@ import {
 
 /** The marks' colour over the picture. */
 const INK = '#fa5252';
-/** The long edge the marks to start from are kept at, in canvas pixels. */
-const EDGE = 1600;
 /** How far the picture zooms: far enough that a speck on a large scan is several screen pixels across. */
 const MAX_ZOOM = 16;
+/** How long the zoom holds still before the part in view is cut out of the picture, in ms. */
+const CUT_DELAY = 300;
+/** How much of the view's size the cut reaches past it on each side, so a short pan stays sharp. */
+const CUT_MARGIN = 0.25;
+
+/** A part of the picture: fractions of the display frame. */
+type Part = { x: number; y: number; width: number; height: number };
 
 type Props = {
   /** The picture, upright as it is shown. */
   src: string;
   srcSet?: string;
-  /** Marks to start from, white on black in the display frame. */
-  marks?: string;
+  /** The picture's path, to cut the part in view out of it at its own resolution when zoomed in. */
+  path?: string;
+  /**
+   * Marks to start from: a mask of the picture as stored, nonzero where marked, at its full size,
+   * and how the picture is turned and flopped to be shown.
+   */
+  marks?: { src: string; angle: number; mirror: boolean };
   strokes: MaskStroke[];
   onStrokes: (strokes: MaskStroke[]) => void;
   mode: MaskStroke['mode'];
@@ -39,25 +52,39 @@ type Props = {
 };
 
 /**
+ * Set `ctx` to draw in CSS pixels of the picture as it is shown at `zoom` in a box `size` big, from
+ * its top left corner, on a canvas `ratio` device pixels to the CSS pixel; the picture's size on
+ * the screen is answered.
+ */
+const place = (ctx: CanvasRenderingContext2D, zoom: ZoomState, size: { width: number; height: number }, ratio: number) => {
+  const [width, height] = [size.width * zoom.scale, size.height * zoom.scale];
+  ctx.setTransform(ratio, 0, 0, ratio, ratio * (size.width / 2 + zoom.x - width / 2), ratio * (size.height / 2 + zoom.y - height / 2));
+  return { width, height };
+};
+
+/**
  * A picture with marks over it in red, painted on and erased with a brush. The strokes are kept
  * in fractions of the display frame, so they can be drawn again at any size. The picture zooms
  * and pans the way the lightbox's does — the wheel or two fingers zoom, a drag with the right or
  * middle button or with two fingers pans, the buttons in the corner step — and the marks are
- * drawn at the screen's resolution over the part that is shown.
+ * drawn at the screen's resolution over the part that is shown, from the mask at its full size.
+ * Zoomed in, the part in view is cut out of the picture at its own resolution (`file-crop`) and
+ * laid over the rendition once the zoom holds still.
  */
-export function MarksBrush({ src, srcSet, marks, strokes, onStrokes, mode, radius, disabled }: Props) {
+export function MarksBrush({ src, srcSet, path, marks, strokes, onStrokes, mode, radius, disabled }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const base = useRef<HTMLCanvasElement | null>(null);
+  // The mask as loaded, and its marks in red at the canvas's size over the part shown.
+  const mask = useRef<HTMLImageElement | null>(null);
+  const layer = useRef<HTMLCanvasElement | null>(null);
   const drawing = useRef<MaskStroke | null>(null);
   const pointers = useRef(new Map<number, ZoomPoint>());
   const pinch = useRef<{ state: ZoomState; centre: ZoomPoint; distance: number } | null>(null);
   const [cursor, setCursor] = useState<ZoomPoint | null>(null);
   const [loaded, setLoaded] = useState(0);
-  // The picture's shape, once it has loaded; square until then.
-  const [aspect, setAspect] = useState(1);
-  const width = aspect >= 1 ? EDGE : Math.round(EDGE * aspect);
-  const height = aspect >= 1 ? Math.round(EDGE / aspect) : EDGE;
+  // The part in view cut out of the picture, and where it goes.
+  const [cut, setCut] = useState<{ url: string; part: Part } | null>(null);
+  const cutting = useRef(0);
   // The box's size in CSS pixels, which is the picture's at fit.
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [zoom, setZoom] = useState<ZoomState>(ZOOM_IDENTITY);
@@ -65,35 +92,21 @@ export function MarksBrush({ src, srcSet, marks, strokes, onStrokes, mode, radiu
   zoomRef.current = zoom;
   const ratio = globalThis.devicePixelRatio || 1;
 
-  // The marks to start from, turned from white on black into red on nothing.
   useEffect(() => {
-    base.current = null;
+    mask.current = null;
     if (!marks) return setLoaded((n) => n + 1);
     let live = true;
     const image = new Image();
     image.onload = () => {
       if (!live) return;
-      const layer = document.createElement('canvas');
-      layer.width = width;
-      layer.height = height;
-      const ctx = layer.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
-      ctx.drawImage(image, 0, 0, width, height);
-      const pixels = ctx.getImageData(0, 0, width, height);
-      const [r, g, b] = [0xfa, 0x52, 0x52];
-      for (let i = 0; i < pixels.data.length; i += 4) {
-        const marked = pixels.data[i] >= 128;
-        pixels.data.set([r, g, b, marked ? 255 : 0], i);
-      }
-      ctx.putImageData(pixels, 0, 0);
-      base.current = layer;
+      mask.current = image;
       setLoaded((n) => n + 1);
     };
-    image.src = marks;
+    image.src = marks.src;
     return () => {
       live = false;
     };
-  }, [marks, width, height]);
+  }, [marks?.src]);
 
   useEffect(() => setZoom(ZOOM_IDENTITY), [src]);
 
@@ -114,16 +127,88 @@ export function MarksBrush({ src, srcSet, marks, strokes, onStrokes, mode, radiu
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    // The picture's top left corner and size on the screen, in CSS pixels from the box's.
-    const { scale, x, y } = zoomRef.current;
-    const [shownWidth, shownHeight] = [size.width * scale, size.height * scale];
-    ctx.setTransform(ratio, 0, 0, ratio, ratio * (size.width / 2 + x - shownWidth / 2), ratio * (size.height / 2 + y - shownHeight / 2));
-    ctx.imageSmoothingEnabled = false;
-    if (base.current) ctx.drawImage(base.current, 0, 0, shownWidth, shownHeight);
+    if (layer.current) ctx.drawImage(layer.current, 0, 0);
+    const { width: shownWidth, height: shownHeight } = place(ctx, zoomRef.current, size, ratio);
     for (const stroke of drawing.current ? [...strokes, drawing.current] : strokes) drawStroke(ctx, stroke, shownWidth, shownHeight, INK, null);
   }, [strokes, size, ratio]);
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
 
-  useEffect(draw, [draw, loaded, zoom]);
+  useEffect(draw, [draw, zoom]);
+
+  // The mask turned into the display frame and drawn over the part shown, then from white on black
+  // into red on nothing; once a frame, however fast the zoom changes.
+  useEffect(() => {
+    const frameId = requestAnimationFrame(() => {
+      const image = mask.current;
+      if (!image || !marks || size.width === 0) {
+        layer.current = null;
+        return drawRef.current();
+      }
+      const out = layer.current ?? document.createElement('canvas');
+      out.width = Math.round(size.width * ratio);
+      out.height = Math.round(size.height * ratio);
+      const ctx = out.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      const [stored, display] = [{ width: image.naturalWidth, height: image.naturalHeight }, displaySize(image.naturalWidth, image.naturalHeight, marks.angle)];
+      const shown = place(ctx, zoomRef.current, size, ratio);
+      ctx.scale(shown.width / display.width, shown.height / display.height);
+      ctx.transform(...invertAffine(displayToStored(stored.width, stored.height, marks.angle, marks.mirror)));
+      // Zoomed past one mask pixel to a screen pixel, each shows as a square; short of it, they are averaged.
+      ctx.imageSmoothingEnabled = (shown.width * ratio) / display.width < 1;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(image, 0, 0);
+      const pixels = ctx.getImageData(0, 0, out.width, out.height);
+      const [r, g, b] = [0xfa, 0x52, 0x52];
+      // A speck averaged into a screen pixel is faint, so its share is shown four times as strong.
+      for (let i = 0; i < pixels.data.length; i += 4) pixels.data.set([r, g, b, Math.min(255, pixels.data[i] * 4)], i);
+      ctx.putImageData(pixels, 0, 0);
+      layer.current = out;
+      drawRef.current();
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [loaded, zoom, size, ratio, marks?.angle, marks?.mirror]);
+
+  // Zoomed in, the part in view and a margin around it, cut out of the picture at as many pixels as
+  // it takes on the screen, once the zoom holds still; at fit, the rendition alone.
+  useEffect(() => {
+    const ticket = cutting.current;
+    if (!path || !isZoomed(zoom) || size.width === 0) return setCut(null);
+    const timer = setTimeout(async () => {
+      const span = (offset: number, extent: number) => {
+        const view = 1 / zoom.scale;
+        const start = 0.5 - view / 2 - offset / (extent * zoom.scale);
+        const from = Math.max(0, start - CUT_MARGIN * view);
+        return [from, Math.min(1, start + view + CUT_MARGIN * view) - from];
+      };
+      const [x, width] = span(zoom.x, size.width);
+      const [y, height] = span(zoom.y, size.height);
+      const pixels = Math.ceil(width * size.width * zoom.scale * ratio);
+      const temp = `/tmp/brush-cut-${uuidv4()}.jpg`;
+      try {
+        const box = [x, y, width, height].map((n) => n.toFixed(6)).join(',');
+        await execCommand<FileCropAnswer>(`file-crop ${shq(path)} --box ${box} --width ${pixels} -o ${shq(temp)}`);
+        const res = await fetch(fileUrl(temp));
+        if (!res.ok || ticket !== cutting.current) return;
+        const url = URL.createObjectURL(await res.blob());
+        setCut({ url, part: { x, y, width, height } });
+      } catch {
+        // The rendition stays: it is the picture, only less sharp.
+      } finally {
+        await execCommand(`rm -f ${shq(temp)}`).catch(() => {});
+      }
+    }, CUT_DELAY);
+    return () => {
+      clearTimeout(timer);
+      // A cut still on its way when the zoom changes, or the brush goes, is not shown.
+      cutting.current++;
+    };
+  }, [path, zoom, size, ratio]);
+
+  // A cut replaced or left behind lets its picture go.
+  useEffect(() => () => {
+    if (cut) URL.revokeObjectURL(cut.url);
+  }, [cut]);
 
   // Native, not React's `onWheel`, which is passive: the dialog must not scroll under the zoom.
   useEffect(() => {
@@ -232,25 +317,28 @@ export function MarksBrush({ src, srcSet, marks, strokes, onStrokes, mode, radiu
           cursor: !disabled ? 'none' : zoomed ? 'grab' : 'default',
         }}
       >
-        <img
-          src={src}
-          srcSet={srcSet || undefined}
-          sizes={zoomedSizes(zoom.scale)}
-          alt=''
-          onLoad={(event) => {
-            const image = event.currentTarget;
-            if (image.naturalWidth > 0 && image.naturalHeight > 0) setAspect(image.naturalWidth / image.naturalHeight);
-          }}
-          style={{
-            maxWidth: '100%',
-            maxHeight: 'max(240px, calc(100dvh - 350px))',
-            width: 'auto',
-            height: 'auto',
-            display: 'block',
-            transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-            transformOrigin: 'center',
-          }}
-        />
+        <div style={{ position: 'relative', transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`, transformOrigin: 'center' }}>
+          <img
+            src={src}
+            srcSet={srcSet || undefined}
+            sizes={zoomedSizes(zoom.scale)}
+            alt=''
+            style={{ maxWidth: '100%', maxHeight: 'max(240px, calc(100dvh - 350px))', width: 'auto', height: 'auto', display: 'block' }}
+          />
+          {cut && (
+            <img
+              src={cut.url}
+              alt=''
+              style={{
+                position: 'absolute',
+                left: `${cut.part.x * 100}%`,
+                top: `${cut.part.y * 100}%`,
+                width: `${cut.part.width * 100}%`,
+                height: `${cut.part.height * 100}%`,
+              }}
+            />
+          )}
+        </div>
         <canvas
           ref={canvas}
           width={Math.round(size.width * ratio)}
