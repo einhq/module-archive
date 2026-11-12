@@ -217,7 +217,9 @@
         "label": "Gap check interval (seconds)",
         "description": "How often the background check looks for media missing something a pipeline should have given it, when nothing else is waiting to be processed.",
         "group": "Processing",
-        "restarts": ["media-heal"]
+        "restarts": [
+          "media-heal"
+        ]
       },
       {
         "key": "CFG_MEDIA_HEAL_REST",
@@ -227,7 +229,9 @@
         "label": "Rest after a full gap check (seconds)",
         "description": "How long the background gap check waits after a pass through the whole archive that found nothing before it starts another.",
         "group": "Processing",
-        "restarts": ["media-heal"]
+        "restarts": [
+          "media-heal"
+        ]
       },
       {
         "key": "CFG_FACE_VOTE_THRESHOLD",
@@ -607,7 +611,9 @@
     },
     {
       "name": "duplicate_deferred",
-      "on": ["duplicate.deferred"],
+      "on": [
+        "duplicate.deferred"
+      ],
       "using": "statistics"
     },
     {
@@ -677,7 +683,9 @@
       "/stats/life-events": "ui/people/pages/life-events.tsx",
       "/timeline": "ui/pages/timeline.tsx",
       "/trips": "ui/location/pages/trips.tsx",
-      "/year": "ui/pages/year.tsx"
+      "/year": "ui/pages/year.tsx",
+      "/cards/archive/picture": "ui/cards/picture.tsx",
+      "/cards/archive/birthdays": "ui/cards/birthdays.tsx"
     },
     "open": {
       "person": "/people/{name}",
@@ -686,7 +694,10 @@
       "camera": "/cameras/{name}"
     },
     "shareLinks": {
-      "album": { "shows": "node", "noun": "album" }
+      "album": {
+        "shows": "node",
+        "noun": "album"
+      }
     }
   }
 }

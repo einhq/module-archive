@@ -1,0 +1,65 @@
+[
+  {
+    "name": "picture",
+    "label": "Picture of the day",
+    "description": "One picture filling the card, the same all day or changing each hour: from this day in earlier years, an album, or the newest.",
+    "icon": "photo",
+    "color": "blue",
+    "route": "/cards/archive/picture",
+    "frame": "plain",
+    "size": [6, 5],
+    "min": [3, 2],
+    "params": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "title": "Pictures from",
+          "default": "onthisday",
+          "oneOf": [
+            { "const": "onthisday", "title": "This day in earlier years" },
+            { "const": "album", "title": "An album" },
+            { "const": "recent", "title": "The newest pictures" }
+          ]
+        },
+        "album": {
+          "type": "string",
+          "format": "path",
+          "title": "Album",
+          "description": "When the pictures are from an album.",
+          "x-choices": { "command": "album list /archive/albums --limit 500", "items": "items", "value": "path", "label": "title" }
+        },
+        "every": {
+          "type": "string",
+          "title": "Changes",
+          "default": "day",
+          "oneOf": [{ "const": "day", "title": "Each day" }, { "const": "hour", "title": "Each hour" }]
+        }
+      }
+    }
+  },
+  {
+    "name": "birthdays",
+    "label": "Birthdays",
+    "description": "The birthdays coming up, nearest first, with faces and ages; wedding anniversaries and memorials too, if you like.",
+    "icon": "cake",
+    "color": "grape",
+    "route": "/cards/archive/birthdays",
+    "size": [4, 5],
+    "min": [3, 3],
+    "params": {
+      "type": "object",
+      "properties": {
+        "days": { "type": "integer", "title": "Days ahead", "default": 30, "minimum": 1, "maximum": 366 },
+        "limit": { "type": "integer", "title": "At most", "default": 8, "minimum": 1, "maximum": 30 },
+        "kinds": {
+          "type": "array",
+          "items": { "type": "string" },
+          "title": "Show",
+          "description": "Birthdays only, unless you choose more.",
+          "enum": ["birthday", "anniversary", "death"]
+        }
+      }
+    }
+  }
+]
