@@ -3,7 +3,7 @@
   "version": "0.19.12",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.14.13",
+  "coreApi": "^0.14.16",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",

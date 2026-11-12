@@ -1,19 +1,15 @@
 /**
- * file-set-description: the hand-written description, which the UI writes
- * base64-encoded because it is arbitrary multi-line text on its way through a
- * shell command string.
+ * file-set-description: the hand-written description, given as `--text` or, as
+ * the UI does, on stdin with `--text -`.
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
-import { encodeBase64 } from '@std/encoding/base64';
 import { createTestContext, testCommands } from '@ein/testing';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
 const FILE = `${ALBUMS_ROOT}/a/p.jpg`;
-
-const b64 = (text: string) => encodeBase64(new TextEncoder().encode(text));
 
 Deno.test({
   name: 'file-set-description',
@@ -34,10 +30,10 @@ Deno.test({
       assertEquals(attrs.description, 'Boat trip');
     });
 
-    await t.step('--text-base64 round-trips multi-line text with quotes', async () => {
-      // The whole reason the flag exists: none of this survives a shell string.
+    await t.step('--text - reads multi-line text with quotes from stdin', async () => {
       const text = 'Line one\nLine "two" — with $VARS and \'quotes\'\nLine three';
-      await cmd.shouldSucceed(`file-set-description ${FILE} --text-base64 ${b64(text)}`);
+      const set = await client.exec(`file-set-description ${FILE} --text -`, { stdin: text });
+      assertEquals(set.success, true, set.error);
 
       const attrs = await client.execJson<{ description?: string }>(`attrs ${FILE}`);
       assertEquals(attrs.description, text);
@@ -51,13 +47,9 @@ Deno.test({
     });
 
     await t.step('empty text clears the attr rather than storing an empty string', async () => {
-      await cmd.shouldSucceed(`file-set-description ${FILE} --text-base64 ${b64('   ')}`);
+      await cmd.shouldSucceed(`echo '   ' | file-set-description ${FILE} --text -`);
       const attrs = await client.execJson<{ description?: string }>(`attrs ${FILE}`);
       assertEquals(attrs.description ?? null, null);
-    });
-
-    await t.step('bad base64 fails rather than storing mojibake', async () => {
-      await cmd.shouldFail(`file-set-description ${FILE} --text-base64 'not base64!!'`);
     });
 
     await t.step('no text at all is a usage error', async () => {

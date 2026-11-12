@@ -18,7 +18,6 @@
 import type { Command, Node, NodeChild } from '@ein/client';
 import { shq } from '@ein/client';
 import { homePath } from '@ein/paths';
-import { encodeBase64 } from '@std/encoding/base64';
 import type { MediaSidecar, MediaSidecarsAnswer, TakeoutAlbumSidecar, TakeoutSidecar, XmpSidecar } from '@archive/media/api';
 import { SIDECAR_CHILD, SIDECAR_MIMETYPES, sidecarPoint, writePosition } from '@archive/media/paired-sidecar';
 import { matchTakeout, parseTakeoutJson } from '@archive/media/takeout';
@@ -288,7 +287,7 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
     if (caption && !medium.attrs.description) {
       answer.described++;
       if (!dryRun) {
-        const result = await cmd.execute(`file-set-description ${shq(medium.path)} --text-base64 ${encodeBase64(new TextEncoder().encode(caption))}`);
+        const result = await cmd.execute(`file-set-description ${shq(medium.path)} --text -`, { stdin: caption });
         if (result.code !== 0) answer.failed.push({ path: medium.path, error: result.stderr.trim() || 'file-set-description failed' });
       }
     }

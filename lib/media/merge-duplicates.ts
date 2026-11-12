@@ -12,7 +12,6 @@ import type { Command, NodeProps } from '@ein/client';
 import { shq, verifyAccess } from '@ein/client';
 import { COVER_LINK_NAME, isTrashPath } from '@ein/paths';
 import type { StarEntry, TrashEntry, TrashPutResult } from '@ein/api';
-import { encodeBase64 } from '@std/encoding/base64';
 import { basename, dirname } from '@std/path';
 import type { AlbumAddResult, MergeDuplicatesResult, MergeField } from '@archive/media/api';
 import { POSITION_CHILD } from '@archive/location/location-link';
@@ -85,9 +84,9 @@ type AlbumPlan = { unlink: string[]; join: string[]; cover: string[]; dirs: Set<
 
 type MergeOptions = { batch?: string; label?: string; dryRun?: boolean };
 
-/** Run `command` in JSON mode; its stdout, or its stderr as the error. */
-const run = async (cmd: Command, command: string): Promise<string> => {
-  const result = await cmd.execute(`JSON_OUTPUT=1 ${command}`);
+/** Run `command` in JSON mode, `stdin` as its stdin; its stdout, or its stderr as the error. */
+const run = async (cmd: Command, command: string, stdin?: string): Promise<string> => {
+  const result = await cmd.execute(`JSON_OUTPUT=1 ${command}`, { stdin });
   if (result.code !== 0) throw new Error(result.stderr.trim() || `${command.split(' ')[0]} failed`);
   return result.stdout;
 };
@@ -96,7 +95,10 @@ const run = async (cmd: Command, command: string): Promise<string> => {
 const ask = async <T>(cmd: Command, command: string): Promise<T> => JSON.parse(await run(cmd, command)) as T;
 
 /** A step that runs one writer command. */
-const commandStep = (cmd: Command, field: MergeField, command: string): Step => ({ field, apply: async () => void await run(cmd, command) });
+const commandStep = (cmd: Command, field: MergeField, command: string, stdin?: string): Step => ({
+  field,
+  apply: async () => void await run(cmd, command, stdin),
+});
 
 const nowIso = () => new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
@@ -178,8 +180,7 @@ const planFields = (cmd: Command, keep: MergeFile, drops: MergeFile[], starred: 
 
   const described = !keep.attrs.description ? drops.find((drop) => drop.attrs.description) : undefined;
   if (described) {
-    const text = encodeBase64(new TextEncoder().encode(described.attrs.description!));
-    steps.push(commandStep(cmd, 'description', `file-set-description ${shq(keep.path)} --text-base64 ${text}`));
+    steps.push(commandStep(cmd, 'description', `file-set-description ${shq(keep.path)} --text -`, described.attrs.description!));
   }
 
   const timed = !keep.attrs.whenManual ? drops.find((drop) => drop.attrs.whenManual) : undefined;

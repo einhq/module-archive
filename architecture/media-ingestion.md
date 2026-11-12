@@ -1286,8 +1286,8 @@ face ("Is this <name>?"). `face-doubt --clear` withdraws a doubt unanswered.
 
 **Comments (convention).** Any node may carry `comments/<slug>` children: markdown `file` nodes (db
 tier) whose content is the body, author in `props.uid` and time in `props.birthtime` — no bespoke attrs. The core
-`comment <list|add|remove>` command owns them (`--body-base64` for bodies that would not survive shell
-quoting); reading is `readComments` (`src/lib/comments`), exported to modules through `@ein/client` for
+`comment <list|add|remove>` command owns them (`--body -` reads the body from stdin, as the UI
+sends it); reading is `readComments` (`src/lib/comments`), exported to modules through `@ein/client` for
 aggregators such as `media-details`. Owners are typically files
 and albums (the legacy importer writes the same shape).
 
@@ -1322,10 +1322,9 @@ album either end pointed at before stops pointing back; a neighbour the caller m
 left as it was and named on stderr. Only library albums take part, not suggestions. `album info`
 answers `previous` and `next` with the rest of the album's row.
 
-**Writing the description.** `file-set-description <file> [--text | --text-base64]` sets the
-hand-written `description` attr. The UI
-uses the base64 form for the same reason `comment add` has one: a description is arbitrary
-multi-line text on its way through a shell command string. Empty text clears the attr rather than
+**Writing the description.** `file-set-description <file> --text <s>|-` sets the
+hand-written `description` attr; the UI sends it on stdin (`--text -`), as it does a comment, so
+multi-line text with quotes in it never goes through a command line. Empty text clears the attr rather than
 storing an empty string, because every reader tests it for truthiness.
 
 ## Speaker recognition

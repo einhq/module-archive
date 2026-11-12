@@ -56,16 +56,6 @@ export type UseMediaDetailsResult = {
   rawExifLoading: boolean;
 };
 
-// Comment bodies, descriptions and a picture's text are arbitrary multi-line
-// text going into a shell command string, so they travel base64-encoded
-// (`comment add --body-base64`, `file-set-description --text-base64`,
-// `file-set-text --text-base64`).
-function encodeBody(text: string): string {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 const detailsArgs = (path: string, albumPath?: string) => `${shq(path)}${albumPath ? ` --album ${shq(albumPath)}` : ''}`;
 
 /**
@@ -212,7 +202,9 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
 
   const addComment = useCallback(async (text: string) => {
     if (!path || !text.trim()) return;
-    await execCommand(`comment add ${shq(path)} --body-base64 ${encodeBody(text)}`);
+    // Comments, descriptions, a picture's text and a transcript are multi-line text: each goes
+    // in on stdin, which a command takes as `-`, rather than on the command line.
+    await execCommand(`comment add ${shq(path)} --body -`, { stdin: text });
     await fetchDetails();
   }, [path, fetchDetails]);
 
@@ -224,20 +216,20 @@ export function useMediaDetails(path: string | undefined, albumPath?: string): U
 
   const setText = useCallback(async (text: string) => {
     if (!path) return;
-    await execCommand(`file-set-text ${shq(path)} --text-base64 ${encodeBody(text)}`);
+    await execCommand(`file-set-text ${shq(path)} --text -`, { stdin: text });
     await fetchDetails();
   }, [path, fetchDetails]);
 
   const setTranscript = useCallback(async (vtt: string) => {
     if (!path) return;
-    await execCommand(`file-set-transcript ${shq(path)} --vtt-base64 ${encodeBody(vtt)}`);
+    await execCommand(`file-set-transcript ${shq(path)}`, { stdin: vtt });
     forgetTranscript(`${fileUrl(path)}/metadata/transcript`);
     await fetchDetails();
   }, [path, fetchDetails]);
 
   const setDescription = useCallback(async (text: string) => {
     if (!path) return;
-    await execCommand(`file-set-description ${shq(path)} --text-base64 ${encodeBody(text)}`);
+    await execCommand(`file-set-description ${shq(path)} --text -`, { stdin: text });
     await fetchDetails();
   }, [path, fetchDetails]);
 

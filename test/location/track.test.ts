@@ -80,7 +80,7 @@ Deno.test({
   };
 
   try {
-    for (const name of ['trip1', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right', 'untimed']) await tracker(name);
+    for (const name of ['trip1', 'piped', 'south', 'backfill', 'thin', 'paused', 'moored', 'hike', 'glitch', 'cluster', 'wrong', 'right', 'untimed']) await tracker(name);
 
     await t.step("track-list finds a device's track under /dev, named after the device", async () => {
       const trip1 = await listed('trip1');
@@ -110,6 +110,13 @@ Deno.test({
 
       const window = await client.execJson<ReadResult>(`track-read ${positionOf('trip1')} --from 2020-05-01T10:01:00Z`);
       assertEquals(flat(window).map((p) => p.lat), [57.71, 57.72]);
+    });
+
+    await t.step('--json - reads the points from stdin', async () => {
+      const points = [{ lat: 57.72, lng: 11.99, ts: '2020-05-01T10:02:00Z' }, { lat: 57.73, lng: 12, ts: '2020-05-01T10:03:00Z' }];
+      const piped = await client.exec(`track-append ${positionOf('piped')} --json -`, { stdin: JSON.stringify(points) });
+      assertEquals(piped.success, true, piped.error);
+      assertEquals(flat(await client.execJson<ReadResult>(`track-read ${positionOf('piped')}`)).map((p) => p.lat), [57.72, 57.73]);
     });
 
     await t.step('a southern coordinate needs the flag form, and now has one', async () => {
@@ -538,6 +545,7 @@ Deno.test({
         'moored',
         'old-etrex',
         'paused',
+        'piped',
         'pocket',
         'right',
         'south',

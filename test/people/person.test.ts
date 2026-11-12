@@ -276,6 +276,14 @@ Deno.test({
       await cmd.shouldSucceed(`rm ${PEOPLE_ROOT}/anna/events/engagement-1971-12-24 ${PEOPLE_ROOT}/anna/events/engagement-1971-12-24-2 ${PEOPLE_ROOT}/anna/events/event`);
     });
 
+    await t.step('add-event --body - reads the body from stdin', async () => {
+      const body = 'Moved to Lund\nwith "the whole" family\n';
+      const added = await client.execJson<{ path: string }>(`person-add-event ${PEOPLE_ROOT}/anna --date 1998-06 --body -`, { stdin: body });
+      assertEquals(await client.execString(`cat ${added.path}`), body);
+      assertEquals((await client.execJson<{ name: string }>(`attrs ${added.path}`)).name, 'Moved to Lund');
+      await cmd.shouldSucceed(`rm ${added.path}`);
+    });
+
     await t.step('add-event --writer links the person who wrote the text, replacing the link when given again', async () => {
       await cmd.shouldSucceed(`person-create ${PEOPLE_ROOT}/tora --name Tora`);
       const writerOf = async (event: string) => (await client.execJson<{ softlink: string }>(`props -L ${event}/writer`)).softlink;
