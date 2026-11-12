@@ -6,6 +6,7 @@ import { execCommand, type MediaItem } from '@ein/ui/signals';
 import type { MediaVersion } from '@archive/media/api';
 import type { FileRestoreAnswer } from '@media/api';
 import { fillPainted } from '../lib/restore-fill.ts';
+import { originalOf, setShownCopy } from '../lib/shown-copy.ts';
 import { againFlags, type MaskStroke } from '../lib/restore-mask.ts';
 import { BrushBar, MarksBrush } from './MarksBrush.tsx';
 
@@ -29,11 +30,15 @@ type Props = {
   /** How the picture is turned and flopped to be shown. */
   angle: number;
   mirror: boolean;
+  /** Whether the person may change the picture: show the copy in its place, or discard it. */
+  canEdit: boolean;
   onClose: () => void;
   /** After the copy is deleted. */
   onDiscarded: () => void;
-  /** After the copy is made again from corrected marks, and the one compared deleted. */
-  onReplaced: (answer: FileRestoreAnswer) => void;
+  /** After the copy is made again from corrected marks, and the one compared deleted; `shown` when it shows in the picture's place. */
+  onReplaced: (answer: FileRestoreAnswer, shown: boolean) => void;
+  /** After the copy is shown in the picture's place, or the picture again. */
+  onShown: () => void;
 };
 
 /** One picture at the column's width, its own height, and over it, when given, the marks in red. */
@@ -69,9 +74,9 @@ function Picture({ src, srcSet, marks, label }: { src: string; srcSet?: string; 
  * damage — a button, a highlight in an eye — is painted over in the copy. They can be corrected
  * with a brush, erased where they are wrong and painted where damage was missed, and the copy made
  * again from them, in place of this one. Discarding deletes the copy; keeping leaves it among the
- * picture's versions.
+ * picture's versions, and showing it makes it the picture the archive shows, the original kept.
  */
-export function RestoredCompare({ version, original, angle, mirror, onClose, onDiscarded, onReplaced }: Props) {
+export function RestoredCompare({ version, original: item, angle, mirror, canEdit, onClose, onDiscarded, onReplaced, onShown }: Props) {
   const [marks, setMarks] = useState(false);
   const [correcting, setCorrecting] = useState(false);
   const [strokes, setStrokes] = useState<MaskStroke[]>([]);
@@ -79,14 +84,17 @@ export function RestoredCompare({ version, original, angle, mirror, onClose, onD
   const [radius, setRadius] = useState(0.006);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shown, setShown] = useState(false);
   useEffect(() => {
     setMarks(false);
     setCorrecting(false);
     setStrokes([]);
     setError(null);
+    setShown(version?.shown === true);
   }, [version?.path]);
 
   if (!version) return null;
+  const original = originalOf(item);
   const restored = mediaItemFrom({
     path: version.path,
     mimetype: version.mimetype ?? 'image/png',
@@ -114,7 +122,8 @@ export function RestoredCompare({ version, original, angle, mirror, onClose, onD
         flags: againFlags(version.restored.steps),
       });
       await execCommand(`rm -r ${shq(version.path)}`);
-      onReplaced(answer);
+      if (shown) await setShownCopy(original.path, answer.name);
+      onReplaced(answer, shown);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -126,9 +135,24 @@ export function RestoredCompare({ version, original, angle, mirror, onClose, onD
     setBusy(true);
     setError(null);
     try {
+      if (shown) await setShownCopy(original.path, null);
       await execCommand(`rm -r ${shq(version.path)}`);
       onDiscarded();
       onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const show = async (copy: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setShownCopy(original.path, copy ? version.name : null);
+      setShown(copy);
+      onShown();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -185,7 +209,7 @@ export function RestoredCompare({ version, original, angle, mirror, onClose, onD
               )}
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing='md'>
                 <Picture src={original.fullUrl} srcSet={original.srcSet} marks={marks ? marksUrl : undefined} label='Original' />
-                <Picture src={restored.fullUrl} srcSet={restored.srcSet} label={version.name} />
+                <Picture src={restored.fullUrl} srcSet={restored.srcSet} label={shown ? `${version.name}, shown in the archive` : version.name} />
               </SimpleGrid>
             </>
           )}
@@ -202,9 +226,12 @@ export function RestoredCompare({ version, original, angle, mirror, onClose, onD
           <DialogActions>
             <Group gap='xs' mr='auto'>
               <Button component='a' variant='default' href={fileUrl(version.path)} download={version.name}>Download</Button>
-              {correctable && <Button variant='default' onClick={() => setCorrecting(true)} disabled={busy}>Correct the marks</Button>}
+              {canEdit && correctable && <Button variant='default' onClick={() => setCorrecting(true)} disabled={busy}>Correct the marks</Button>}
             </Group>
-            <Button variant='default' color='red' loading={busy} onClick={() => void discard()}>Discard</Button>
+            {canEdit && <Button variant='default' color='red' loading={busy} onClick={() => void discard()}>Discard</Button>}
+            {canEdit && version.thumbnails && (
+              <Button variant='default' loading={busy} onClick={() => void show(!shown)}>{shown ? 'Show the original' : 'Show this copy'}</Button>
+            )}
             <Button onClick={onClose} disabled={busy}>Keep</Button>
           </DialogActions>
         )}

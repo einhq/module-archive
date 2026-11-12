@@ -77,6 +77,8 @@ export type MediaVersion = {
   thumbnails?: true;
   /** A restored copy: how it was made. */
   restored?: VersionRestoration;
+  /** The archive shows this copy in the file's place: the file's `shown` attr names it. */
+  shown?: true;
 };
 
 /**

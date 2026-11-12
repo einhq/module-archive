@@ -469,6 +469,18 @@ Deno.test({
         mask: `${print}/versions/restored-1.png/mask.png`,
         marks: `${print}/versions/restored-1.png/marks.png`,
       });
+      assertEquals(versions[0].shown, undefined);
+    });
+
+    await t.step('the copy the file shows is marked shown, while it has renditions', async () => {
+      const print = `${ALBUMS_ROOT}/a/files/print.jpg`;
+      await cmd.shouldSucceed(`mkfile ${print}/versions/restored-2.png`);
+      await cmd.shouldSucceed(`attrs ${print} -s shown=versions/restored-1.png`);
+      const shownOf = async () => (await client.execJson<Details>(`media-details ${print}`)).versions.map((version) => version.shown ?? false);
+      assertEquals(await shownOf(), [true, false]);
+      await cmd.shouldSucceed(`attrs ${print} -s shown=versions/restored-2.png`);
+      assertEquals(await shownOf(), [false, false]);
+      await cmd.shouldSucceed(`attrs ${print} -d shown`);
     });
 
     await t.step("a video's storyboard sheet travels with how to read it; one half-written does not", async () => {

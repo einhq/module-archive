@@ -4,6 +4,7 @@ import { Dialog, DialogActions, TablerIcon } from '@ein/ui/components';
 import type { MediaItem } from '@ein/ui/signals';
 import type { FileRestoreAnswer } from '@media/api';
 import { fillPainted } from '../lib/restore-fill.ts';
+import { originalOf } from '../lib/shown-copy.ts';
 import type { MaskStroke } from '../lib/restore-mask.ts';
 import { BrushBar, MarksBrush } from './MarksBrush.tsx';
 
@@ -33,6 +34,8 @@ export function BlemishDialog({ opened, onClose, media, angle, mirror, width, he
   const [radius, setRadius] = useState(0.01);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The file is what is filled, so it is what is painted over, not a copy it is shown as.
+  const original = originalOf(media);
 
   useEffect(() => {
     if (!opened) return;
@@ -87,7 +90,7 @@ export function BlemishDialog({ opened, onClose, media, angle, mirror, width, he
           onUndo={strokes.length > 0 ? () => setStrokes(strokes.slice(0, -1)) : undefined}
           disabled={busy}
         />
-        <MarksBrush src={media.fullUrl} srcSet={media.srcSet} strokes={strokes} onStrokes={setStrokes} mode={mode} radius={radius} disabled={busy} />
+        <MarksBrush src={original.fullUrl} srcSet={original.srcSet} strokes={strokes} onStrokes={setStrokes} mode={mode} radius={radius} disabled={busy} />
         {busy && <Text size='sm' c='dimmed'>Filling. A large scan takes a minute or two.</Text>}
         {error && <Alert color='red' icon={<TablerIcon name='alert-circle' size={16} />}>{error}</Alert>}
       </Stack>

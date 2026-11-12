@@ -517,8 +517,11 @@ const readFingerprints = async (vfs: Vfs, access: Access, path: string): Promise
   }
 };
 
-/** The files under `<path>/versions`, by name, and of a restored copy how it was made. */
-const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<MediaVersion[]> => {
+/**
+ * The files under `<path>/versions`, by name, and of a restored copy how it was made. The one the
+ * file's `shown` attr names is marked shown while it has renditions to show.
+ */
+const readVersions = async (vfs: Vfs, access: Access, path: string, shown: unknown): Promise<MediaVersion[]> => {
   try {
     const entries = await vfs.children<
       { mimetype?: string; size?: number; restoration?: { steps?: { op?: string; params?: Record<string, unknown> }[]; at?: string; marked?: number } }
@@ -540,6 +543,7 @@ const readVersions = async (vfs: Vfs, access: Access, path: string): Promise<Med
             ...(attrs.mimetype ? { mimetype: attrs.mimetype } : {}),
             ...(attrs.size !== undefined ? { size: attrs.size } : {}),
             ...(below.has('thumbnails') ? { thumbnails: true as const } : {}),
+            ...(below.has('thumbnails') && shown === `versions/${entry.name}` ? { shown: true as const } : {}),
             ...(restoration
               ? {
                 restored: {
@@ -729,6 +733,8 @@ type FileAttrs = {
   sar?: number;
   duration?: number;
   cameraPath?: string;
+  /** The version shown in the file's place, by its path under it. */
+  shown?: string;
 };
 
 const stackMember = (id: string, path: string, node: Awaited<ReturnType<Vfs['get']>>): StackMemberRef => {
@@ -863,7 +869,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     childNames.has('metadata') ? readTranscript(vfs, access, `${path}/metadata/transcript`) : Promise.resolve(null),
     childNames.has('metadata') ? readSpeakers(vfs, access, path, takenAt) : Promise.resolve({ speakers: [], unattributedTurns: [], heard: [] }),
     childNames.has('metadata') ? readFingerprints(vfs, access, path) : Promise.resolve([]),
-    childNames.has('versions') ? readVersions(vfs, access, path) : Promise.resolve([]),
+    childNames.has('versions') ? readVersions(vfs, access, path, node.attrs.shown) : Promise.resolve([]),
     albumPath ? readAlbumStack(vfs, access, albumPath, node.id, path).catch(() => undefined) : Promise.resolve(undefined),
     isVideo && childNames.has('thumbnails') ? readStoryboard(vfs, access, path) : Promise.resolve(null),
     isVideo && childNames.has('metadata') ? readChapters(vfs, access, `${path}/metadata/chapters`) : Promise.resolve(null),
@@ -972,7 +978,7 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
       await cmd.writeLn(`fingerprint: ${f.name}${f.computedAt ? ` (${f.computedAt})` : ''}`);
     }
     for (const v of details.versions) {
-      await cmd.writeLn(`version: ${v.name}${v.mimetype ? ` (${v.mimetype})` : ''}`);
+      await cmd.writeLn(`version: ${v.name}${v.mimetype ? ` (${v.mimetype})` : ''}${v.shown ? ', shown' : ''}`);
     }
   }
   return 0;

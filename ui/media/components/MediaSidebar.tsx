@@ -42,6 +42,7 @@ import { MediaEditModal } from './MediaEditModal.tsx';
 import { RESTORABLE, RestoreDialog } from './RestoreDialog.tsx';
 import type { FileRestoreAnswer } from '@media/api';
 import { RestoredCompare, restoredSteps } from './RestoredCompare.tsx';
+import { setShownCopy } from '../lib/shown-copy.ts';
 import { BlemishDialog } from './BlemishDialog.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
@@ -330,9 +331,15 @@ function CameraSection({ details, exif, onOpen }: {
 
 /**
  * The file's other versions, such as the camera RAW of a JPEG or a restored copy: each a download,
- * with its type and size, and a restored copy what was done to it and a way to compare it.
+ * with its type and size, and a restored copy what was done to it, a way to compare it and, for
+ * whoever may change the file, to show it in the file's place or the file again.
  */
-function VersionsSection({ versions, onCompare }: { versions: MediaVersion[]; onCompare: (version: MediaVersion) => void }) {
+function VersionsSection({ versions, onCompare, onShow }: {
+  versions: MediaVersion[];
+  onCompare: (version: MediaVersion) => void;
+  /** Show this copy in the file's place, or the file with null; absent for who may not. */
+  onShow?: (name: string | null) => void;
+}) {
   return (
     <SidebarSection id='versions' label='Versions' icon='versions' count={versions.length}>
       {versions.map((version) => (
@@ -351,6 +358,15 @@ function VersionsSection({ versions, onCompare }: { versions: MediaVersion[]; on
               <Text size='xs' c='dimmed'>Restored: {restoredSteps(version.restored.steps)}</Text>
               <Anchor component='button' size='xs' onClick={() => onCompare(version)}>Compare</Anchor>
             </Group>
+          )}
+          {version.shown && (
+            <Group gap={6} wrap='nowrap'>
+              <Text size='xs' c='dimmed'>Shown in the archive</Text>
+              {onShow && <Anchor component='button' size='xs' onClick={() => onShow(null)}>Show the original</Anchor>}
+            </Group>
+          )}
+          {!version.shown && version.restored && version.thumbnails && onShow && (
+            <Anchor component='button' size='xs' onClick={() => onShow(version.name)}>Show this copy</Anchor>
           )}
         </Box>
       ))}
@@ -498,7 +514,7 @@ export function MediaSidebar(
    * A restoration done: its copy beside the picture, when that is still the one shown; a note
    * otherwise, since the lightbox has moved on while it ran.
    */
-  const restored = (from: string) => (answer: FileRestoreAnswer) => {
+  const restored = (from: string) => (answer: FileRestoreAnswer, shown = false) => {
     if (pathRef.current !== from) {
       notify({ message: `The restored copy of ${from.split('/').pop()} is ready among its versions` });
       return;
@@ -509,6 +525,7 @@ export function MediaSidebar(
       path: answer.path,
       mimetype: answer.path.endsWith('.tif') ? 'image/tiff' : 'image/png',
       thumbnails: true,
+      ...(shown ? { shown: true as const } : {}),
       restored: {
         steps: answer.restoration.steps.map((step) => ({ op: step.op, params: step.params })),
         at: answer.restoration.at,
@@ -555,6 +572,16 @@ export function MediaSidebar(
   const faces = details?.faces ?? [];
   const comments = details?.comments ?? [];
   const versions = details?.versions ?? [];
+  const shownCopy = versions.find((version) => version.shown);
+  /** Show the copy `name` in the picture's place, or the picture again with null. */
+  const showCopy = async (name: string | null) => {
+    try {
+      await setShownCopy(media.path, name);
+    } catch (err) {
+      notify({ color: 'red', message: err instanceof Error ? err.message : String(err) });
+    }
+    void result.refetch();
+  };
   const exif = details?.exif ?? null;
   const albumStack = details?.albumStack;
   const canMutateStack = !!albumStack && albumStack.membersComplete && canWrite(albumStack.albumOwnership, access) &&
@@ -637,6 +664,17 @@ export function MediaSidebar(
               )}
             </Group>
             {summary && <Text size='xs' c='dimmed' mt={4}>{summary}</Text>}
+            {shownCopy && (
+              <Text size='xs' c='dimmed' mt={4}>
+                Shown as its restored copy, {shownCopy.name}
+                {canEdit && (
+                  <>
+                    {' · '}
+                    <Anchor component='button' size='xs' onClick={() => void showCopy(null)}>Show the original</Anchor>
+                  </>
+                )}
+              </Text>
+            )}
             <Group gap='xs' mt={8} wrap='wrap'>
               {/* A visitor is not told who else may see it. */}
               {details && access && !isGuest(access) && <SharingChip path={media.path} ownership={details.ownership} />}
@@ -902,7 +940,7 @@ export function MediaSidebar(
           />
         )}
 
-        {versions.length > 0 && <VersionsSection versions={versions} onCompare={setComparing} />}
+        {versions.length > 0 && <VersionsSection versions={versions} onCompare={setComparing} onShow={canEdit ? (name) => void showCopy(name) : undefined} />}
 
         {similar?.length !== 0 && (
           <SidebarSection id='similar' label='Similar' icon='photo-search'>
@@ -1070,9 +1108,11 @@ export function MediaSidebar(
         original={media}
         angle={details?.angle ?? 0}
         mirror={details?.mirror ?? false}
+        canEdit={canEdit}
         onClose={() => setComparing(null)}
         onDiscarded={() => void result.refetch()}
         onReplaced={restored(media.path)}
+        onShown={() => void result.refetch()}
       />
       {details && (
         <MediaEditModal
