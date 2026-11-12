@@ -84,7 +84,7 @@ export type MediaVersion = {
  * of the picture the defect finder took for damage, and `marks` its marks in the picture's display
  * frame, white on black, for a page to lay over the original.
  */
-export type VersionRestoration = { ops: string[]; at?: string; marked?: number; marks?: string };
+type VersionRestoration = { ops: string[]; at?: string; marked?: number; marks?: string };
 
 /** A file `raw` reckons is of the same shot, with the score and the signals behind it. */
 export type RawPartner = { path: string; score: number; reasons: ('stem' | 'dir' | 'time' | 'camera')[] };
