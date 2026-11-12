@@ -49,9 +49,8 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
-import { useAccessIds, useShortcutHelp, useSurface } from '@ein/ui/hooks';
+import { useAccessIds, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
-import { useWakeLock } from '../hooks/useWakeLock.ts';
 import {
   albumMediaList,
   currentMediaIndex,

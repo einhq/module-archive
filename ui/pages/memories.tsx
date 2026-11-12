@@ -4,12 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import type { DayInHistory } from '@archive/media/api';
 import { PageLoader, TablerIcon } from '@ein/ui/components';
-import { useCommand, useShortcutHelp, useSurface } from '@ein/ui/hooks';
+import { useCommand, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { mediaItemFrom, posterUrl } from '@ein/ui/lib';
 import { type MediaItem, openMediaAt } from '@ein/ui/signals';
 import '../components/memories.css';
 import { yearsAgo } from '../components/MemoryRings.tsx';
-import { useWakeLock } from '../media/hooks/useWakeLock.ts';
 
 export const handle = { fullBleed: true };
 
