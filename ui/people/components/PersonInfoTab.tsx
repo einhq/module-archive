@@ -8,11 +8,14 @@ import { spanLine } from '../../lib/residence-span.ts';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { SourceFiles } from '../../components/SourceFiles.tsx';
+import { NodeComments } from '../../components/Comments.tsx';
 import { qualifiedDate } from '@archive/people/date-qualifier';
 import { yearSpan } from '../../lib/year-span.ts';
 
 type PersonInfoTabProps = {
   person: PersonInfo;
+  /** Whether the reader may change the person, and so comment on them. */
+  editable: boolean;
   /** How much media they appear in, and over what years. Absent while it loads. */
   media?: { total: number; range: { min: number; max: number } | null };
 };
@@ -29,9 +32,10 @@ const slugOf = (path: string): string => encodeURIComponent(path.split('/').pop(
  * and on a phone not even their contact details, which would push the name off
  * the cover. This tab is where the rest lives, on every screen size: every
  * contact with its type, the full dates, homes with their spans, the family
- * the node links to, the whole description, and the files that describe them.
+ * the node links to, the whole description, the files that describe them and
+ * the comments on them.
  */
-export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
+export function PersonInfoTab({ person, editable, media }: PersonInfoTabProps) {
   const contacts = person.contact ?? [];
   const homes = [...person.homes].sort((a, b) => {
     if (Boolean(a.to) !== Boolean(b.to)) return a.to ? 1 : -1;
@@ -116,6 +120,8 @@ export function PersonInfoTab({ person, media }: PersonInfoTabProps) {
           <UserText text={person.description} size='sm' />
         </InfoSection>
       )}
+
+      <NodeComments path={person.path} writable={editable} />
 
       {person.sources.length > 0 && (
         <InfoSection title='Sources'>

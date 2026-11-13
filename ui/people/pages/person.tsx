@@ -151,7 +151,7 @@ export default function PersonDetailPage() {
           </Tabs.Panel>
 
           <Tabs.Panel value='info'>
-            <PersonInfoTab person={person} media={facets ? { total: facets.total, range: facets.range } : undefined} />
+            <PersonInfoTab person={person} editable={editable} media={facets ? { total: facets.total, range: facets.range } : undefined} />
           </Tabs.Panel>
 
           <Tabs.Panel value='media'>

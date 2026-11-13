@@ -19,13 +19,13 @@
  * state of their own for a picture are keyed by its path.
  */
 
-import { CoverAvatar, Dialog, DialogActions, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text, Textarea } from '@mantine/core';
+import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
+import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text } from '@mantine/core';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
-import type { CommentEntry, MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
+import type { MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, notify, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
@@ -47,12 +47,11 @@ import { BlemishDialog } from './BlemishDialog.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
 import { LightboxActionItems } from './LightboxActionItems.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { Comments } from '../../components/Comments.tsx';
 import { SidebarSection, useSectionOpen } from './SidebarSection.tsx';
 
 /** Wide enough for the iconed rows. */
 export const SIDEBAR_WIDTH = 400;
-/** The comment author's picture beside their name, in px. */
-const COMMENT_AVATAR = 20;
 
 /** In the reader's date and time format, as the lightbox's other times are. */
 const TIMESTAMP: Intl.DateTimeFormatOptions = { dateStyle: 'medium', timeStyle: 'short' };
@@ -248,34 +247,6 @@ function StackSection({ details, selectedPath, canMutate, busy, onPreview, onAct
   );
 }
 
-/** A comment, under its author: the account's full name, or its username, beside the linked person's picture. */
-function CommentRow({ comment, canDelete, onDelete }: {
-  comment: CommentEntry;
-  canDelete: boolean;
-  onDelete: () => void;
-}) {
-  const author = comment.authorName ?? comment.author;
-  return (
-    <Stack gap={6}>
-      <Group justify='space-between' gap='xs' wrap='nowrap'>
-        <Group gap='xs' wrap='nowrap' miw={0}>
-          {comment.personPath && <CoverAvatar path={comment.personPath} fallback={author.charAt(0).toUpperCase()} size={COMMENT_AVATAR} alt='' eager />}
-          <Text size='xs' c='dimmed' miw={0}>
-            {author}
-            {comment.createdAt ? ` · ${formatTimestamp(comment.createdAt)}` : ''}
-          </Text>
-        </Group>
-        {canDelete && (
-          <ActionIcon variant='subtle' color='gray' size='sm' onClick={onDelete} aria-label='Delete comment'>
-            <TablerIcon name='trash' size={14} />
-          </ActionIcon>
-        )}
-      </Group>
-      <Text size='sm' lh={1.5} style={{ whiteSpace: 'pre-wrap' }}>{comment.body}</Text>
-    </Stack>
-  );
-}
-
 /** The description a person wrote, changed in the file's edit dialog. */
 function DescriptionSection({ description }: { description: string }) {
   return (
@@ -374,26 +345,6 @@ function VersionsSection({ versions, onCompare, onShow }: {
   );
 }
 
-const COMMENT_MAX_ROWS = 6;
-/** The send button inside the comment box, and the room kept for it at the box's right, in px. */
-const COMMENT_SEND_BUTTON = 26;
-const COMMENT_SEND_SECTION = 36;
-
-/**
- * Sizes the comment box to `draft`: one row while empty, otherwise tall enough for the text, up to
- * COMMENT_MAX_ROWS lines, scrolling past that.
- */
-function fitComment(box: HTMLTextAreaElement | null, draft: string) {
-  if (!box) return;
-  box.style.height = '';
-  if (!draft || box.scrollHeight <= box.clientHeight) return;
-  const style = getComputedStyle(box);
-  const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
-  const borders = box.offsetHeight - box.clientHeight;
-  const most = COMMENT_MAX_ROWS * parseFloat(style.lineHeight) + padding;
-  box.style.height = `${Math.min(box.scrollHeight, most) + borders}px`;
-}
-
 export function MediaSidebar(
   {
     media,
@@ -457,12 +408,6 @@ export function MediaSidebar(
   // Asked here rather than in the strip, so a picture with nothing like it has no row at all.
   const similar = useSimilarMedia(media.type === 'audio' ? undefined : media.path);
   const { details, addComment, removeComment, setDescription, setTextLanguage, rawExif, loadRawExif, rawExifLoading } = result;
-  const [draft, setDraft] = useState('');
-  const [posting, setPosting] = useState(false);
-  // The comment box grows with its draft and is measured only when the draft changes, not on every
-  // render as Mantine's `autosize` is.
-  const commentRef = useRef<HTMLTextAreaElement>(null);
-  useLayoutEffect(() => fitComment(commentRef.current, draft), [draft]);
   const [editing, setEditing] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [blemishing, setBlemishing] = useState(false);
@@ -471,22 +416,18 @@ export function MediaSidebar(
   const [menuOpen, setMenuOpen] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
-  /** The comment whose delete waits to be confirmed. */
-  const [deleting, setDeleting] = useState<CommentEntry | null>(null);
-  const [deletingBusy, setDeletingBusy] = useState(false);
+  /** A comment's delete waits to be confirmed. */
+  const [confirmingComment, setConfirmingComment] = useState(false);
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
-    setDraft('');
-    setPosting(false);
     setEditing(false);
     setRestoring(false);
     setBlemishing(false);
     setComparing(null);
     setMenuOpen(false);
     setAsking(null);
-    setDeleting(null);
-    setDeletingBusy(false);
+    setConfirmingComment(false);
   }
   /** The picture shown, for a comment posted on one to know whether it is still the one shown. */
   const pathRef = useRef(media.path);
@@ -500,7 +441,7 @@ export function MediaSidebar(
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
   const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || restoring || blemishing || comparing !== null || sharing || asking !== null || menuOpen || deleting !== null), [
+  useEffect(() => onLayer(editing || restoring || blemishing || comparing !== null || sharing || asking !== null || menuOpen || confirmingComment), [
     editing,
     restoring,
     blemishing,
@@ -508,7 +449,7 @@ export function MediaSidebar(
     sharing,
     asking,
     menuOpen,
-    deleting,
+    confirmingComment,
   ]);
   /**
    * A restoration done: its copy beside the picture, when that is still the one shown; a note
@@ -590,30 +531,6 @@ export function MediaSidebar(
   // A file may have GPS of its own, or only a link to a location that has coordinates. Either is
   // enough to draw the map; the file's own point wins when both exist.
   const mapPoint = position ?? (location?.lat !== undefined && location?.lng !== undefined ? { lat: location.lat, lng: location.lng, radius: location.radius } : null);
-
-  const post = async () => {
-    if (!draft.trim()) return;
-    const path = media.path;
-    setPosting(true);
-    try {
-      await addComment(draft);
-      if (pathRef.current === path) setDraft('');
-    } finally {
-      if (pathRef.current === path) setPosting(false);
-    }
-  };
-
-  const confirmDelete = async () => {
-    if (!deleting) return;
-    const path = media.path;
-    setDeletingBusy(true);
-    try {
-      await removeComment(deleting.slug);
-      if (pathRef.current === path) setDeleting(null);
-    } finally {
-      if (pathRef.current === path) setDeletingBusy(false);
-    }
-  };
 
   const originalUrl = fileUrl(media.path);
   const summary = summaryLine(exif, media);
@@ -954,57 +871,14 @@ export function MediaSidebar(
         }
         {(comments.length > 0 || canEdit) && (
           <SidebarSection id='comments' label='Comments' icon='messages' count={comments.length}>
-            {comments.length > 0 && (
-              <Stack gap='lg' mb='xs'>
-                {comments.map((comment) => (
-                  <CommentRow
-                    key={comment.slug}
-                    comment={comment}
-                    canDelete={access?.uid === comment.uid}
-                    onDelete={() => setDeleting(comment)}
-                  />
-                ))}
-              </Stack>
-            )}
-            {canEdit && (
-              <>
-                {
-                  /* Send sits inside the box, in its bottom-right corner as on the chat page, so it
-                    stays beside the last line as the box grows. Enter is a new line; Ctrl+Enter posts. */
-                }
-                <Textarea
-                  ref={commentRef}
-                  value={draft}
-                  onChange={(e) => setDraft(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      void post();
-                    }
-                  }}
-                  placeholder='Add a comment…'
-                  rows={1}
-                  readOnly={posting}
-                  rightSectionWidth={COMMENT_SEND_SECTION}
-                  rightSectionPointerEvents='all'
-                  styles={{ section: { alignItems: 'flex-end', paddingBottom: 4 } }}
-                  rightSection={
-                    <ActionIcon
-                      variant='filled'
-                      color='marine'
-                      size={COMMENT_SEND_BUTTON}
-                      onClick={() => void post()}
-                      disabled={!draft.trim()}
-                      loading={posting}
-                      title='Comment'
-                      aria-label='Comment'
-                    >
-                      <TablerIcon name='send' size={14} />
-                    </ActionIcon>
-                  }
-                />
-              </>
-            )}
+            <Comments
+              key={media.path}
+              comments={comments}
+              writable={canEdit}
+              onAdd={addComment}
+              onRemove={removeComment}
+              onDialog={setConfirmingComment}
+            />
           </SidebarSection>
         )}
 
@@ -1077,13 +951,6 @@ export function MediaSidebar(
           </SidebarSection>
         )}
       </Stack>
-      <Dialog opened={deleting !== null} onClose={() => setDeleting(null)} title='Delete comment?' icon='trash' pattern='danger' size='sm' floating>
-        <Text size='sm' style={{ whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto' }}>{deleting?.body}</Text>
-        <DialogActions>
-          <Button variant='default' onClick={() => setDeleting(null)}>Cancel</Button>
-          <Button color='red' loading={deletingBusy} onClick={() => void confirmDelete()}>Delete</Button>
-        </DialogActions>
-      </Dialog>
       <RestoreDialog
         opened={restoring}
         onClose={() => setRestoring(false)}

@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { EntityPicker } from '../../components/EntityPicker.tsx';
 import { InfoFact, InfoSection } from '../../components/InfoSection.tsx';
 import { UserText } from '../../components/UserText.tsx';
+import { NodeComments } from '../../components/Comments.tsx';
 import { useTracks } from '../../location/hooks/useTracks.ts';
 import { useAlbumDevices } from '../hooks/useAlbumDevices.ts';
 import { deviceRoute } from '../../location/lib/device-route.ts';
@@ -14,7 +15,7 @@ import { useContainerSubjects } from '../hooks/useContainerSubjects.ts';
 
 type AlbumInfoTabProps = {
   path: string;
-  /** Whether the reader may change the album's list of devices: an album they may write. */
+  /** Whether the reader may change the album's list of devices and comment on it: an album they may write. */
   editable: boolean;
   title: string;
   description?: string;
@@ -176,7 +177,7 @@ function AlbumDevices({ path, editable }: { path: string; editable: boolean }) {
  * and who and what its media have — the people in them, where they were taken, the cameras that took
  * them, who held the camera and the labels they carry (`subjects-in`) — and the devices whose
  * tracks its map draws. Each opens its own page, and its count a search of this album's media that
- * have it.
+ * have it. Beside them, the comments on the album.
  */
 export function AlbumInfoTab({ path, editable, title, description, timeStart, timeEnd, facets }: AlbumInfoTabProps) {
   const { subjects, loading } = useContainerSubjects(path);
@@ -201,6 +202,8 @@ export function AlbumInfoTab({ path, editable, title, description, timeStart, ti
           <UserText text={description} size='sm' />
         </InfoSection>
       )}
+
+      <NodeComments path={path} writable={editable} />
 
       {loading && (
         <InfoSection title='People and places'>
