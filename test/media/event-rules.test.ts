@@ -113,6 +113,7 @@ Deno.test("rule: the archive's reading of a file's metadata is a fact, on the wr
     hasGps: true,
     cameraSerial: 'SER1',
     cameraKey: 'SER1',
+    digitized: false,
   }]]);
   assertEquals((await deriveEvents(updated(['description']), ctx, 100)).filter((f) => f.type === MEDIA_EVENTS.metadataInterpreted), []);
 });
@@ -580,4 +581,25 @@ Deno.test('faces: current faces, a file never detected, an undecodable one, anot
   // An EMS running models recognition is not tuned for would store nothing on a re-detection.
   assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT }), { faceGeneration: 'other-detector+other-recogniser' }), 100)), []);
   assertEquals(facesFacts(await deriveGaps(IMG, tree(indexed({ facesAt: FOUND_AT })), 100)), []);
+});
+
+const DAMAGE = 'damage/1+bopb-detection';
+const damageFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.damageMissing);
+const scan = (attrs: Record<string, unknown> = {}) => indexed({ digitized: true, interpretedAt: 'now', ...attrs });
+
+Deno.test('damage: a scan never read, or read by another method than EMS reads with now, is read', async () => {
+  const never = damageFacts(await deriveGaps(IMG, tree(scan(), { damageGeneration: DAMAGE }), 100));
+  assertEquals(never.map((f) => [f.subject, f.data]), [[IMG, { mimetype: 'image/jpeg', damageBy: '' }]]);
+  // Without EMS the scans never read are still found.
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(scan()), 100)).length, 1);
+  const older = damageFacts(await deriveGaps(IMG, tree(scan({ damageAt: 'then', damageBy: 'damage/0+bopb-detection' }), { damageGeneration: DAMAGE }), 100));
+  assertEquals(older.map((f) => f.data?.damageBy), ['damage/0+bopb-detection']);
+});
+
+Deno.test('damage: a scan read now, one EMS cannot be asked about, a photo, a HEIF scan or an undecodable one ask nothing', async () => {
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(scan({ damageAt: 'then', damageBy: DAMAGE }), { damageGeneration: DAMAGE }), 100)), []);
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(scan({ damageAt: 'then', damageBy: 'damage/0+bopb-detection' })), 100)), []);
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(indexed({ interpretedAt: 'now' }), { damageGeneration: DAMAGE }), 100)), []);
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(scan({ mimetype: 'image/heic' }), { damageGeneration: DAMAGE }), 100)), []);
+  assertEquals(damageFacts(await deriveGaps(IMG, tree(scan({ undecodable: 'truncated' }), { damageGeneration: DAMAGE }), 100)), []);
 });

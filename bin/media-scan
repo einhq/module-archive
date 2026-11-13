@@ -42,7 +42,8 @@
  * files under the root, so a pass run as a pipeline step draws its progress where the step shows.
  *
  * The faces check compares a file with what EMS runs now, so a run that cannot ask EMS cannot
- * make it. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
+ * make it; nor can the damage check tell a scan read by an older method, though it still finds
+ * the scans never read. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
  * names the types it could not check (`unchecked`) and counts them as held back, which the pass then
  * owes (ein/core#1006).
  */
@@ -231,6 +232,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   // The face models EMS runs now: a file whose faces were found by others is detected again.
   const ems = gaps ? await generations(cmd) : null;
   const faceGeneration = ems?.faces ?? undefined;
+  const damageGeneration = ems?.damage ?? undefined;
   // Photos are owed their weather only while it may be looked up.
   const weather = gaps && weatherOn(await readSettings(cmd, cmd.access));
 
@@ -274,6 +276,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       }
     },
     faceGeneration,
+    damageGeneration,
     weather,
   };
 
@@ -314,6 +317,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // Every setting of the full context, not only the listing answers: a field left out here
       // silently turns its check off on the fast path.
       faceGeneration,
+      damageGeneration,
       weather,
     };
   };

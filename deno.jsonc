@@ -157,6 +157,7 @@
     "@media/bridge": "../media/lib/bridge.ts",
     "@media/chapters": "../media/lib/chapters.ts",
     "@media/chromaprint": "../media/lib/chromaprint.ts",
+    "@media/damage": "../media/lib/damage.ts",
     "@media/facts": "../media/lib/facts.ts",
     "@media/file-rules": "../media/lib/file-rules.ts",
     "@media/fingerprints": "../media/lib/fingerprints.ts",

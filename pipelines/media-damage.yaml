@@ -1,0 +1,39 @@
+# Read how faded, dusty and scratched a scan is (`find-damage`, EMS `image.damage`), so the scans
+# worth restoring can be listed. ein/core#1200.
+#
+# A scan is a file its staging category stamped `digitized`, which `exif-interpret` reads before it
+# writes `interpretedAt`, so the fact says it. A file marked a scan after it was interpreted, one
+# that arrived while nothing listened and one read by an older method are `media-scan`'s gap,
+# `media.damage.missing`, read again with `-f`. The pictures EMS's restoration ops read only.
+name: media-damage
+description: Read how faded, dusty and scratched a scan is
+
+vars:
+  FORCE: ''
+
+triggers:
+  - on: media.metadata.interpreted
+    wants: archive
+    match:
+      digitized: 'true'
+      mimetype: [image/jpeg, image/png, image/tiff, image/webp, image/bmp]
+    skipIfAttr: damageAt
+
+  - on: media.damage.missing
+    wants: archive
+    vars:
+      FORCE: -f
+    priority: 10
+
+steps:
+  find-damage:
+    command: find-damage $FORCE $NODE_PATH
+    description: How faded, dusty and scratched the scan is
+    pool: media
+    kind: damage
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 3
+  priority: 10

@@ -17,6 +17,7 @@
 import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
+import { RESTORABLE } from '@media/damage';
 import { weatherOwed } from '@archive/weather/photo';
 import {
   deriveForExif as extractedFacts,
@@ -92,6 +93,11 @@ export const MEDIA_EVENTS = {
    * gap.
    */
   speakersMissing: 'media.speakers.missing',
+  /**
+   * A scan whose damage was never read (`find-damage`), or read by another method than EMS reads
+   * with now (`damageBy`): a digitized picture EMS's restoration ops take. The reconciler's gap.
+   */
+  damageMissing: 'media.damage.missing',
   /**
    * A photo or video's faces were found by other face models than EMS runs now (`facesBy`). Its
    * own fact because the face pipelines' ordinary trigger skips every file that has `facesAt`.
@@ -179,6 +185,11 @@ export type RuleContext = FileRuleContext & {
    * every file stale forever.
    */
   faceGeneration?: string;
+  /**
+   * What EMS reads damage with now (`generations().damage`). A scan whose `damageBy` names another
+   * is read again. Undefined when EMS cannot be asked, which leaves the read ones alone.
+   */
+  damageGeneration?: string;
   /**
    * Whether `CFG_WEATHER` lets photos be given their weather. Undefined or false disables the
    * check: a photo is owed nothing while no lookup may be made.
@@ -372,6 +383,23 @@ export async function deriveGaps(
         time: now,
         source: MEDIA_EVENT_SOURCE,
         data: { mimetype, facesBy: facesBy ?? '', expected: ctx.faceGeneration },
+      });
+    }
+  }
+
+  // A scan whose damage was never read, or read by another method than EMS's now: the first is a
+  // scan that arrived while nothing listened or was marked a scan after it was interpreted, which
+  // stamps `digitized` without interpreting it again.
+  if (!undecodable && interpreted && file.attrs.digitized === true && RESTORABLE.has(mimetype)) {
+    const damageBy = str(file.attrs.damageBy);
+    if (!str(file.attrs.damageAt) || (ctx.damageGeneration !== undefined && damageBy !== ctx.damageGeneration)) {
+      events.push({
+        type: MEDIA_EVENTS.damageMissing,
+        subject: filePath,
+        nodeId: file.id,
+        time: now,
+        source: MEDIA_EVENT_SOURCE,
+        data: { mimetype, damageBy: damageBy ?? '' },
       });
     }
   }
@@ -603,6 +631,8 @@ async function interpretedFact(filePath: string, file: NodeSnapshot, ctx: RuleCo
       // Whether there is *anything* to match a camera on: a serial, or make and model, since most
       // phones write no serial.
       cameraKey: cameraSerial || str(deviceinfo?.model) || str(deviceinfo?.make) || '',
+      // A scan, whose damage is read for restoring.
+      digitized: file.attrs.digitized === true,
     },
   };
 }

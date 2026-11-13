@@ -27,6 +27,7 @@ const MODEL_STEPS = [
   { file: 'media-faces-stale.yaml', step: 'detect-faces', kind: 'faces' },
   { file: 'media-voiceprint.yaml', step: 'voiceprint-file', kind: 'diarize' },
   { file: 'media-speaker-faces.yaml', step: 'see', kind: 'diarize' },
+  { file: 'media-damage.yaml', step: 'find-damage', kind: 'damage' },
 ];
 
 Deno.test('model-bound steps take one slot each, and every kind they name is one the models worker is offered', async () => {

@@ -5,3 +5,4 @@
 # `requires: models` is here, or it never runs (test/media/model-slots.test.ts).
 faces ops=faces.detect,faces.detect_video,image.renditions,video.poster
 diarize ops=speech.voiceprint,speech.active_speakers
+damage ops=image.damage

@@ -23,6 +23,7 @@ const FAMILIES: Record<string, string[]> = {
   'media-speaker-assign': ['archive'],
   'media-voiceprint': ['archive'],
   'media-camera': ['archive'],
+  'media-damage': ['archive'],
   'media-camera-cover': ['archive'],
   'media-interpret': ['archive'],
   'media-geocode': ['archive'],
