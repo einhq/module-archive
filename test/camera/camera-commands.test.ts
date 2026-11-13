@@ -263,6 +263,34 @@ Deno.test({
       assertEquals(facets.years, []);
     });
 
+    await t.step('a clock offset re-dates the linked files from its date on, and camera-info reports it', async () => {
+      const exif = (iso: string) => {
+        const [[year, month, day], [hour, minute, second]] = iso.split('T').map((half) => half.split(/[-:]/));
+        return { deviceinfo: { make: 'OLYMPUS', model: 'mju 700' }, when: { device: { year, month, day, hour, minute, second } } };
+      };
+      await media('/shots/ahead.jpg', exif('2017-07-26T14:00:00'));
+      await media('/shots/right.jpg', exif('2017-08-10T10:00:00'));
+      const camera = `${CAMERAS_ROOT}/Olympus_mju_700`;
+      await cmd.shouldSucceed('camera-create --name "Olympus mju 700" --make OLYMPUS --model "mju 700" --timezone Europe/Stockholm');
+      assertEquals((await client.execJson<Times>('attrs /shots/ahead.jpg')).takenAt, '2017-07-26T14:00:00+02:00');
+
+      const ahead = await client.execJson<{ relink: Relink }>(`camera-update ${camera} --clock-offset=+23h2m`);
+      assertEquals(ahead.relink.retimed, 2);
+      const right = await client.execJson<{ relink: Relink }>(`camera-update ${camera} --clock-offset=0 --clock-from=2017-08`);
+      assertEquals(right.relink.retimed, 1);
+      let attrs = await client.execJson<Times>('attrs /shots/ahead.jpg');
+      assertEquals([attrs.takenAt, attrs.takenAtUtc, attrs.takenAtSource], ['2017-07-25T14:58:00+02:00', '2017-07-25T12:58:00Z', 'camera']);
+      attrs = await client.execJson<Times>('attrs /shots/right.jpg');
+      assertEquals(attrs.takenAt, '2017-08-10T10:00:00+02:00');
+
+      const info = await client.execJson<{ clockOffsets?: { seconds: number; from?: string }[] }>(`camera-info ${camera}`);
+      assertEquals(info.clockOffsets, [{ seconds: 23 * 3600 + 120 }, { seconds: 0, from: '2017-08-01' }]);
+
+      await cmd.shouldFailWith(`camera-update ${camera} --clock-offset=soon`, '--clock-offset takes');
+      await cmd.shouldFailWith(`camera-update ${camera} --clock-from=2017`, '--clock-from needs --clock-offset');
+      await cmd.shouldFailWith(`camera-update ${camera} --clock-offset=1h --clock-from=someday`, '--clock-from takes a date');
+    });
+
     await t.step('a relinked camera is then findable by search --camera', async () => {
       const found = await client.execJson<{ results: { path: string }[] }>(`search --subject camera:${CAMERAS_ROOT}/iPhone_12`);
       assertEquals(found.results.map((hit) => hit.path).sort(), ['/shots/b.jpg', '/shots/c.jpg']);

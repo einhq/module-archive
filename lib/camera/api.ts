@@ -27,6 +27,12 @@ export type CameraTimeline = {
   entries: TimelineEntry[];
 };
 
+/**
+ * One `--clock-offset` setting of a camera: its clock ran `seconds` ahead of the time in its zone,
+ * behind when negative, from `from` (`YYYY-MM-DD`) on, or for all its pictures without it.
+ */
+export type ClockOffsetSetting = { seconds: number; from?: string };
+
 /** What one camera's relink pass changed. `camera` is its path, so a sweep's rows identify themselves. */
 export type RelinkResult = { camera: string; scanned: number; linked: number; retimed: number; skipped: number };
 

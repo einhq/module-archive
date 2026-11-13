@@ -12,7 +12,7 @@ import type { Command, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
 import { NOT_DERIVED, SYSTEM_TIME_ZONE } from '@ein/client';
 import type { StagingRetimeAnswer, StagingTimeRules } from '@archive/staging/api';
 import { type CaptureWhen, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
-import { type CameraClock, clockForFile, offsetAt } from '@archive/camera/camera-zone';
+import { type CameraClock, clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { stampsHold, timeStamps } from '@archive/staging/category';
 
 /** Files read per page. */
@@ -93,10 +93,7 @@ const retimePage = async (cmd: Command, rows: NodeQueryEntry[], rules: StagingTi
         manual: str(attrs.whenManual),
         gps: when.gps,
         camera: when.device,
-        digitizer: clock.digitizer,
-        quicktimeUtc: clock.quicktimeUtc,
-        cameraOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
-        archiveZone: SYSTEM_TIME_ZONE,
+        ...clockSources(clock, SYSTEM_TIME_ZONE),
         ...stampedSources(stamps),
       });
       const same = str(attrs.takenAt) === resolved?.takenAt && str(attrs.takenAtUtc) === resolved?.takenAtUtc &&

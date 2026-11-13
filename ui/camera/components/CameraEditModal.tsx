@@ -1,6 +1,7 @@
 import { Alert, Button, NumberInput, Select, SimpleGrid, Stack, Switch, TextInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type { RelinkResult } from '@archive/camera/api';
+import { parseClockOffset } from '@archive/camera/clock-offset';
 import { Dialog, DialogActions, MarkdownEditor, TablerIcon } from '@ein/ui/components';
 import type { CameraDetail, CameraFields } from '../hooks/useCamera.ts';
 import { LabelsField, useLabelsDraft } from '../../components/NodeLabels.tsx';
@@ -61,6 +62,10 @@ export function CameraEditModal({ opened, onClose, camera, save, onSaved }: Came
       setError('a camera needs a name');
       return;
     }
+    if (draft.clockOffset.trim() && parseClockOffset(draft.clockOffset) === undefined) {
+      setError('a clock offset says how far its clock ran ahead, such as +23h 2m, or -5m when it was behind');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -114,6 +119,22 @@ export function CameraEditModal({ opened, onClose, camera, save, onSaved }: Came
           limit={50}
           nothingFoundMessage='No such timezone'
         />
+        <SimpleGrid cols={{ base: 1, sm: 2 }}>
+          <TextInput
+            label='Clock is off by'
+            placeholder='0'
+            description='How far ahead its clock was, such as +23h 2m; -5m when behind.'
+            value={field('clockOffset')}
+            onChange={(event) => setField('clockOffset', event.currentTarget.value)}
+          />
+          <TextInput
+            label='From'
+            placeholder='All its pictures'
+            description='The date its clock was off from: 2017, 2017-06 or 2017-06-20.'
+            value={field('clockFrom')}
+            onChange={(event) => setField('clockFrom', event.currentTarget.value)}
+          />
+        </SimpleGrid>
         <Switch
           label='Scanner or digitizer'
           description='Its EXIF camera dates say when the file was scanned, not when the photograph was taken.'

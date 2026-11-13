@@ -18,7 +18,8 @@
  * - **gps** — the receiver's clock, disciplined by satellite. True UTC, full precision, and the
  *   only source that knows what instant it actually was. It wins over the camera.
  * - **camera** — the camera's own clock. A wall clock with no zone attached, frequently wrong
- *   by minutes and occasionally by years, but for most files it is all there is.
+ *   by minutes and occasionally by years, but for most files it is all there is. Where the camera
+ *   registry says how far it was off, the reading is put right first.
  * - **name** — a date the file's name spells (`whenName`), read only where its staging category
  *   says names are dates (`@archive/media/filename-date`). The last resort: a phone writes the
  *   same clock into the name as into the tags, so the name decides only when the tags are gone.
@@ -105,6 +106,13 @@ type TimeSources = {
    */
   cameraOffsetAt?: (wallClock: string) => number | undefined;
   /**
+   * How many seconds the camera's clock ran ahead at a reading of it, behind when negative, when
+   * the camera registry says it was wrong; built by `@archive/camera/camera-zone` too. The camera
+   * reading, a name and a Takeout instant, all read off that clock, are put right by it before
+   * anything else is asked of them, `cameraOffsetAt` included.
+   */
+  cameraErrorAt?: (wallClock: string) => number;
+  /**
    * The camera is a scanner or an editor, so its clock records when the *file* was made.
    *
    * Some scanners write the scan time into `DateTimeOriginal` itself, which no
@@ -150,6 +158,44 @@ const instantParts = (instant: string): CaptureDateParts | undefined => {
   if (!match) return undefined;
   const [, year, month, day, hour, minute, second] = match;
   return { year, month, day, hour, minute, second, timezone: 'Z' };
+};
+
+/** Parts moved by some seconds: as they are when there is nothing to move, or Temporal refuses them. */
+const shiftParts = (parts: CaptureDateParts, seconds: number): CaptureDateParts => {
+  if (seconds === 0) return parts;
+  try {
+    const moved = Temporal.PlainDateTime.from(partsToWallClock(parts)).add({ seconds });
+    const pad = (value: number, width = 2) => String(value).padStart(width, '0');
+    return {
+      ...parts,
+      year: pad(moved.year, 4),
+      month: pad(moved.month),
+      day: pad(moved.day),
+      hour: pad(moved.hour),
+      minute: pad(moved.minute),
+      second: pad(moved.second),
+    };
+  } catch {
+    return parts;
+  }
+};
+
+/**
+ * A name's capture time put right by the camera's clock error, when it is a minute or a second
+ * the camera's clock gave; a coarser one, or one nothing says was wrong, is returned as it is.
+ */
+const correctName = (name: string, cameraErrorAt: TimeSources['cameraErrorAt']): string => {
+  const parts = parseCaptureTime(name);
+  if (!cameraErrorAt || !parts || (parts.precision !== 'second' && parts.precision !== 'minute')) return name;
+  const wall = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second ?? '00'}`;
+  const error = cameraErrorAt(wall);
+  if (error === 0) return name;
+  try {
+    const moved = Temporal.PlainDateTime.from(wall).subtract({ seconds: error }).toString({ smallestUnit: parts.precision });
+    return `${moved}${/(Z|[-+]\d{2}:\d{2})$/.exec(name.trim())?.[1] ?? ''}`;
+  } catch {
+    return name;
+  }
 };
 
 /** Epoch seconds for a parts object read as if it were UTC — only ever used for differences. */
@@ -247,7 +293,10 @@ const placeUtcReading = (
  */
 export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   const { manual, archiveZone } = sources;
-  const given = sources.camera?.quicktime && sources.camera.timezone === undefined && sources.quicktimeUtc ? { ...sources.camera, timezone: 'Z' } : sources.camera;
+  // A clock the registry says was wrong is put right before anything is read off it.
+  const error = sources.camera ? sources.cameraErrorAt?.(partsToWallClock(sources.camera)) ?? 0 : 0;
+  const put = sources.camera && shiftParts(sources.camera, -error);
+  const given = put?.quicktime && put.timezone === undefined && sources.quicktimeUtc ? { ...put, timezone: 'Z' } : put;
   const reading = given && placeUtcReading(given, sources.cameraOffsetAt, archiveZone);
   const camera = sources.digitizer || sources.digitized ? undefined : reading;
 
@@ -264,8 +313,10 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   }
 
   // A Takeout instant far from the camera clock (unsuppressed: a digitizer's clock is still a
-  // clock), or with none far from the upload, is a date a person set in Google Photos.
-  const instant = sources.sidecar?.instant !== undefined ? instantParts(sources.sidecar.instant) : undefined;
+  // clock), or with none far from the upload, is a date a person set in Google Photos. Near it, it
+  // is Google's reading of that clock, and as wrong as the clock was.
+  const taken = sources.sidecar?.instant !== undefined ? instantParts(sources.sidecar.instant) : undefined;
+  const instant = taken && shiftParts(taken, -error);
   const uploaded = sources.sidecar?.uploaded !== undefined ? instantParts(sources.sidecar.uploaded) : undefined;
   const farFrom = (other: CaptureDateParts) => Math.abs(partsToNaiveSeconds(instant!) - partsToNaiveSeconds(other)) > GPS_SANITY_WINDOW_SECONDS;
   if (instant && (reading ? farFrom(reading) : !uploaded || farFrom(uploaded))) {
@@ -292,7 +343,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   // stays the camera's, the instant is Google's, and the two say which offset to stamp. A camera
   // that recorded its own offset already says all of it.
   if (instant && camera && camera.timezone === undefined) {
-    return { takenAt: withOffset(partsToWallClock(camera), recoverOffsetSeconds(camera, instant)), takenAtUtc: sources.sidecar!.instant!, takenAtSource: 'sidecar' };
+    return { takenAt: withOffset(partsToWallClock(camera), recoverOffsetSeconds(camera, instant)), takenAtUtc: `${partsToWallClock(instant)}Z`, takenAtSource: 'sidecar' };
   }
 
   if (camera) {
@@ -307,7 +358,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
 
   // A digitizer named the file when it made it, as its clock dated it.
   if (sources.name !== undefined && !sources.digitizer && !sources.digitized) {
-    const named = resolveName(sources.name, sources.cameraOffsetAt, archiveZone);
+    const named = resolveName(correctName(sources.name, sources.cameraErrorAt), sources.cameraOffsetAt, archiveZone);
     if (named) return { ...named, takenAtSource: 'name' };
   }
 

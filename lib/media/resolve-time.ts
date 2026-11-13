@@ -10,7 +10,7 @@ import type { Command } from '@ein/client';
 import { SYSTEM_TIME_ZONE } from '@ein/client';
 import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 import type { CaptureWhen, ResolvedTime } from '@archive/media/capture-resolve';
-import { type CameraClock, clockForFile, offsetAt } from '@archive/camera/camera-zone';
+import { type CameraClock, clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { readSidecar, sidecarTime } from '@archive/media/paired-sidecar';
 
 /* ------------------------------------------------------------------ */
@@ -76,10 +76,7 @@ const resolveFileTime = async (
     manual,
     gps: when?.gps,
     camera: when?.device,
-    digitizer: clock.digitizer,
-    quicktimeUtc: clock.quicktimeUtc,
-    cameraOffsetAt: (wallClock) => offsetAt(clock, wallClock, SYSTEM_TIME_ZONE),
-    archiveZone: SYSTEM_TIME_ZONE,
+    ...clockSources(clock, SYSTEM_TIME_ZONE),
     ...stampedSources(attrs),
     ...(sidecar ? { sidecar } : {}),
   });

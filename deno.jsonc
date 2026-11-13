@@ -8,6 +8,7 @@
     "@archive/camera/api": "./lib/camera/api.ts",
     "@archive/camera/camera": "./lib/camera/camera.ts",
     "@archive/camera/camera-zone": "./lib/camera/camera-zone.ts",
+    "@archive/camera/clock-offset": "./lib/camera/clock-offset.ts",
     "@archive/camera/types": "./types/camera/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",

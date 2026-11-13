@@ -27,7 +27,7 @@ type CameraInfoProps = {
  */
 export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setDevice }: CameraInfoProps) {
   const matchable = Boolean(camera.serial || (camera.make && camera.model));
-  const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.digitizer || camera.quicktimeUtc;
+  const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.clockOffset || camera.digitizer || camera.quicktimeUtc;
 
   return (
     <Stack gap='md'>
@@ -36,6 +36,7 @@ export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, on
         {camera.model && <InfoFact label='Model'>{camera.model}</InfoFact>}
         {camera.serial && <InfoFact label='Serial number'>{camera.serial}</InfoFact>}
         {camera.timezone && <InfoFact label='Timezone'>{camera.timezone}</InfoFact>}
+        {camera.clockOffset && <InfoFact label='Clock off by'>{camera.clockFrom ? `${camera.clockOffset} from ${camera.clockFrom}` : camera.clockOffset}</InfoFact>}
         {camera.digitizer && (
           <InfoFact label='Capture dates'>
             <Badge size='sm' variant='light' color='yellow'>Scanner dates suppressed</Badge>

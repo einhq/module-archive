@@ -7,6 +7,11 @@
  * not the node's, `--serial` writes `serialNumber`, and a timezone is checked
  * against ICU before it is stored rather than sitting there unusable.
  *
+ * `--clock-offset` says how far its clock ran ahead of the time in its zone (`+23h 2m`; `-5m` when
+ * behind; `0` once it was put right), from `--clock-from` (a date, `2017-06` or `2017-06-20`) or
+ * for all its pictures without it. It is appended to the camera's `configuration` log, so earlier
+ * settings keep dating the pictures from before.
+ *
  * For a camera linking a device with a stream, `--clips` says what opens a clip of it (`face`, the
  * default; `motion`, a face or motion; `off`) and `--clip-days` how many days its clips are kept
  * (30 by default, 0 keeps them).
@@ -20,10 +25,11 @@
  * different intentions and only one of them is ever meant.
  */
 import type { CmdReturn, Command } from '@ein/client';
-import { parseArgs, shq } from '@ein/client';
+import { parseArgs, shq, toUtc } from '@ein/client';
 import { resolve } from '@std/path';
 import { isKnownTimezone, NODE_TYPE_CAMERA } from '@archive/camera/camera';
 import { CLIP_TRIGGERS, type RelinkResult } from '@archive/camera/api';
+import { parseClockOffset } from '@archive/camera/clock-offset';
 
 /** Flag → attr name. `serial` is the flag; `serialNumber` is what the node carries. */
 const FIELDS: Record<string, string> = {
@@ -39,6 +45,9 @@ const FIELDS: Record<string, string> = {
   'clip-days': 'clipDays',
 };
 
+/** The camera's log of clock settings, read by `@archive/camera/camera-zone`. */
+const CONFIGURATION = 'configuration';
+
 /** The switches among `FIELDS`: set with the bare flag, unset with `--clear`. */
 const SWITCHES = ['digitizer', 'quicktime-utc'];
 /** The numbers among `FIELDS`, stored as numbers. */
@@ -46,7 +55,7 @@ const NUMBERS = ['clip-days'];
 
 const cameraUpdate = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, {
-    string: ['name', 'make', 'model', 'serial', 'timezone', 'description', 'clips', 'clip-days'],
+    string: ['name', 'make', 'model', 'serial', 'timezone', 'description', 'clips', 'clip-days', 'clock-offset', 'clock-from'],
     boolean: SWITCHES,
     collect: ['clear'],
   });
@@ -80,6 +89,24 @@ const cameraUpdate = async (cmd: Command): CmdReturn => {
   const clipDays = flags['clip-days'] as string | undefined;
   if (clipDays !== undefined && !/^\d+$/.test(clipDays)) {
     await cmd.writeError(`camera-update: --clip-days takes a whole number of days, 0 to keep them (got '${clipDays}')\n`);
+    return 1;
+  }
+
+  const clockOffsetText = flags['clock-offset'] as string | undefined;
+  const clockOffset = clockOffsetText === undefined ? undefined : parseClockOffset(clockOffsetText);
+  if (clockOffsetText !== undefined && clockOffset === undefined) {
+    await cmd.writeError(`camera-update: --clock-offset takes how far its clock ran ahead, e.g. +23h2m, -5m or 0 (got '${clockOffsetText}')\n`);
+    return 1;
+  }
+  const clockFromText = flags['clock-from'] as string | undefined;
+  if (clockFromText !== undefined && clockOffset === undefined) {
+    await cmd.writeError('camera-update: --clock-from needs --clock-offset\n');
+    return 1;
+  }
+  // From the start of the date given, read as the wall clock the setting is compared with.
+  const clockFrom = clockFromText === undefined ? new Date(0).toISOString() : toUtc(clockFromText, 'UTC');
+  if (clockFrom === undefined) {
+    await cmd.writeError(`camera-update: --clock-from takes a date, e.g. 2017, 2017-06 or 2017-06-20 (got '${clockFromText}')\n`);
     return 1;
   }
 
@@ -123,28 +150,47 @@ const cameraUpdate = async (cmd: Command): CmdReturn => {
     changed.push(attr);
   }
 
-  if (parts.length === 0) {
+  if (parts.length === 0 && clockOffset === undefined) {
     await cmd.writeError('camera-update: nothing to change (pass a field, or --clear <field>)\n');
     return 1;
   }
 
-  const result = await cmd.execute(`attrs ${shq(path)} ${parts.join(' ')}`);
-  if (result.code !== 0) {
-    await cmd.writeError(`camera-update: ${path}: ${result.stderr.trim() || 'update failed'}\n`);
-    return 1;
+  if (parts.length > 0) {
+    const result = await cmd.execute(`attrs ${shq(path)} ${parts.join(' ')}`);
+    if (result.code !== 0) {
+      await cmd.writeError(`camera-update: ${path}: ${result.stderr.trim() || 'update failed'}\n`);
+      return 1;
+    }
+  }
+
+  if (clockOffset !== undefined) {
+    try {
+      await cmd.sys.vfs.ensure(cmd.access, 'log', path, CONFIGURATION, { props: { mode: 0o664 } });
+    } catch (error) {
+      await cmd.writeError(`camera-update: ${path}/${CONFIGURATION}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+    const entry = JSON.stringify({ clockOffset });
+    const appended = await cmd.execute(`log-append ${shq(`${path}/${CONFIGURATION}`)} --data ${shq(entry)} --at ${shq(clockFrom)}`);
+    if (appended.code !== 0) {
+      await cmd.writeError(`camera-update: ${path}: ${appended.stderr.trim() || 'clock offset not saved'}\n`);
+      return 1;
+    }
+    changed.push('clockOffset');
   }
 
   // A changed make, model or serial decides which files are this camera's, and the files already
   // in the archive that carry the new fingerprint were passed over when they were indexed: they
-  // are linked now, as `camera-create` links a new camera's. Three registry settings change the
+  // are linked now, as `camera-create` links a new camera's. Four registry settings change the
   // meaning of dates on files already linked to it instead: `digitizer` says its clock records the
-  // scan rather than the exposure, `timezone` says which meridian its clock was set to, and
-  // `quicktimeUtc` says its videos' `CreateDate` is UTC. Each moves its files' dates, so they
-  // reapply through the indexed file-side cameraPath lookup — no EXIF scan, no exiftool. Linking
-  // re-dates every file of the camera as well, so one `camera-relink` covers both. An unapplied
-  // setting is worse than an absent one. A fingerprint cleared down to nothing links nothing.
+  // scan rather than the exposure, `timezone` says which meridian its clock was set to,
+  // `quicktimeUtc` says its videos' `CreateDate` is UTC, and a clock offset how wrong it was. Each
+  // moves its files' dates, so they reapply through the indexed file-side cameraPath lookup — no
+  // EXIF scan, no exiftool. Linking re-dates every file of the camera as well, so one
+  // `camera-relink` covers both. An unapplied setting is worse than an absent one. A fingerprint
+  // cleared down to nothing links nothing.
   const FINGERPRINT = ['make', 'model', 'serialNumber'];
-  const RETIMING_SETTINGS = ['digitizer', 'timezone', 'quicktimeUtc'];
+  const RETIMING_SETTINGS = ['digitizer', 'timezone', 'quicktimeUtc', 'clockOffset'];
   const after = { ...node.attrs } as Record<string, unknown>;
   for (const flag of Object.keys(FIELDS)) {
     const value = flags[flag as keyof typeof flags];
@@ -183,6 +229,8 @@ cameraUpdate.spec = {
     { name: 'model', type: 'string' as const, description: 'model, as exif writes it' },
     { name: 'serial', type: 'string' as const, description: 'serial number (the strong match key)' },
     { name: 'timezone', type: 'string' as const, description: 'IANA timezone its clock was set to, e.g. Europe/Stockholm' },
+    { name: 'clock-offset', type: 'string' as const, description: 'how far its clock ran ahead of the time in its zone, e.g. +23h2m, -5m, 0 once right' },
+    { name: 'clock-from', type: 'string' as const, description: 'with --clock-offset: the date it applies from (all its pictures without it)' },
     { name: 'digitizer', type: 'bool' as const, description: 'mark as a scanner and suppress its camera dates on linked media' },
     { name: 'quicktime-utc', type: 'bool' as const, description: "read its videos' QuickTime CreateDate as UTC (phones), not local time" },
     { name: 'description', type: 'string' as const, description: 'free-text note' },

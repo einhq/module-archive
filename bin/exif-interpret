@@ -23,7 +23,7 @@ import { basename, resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
 import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
-import { clockForFile, offsetAt } from '@archive/camera/camera-zone';
+import { clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { reportUnwritable } from '@media/writable';
 import type { ExifInterpretAnswer } from '@archive/media/api';
 import { inboxOf } from '@archive/staging/duplicates';
@@ -84,10 +84,7 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
     manual: typeof attrs.whenManual === 'string' ? attrs.whenManual : undefined,
     gps: when?.gps,
     camera: when?.device,
-    digitizer: cameraClock.digitizer,
-    quicktimeUtc: cameraClock.quicktimeUtc,
-    cameraOffsetAt: (wallClock) => offsetAt(cameraClock, wallClock, SYSTEM_TIME_ZONE),
-    archiveZone: SYSTEM_TIME_ZONE,
+    ...clockSources(cameraClock, SYSTEM_TIME_ZONE),
     ...stampedSources(stamps ?? attrs),
     ...(sidecarTimes ? { sidecar: sidecarTimes } : {}),
   });

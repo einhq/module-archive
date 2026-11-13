@@ -2,7 +2,11 @@
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
 import { shq } from '@ein/client';
+import { resolve } from '@std/path';
 import { OWNERS_DIR, readCamera } from '@archive/camera/camera';
+import type { ClockOffsetSetting } from '@archive/camera/api';
+import { clockForFile } from '@archive/camera/camera-zone';
+import { formatClockOffset } from '@archive/camera/clock-offset';
 
 type OwnerInfo = {
   name: string;
@@ -21,6 +25,8 @@ type CameraInfo = {
   timezone?: string;
   digitizer?: boolean;
   quicktimeUtc?: boolean;
+  /** How far its clock was off, oldest first; absent when nothing says it was. */
+  clockOffsets?: ClockOffsetSetting[];
   description?: string;
   owners: OwnerInfo[];
 };
@@ -91,6 +97,9 @@ const cameraInfo = async (cmd: Command): CmdReturn => {
   }
 
   const owners = await readOwners(cmd, targetPath);
+  const clockOffsets = (await clockForFile(cmd, resolve(cmd.cwd, targetPath))).history.flatMap((setting): ClockOffsetSetting[] =>
+    'clockOffset' in setting ? [{ seconds: setting.clockOffset, ...(setting.from > 0 ? { from: new Date(setting.from).toISOString().slice(0, 10) } : {}) }] : []
+  );
 
   const info: CameraInfo = {
     path: targetPath,
@@ -101,6 +110,7 @@ const cameraInfo = async (cmd: Command): CmdReturn => {
     ...(attrs.timezone ? { timezone: attrs.timezone } : {}),
     ...(attrs.digitizer ? { digitizer: true } : {}),
     ...(attrs.quicktimeUtc ? { quicktimeUtc: true } : {}),
+    ...(clockOffsets.length > 0 ? { clockOffsets } : {}),
     ...(attrs.description ? { description: attrs.description as string } : {}),
     owners,
   };
@@ -117,6 +127,9 @@ const cameraInfo = async (cmd: Command): CmdReturn => {
   if (info.timezone) await cmd.writeLn(`Timezone: ${info.timezone}`);
   if (info.digitizer) await cmd.writeLn('Digitizer: yes');
   if (info.quicktimeUtc) await cmd.writeLn('Video times: UTC');
+  for (const setting of info.clockOffsets ?? []) {
+    await cmd.writeLn(`Clock off by: ${formatClockOffset(setting.seconds)}${setting.from ? ` from ${setting.from}` : ''}`);
+  }
   if (info.description) await cmd.writeLn(`Description: ${info.description}`);
 
   if (owners.length > 0) {

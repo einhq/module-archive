@@ -2,9 +2,11 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import { useCallback, useEffect, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import type { StatNode } from '@ein/ui/hooks';
+import type { LogReadEntries } from '@ein/api';
 import { NodeChildEntry, NodeOwnership, shq } from '@ein/ui/lib';
 import { CAMERAS_ROOT } from './useCameras.ts';
 import type { RelinkResult } from '@archive/camera/api';
+import { formatClockOffset } from '@archive/camera/clock-offset';
 
 /** The settings a camera carries, and the only fields the form writes. */
 export type CameraFields = {
@@ -19,6 +21,13 @@ export type CameraFields = {
   /** For a camera linking a device with a stream: what opens a clip of it, and how many days clips are kept; empty for the default. */
   clips: string;
   clipDays: string;
+  /**
+   * How far its clock ran ahead (`+23h 2m`), and from which date (`YYYY-MM-DD`, empty for all its
+   * pictures): the latest of its `configuration` log's clock offsets, empty when it has none.
+   * Saving a change adds a setting rather than replacing this one.
+   */
+  clockOffset: string;
+  clockFrom: string;
 };
 
 export type CameraDetail = CameraFields & {
@@ -62,10 +71,34 @@ type OwnerLinkAttrs = { relation?: { from?: string; to?: string } };
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : '');
 
-const EMPTY: CameraFields = { name: '', make: '', model: '', serial: '', timezone: '', description: '', digitizer: false, quicktimeUtc: false, clips: '', clipDays: '' };
+const EMPTY: CameraFields = {
+  name: '',
+  make: '',
+  model: '',
+  serial: '',
+  timezone: '',
+  description: '',
+  digitizer: false,
+  quicktimeUtc: false,
+  clips: '',
+  clipDays: '',
+  clockOffset: '',
+  clockFrom: '',
+};
+
+/** The latest clock offset in a camera's `configuration` log, as the form shows it. */
+const latestClockOffset = (log: LogReadEntries): Pick<CameraFields, 'clockOffset' | 'clockFrom'> => {
+  let latest: { at: string; seconds: number } | undefined;
+  for (const entry of log.entries) {
+    const seconds = (entry.data as { clockOffset?: unknown } | null)?.clockOffset;
+    if (typeof seconds === 'number' && (!latest || entry.at >= latest.at)) latest = { at: entry.at, seconds };
+  }
+  if (!latest) return { clockOffset: '', clockFrom: '' };
+  return { clockOffset: formatClockOffset(latest.seconds), clockFrom: Date.parse(latest.at) > 0 ? latest.at.slice(0, 10) : '' };
+};
 
 /** Flag name for each field, as `camera-update` spells it. */
-type TextCameraField = Exclude<keyof CameraFields, 'digitizer' | 'quicktimeUtc'>;
+type TextCameraField = Exclude<keyof CameraFields, 'digitizer' | 'quicktimeUtc' | 'clockOffset' | 'clockFrom'>;
 const FLAGS: Record<TextCameraField, string> = {
   name: 'name',
   make: 'make',
@@ -116,6 +149,8 @@ export function useCamera(id: string | undefined): UseCameraResult {
       const deviceName = device && await execCommand<StatNode>(`stat ${shq(device)}`).then((node) => str(node.attrs.label) || undefined, () => undefined);
       const streams = device &&
         await execCommand<NodeChildEntry[]>(`ls -l ${shq(device)}`).then((endpoints) => endpoints.some((each) => each.node.type === 'stream'), () => false);
+      // A camera whose clock nothing was ever said about has no `configuration` log.
+      const clock = await execCommand<LogReadEntries>(`log-read ${shq(`${path}/configuration`)}`).then(latestClockOffset, () => latestClockOffset({ entries: [] }));
       setCamera({
         id,
         path,
@@ -129,6 +164,7 @@ export function useCamera(id: string | undefined): UseCameraResult {
         quicktimeUtc: attrs.quicktimeUtc === true,
         clips: str(attrs.clips),
         clipDays: typeof attrs.clipDays === 'number' ? String(attrs.clipDays) : '',
+        ...clock,
         ownership: { mode: entry.node.props.mode, uid: entry.node.props.uid, gid: entry.node.props.gid },
         ...(device ? { device } : {}),
         ...(deviceName ? { deviceName } : {}),
@@ -203,6 +239,14 @@ export function useCamera(id: string | undefined): UseCameraResult {
     }
     if (fields.quicktimeUtc !== current.quicktimeUtc) {
       parts.push(fields.quicktimeUtc ? '--quicktime-utc' : '--clear quicktime-utc');
+    }
+    // A clock offset is a setting from a date, added to the ones before it; emptied, the clock was
+    // right from that date. Joined with `=`, since the offset may be negative.
+    const clockOffset = fields.clockOffset.trim();
+    const clockFrom = fields.clockFrom.trim();
+    if (clockOffset !== current.clockOffset || clockFrom !== current.clockFrom) {
+      parts.push(`--clock-offset=${shq(clockOffset || '0')}`);
+      if (clockFrom) parts.push(`--clock-from=${shq(clockFrom)}`);
     }
 
     let relink: RelinkResult | null = null;
