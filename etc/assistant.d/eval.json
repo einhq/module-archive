@@ -71,6 +71,24 @@
       ]
     },
     {
+      "id": "search-midsummer",
+      "bucket": "search",
+      "lang": "sv",
+      "ask": "Visa bilder från midsommar",
+      "commands": [
+        "search"
+      ]
+    },
+    {
+      "id": "search-easter-one-year",
+      "bucket": "search",
+      "lang": "en",
+      "ask": "Show me photos from Easter 2017",
+      "commands": [
+        "search"
+      ]
+    },
+    {
       "id": "count-not-search",
       "bucket": "count",
       "lang": "sv",
