@@ -75,7 +75,8 @@ function formatSpan(from?: string, to?: string): string {
 
 /**
  * The small facts, on one line under the filename: how big the picture is, how
- * many megapixels that comes to, and what the camera was set to.
+ * many megapixels that comes to, and what the camera was set to. A document's
+ * size is its first page's, in millimetres.
  *
  * One line rather than a stack of labelled rows because none of it is worth a
  * row of its own — it is the caption a photographer glances at, not data.
@@ -85,7 +86,10 @@ function summaryLine(exif: MediaExif | null, media: MediaItem): string {
 
   const width = exif?.displayWidth ?? media.width;
   const height = exif?.displayHeight ?? media.height;
-  if (width && height) {
+  if (width && height && media.type === 'document') {
+    // Stored in points, 72 to the inch.
+    parts.push(`${Math.round(width * 25.4 / 72)} × ${Math.round(height * 25.4 / 72)} mm`);
+  } else if (width && height) {
     parts.push(`${width} × ${height}`);
     parts.push(`${((width * height) / 1e6).toFixed(1)} MP`);
   }
