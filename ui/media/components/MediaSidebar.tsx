@@ -180,6 +180,13 @@ function TextLanguage({ details, canEdit, onSet }: { details: MediaDetails; canE
   );
 }
 
+/** What `find-damage` found, as the Damage row says it. */
+const DAMAGE_WORDS: Record<string, string> = { faded: 'faded colours', dust: 'dust', scratches: 'scratches' };
+const damageLabel = (kinds: string[]): string => {
+  const words = kinds.map((kind) => DAMAGE_WORDS[kind] ?? kind).join(', ');
+  return words ? words[0].toUpperCase() + words.slice(1) : 'None found';
+};
+
 function InfoRow({ label, value }: { label: string; value: string }) {
   if (!value) return null;
   return (
@@ -935,6 +942,8 @@ export function MediaSidebar(
           <InfoRow label='Taken at' value={qualifiedDate(details?.takenAt ?? media.takenAt ?? '', details?.takenAtQualifier)} />
           <InfoRow label='Taken at (UTC)' value={details?.takenAtUtc ?? ''} />
           <InfoRow label='Time source' value={[timeSourceLabel(details?.takenAtSource, details?.digitized), details?.takenAtNote].filter(Boolean).join(' · ')} />
+          {details?.damage && <InfoRow label='Damage' value={damageLabel(details.damage.kinds)} />}
+          {details?.restoring && <InfoRow label='Restoring' value={details.restoring.failed ? `Failed: ${details.restoring.failed}` : 'Queued, waiting its turn'} />}
           <InfoRow label='Created' value={formatTimestamp(media.birthtime)} />
           <InfoRow label='Modified' value={formatTimestamp(media.modtime)} />
           {

@@ -10,7 +10,7 @@ import type { CommentEntry, NodeOwnership } from '@ein/api';
 import type { TripLeg, TripPlace, TripStay, TripWeather } from '@archive/location/api';
 import type { PersonFace, PersonVoice } from '@archive/people/api';
 import type { StagingGroupDetail, StagingRowInfo } from '@archive/staging/api';
-import type { Storyboard } from '@media/api';
+import type { DamageKind, DamageScores, Storyboard } from '@media/api';
 import type { WeatherReading } from '@archive/weather/api';
 
 export type NodeRef = {
@@ -272,6 +272,16 @@ export type MediaDetails = {
   takenAtQualifier?: 'about';
   /** A digitized copy (a scan): the clocks recorded while digitizing were not believed. */
   digitized?: true;
+  /**
+   * How damaged the picture was found to be (`find-damage`): the kinds found, `faded`, `dust` or
+   * `scratches`, and the scores they come from, each 0 to 1. Present once it was read.
+   */
+  damage?: { kinds: DamageKind[]; scores: DamageScores | null };
+  /**
+   * A restoration asked for in the media pool and not yet made (`file-restore --queue`): when, and
+   * why it failed when it did.
+   */
+  restoring?: { at: string; failed?: string };
   /** Why a hand-typed time is what it is, when somebody said. */
   takenAtNote?: string;
   /** The hand-typed source itself — present exactly when there is something to revert. */

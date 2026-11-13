@@ -23,6 +23,7 @@ import { basename, resolve } from '@std/path';
 import { isFingerprintName } from '@media/fingerprints';
 import { readStoryboard } from '@media/storyboard';
 import type { ChapterBoundary } from '@media/chapters';
+import type { DamageKind, DamageScores, RestoreRequest } from '@media/api';
 import { toText } from '@std/streams/to-text';
 import { ageAt, ageMonthsAt } from '@archive/people/genealogy';
 import { type Angle, normalizeAngle, normalizeMirror, pictureDims } from '@media/orientation';
@@ -719,6 +720,10 @@ type FileAttrs = {
   takenAtSource?: string;
   takenAtQualifier?: string;
   digitized?: boolean;
+  damage?: DamageKind[];
+  damageScores?: DamageScores | null;
+  damageAt?: string;
+  restoreRequest?: RestoreRequest | null;
   takenAtNote?: string;
   whenManual?: string;
   angle?: unknown;
@@ -897,6 +902,10 @@ const mediaDetails = async (cmd: Command): CmdReturn => {
     takenAtSource: node.attrs.takenAtSource,
     ...(node.attrs.takenAtQualifier === 'about' ? { takenAtQualifier: 'about' as const } : {}),
     ...(node.attrs.digitized === true ? { digitized: true as const } : {}),
+    ...(node.attrs.damageAt ? { damage: { kinds: node.attrs.damage ?? [], scores: node.attrs.damageScores ?? null } } : {}),
+    ...(node.attrs.restoreRequest?.at
+      ? { restoring: { at: node.attrs.restoreRequest.at, ...(node.attrs.restoreRequest.failed ? { failed: node.attrs.restoreRequest.failed } : {}) } }
+      : {}),
     ...(node.attrs.takenAtNote ? { takenAtNote: node.attrs.takenAtNote } : {}),
     ...(node.attrs.whenManual ? { whenManual: node.attrs.whenManual } : {}),
     angle,

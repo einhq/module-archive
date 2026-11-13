@@ -30,6 +30,8 @@ type Details = {
   height?: number;
   mimetype?: string;
   size?: number;
+  damage?: { kinds: string[]; scores: Record<string, number> | null };
+  restoring?: { at: string; failed?: string };
   exif: {
     make?: string;
     model?: string;
@@ -481,6 +483,22 @@ Deno.test({
       await cmd.shouldSucceed(`attrs ${print} -s shown=versions/restored-2.png`);
       assertEquals(await shownOf(), [false, false]);
       await cmd.shouldSucceed(`attrs ${print} -d shown`);
+    });
+
+    await t.step('a scan says how damaged it was found, and a restoration queued for it, failed or not', async () => {
+      const print = `${ALBUMS_ROOT}/a/files/print.jpg`;
+      const before = await client.execJson<Details>(`media-details ${print}`);
+      assertEquals([before.damage, before.restoring], [undefined, undefined]);
+      const scores = { faded: 0.8, dusty: 0.6, scratched: 0.1 };
+      await vfs.update(ADMIN_ACCESS, print, {
+        attrs: { damage: ['faded', 'dust'], damageScores: scores, damageAt: '2026-11-13T20:00:00Z', restoreRequest: { unfade: true, at: '2026-11-13T21:00:00Z' } },
+      });
+      const after = await client.execJson<Details>(`media-details ${print}`);
+      assertEquals(after.damage, { kinds: ['faded', 'dust'], scores });
+      assertEquals(after.restoring, { at: '2026-11-13T21:00:00Z' });
+      await vfs.update(ADMIN_ACCESS, print, { attrs: { restoreRequest: { unfade: true, at: '2026-11-13T21:00:00Z', failed: 'the file cannot be decoded' } } });
+      assertEquals((await client.execJson<Details>(`media-details ${print}`)).restoring, { at: '2026-11-13T21:00:00Z', failed: 'the file cannot be decoded' });
+      await vfs.update(ADMIN_ACCESS, print, { attrs: { damage: null, damageScores: null, damageAt: null, restoreRequest: null } });
     });
 
     await t.step("a video's storyboard sheet travels with how to read it; one half-written does not", async () => {
