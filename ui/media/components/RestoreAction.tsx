@@ -93,8 +93,8 @@ export function RestoreAction({ selection, items, initial }: Props) {
       >
         <Stack gap='md'>
           <Text size='sm' c='dimmed'>
-            The pictures are restored in the background, one after another, and nothing waits for them. Each picture is not changed: its restored copy is kept beside it, among
-            its versions, to compare and keep or discard.
+            The pictures are restored in the background, one after another, and nothing waits for them. The pictures themselves are not changed: each restored copy is kept
+            beside its picture, among its versions, to compare and keep or discard.
           </Text>
           {skipped > 0 && (
             <Text size='sm' c='dimmed'>
