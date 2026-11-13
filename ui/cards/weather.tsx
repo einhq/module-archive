@@ -31,6 +31,8 @@ const PLACE_EM = 1.15 + 0.9;
 const NOW_EM = 3.6;
 const HOURS_EM = 6.1 + 0.9;
 const DAY_EM = 2.1;
+/** The width, in em, a day's row needs for its rain too. */
+const DAY_WIDE_EM = 18;
 /** The width, in em, of one hour of the hours row. */
 const HOUR_EM = 3.1;
 
@@ -38,17 +40,22 @@ const HOUR_EM = 3.1;
 const textSize = (width: number, height: number): number => Math.max(13, Math.min(30, Math.min(width, height) * 0.055));
 
 /**
- * What a card of this size has room for: the hours row, and whether the days go beside the rest or
- * under it. How many days fit is measured once they are laid out (`Days`).
+ * What a card of this size has room for: the words and details of the weather now, the hours row,
+ * and whether the days go beside the rest or under it. How many days fit, and whether their rain
+ * does, is measured once they are laid out (`Days`).
  */
 const layoutFor = (width: number, height: number, size: number) => {
   const wide = width / size - 2;
   const high = height / size - 1.6;
   const side = wide >= 30 && width >= 1.45 * height;
   const column = side ? (wide - 2.4) / 2 : wide;
-  const nowEm = PLACE_EM + (column >= 18 ? NOW_EM : NOW_EM + 2.6);
+  // A narrow card puts the words under the picture and the temperature, as far as its height allows.
+  const beside = column >= 18;
+  const words = beside || high >= PLACE_EM + NOW_EM + 1.3;
+  const detail = beside || high >= PLACE_EM + NOW_EM + 2.6;
+  const nowEm = PLACE_EM + (beside ? NOW_EM : NOW_EM + 2.6);
   const hours = column >= 13 && high >= nowEm + HOURS_EM ? Math.min(12, Math.floor(column / HOUR_EM)) : 0;
-  return { side, hours, under: !side && high - nowEm - (hours ? HOURS_EM : 0) >= DAY_EM + 1 };
+  return { side, beside, words, detail, hours, under: !side && high - nowEm - (hours ? HOURS_EM : 0) >= DAY_EM + 1 };
 };
 
 /**
@@ -56,16 +63,17 @@ const layoutFor = (width: number, height: number, size: number) => {
  * lowest and highest temperature on a bar spanning all the days shown.
  */
 function Days({ forecast, size }: { forecast: WeatherForecast; size: number }) {
-  const { ref, height } = useElementSize();
+  const { ref, width, height } = useElementSize();
   const days = forecast.days.slice(0, Math.floor(height / (DAY_EM * size)));
+  const narrow = width / size < DAY_WIDE_EM;
   return (
-    <div ref={ref} className='wx-days' data-empty={days.length === 0 || undefined}>
-      {days.length > 0 && <DayRows days={days} zone={forecast.timezone} />}
+    <div ref={ref} className='wx-days' data-empty={days.length === 0 || undefined} data-narrow={narrow || undefined}>
+      {days.length > 0 && <DayRows days={days} zone={forecast.timezone} rain={!narrow} />}
     </div>
   );
 }
 
-function DayRows({ days, zone }: { days: ForecastDay[]; zone: string }) {
+function DayRows({ days, zone, rain }: { days: ForecastDay[]; zone: string; rain: boolean }) {
   const low = Math.min(...days.map((day) => day.temperatureMin));
   const high = Math.max(...days.map((day) => day.temperatureMax));
   const span = high - low || 1;
@@ -82,7 +90,7 @@ function DayRows({ days, zone }: { days: ForecastDay[]; zone: string }) {
             <span style={{ left: `${((day.temperatureMin - low) / span) * 100}%`, right: `${((high - day.temperatureMax) / span) * 100}%` }} />
           </div>
           <span>{degrees(day.temperatureMax)}</span>
-          <span className='wx-wet'>{day.precipitation >= 0.1 ? `${millimetres(day.precipitation)} mm` : ''}</span>
+          {rain && <span className='wx-wet'>{day.precipitation >= 0.1 ? `${millimetres(day.precipitation)} mm` : ''}</span>}
         </div>
       ))}
     </>
@@ -129,12 +137,12 @@ function Forecast({ forecast, label, width, height, size }: { forecast: WeatherF
     <>
       <div className='wx-side'>
         <div className='wx-place'>{label}</div>
-        <div className='wx-now' style={{ flexWrap: fit.side || width / size >= 20 ? 'nowrap' : 'wrap' }}>
+        <div className='wx-now' style={{ flexWrap: fit.beside ? 'nowrap' : 'wrap' }}>
           <WeatherIcon code={now.code} day={now.isDay} size={`${NOW_EM}em`} />
           <div className='wx-temp'>{degrees(now.temperature)}</div>
-          <Stack gap='0.25em' style={{ minWidth: 0, flex: '1 1 8em', marginLeft: '0.4em' }}>
+          <Stack gap='0.25em' style={{ minWidth: 0, flex: '1 1 8em', marginLeft: fit.beside ? '0.4em' : 0, display: fit.words ? undefined : 'none' }}>
             <div className='wx-words'>{weatherWords(now.code)}</div>
-            <div className='wx-detail'>
+            <div className='wx-detail' style={{ display: fit.detail ? undefined : 'none' }}>
               <span>Feels like {degrees(now.feelsLike)}</span>
               <span>
                 <TablerIcon name='arrow-up' size='1em' style={{ transform: `rotate(${now.windDirection + 180}deg)` }} />
