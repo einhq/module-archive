@@ -23,28 +23,33 @@ goes on the card only if its need is free now **and** still left once every clai
 Measuring free memory alone had two families, each placed within it, run the card out of memory
 together mid-request.
 
-| Family                                              | Claims on the card | Without room                |
-| --------------------------------------------------- | ------------------ | --------------------------- |
-| whisper large-v3                                    | 4.0 GB (float16)   | waits on a host with a card |
-| faces, picture vectors, text vectors                | 2.5–2.6 GB each    | runs on the CPU             |
-| voices: sortformer, titanet, active-speaker scoring | 1.5, 0.5, 0.3 GB   | runs on the CPU             |
+| Family                                              | Claims on the card | Without room                    |
+| --------------------------------------------------- | ------------------ | ------------------------------- |
+| whisper large-v3                                    | 4.0 GB (float16)   | waits, while the share holds it |
+| faces, picture vectors, text vectors                | 2.5–2.6 GB each    | runs on the CPU                 |
+| voices: sortformer, titanet, active-speaker scoring | 1.5, 0.5, 0.3 GB   | runs on the CPU                 |
 
 One family follows a rule of its own:
 
-- **whisper runs in one place per host.** On a host with a card, that is always the card, in
-  float16, and a transcription waits for room rather than move to the CPU. On a host without a
-  card, it is the CPU, in int8. The place is part of the transcript's signature
-  (`on=cuda:float16`). One precision on both cameras was measured and does not give the same
-  words: int8 on the card and int8 on the CPU differed in 7% of words on Swedish home video. So
-  the rule is that a transcript never depends on what else was on the card at the time.
+- **whisper runs where the card's share puts it.** While EMS's share of the card holds its 4.0 GB
+  beside a CUDA context, that is always the card, in float16, and a transcription waits for room
+  rather than move to the CPU. With a smaller share, or no card, it is the CPU, in int8. The place
+  is part of the transcript's signature (`on=cuda:float16`). One precision on both was measured
+  and does not give the same words: int8 on the card and int8 on the CPU differed in 7% of words
+  on Swedish home video. So a transcript never depends on what else was on the card at the time;
+  but a transcript made in either place counts as current (`transcribe_places`), since the share
+  is its user's to move and a move is no reason to transcribe the archive again.
 
-**A card shared with the llm** is split by one number, set on both sides in the host profile:
-`EMS_CARD_SHARE_MB` (the most EMS's own processes hold) and `LLM_CARD_RESERVE_MB` (what the llm
-leaves EMS). Neither then loads into the other's part, whichever starts first. EMS measures its
-own use with `nvidia-smi`, which in its container lists only its own processes. The llm gets as
-many layers as fit what is left (`-ngl auto --fit`) and restarts until it loads; layers that do
-not fit run on the CPU, and it answers slower. The llm's reserve is 0.4 GB larger than EMS's share:
-it counts the card as `nvidia-smi` does, and torch never sees that much of it.
+**A card shared with the llm** is split by EMS's share, the most its own processes hold, and the
+llm's reserve, what the llm leaves EMS (`LLM_CARD_RESERVE_MB`, its own setting). EMS starts with
+`EMS_CARD_SHARE_MB`; once EiN's `CFG_EMS_CARD_SHARE_MB` is set, the ems module's `ems-link` gives EMS
+that instead, at once and after each restart, and the Media service tab sets it with a slider. A
+lowered share unloads what no longer fits. Neither side loads into the other's part, whichever
+starts first. EMS measures its own use with `nvidia-smi`, which in its container lists only its own
+processes. The llm gets as many layers as fit what is left (`-ngl auto --fit`) and restarts until it
+loads; layers that do not fit run on the CPU, and it answers slower. The llm's reserve is 0.4 GB
+larger than EMS's share: it counts the card as `nvidia-smi` does, and torch never sees that much of
+it.
 
 An llm that is not ours (`CFG_LLM_URL` at a provider
 elsewhere, named in `CFG_LLM_PROVIDER`) has no part of the card, and EMS takes all of it. The host
