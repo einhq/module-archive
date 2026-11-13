@@ -75,6 +75,7 @@ import {
   userConfigNumber,
 } from '@ein/ui/signals';
 import { AudioPlayer } from './AudioPlayer.tsx';
+import { DocumentReader } from './DocumentReader.tsx';
 import { FaceOverlay, toFaceMarks } from './FaceOverlay.tsx';
 import { VideoFaces } from './VideoFaces.tsx';
 import { type FacePersonChange, FacePersonDialog } from './FacePersonDialog.tsx';
@@ -132,7 +133,8 @@ const PRELOAD_PARALLEL = 2;
  */
 const LIGHTBOX_REST_MS = 600;
 const NATIVE_EDGE_GESTURE_PX = 24;
-const GESTURE_CONTROL_SELECTOR = 'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-link], [data-text-overlay], [data-video-controls]';
+const GESTURE_CONTROL_SELECTOR =
+  'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-link], [data-text-overlay], [data-video-controls], [data-document-reader]';
 
 type SlideshowPhotoTransition = {
   outgoing: MediaItem;
@@ -1723,6 +1725,8 @@ export function MediaLightbox() {
 
   const isVideo = media.type === 'video';
   const isAudio = media.type === 'audio';
+  // A document is read in place; a slideshow shows its first page like a photo.
+  const readsDocument = media.type === 'document' && !slideshow;
   // A source ffprobe could not read at all — no rendition exists and none can be made, so the
   // player below would be controls over nothing. Say what is wrong instead. Only for a/v: it is
   // the only family `exif-extract` probes, and `details` is the read the sidebar already makes.
@@ -2074,7 +2078,7 @@ export function MediaLightbox() {
               // The browser must not pinch-zoom the page, scroll or pull to refresh under a
               // swipe or while two fingers spread over a picture; every touch on it is
               // interpreted here.
-              touchAction: zoomable || (isMobile && !slideshow) ? 'none' : undefined,
+              touchAction: zoomable || (isMobile && !slideshow && !readsDocument) ? 'none' : undefined,
               cursor: zoomed ? (panning ? 'grabbing' : 'grab') : undefined,
               userSelect: zoomed ? 'none' : undefined,
             }}
@@ -2153,6 +2157,8 @@ export function MediaLightbox() {
                     <Text size='xs' mt='sm' c='dimmed' style={{ wordBreak: 'break-word' }}>{undecodable}</Text>
                   </Box>
                 )
+                : readsDocument
+                ? <DocumentReader key={`${media.id}-${reloadToken}`} media={media} reloadToken={reloadToken} compact={isMobile} />
                 : isAudio
                 // Keyed like the video and the img: without it, stepping to the next track
                 // reuses the instance and carries the old playhead and play state across.
