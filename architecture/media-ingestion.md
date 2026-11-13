@@ -71,8 +71,10 @@ waits for rather than by a shared DAG:
    `media-sidecars` ([sidecars.ts](../lib/media/sidecars.ts)): moved under it
    as `<file>/sidecar`, a file carrying `sourceId` (the picture's id, so it is a derived file no
    pipeline takes) and `sidecar` (what it says), or a softlink to one an edited copy or a Live
-   Photo's video shares. `exif-extract` and `@archive/media/resolve-time` read it as a capture-time
-   source (`takenAtSource: 'sidecar'`) and for a position where the bytes have none. In staging the
+   Photo's video shares. `exif-extract`, `@archive/media/resolve-time` and `staging retime` read it
+   as a capture-time source (`takenAtSource: 'sidecar'`), and for a position where the bytes have
+   none. An XMP date the scan application marks approximate (`scan:DateApproximate`) is stored with
+   `takenAtQualifier: 'about'`. In staging the
    bridge announces `staging.sidecars.arrived` for the folder when an unpaired sidecar's bytes land
    or it is moved in, when a media file lands where one waits (asked with a one-row query, kept ten
    seconds), and when a directory is moved into a category, wherever the category pairs sidecars
@@ -1007,13 +1009,14 @@ the node; the sources stay sources and nothing queries them. `whenManual` is wha
 receiver said, `whenName` is the date the file's name spells, and a camera's clock comes from its IANA `timezone` or, failing that, the
 `configuration` log the legacy importer backdates to the epoch — so an offset is time-varying by
 construction, which a single attr cannot be (`@archive/camera/camera-zone`). Media's `resolveTime`
-(`@archive/media/capture-resolve`) weighs them, `manual > gps > camera > name`, and writes three attrs:
+(`@archive/media/capture-resolve`) weighs them, `manual > gps > camera > name`, and writes four attrs:
 
-| attr            | meaning                                                                                                                                                                                                                    |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `takenAt`       | the **wall clock**. Its length is its precision — `1975`, `2004-03`, `2003-04-30`, `…T14:03`, `…T14:03:11`, the last two optionally carrying `±HH:MM`. Never padded: 1,023 files in this archive are known only to a year. |
-| `takenAtUtc`    | the **instant**, always a complete `YYYY-MM-DDTHH:MM:SSZ`.                                                                                                                                                                 |
-| `takenAtSource` | `manual`, `gps`, `camera` or `name`.                                                                                                                                                                                       |
+| attr               | meaning                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `takenAt`          | the **wall clock**. Its length is its precision — `1975`, `2004-03`, `2003-04-30`, `…T14:03`, `…T14:03:11`, the last two optionally carrying `±HH:MM`. Never padded: 1,023 files in this archive are known only to a year. |
+| `takenAtUtc`       | the **instant**, always a complete `YYYY-MM-DDTHH:MM:SSZ`.                                                                                                                                                                 |
+| `takenAtSource`    | `manual`, `gps`, `camera` or `name`.                                                                                                                                                                                       |
+| `takenAtQualifier` | `about` when the date is only about then (an approximate sidecar date), shown `~1985`; null otherwise.                                                                                                                     |
 
 The split between the two is what makes both questions answerable. `--from`/`--to`, the year facet
 and every rendered caption read `takenAt`, because "which year is this photograph from" is a

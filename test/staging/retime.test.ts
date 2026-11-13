@@ -3,7 +3,8 @@
  * again where the stamps change; a dry run writes nothing and a second run nothing more. A batch
  * moved from a phone category into a scans category is announced by the bridge's rules, and the
  * retime they start takes its dates off; moved back, they are restored. A scan filed into the
- * library stays undated through `media-resolve-time`, its `digitized` going with it.
+ * library stays undated through `media-resolve-time`, its `digitized` going with it. A scan's date
+ * from its XMP sidecar, approximate as the scan application marked it, stays through a retime.
  *
  * The files are invented and their exif nodes written by hand, as `exif-extract` leaves them.
  */
@@ -20,7 +21,7 @@ const FILES = '/home/admin/staging/files';
 const PHONE = `${FILES}/phone/trip`;
 const SCANS = `${FILES}/scans/trip`;
 
-type Attrs = { takenAt?: string; takenAtSource?: string; digitized?: boolean; whenName?: string };
+type Attrs = { takenAt?: string; takenAtSource?: string; takenAtQualifier?: string; digitized?: boolean; whenName?: string };
 
 Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false }, async (t) => {
   const { vfs } = await testCtx.setup();
@@ -163,6 +164,25 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
       await cmd.shouldSucceed(`media-resolve-time --under ${album}`);
       const filed = await attrsOf(`${album}/DSC_0001.jpg`);
       assertEquals([filed.digitized, filed.takenAt], [true, undefined]);
+    });
+
+    await t.step("a scan's approximate sidecar date stays through a retime into scans, its scanner clock not believed", async () => {
+      const prints = `${FILES}/phone/prints`;
+      await cmd.shouldSucceed(`mkdir -p ${prints}`);
+      // Dated by its sidecar, as `exif-extract` leaves it; its scanner's clock is in the exif.
+      const scan = photo('SCAN_0001.jpg', '2024-03-02T10:11:12');
+      Object.assign(scan.attrs, { takenAt: '1985', takenAtUtc: '1984-12-31T23:00:00Z', takenAtSource: 'sidecar', takenAtQualifier: 'about' });
+      const scanned = await vfs.createTree<Record<string, unknown>>(ADMIN_ACCESS, prints, [scan]);
+      const sidecar = { kind: 'xmp', wallClock: '1985', approximate: true, pairedAt: '2026-10-18T00:00:00Z' };
+      await vfs.createTree<Record<string, unknown>>(ADMIN_ACCESS, `${prints}/SCAN_0001.jpg`, [
+        { type: 'file', name: 'sidecar', props, attrs: { mimetype: 'application/rdf+xml', size: 10, sourceId: scanned[0].id, sidecar } },
+      ]);
+
+      await cmd.shouldSucceed(`mv ${prints} ${FILES}/scans/`);
+      const answer = await retime(`${FILES}/scans/prints`);
+      assertEquals([answer.policyChanged, answer.retimed, answer.cleared], [1, 0, 0]);
+      const after = await attrsOf(`${FILES}/scans/prints/SCAN_0001.jpg`);
+      assertEquals([after.digitized, after.takenAt, after.takenAtSource, after.takenAtQualifier], [true, '1985', 'sidecar', 'about']);
     });
 
     await t.step('a path outside staging, a category that is not there, or two scopes are refused', async () => {

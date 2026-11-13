@@ -7,7 +7,8 @@
  * alternative (`rdf:Alt`) or a bag (`rdf:Bag`) by its items. The capture time is
  * `photoshop:DateCreated`, else `exif:DateTimeOriginal`, at the precision written (a scan dated
  * `1968-07` is a month); `xmp:CreateDate` is when the file was made, a scan's scan time, and is
- * not read. The position is `exif:GPSLatitude` / `exif:GPSLongitude` (`59,19.83N`, or with
+ * not read. `scan:DateApproximate` (`True`), which the scan application writes for a date given as
+ * "ca. 1985", marks a `photoshop:DateCreated` as only about then. The position is `exif:GPSLatitude` / `exif:GPSLongitude` (`59,19.83N`, or with
  * seconds); then `dc:title`, `dc:description`, `xmp:Rating`, `xmp:Label` and the keywords of
  * `dc:subject`.
  *
@@ -76,8 +77,10 @@ const coordinate = (value: string | undefined, negative: string): number | undef
 export const parseXmp = (packet: string): XmpSidecar | undefined => {
   if (!/<x:xmpmeta\b|<rdf:RDF\b/.test(packet)) return undefined;
   const sidecar: XmpSidecar = { kind: 'xmp' };
-  const date = [first(packet, 'photoshop:DateCreated'), first(packet, 'exif:DateTimeOriginal')].map((value) => value && xmpDate(value)).find((value) => value);
+  const created = xmpDate(first(packet, 'photoshop:DateCreated') ?? '');
+  const date = created ?? xmpDate(first(packet, 'exif:DateTimeOriginal') ?? '');
   if (date) sidecar.wallClock = date;
+  if (created && first(packet, 'scan:DateApproximate')?.toLowerCase() === 'true') sidecar.approximate = true;
   const lat = coordinate(first(packet, 'exif:GPSLatitude'), 'S');
   const lng = coordinate(first(packet, 'exif:GPSLongitude'), 'W');
   if (lat !== undefined && lng !== undefined && !(lat === 0 && lng === 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {

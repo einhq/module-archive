@@ -268,6 +268,8 @@ export type MediaDetails = {
   takenAtUtc?: string;
   /** Which source won: `manual`, `gps`, `camera` or `name`. */
   takenAtSource?: string;
+  /** `about` when the date is only about then, as a scan's sidecar can say. */
+  takenAtQualifier?: 'about';
   /** A digitized copy (a scan): the clocks recorded while digitizing were not believed. */
   digitized?: true;
   /** Why a hand-typed time is what it is, when somebody said. */
@@ -647,12 +649,14 @@ export type TakeoutAlbumSidecar = { kind: 'takeout-album'; title: string; descri
 
 /**
  * What an XMP sidecar says about its file: when it was taken as a wall clock at its own precision
- * (`wallClock`, from `photoshop:DateCreated` or `exif:DateTimeOriginal`), where, its title and
- * caption, its rating and colour label, and its keywords (`dc:subject`).
+ * (`wallClock`, from `photoshop:DateCreated` or `exif:DateTimeOriginal`) and whether that date is
+ * only about then (`approximate`, scan's `scan:DateApproximate`), where, its title and caption,
+ * its rating and colour label, and its keywords (`dc:subject`).
  */
 export type XmpSidecar = {
   kind: 'xmp';
   wallClock?: string;
+  approximate?: true;
   where?: SidecarPoint;
   title?: string;
   description?: string;

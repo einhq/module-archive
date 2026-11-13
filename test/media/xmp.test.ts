@@ -60,6 +60,23 @@ Deno.test('a packet in elements is read the same; a southern and western positio
   assertEquals([read?.where?.lat.toFixed(4), read?.where?.lng.toFixed(4)], ['-33.8651', '-151.2100']);
 });
 
+/** The scan application's spelling (exiftool's), with a date given as "ca. 1985-06". */
+const SCAN = `<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about='' xmlns:photoshop='http://ns.adobe.com/photoshop/1.0/'>
+  <photoshop:DateCreated>1985-06</photoshop:DateCreated>
+ </rdf:Description>
+ <rdf:Description rdf:about='' xmlns:scan='https://goto.runge.se/ns/scan/1.0/'>
+  <scan:DateApproximate>True</scan:DateApproximate>
+  <scan:ID>01J0000000000000000000000</scan:ID>
+ </rdf:Description>
+</rdf:RDF></x:xmpmeta>`;
+
+Deno.test('a date the scan application marks approximate is only about then; the mark alone dates nothing', () => {
+  assertEquals(parseXmp(SCAN), { kind: 'xmp', wallClock: '1985-06', approximate: true });
+  assertEquals(parseXmp(SCAN.replace('True', 'False')), { kind: 'xmp', wallClock: '1985-06' });
+  assertEquals(parseXmp(SCAN.replace(/<photoshop:DateCreated>.*<\/photoshop:DateCreated>/, '')), { kind: 'xmp' });
+});
+
 Deno.test('XMP dates in their forms; anything else is no date', () => {
   assertEquals(xmpDate('1968'), '1968');
   assertEquals(xmpDate('1968-07-14'), '1968-07-14');

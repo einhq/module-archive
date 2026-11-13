@@ -84,7 +84,7 @@ const resolveFileTime = async (
 
 /**
  * Resolve and write a file's capture time. Returns what it wrote, or null when the file has no
- * believable date — in which case the three attrs are cleared rather than left stale.
+ * believable date — in which case the time attrs are cleared rather than left stale.
  */
 export const applyFileTime = async (
   cmd: Command,

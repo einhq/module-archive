@@ -35,6 +35,7 @@ import { PersonGlance, UnknownGlance } from './FaceGlance.tsx';
 import { TranscriptPanel } from './TranscriptPanel.tsx';
 import { albumRoute } from '../lib/album-path.ts';
 import { timeSourceLabel } from '../lib/capture-time.ts';
+import { qualifiedDate } from '@archive/people/date-qualifier';
 import { FaceCrop } from '../../people/components/FaceCrop.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { StagedDuplicates } from '../../staging/components/StagedDuplicates.tsx';
@@ -931,7 +932,7 @@ export function MediaSidebar(
               caption above the picture renders it for reading, and this is where one
               checks what the record actually says. */
           }
-          <InfoRow label='Taken at' value={details?.takenAt ?? media.takenAt ?? ''} />
+          <InfoRow label='Taken at' value={qualifiedDate(details?.takenAt ?? media.takenAt ?? '', details?.takenAtQualifier)} />
           <InfoRow label='Taken at (UTC)' value={details?.takenAtUtc ?? ''} />
           <InfoRow label='Time source' value={[timeSourceLabel(details?.takenAtSource, details?.digitized), details?.takenAtNote].filter(Boolean).join(' · ')} />
           <InfoRow label='Created' value={formatTimestamp(media.birthtime)} />

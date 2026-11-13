@@ -85,6 +85,7 @@ import { TextEditDialog } from './TextEditDialog.tsx';
 import { TextOverlay } from './TextOverlay.tsx';
 import { VideoPlayer } from './VideoPlayer.tsx';
 import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } from '../lib/capture-time.ts';
+import { qualifiedDate } from '@archive/people/date-qualifier';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
 import { facesVisible, infoSidebarOpen, lightboxCountHidden, lightboxRestedPath, toggleFacesVisible, toggleInfoSidebar } from '../signals/lightbox.ts';
 
@@ -262,7 +263,9 @@ type BarInfo = { index: number; taken: TakenParts; takenLabel: string; takenTool
 /** `details` may be missing, or not read yet; the list item's date stands in until they are. */
 function barInfoOf(item: MediaItem, details: MediaDetails | null, index: number, short: boolean): BarInfo {
   const takenAt = details?.takenAt ?? item.takenAt;
-  const taken = formatLightboxTaken(takenAt, short);
+  // A date only about then is worn as `~1985`, as a person's is.
+  const exact = formatLightboxTaken(takenAt, short);
+  const taken = details?.takenAtQualifier ? { ...exact, date: qualifiedDate(exact.date, details.takenAtQualifier) } : exact;
   // A photograph is shown on the clock the photographer was reading. The viewer's own time is
   // offered beside it only when the two differ, which on this archive means the pictures taken
   // abroad and nothing else.
@@ -272,7 +275,7 @@ function barInfoOf(item: MediaItem, details: MediaDetails | null, index: number,
     index,
     taken,
     takenLabel: taken.clock ? `${taken.date}, ${taken.clock}` : taken.date,
-    takenTooltip: [takenHere && `${takenHere} your time`, takenSource, details?.takenAtNote].filter(Boolean).join(' · '),
+    takenTooltip: [takenHere && `${takenHere} your time`, details?.takenAtQualifier && 'approximate', takenSource, details?.takenAtNote].filter(Boolean).join(' · '),
     where: locationLabel(details),
   };
 }

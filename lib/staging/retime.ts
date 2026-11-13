@@ -5,13 +5,15 @@
  * is read and left alone, so a second run writes nothing.
  *
  * A page of files at a time, in a fixed number of store calls per page however many files it holds:
- * one query for the page, two child-link reads and one node read for the exif of the files whose
- * attrs change, and one batched write (`updateEach`). A camera's clock is read once per call.
+ * one query for the page, two child-link reads and one node read for the exif and paired sidecars of
+ * the files whose attrs change, and one batched write (`updateEach`); only a sidecar shared by a
+ * softlink takes a read of its own. A camera's clock is read once per call.
  */
 import type { Command, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
 import { NOT_DERIVED, SYSTEM_TIME_ZONE } from '@ein/client';
 import type { StagingRetimeAnswer, StagingTimeRules } from '@archive/staging/api';
-import { type CaptureWhen, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { type CaptureWhen, resolveTime, type SidecarTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { SIDECAR_CHILD, sidecarOf, sidecarTime } from '@archive/media/paired-sidecar';
 import { type CameraClock, clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { stampsHold, timeStamps } from '@archive/staging/category';
 
@@ -41,29 +43,42 @@ export const emptyRetime = (user: string, path: string, dryRun: boolean): Stagin
 });
 
 /**
- * The normalized capture-time sources of each file in `ids` that has an exif node, by file id: two
- * child-link reads (`metadata`, then `exif`) and one node read for them all. A file with no exif
- * node is absent; one whose exif node predates `when` maps to undefined.
+ * What each file in `ids` gives the time resolver besides its own attrs, by file id: its normalized
+ * exif sources (`whens`), and what its paired sidecar says of when it was taken (`sidecars`). Two
+ * child-link reads (`metadata` and `sidecar`, then `exif`) and one node read for them all. A file
+ * with no exif node is absent from `whens`; one whose exif node predates `when` maps to undefined.
  */
-const readWhens = async (cmd: Command, ids: string[]): Promise<Map<string, CaptureWhen | undefined>> => {
+const readSources = async (cmd: Command, ids: string[]): Promise<{ whens: Map<string, CaptureWhen | undefined>; sidecars: Map<string, SidecarTime> }> => {
   const { vfs } = cmd.sys;
   const whens = new Map<string, CaptureWhen | undefined>();
+  const sidecars = new Map<string, SidecarTime>();
   const metadataOf = new Map<string, string>();
+  const sidecarOfFile = new Map<string, string>();
   for (const [id, children] of await vfs.getChildLinksByIds(cmd.access, ids)) {
     const metadata = children.find((child) => child.name === 'metadata');
     if (metadata) metadataOf.set(metadata.id, id);
+    const sidecar = children.find((child) => child.name === SIDECAR_CHILD);
+    if (sidecar) sidecarOfFile.set(sidecar.id, id);
   }
-  if (metadataOf.size === 0) return whens;
   const exifOf = new Map<string, string>();
-  for (const [id, children] of await vfs.getChildLinksByIds(cmd.access, [...metadataOf.keys()])) {
-    const exif = children.find((child) => child.name === 'exif');
-    if (exif) exifOf.set(exif.id, metadataOf.get(id)!);
+  if (metadataOf.size > 0) {
+    for (const [id, children] of await vfs.getChildLinksByIds(cmd.access, [...metadataOf.keys()])) {
+      const exif = children.find((child) => child.name === 'exif');
+      if (exif) exifOf.set(exif.id, metadataOf.get(id)!);
+    }
   }
-  if (exifOf.size === 0) return whens;
-  for (const [id, node] of await vfs.getNodesByIds(cmd.access, [...exifOf.keys()])) {
-    whens.set(exifOf.get(id)!, whenFromExifAttrs(node.attrs as Record<string, unknown>));
+  if (exifOf.size === 0 && sidecarOfFile.size === 0) return { whens, sidecars };
+  for (const [id, node] of await vfs.getNodesByIds(cmd.access, [...exifOf.keys(), ...sidecarOfFile.keys()])) {
+    const exifFile = exifOf.get(id);
+    if (exifFile !== undefined) whens.set(exifFile, whenFromExifAttrs(node.attrs as Record<string, unknown>));
+    const sidecarFile = sidecarOfFile.get(id);
+    if (sidecarFile === undefined) continue;
+    // An edited copy shares its original's sidecar by a softlink, read through to the original's.
+    const shared = node.props.softlink ? await vfs.get(cmd.access, node.props.softlink).catch(() => undefined) : node;
+    const time = shared && sidecarTime(sidecarOf(shared.attrs as Record<string, unknown>));
+    if (time) sidecars.set(sidecarFile, time);
   }
-  return whens;
+  return { whens, sidecars };
 };
 
 /** One page of files, retimed by `rules` into `answer`. */
@@ -78,7 +93,7 @@ const retimePage = async (cmd: Command, rows: NodeQueryEntry[], rules: StagingTi
   answer.policyChanged += due.length;
   if (due.length === 0) return;
 
-  const whens = await readWhens(cmd, due.map(({ row }) => row.id));
+  const { whens, sidecars } = await readSources(cmd, due.map(({ row }) => row.id));
   const changes: { path: string; attrs: Record<string, unknown> }[] = [];
   for (const { row, attrs, stamps } of due) {
     const change: Record<string, unknown> = { ...stamps };
@@ -93,11 +108,12 @@ const retimePage = async (cmd: Command, rows: NodeQueryEntry[], rules: StagingTi
         manual: str(attrs.whenManual),
         gps: when.gps,
         camera: when.device,
+        ...(sidecars.has(row.id) ? { sidecar: sidecars.get(row.id) } : {}),
         ...clockSources(clock, SYSTEM_TIME_ZONE),
         ...stampedSources(stamps),
       });
       const same = str(attrs.takenAt) === resolved?.takenAt && str(attrs.takenAtUtc) === resolved?.takenAtUtc &&
-        str(attrs.takenAtSource) === resolved?.takenAtSource;
+        str(attrs.takenAtSource) === resolved?.takenAtSource && str(attrs.takenAtQualifier) === resolved?.takenAtQualifier;
       if (!same) {
         Object.assign(change, timeAttrs(resolved));
         answer.retimed++;

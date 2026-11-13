@@ -43,7 +43,7 @@ Deno.test('the ranking is manual, then gps, then camera', async (t) => {
 
   await t.step('nothing usable resolves to nothing, and clears rather than keeps', () => {
     assertEquals(resolveTime({ archiveZone: STOCKHOLM }), null);
-    assertEquals(timeAttrs(null), { takenAt: null, takenAtUtc: null, takenAtSource: null });
+    assertEquals(timeAttrs(null), { takenAt: null, takenAtUtc: null, takenAtSource: null, takenAtQualifier: null });
   });
 
   await t.step('a manual value that is not a capture time falls through to the sources', () => {
@@ -333,6 +333,9 @@ Deno.test("a sidecar's date ranks after a manual one and, for a Takeout instant,
     // An offset it carries is kept; a wall clock without one is read in the archive's zone.
     assertEquals(resolveTime({ sidecar: { wallClock: '2019-06-01T12:34:56+02:00' }, archiveZone: STOCKHOLM })!.takenAtUtc, '2019-06-01T10:34:56Z');
     assertEquals(resolveTime({ sidecar: { wallClock: '2019-06-01T12:34:56' }, archiveZone: STOCKHOLM })!.takenAtUtc, '2019-06-01T10:34:56Z');
+    // One given as approximate is only about then; a manual time over it is not.
+    assertEquals(resolveTime({ sidecar: { wallClock: '1985', approximate: true }, archiveZone: STOCKHOLM })!.takenAtQualifier, 'about');
+    assertEquals(timeAttrs(resolveTime({ manual: '1986', sidecar: { wallClock: '1985', approximate: true }, archiveZone: STOCKHOLM })).takenAtQualifier, null);
   });
 
   await t.step('a Takeout instant near the camera clock gives the camera clock its offset, after a GPS fix', () => {

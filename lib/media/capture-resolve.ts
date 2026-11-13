@@ -82,10 +82,10 @@ type TimeSource = 'manual' | 'sidecar' | 'gps' | 'camera' | 'name';
 
 /**
  * The times a paired sidecar gives (`@archive/media/sidecars`): a wall clock an XMP packet states
- * (`wallClock`, a capture time at any precision), and a Takeout's capture instant and upload
- * instant (`instant`, `uploaded`, both `YYYY-MM-DDTHH:MM:SSZ`).
+ * (`wallClock`, a capture time at any precision, `approximate` when it is only about then), and a
+ * Takeout's capture instant and upload instant (`instant`, `uploaded`, both `YYYY-MM-DDTHH:MM:SSZ`).
  */
-export type SidecarTime = { wallClock?: string; instant?: string; uploaded?: string };
+export type SidecarTime = { wallClock?: string; approximate?: true; instant?: string; uploaded?: string };
 
 export type ResolvedTime = {
   /** Wall clock, precision = length, offset when known. The range and facet attr. */
@@ -93,6 +93,11 @@ export type ResolvedTime = {
   /** `YYYY-MM-DDTHH:MM:SSZ`. The ordering and cursor attr. */
   takenAtUtc: string;
   takenAtSource: TimeSource;
+  /**
+   * `about` when the date is only about then: one a sidecar gives as approximate. The people's
+   * dates use the same word (`@archive/people/date-qualifier`).
+   */
+  takenAtQualifier?: 'about';
 };
 
 type TimeSources = {
@@ -309,7 +314,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   // A date an editor wrote into the sidecar is a person's too, at the precision they gave it.
   if (sources.sidecar?.wallClock !== undefined) {
     const stated = resolveWallClock(sources.sidecar.wallClock, sources.cameraOffsetAt, archiveZone);
-    if (stated) return { ...stated, takenAtSource: 'sidecar' };
+    if (stated) return { ...stated, takenAtSource: 'sidecar', ...(sources.sidecar.approximate ? { takenAtQualifier: 'about' as const } : {}) };
   }
 
   // A Takeout instant far from the camera clock (unsuppressed: a digitizer's clock is still a
@@ -411,11 +416,15 @@ export const stampedSources = (attrs: Record<string, unknown>): { digitized?: bo
   ...(typeof attrs.whenName === 'string' && isCaptureTime(attrs.whenName) ? { name: attrs.whenName } : {}),
 });
 
-/** The three attrs, or three nulls — the shape `vfs.update` wants either way. */
+/**
+ * The four attrs, nulls where there is nothing — the shape `vfs.update` wants either way, and why a
+ * qualifier goes whenever another source wins.
+ */
 export const timeAttrs = (resolved: ResolvedTime | null): Record<string, unknown> => ({
   takenAt: resolved?.takenAt ?? null,
   takenAtUtc: resolved?.takenAtUtc ?? null,
   takenAtSource: resolved?.takenAtSource ?? null,
+  takenAtQualifier: resolved?.takenAtQualifier ?? null,
 });
 
 /** The `when` block `exif-extract` normalizes onto a file's `metadata/exif` child. */

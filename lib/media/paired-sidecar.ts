@@ -34,7 +34,7 @@ export const readSidecar = async (vfs: Vfs, access: Access, filePath: string): P
 
 /** What a paired sidecar says of when its file was taken, as the time resolver takes it. */
 export const sidecarTime = (sidecar: MediaSidecar | undefined): SidecarTime | undefined => {
-  if (sidecar?.kind === 'xmp') return sidecar.wallClock ? { wallClock: sidecar.wallClock } : undefined;
+  if (sidecar?.kind === 'xmp') return sidecar.wallClock ? { wallClock: sidecar.wallClock, ...(sidecar.approximate ? { approximate: true } : {}) } : undefined;
   if (sidecar?.kind !== 'takeout' || !sidecar.takenAt) return undefined;
   return { instant: sidecar.takenAt, ...(sidecar.uploadedAt ? { uploaded: sidecar.uploadedAt } : {}) };
 };
