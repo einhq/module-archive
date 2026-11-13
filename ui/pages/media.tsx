@@ -3,6 +3,7 @@ import { MemoryRings } from '../components/MemoryRings.tsx';
 import { useDayInHistory } from '../hooks/useDayInHistory.ts';
 import { stagingUploadFolder } from '../staging/hooks/useStagingStatus.ts';
 import { SetTimeAction } from '../media/components/SetTimeAction.tsx';
+import { RestoreAction } from '../media/components/RestoreAction.tsx';
 import { SearchByPicture } from '../media/components/SearchByPicture.tsx';
 import { LabelSuggestions } from '../components/LabelSuggestions.tsx';
 import { useSubjectFacets } from '../hooks/useSubjectFacets.ts';
@@ -64,6 +65,18 @@ const LAYOUT_OPTIONS = [
 ] as const;
 
 /**
+ * The damage a scan is found to have (`find-damage`), as the filter offers it: each kind as the
+ * value `search --has damage=<kind>` matches, and the steps a restoration of them is first offered.
+ */
+const DAMAGE_PREFIX = 'damage=';
+const DAMAGE_FILTERS = [
+  { value: '', label: 'Any condition', icon: <TablerIcon name='photo' size={18} />, steps: {} },
+  { value: 'faded', label: 'Faded', icon: <TablerIcon name='palette-off' size={18} />, steps: { unfade: true, dust: false } },
+  { value: 'dust', label: 'Dusty', icon: <TablerIcon name='grain' size={18} />, steps: { unfade: false, dust: true } },
+  { value: 'scratches', label: 'Scratched', icon: <TablerIcon name='slash' size={18} />, steps: { unfade: false, dust: true } },
+] as const;
+
+/**
  * The reader's words for a provider's stderr line.
  *
  * The one that matters is the content match giving up — the model server did not
@@ -102,6 +115,10 @@ export const handle = { fullBleed: true };
  * and the chips narrow it as they narrow words.
  *
  * The kind control belongs to both modes: "just the videos" is still the feed.
+ *
+ * The Damage filter lists the scans found faded, dusty or scratched (`find-damage`, a filter like
+ * any chip, `search --has damage=<kind>`), and Restore… in the selection bar restores a selection
+ * of them in the background (`file-restore --queue`).
  */
 export default function MediaPage() {
   useSignals();
@@ -137,6 +154,7 @@ export default function MediaPage() {
     if (kind === 'person') return people.find((person) => person.id === value)?.name;
     if (kind === 'location') return locations.find((location) => location.id === value)?.name;
     if (kind === 'album') return albumNames.get(value);
+    if (kind === 'has' && value.startsWith(DAMAGE_PREFIX)) return DAMAGE_FILTERS.find((entry) => entry.value && `${DAMAGE_PREFIX}${entry.value}` === value)?.label;
     return undefined;
   }, [people, locations, albumNames]);
 
@@ -158,6 +176,13 @@ export default function MediaPage() {
     const match = MEDIA_KIND_FILTERS.find((entry) => entry.kinds.length === kinds.length && entry.kinds.every((kind) => kinds.includes(kind)));
     return match ?? MEDIA_KIND_FILTERS[0];
   }, [filters.kinds]);
+
+  const damage = DAMAGE_FILTERS.find((entry) => entry.value && filters.has?.includes(`${DAMAGE_PREFIX}${entry.value}`)) ?? DAMAGE_FILTERS[0];
+  const chooseDamage = (value: string) => {
+    const others = (filters.has ?? []).filter((entry) => !entry.startsWith(DAMAGE_PREFIX));
+    const has = value ? [...others, `${DAMAGE_PREFIX}${value}`] : others;
+    patch({ has: has.length > 0 ? has : undefined });
+  };
 
   // ----- Scope -----
   // All by default; a guest has no "my" at all.
@@ -270,6 +295,12 @@ export default function MediaPage() {
                   )
                 }
                 <HeaderChoice
+                  label='Damage'
+                  value={damage.value}
+                  onChange={chooseDamage}
+                  options={DAMAGE_FILTERS.map(({ value, label, icon }) => ({ value, label, icon }))}
+                />
+                <HeaderChoice
                   label='Show'
                   variant='segmented'
                   value={kindFilter.value}
@@ -321,7 +352,12 @@ export default function MediaPage() {
                 grouped={false}
                 onLoadingChange={setSearching}
                 emptyMessage='Nothing matches that filter.'
-                selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
+                selectionActions={({ selection, items, reload }) => (
+                  <>
+                    <SetTimeAction selection={selection} items={items} onApplied={reload} />
+                    <RestoreAction selection={selection} items={items} initial={damage.steps} />
+                  </>
+                )}
               />
             )
             : (
@@ -332,7 +368,12 @@ export default function MediaPage() {
                 square={layout.square}
                 onLoadingChange={setSearching}
                 emptyMessage={scope === 'my' ? 'Nothing you have added yet.' : 'No media yet.'}
-                selectionActions={({ selection, items, reload }) => <SetTimeAction selection={selection} items={items} onApplied={reload} />}
+                selectionActions={({ selection, items, reload }) => (
+                  <>
+                    <SetTimeAction selection={selection} items={items} onApplied={reload} />
+                    <RestoreAction selection={selection} items={items} />
+                  </>
+                )}
               />
             )}
         </Stack>
