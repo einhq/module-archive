@@ -51,11 +51,9 @@ type StagingRoots = {
   genealogyPath: string;
 };
 
-const USER_NAME = /^[A-Za-z0-9._@+-]+$/;
-
 /** Where `user`'s staging area and its directories are. Throws for a name that is not one path segment. */
 export const stagingRoots = (user: string): StagingRoots => {
-  if (!USER_NAME.test(user) || user === '.' || user === '..') throw new Error(`invalid username '${user}'`);
+  if (!user || user.includes('/') || user === '.' || user === '..') throw new Error(`invalid username '${user}'`);
   const homePath = homeOf(user);
   const stagingPath = `${homePath}/staging`;
   return {

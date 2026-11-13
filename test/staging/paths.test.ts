@@ -23,6 +23,8 @@ Deno.test('staging roots: every directory of the area, for a name that is one pa
     routesPath: '/home/person@example.com/staging/routes',
     genealogyPath: '/home/person@example.com/staging/genealogy',
   });
+  assertEquals(stagingRoots('gustaf.möller').filesPath, '/home/gustaf.möller/staging/files');
+  assertThrows(() => stagingRoots(''));
   assertThrows(() => stagingRoots('..'));
   assertThrows(() => stagingRoots('anna/bertil'));
   assertEquals(categoryPath('anna', 'scans'), '/home/anna/staging/files/scans');
