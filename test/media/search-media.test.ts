@@ -9,7 +9,7 @@
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
-import { assertAlmostEquals, assertEquals, assertLess } from '@std/assert';
+import { assertEquals, assertGreaterOrEqual, assertLess, assertLessOrEqual } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
 
@@ -193,10 +193,15 @@ Deno.test({
         await new Promise((resolve) => setTimeout(resolve, 300));
         controller.abort();
         await search;
-        assertLess(Date.now() - started, 10_000);
+        const ended = Date.now();
+        assertLess(ended - started, 10_000);
 
+        // Each embed asks for a minute from when it was sent, some time within the search.
         const deadlines = stub.requests.map((request) => (request.body.options as { deadline?: number } | undefined)?.deadline ?? 0);
-        for (const deadline of deadlines) assertAlmostEquals(deadline, started / 1000 + 60, 5);
+        for (const deadline of deadlines) {
+          assertGreaterOrEqual(deadline, Math.floor(started / 1000) + 60);
+          assertLessOrEqual(deadline, Math.ceil(ended / 1000) + 60);
+        }
         for (let i = 0; i < 100 && stub.hungUp.length < stub.requests.length; i++) await new Promise((resolve) => setTimeout(resolve, 20));
         assertEquals([...stub.hungUp].sort(), stub.requests.map((request) => request.op).sort());
         assertEquals(ops(), new Set(['text.embed', 'vision.embed_text']));
