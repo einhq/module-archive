@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { execCommand, onOutsideEdit } from '@ein/ui/signals';
 import { fileUrl, shq } from '@ein/ui/lib';
 import { forgetTranscript } from './useTranscriptCues.ts';
-import type { CommentEntry } from '@ein/api';
 import type { MediaDetails } from '@archive/media/api';
 export type {
   AlbumRef,
@@ -23,8 +22,6 @@ export type {
   StackMemberRef,
   UnknownFace,
 } from '@archive/media/api';
-
-export type { CommentEntry };
 
 /** What the lightbox's orientation buttons ask for. */
 export type OrientationChange = { rotate: 'cw' | 'ccw' | '180' } | { mirror: 'toggle' };
