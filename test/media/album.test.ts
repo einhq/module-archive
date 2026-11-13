@@ -1,13 +1,13 @@
 /**
  * Album command tests: create, info (of one album and of several), list (its paging, and what it
- * says of a suggested album), set (its series links too) and add, and the layout of a suggested album's members.
+ * says of a suggested album), set (its series links too), add and move, and the layout of a suggested album's members.
  */
 
 import { ALBUMS_ROOT, LOCATIONS_ROOT } from '@archive/paths';
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, captureTime, createTestContext, testCommands } from '@ein/testing';
 import type { SearchLayoutResponse } from '@ein/api';
-import type { AlbumAddResult, AlbumInfoAnswer, AlbumListResult } from '@archive/media/api';
+import type { AlbumAddResult, AlbumInfoAnswer, AlbumListResult, AlbumMoveResult } from '@archive/media/api';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -303,6 +303,63 @@ Deno.test({
     await t.step('add refuses a missing file and adds nothing', async () => {
       await cmd.shouldFail(`album add ${ALBUMS_ROOT}/picked /picks/two.txt /picks/nope.txt`);
       await cmd.shouldFail(`album add ${ALBUMS_ROOT}/picked`);
+    });
+
+    await t.step('move moves files into the album under a free name, and spans both albums', async () => {
+      await cmd.shouldSucceed(`album create ${ALBUMS_ROOT}/from --name "From"`);
+      await client.exec(`echo a > ${ALBUMS_ROOT}/from/a.jpg && echo b > ${ALBUMS_ROOT}/from/b.jpg && echo c > ${ALBUMS_ROOT}/from/c.jpg`);
+      await vfs.update(ADMIN_ACCESS, `${ALBUMS_ROOT}/from/a.jpg`, { attrs: { mimetype: 'image/jpeg', ...captureTime('2019-06-14T09:00:00') } });
+      await vfs.update(ADMIN_ACCESS, `${ALBUMS_ROOT}/from/b.jpg`, { attrs: { mimetype: 'image/jpeg', ...captureTime('2019-06-20T09:00:00') } });
+      await cmd.shouldSucceed(`album-span ${ALBUMS_ROOT}/from`);
+      await cmd.shouldSucceed(`album create ${ALBUMS_ROOT}/into --name "Into"`);
+      await client.exec(`echo taken > ${ALBUMS_ROOT}/into/b.jpg`);
+      await cmd.shouldSucceed(`ln -s ${ALBUMS_ROOT}/from/c.jpg /picks/to-c`);
+
+      const result = await client.execJson<AlbumMoveResult>(`album move ${ALBUMS_ROOT}/into ${ALBUMS_ROOT}/from/a.jpg ${ALBUMS_ROOT}/from/b.jpg ${ALBUMS_ROOT}/from/c.jpg`);
+      assertEquals(result.moved, [
+        { path: `${ALBUMS_ROOT}/from/a.jpg`, to: `${ALBUMS_ROOT}/into/a.jpg` },
+        { path: `${ALBUMS_ROOT}/from/b.jpg`, to: `${ALBUMS_ROOT}/into/b (2).jpg` },
+        { path: `${ALBUMS_ROOT}/from/c.jpg`, to: `${ALBUMS_ROOT}/into/c.jpg` },
+      ]);
+      assertEquals(result.failed, []);
+      const link = await client.execJson<{ softlink: string }>('props -L /picks/to-c');
+      assertEquals(link.softlink, `${ALBUMS_ROOT}/into/c.jpg`);
+      const { albums: [from, into] } = await client.execJson<AlbumInfoAnswer>(`album info ${ALBUMS_ROOT}/from ${ALBUMS_ROOT}/into`);
+      assertEquals(from.timeStart, undefined);
+      assert(into.timeStart?.startsWith('2019-06-14'), into.timeStart);
+    });
+
+    await t.step('move takes a link along, drops one whose picture is there, and replaces a link with its file', async () => {
+      await client.exec(`echo d > ${ALBUMS_ROOT}/from/d.jpg && echo e > /picks/e.txt && echo f > /picks/f.txt`);
+      await cmd.shouldSucceed(`album add ${ALBUMS_ROOT}/from /picks/e.txt /picks/f.txt`);
+      await cmd.shouldSucceed(`album add ${ALBUMS_ROOT}/into /picks/f.txt ${ALBUMS_ROOT}/from/d.jpg`);
+
+      const result = await client.execJson<AlbumMoveResult>(
+        `album move ${ALBUMS_ROOT}/into ${ALBUMS_ROOT}/from/e.txt ${ALBUMS_ROOT}/from/f.txt ${ALBUMS_ROOT}/from/d.jpg ${ALBUMS_ROOT}/into/a.jpg`,
+      );
+      assertEquals(result.moved, [
+        { path: `${ALBUMS_ROOT}/from/e.txt`, to: `${ALBUMS_ROOT}/into/e.txt` },
+        { path: `${ALBUMS_ROOT}/from/d.jpg`, to: `${ALBUMS_ROOT}/into/d.jpg` },
+      ]);
+      assertEquals(result.unlinked, [
+        { link: `${ALBUMS_ROOT}/from/f.txt`, target: '/picks/f.txt' },
+        { link: `${ALBUMS_ROOT}/into/d.jpg`, target: `${ALBUMS_ROOT}/from/d.jpg` },
+      ]);
+      assertEquals(result.already, [`${ALBUMS_ROOT}/from/f.txt`, `${ALBUMS_ROOT}/into/a.jpg`]);
+      const moved = await client.execJson<{ softlink: string }>(`props -L ${ALBUMS_ROOT}/into/e.txt`);
+      assertEquals(moved.softlink, '/picks/e.txt');
+      const node = await client.execJson<{ type: string }>(`info ${ALBUMS_ROOT}/into/d.jpg`);
+      assertEquals(node.type, 'file');
+      assertEquals((await vfs.children(ADMIN_ACCESS, `${ALBUMS_ROOT}/from`)).map((entry) => entry.name), []);
+    });
+
+    await t.step('move --create makes the album, and a missing file moves nothing', async () => {
+      await client.exec('echo g > /picks/g.txt');
+      const result = await client.execJson<AlbumMoveResult>(`album move ${ALBUMS_ROOT}/fresh /picks/g.txt --create --name "Fresh"`);
+      assertEquals(result.created, true);
+      assertEquals(result.moved, [{ path: '/picks/g.txt', to: `${ALBUMS_ROOT}/fresh/g.txt` }]);
+      await cmd.shouldFail(`album move ${ALBUMS_ROOT}/fresh ${ALBUMS_ROOT}/fresh/g.txt /picks/nope.txt`);
+      await cmd.shouldFailWith(`album move ${ALBUMS_ROOT}/nowhere /picks/one.txt`, 'album');
     });
 
     await t.step("a suggested album's layout says which of the files it links have renditions", async () => {

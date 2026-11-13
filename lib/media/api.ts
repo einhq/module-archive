@@ -397,6 +397,27 @@ export type AlbumAddResult = {
   journal?: string[];
 };
 
+/**
+ * `album move`: which files moved into the album and where each now lives, the links taken away
+ * because the album already had the picture, and what was not moved.
+ */
+export type AlbumMoveResult = {
+  album: string;
+  /** Each file or link moved, from where it was to where it now is in the album. */
+  moved: { path: string; to: string }[];
+  /**
+   * Each link removed: a moved link whose picture the album already had, and a link in the album
+   * to a file moved into it, which would otherwise show it twice. `ln -s target link` puts one back.
+   */
+  unlinked: { link: string; target: string }[];
+  /** Files already in the album; nothing was done for them. */
+  already: string[];
+  /** Each file that did not move, with why. */
+  failed: { path: string; error: string }[];
+  /** `--create` made the album. */
+  created?: boolean;
+};
+
 /** One album in `album-span`'s answer: the span it has (or, with `--dry-run`, would have) and its media's own. */
 export type AlbumSpanRow = {
   path: string;

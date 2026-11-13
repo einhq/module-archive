@@ -15,9 +15,10 @@ import {
 import { albumMembers } from '@archive/media/album-members';
 import { NEXT_LINK_NAME, NON_MEMBER_LINK_NAMES, PREVIOUS_LINK_NAME } from '@archive/media/types';
 import { mediaSpan, SPAN_DAY, SPAN_KEYS } from '@archive/media/album-span';
-import type { AlbumAddResult, AlbumInfo, AlbumInfoAnswer, AlbumListItem, AlbumListResult } from '@archive/media/api';
+import type { AlbumAddResult, AlbumInfo, AlbumInfoAnswer, AlbumListItem, AlbumListResult, AlbumMoveResult } from '@archive/media/api';
 import type { StagingAlbumRef } from '@archive/staging/api';
 import { leavesStaging } from '@archive/staging';
+import { isStagedPath } from '@archive/staging/paths';
 import { fileStagedMany, freeName } from '@archive/staging/file';
 import { AUTO_ORIGIN, type AutoAlbumMeta } from '@archive/staging/auto-album';
 import { groupDetailOf, type GroupRowAttrs, matchedAlbumIds, stagingRowOf } from '@archive/staging/rows';
@@ -28,7 +29,7 @@ const NODE_TYPE_DIRECTORY = 'directory';
 const NODE_TYPE_SOFTLINK = 'softlink';
 const COVER_LINK_NAME = 'coverPhoto';
 
-const USAGE = 'Usage: album <create|info|list|set|add> <path> [options]';
+const USAGE = 'Usage: album <create|info|list|set|add|move> <path> [options]';
 
 /** `album info` takes this many albums at most, read this many at a time. */
 const INFO_MAX_PATHS = 50;
@@ -509,6 +510,143 @@ const albumAdd = async (cmd: Command, path: string, files: string[], flags: Reco
   return 0;
 };
 
+/** The album `path` is in, the nearest album above it, or undefined outside every album. */
+const albumAbove = async (cmd: Command, path: string, seen: Map<string, string | undefined>): Promise<string | undefined> => {
+  const passed: string[] = [];
+  let found: string | undefined;
+  for (let dir = dirname(path); dir !== '/'; dir = dirname(dir)) {
+    if (seen.has(dir)) {
+      found = seen.get(dir);
+      break;
+    }
+    passed.push(dir);
+    const node = await cmd.sys.vfs.get(cmd.access, dir).catch(() => null);
+    if (node?.type === NODE_TYPE_ALBUM) {
+      found = dir;
+      break;
+    }
+  }
+  for (const dir of passed) seen.set(dir, found);
+  return found;
+};
+
+/**
+ * Move files out of where they are into an album, where it keeps its members (the album itself,
+ * or an imported album's `files/`), each under a name free there. A link moves as the link, so a
+ * picture only added to one album is added to this one instead; one whose picture the album
+ * already has is removed rather than moved. A file the album links is moved in and that link
+ * removed, so it is not shown twice. Every softlink at a moved path is re-pointed, as `mv` does.
+ * With `create`, an album that is not there is made first. The spans of this album and of the
+ * albums the files left are refreshed at once, since a member arriving in or leaving a `files/`
+ * raises no membership fact of its own. Staged files are filed with `album add`, which shares them
+ * as the album is.
+ */
+const albumMove = async (cmd: Command, path: string, files: string[], flags: Record<string, unknown>): Promise<number> => {
+  if (files.length === 0) {
+    await cmd.writeError('album: move needs at least one file\n');
+    return 1;
+  }
+  const vfs = cmd.sys.vfs;
+  const sources = [...new Set(files.map((file) => resolve(cmd.cwd, file)))];
+  const nodes = await Promise.all(sources.map((source) => vfs.get(cmd.access, source, { readlink: true })));
+  const staged = sources.find(isStagedPath);
+  if (staged) throw new Error(`${staged} is staged: put it in the album with album add`);
+
+  const created = Boolean(flags.create) && !(await vfs.exists(cmd.access, path));
+  if (!flags.create && (flags.name !== undefined || flags.share !== undefined)) throw new Error('--name and --share are for --create');
+  if (created) await createAlbum(cmd, path, flags.name as string | undefined, flags.share as string | undefined);
+
+  const { containerPath } = await albumMembers(cmd, path);
+  const entries = await vfs.children(cmd.access, containerPath);
+  const used = new Set(entries.map((entry) => entry.name));
+  // What the album already files, by the picture: its own children, and the links pointing at one.
+  const held = new Map<string, { path: string; link: boolean }>();
+  for (const entry of entries) {
+    if (NON_MEMBER_LINK_NAMES.includes(entry.name)) continue;
+    const link = typeof entry.node.props.softlink === 'string';
+    const picture = link ? resolve(containerPath, entry.node.props.softlink as string) : join(containerPath, entry.name);
+    held.set(picture, { path: join(containerPath, entry.name), link });
+  }
+
+  const result: AlbumMoveResult = { album: path, moved: [], unlinked: [], already: [], failed: [], ...(created ? { created } : {}) };
+  const moves: { from: string; to: string; replaced?: { link: string; target: string } }[] = [];
+  for (const [i, source] of sources.entries()) {
+    const node = nodes[i];
+    const isLink = node.type === NODE_TYPE_SOFTLINK && typeof node.props.softlink === 'string';
+    const picture = isLink ? resolve(dirname(source), node.props.softlink as string) : source;
+    const holding = held.get(picture);
+    if (dirname(source) === containerPath || holding?.path === source) {
+      result.already.push(source);
+      continue;
+    }
+    try {
+      if (holding && isLink) {
+        await vfs.unlink(cmd.access, source, dirname(source), { follow: false });
+        result.unlinked.push({ link: source, target: picture });
+        result.already.push(source);
+        continue;
+      }
+      let replaced: { link: string; target: string } | undefined;
+      if (holding?.link) {
+        await vfs.unlink(cmd.access, holding.path, containerPath, { follow: false });
+        used.delete(basename(holding.path));
+        held.delete(picture);
+        replaced = { link: holding.path, target: picture };
+      }
+      const name = freeName(basename(source), used);
+      used.add(name);
+      moves.push({ from: source, to: join(containerPath, name), replaced });
+    } catch (error) {
+      result.failed.push({ path: source, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  const settled = moves.length > 0 ? await vfs.renameMany(cmd.access, moves.map(({ from, to }) => ({ from, to })), { failIfExists: true }) : [];
+  for (const [i, outcome] of settled.entries()) {
+    const { from, to, replaced } = moves[i];
+    if (outcome.status === 'fulfilled' && !outcome.value.already) {
+      result.moved.push({ path: from, to });
+      if (replaced) result.unlinked.push(replaced);
+      continue;
+    }
+    result.failed.push({
+      path: from,
+      error: outcome.status === 'rejected' ? (outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)) : 'no such file or directory',
+    });
+    // The album's link to a file that stayed where it was still belongs to it.
+    if (replaced) {
+      await vfs.create(cmd.access, NODE_TYPE_SOFTLINK, containerPath, basename(replaced.link), {
+        props: { uid: cmd.access.uid, gid: cmd.access.gid, mode: 0o777, softlink: replaced.target },
+      }).catch(() => undefined);
+    }
+  }
+
+  const left = result.moved.map((entry) => entry.path).concat(result.unlinked.filter((entry) => sources.includes(entry.link)).map((entry) => entry.link));
+  if (left.length > 0) {
+    const seen = new Map<string, string | undefined>();
+    const albums = new Set([path]);
+    for (const source of left) {
+      const above = await albumAbove(cmd, source, seen);
+      if (above) albums.add(above);
+    }
+    for (const each of albums) await cmd.execute(`album-span ${shq(each)}`);
+  }
+
+  for (const { path: failed, error } of result.failed) await cmd.writeError(`album: cannot move '${failed}': ${error}\n`);
+  if (cmd.json) {
+    await cmd.writeJSON(result satisfies AlbumMoveResult);
+  } else {
+    const notes = [
+      created ? 'album created' : '',
+      result.already.length ? `${result.already.length} already there` : '',
+      result.failed.length ? `${result.failed.length} not moved` : '',
+    ].filter(Boolean);
+    await cmd.writeLn(`Moved ${result.moved.length} to ${path}${notes.length ? ` (${notes.join(', ')})` : ''}`);
+  }
+  // As `mv`: a partly made move must still say what it moved, so only one that moved nothing fails.
+  return result.failed.length > 0 && result.moved.length === 0 && result.unlinked.length === 0 ? 1 : 0;
+};
+
 const album = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
@@ -540,6 +678,8 @@ const album = async (cmd: Command): CmdReturn => {
         return await albumSet(cmd, path, key, value);
       case 'add':
         return await albumAdd(cmd, path, (flags._ as string[]).slice(2), flags);
+      case 'move':
+        return await albumMove(cmd, path, (flags._ as string[]).slice(2), flags);
       default:
         await cmd.writeError(`album: unknown subcommand '${sub}'\n${USAGE}\n`);
         return 1;
@@ -554,21 +694,22 @@ const album = async (cmd: Command): CmdReturn => {
 album.spec = {
   name: 'album',
   effect: 'read' as const,
-  description: 'Manage albums (create, info, list, set, add files)',
+  description: 'Manage albums (create, info, list, set, add or move files)',
   args: [
-    { name: 'subcommand', type: 'string' as const, writes: ['create', 'set', 'add'], description: 'create | info | list | set | add' },
+    { name: 'subcommand', type: 'string' as const, writes: ['create', 'set', 'add', 'move'], description: 'create | info | list | set | add | move' },
     { name: 'path', type: 'path' as const, description: 'album path' },
     {
       name: 'files',
       type: 'path' as const,
       variadic: true,
-      description: 'add: the files to put in the album: linked, or moved there out of staging; info: more albums, up to 50 in all',
+      description:
+        'add: the files to put in the album: linked, or moved there out of staging; move: the files or links to move into the album; info: more albums, up to 50 in all',
     },
   ],
   flags: [
-    { name: 'name', type: 'string' as const, description: 'create, add --create: the album display name (defaults to the slug)' },
-    { name: 'share', type: 'string' as const, description: `create, add --create: who sees it (${SHARES.join(', ')}; default: as your new albums are)` },
-    { name: 'create', type: 'bool' as const, description: 'add: make the album first when it is not there' },
+    { name: 'name', type: 'string' as const, description: 'create, add or move --create: the album display name (defaults to the slug)' },
+    { name: 'share', type: 'string' as const, description: `create, add or move --create: who sees it (${SHARES.join(', ')}; default: as your new albums are)` },
+    { name: 'create', type: 'bool' as const, description: 'add, move: make the album first when it is not there' },
     { name: 'description', type: 'string' as const, description: 'album description (create)' },
     { name: 'cover', type: 'string' as const, description: 'cover media path (create)' },
     { name: 'limit', type: 'string' as const, description: `albums per list page (max ${LIST_MAX_PAGE_SIZE})` },
@@ -582,9 +723,10 @@ album.spec = {
     'album set /archive/albums/Exempelalbum_2019 next /archive/albums/Exempelalbum_2020',
     "album create /archive/albums/Stugan --name 'Stugan' --share private",
     "album add /archive/albums/Sommar_2020 /home/anna/staging/files/inbox/upload-2026-10-01/IMG_0001.jpg --create --name 'Sommar 2020'",
+    'album move /archive/albums/Sommar_2020 /archive/albums/Exempelalbum_2019/IMG_0412.jpg /archive/albums/Exempelalbum_2019/IMG_0413.jpg',
   ],
   returns:
-    "for `info`, each album's list row with its id, cover, neighbours in a series and child count, a suggested album's parts and candidate albums, and the paths that name none (AlbumInfoAnswer); for `list`, the albums under a root, a suggested album's with what staging decides it by and its best match (AlbumListResult); for `add`, the files linked and moved and where each now files, whether it made the album, and the staging journal entries that undo the moves (AlbumAddResult); for `create` and `set`, nothing.",
+    "for `info`, each album's list row with its id, cover, neighbours in a series and child count, a suggested album's parts and candidate albums, and the paths that name none (AlbumInfoAnswer); for `list`, the albums under a root, a suggested album's with what staging decides it by and its best match (AlbumListResult); for `add`, the files linked and moved and where each now files, whether it made the album, and the staging journal entries that undo the moves (AlbumAddResult); for `move`, each file moved and where it now is, the links removed, and what was already there or did not move (AlbumMoveResult); for `create` and `set`, nothing.",
 };
 
 export default album;

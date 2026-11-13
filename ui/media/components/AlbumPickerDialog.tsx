@@ -12,6 +12,8 @@ type Props = {
   opened: boolean;
   title: string;
   subtitle?: string;
+  /** The dialog's icon, for what is done with the album picked. */
+  icon?: string;
   /** Offer a new album under the name typed. */
   allowNew?: boolean;
   /** A few albums to offer before anything is typed: the recent ones. */
@@ -28,7 +30,7 @@ type Props = {
  * is listed even when it is not, as view only, so the reader sees why no new album of that name is
  * offered.
  */
-export function AlbumPickerDialog({ opened, title, subtitle, allowNew = true, suggested = [], busy = false, error, onClose, onPick }: Props) {
+export function AlbumPickerDialog({ opened, title, subtitle, icon = 'library-plus', allowNew = true, suggested = [], busy = false, error, onClose, onPick }: Props) {
   const access = useAccessIds();
   const [query, setQuery] = useState('');
   useEffect(() => {
@@ -48,7 +50,7 @@ export function AlbumPickerDialog({ opened, title, subtitle, allowNew = true, su
       onClose={() => !busy && onClose()}
       title={title}
       subtitle={subtitle}
-      icon='library-plus'
+      icon={icon}
       pattern='album'
       size='md'
     >

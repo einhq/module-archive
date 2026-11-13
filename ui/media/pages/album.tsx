@@ -5,6 +5,8 @@ import { AlbumTripTab } from '../components/AlbumTripTab.tsx';
 import { AlbumSeriesLinks } from '../components/AlbumSeriesLinks.tsx';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
+import { MoveToAlbumAction } from '../components/MoveToAlbumAction.tsx';
+import { NewFolderDialog } from '../components/NewFolderDialog.tsx';
 import { SetCoverAction } from '../components/SetCoverAction.tsx';
 import { SetTimeAction } from '../components/SetTimeAction.tsx';
 import { StackAction } from '../components/StackAction.tsx';
@@ -84,6 +86,7 @@ export default function AlbumDetailPage() {
 
   const [sort, setSort] = useAlbumSort();
   const [addingEvent, setAddingEvent] = useState(false);
+  const [makingFolder, setMakingFolder] = useState(false);
   const [eventReload, setEventReload] = useState(0);
 
   const togglePinned = async () => {
@@ -268,6 +271,7 @@ export default function AlbumDetailPage() {
             share: albumPath,
             edit: () => setEditing(true),
             items: [
+              ...(suggested ? [] : [{ label: 'New folder', icon: 'folder-plus', onClick: () => setMakingFolder(true) }]),
               { label: 'Add event', icon: 'calendar-event', onClick: () => setAddingEvent(true) },
               ...(rawSortable > 0 ? [{ label: `Hide RAW files (${rawSortable})`, icon: 'stack-back', onClick: () => void hideRaw() }] : []),
               ...(suggested
@@ -331,6 +335,8 @@ export default function AlbumDetailPage() {
               emptyMessage={directories.length > 0 ? 'No media here — open a folder above.' : 'This album is empty'}
               selectionActions={({ selection, items, reload }) => (
                 <>
+                  {/* A suggested album is the organizer's: its pictures are filed in the Sort stream. */}
+                  {editable && !suggested && <MoveToAlbumAction selection={selection} items={items} album={albumPath} />}
                   <SetTimeAction selection={selection} items={items} onApplied={reload} />
                   {/* Stacks and the cover are album-local, so only this page — the one that can name the album — offers them. */}
                   {info.type === 'album' && editable && <StackAction selection={selection} items={items} album={albumPath} />}
@@ -381,6 +387,13 @@ export default function AlbumDetailPage() {
           refetchSeries();
           refetchSuggested();
         }}
+      />
+      <NewFolderDialog
+        opened={makingFolder}
+        parent={contentPath}
+        parentName={info.title}
+        onClose={() => setMakingFolder(false)}
+        onCreated={refetchDirectories}
       />
       <EventModal
         ownerPath={albumPath}
