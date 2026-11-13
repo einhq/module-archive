@@ -213,6 +213,8 @@ Deno.test({
       await seed('/again/IMG_7714.CR2', 'image/x-canon-cr2', undefined, { sha1: 'bb' });
       await seed('/again/IMG_7714.JPG', 'image/jpeg');
       assertEquals((await client.execJson<SortScan>('raw /again --sort')).sorted.length, 2);
+      // An imported file carries children of its own, as its camera link.
+      await client.exec('mkdir /again/IMG_7713.JPG/versions/IMG_7713.CR2/position');
       // A resumed import makes each RAW again where it first landed.
       await seed('/again/IMG_7713.CR2', 'image/x-canon-cr2', undefined, { sha1: 'aa' });
       await client.exec('echo other > /again/IMG_7714.CR2');

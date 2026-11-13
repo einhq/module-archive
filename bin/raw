@@ -228,7 +228,8 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
   const versionsDir = `${best.path}/versions`;
   const dest = `${versionsDir}/${name}`;
   // A version already there with the same bytes is this RAW filed before, and the RAW a copy of
-  // it: it takes the version's place, so the softlinks to the copy follow it.
+  // it: the version goes, children and all (an imported file carries its camera, place and people
+  // links), and the copy takes its path, so softlinks to either path find the copy.
   let replace = false;
   if (await cmd.sys.vfs.exists(cmd.access, dest)) {
     const existing = await cmd.sys.vfs.get(cmd.access, dest, { follow: false });
@@ -243,7 +244,11 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
     // frozen + sourceId. frozen keeps it on the durable disk tier despite sourceId,
     // and both attrs are set in one update so it is never transiently 'volatile'.
     await cmd.sys.vfs.ensure(cmd.access, 'directory', best.path, 'versions', { props: { mode: 0o770 } });
-    const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: !replace, relink: true });
+    if (replace) {
+      await dropRegions(cmd, dest);
+      await cmd.sys.vfs.unlink(cmd.access, dest, versionsDir, { recursive: true });
+    }
+    const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: true, relink: true });
     if (moved.status === 'rejected') throw moved.reason;
     await cmd.sys.vfs.update(cmd.access, dest, { attrs: { sourceId: partnerNode.id, frozen: true } });
     // A cover that showed the RAW shows its partner, since the version is left out of every listing.
