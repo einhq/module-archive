@@ -206,6 +206,29 @@ Deno.test({
       assertEquals((await client.execJson<ScanResult>(`raw ${ALBUMS_ROOT}/suggested`)).count, 0);
     });
 
+    await t.step('--sort replaces a version of the same bytes already filed, and refuses one of other bytes', async () => {
+      await client.exec('mkdir -p /again');
+      await seed('/again/IMG_7713.CR2', 'image/x-canon-cr2', undefined, { sha1: 'aa' });
+      await seed('/again/IMG_7713.JPG', 'image/jpeg');
+      await seed('/again/IMG_7714.CR2', 'image/x-canon-cr2', undefined, { sha1: 'bb' });
+      await seed('/again/IMG_7714.JPG', 'image/jpeg');
+      assertEquals((await client.execJson<SortScan>('raw /again --sort')).sorted.length, 2);
+      // A resumed import makes each RAW again where it first landed.
+      await seed('/again/IMG_7713.CR2', 'image/x-canon-cr2', undefined, { sha1: 'aa' });
+      await client.exec('echo other > /again/IMG_7714.CR2');
+      await vfs.update(ADMIN_ACCESS, '/again/IMG_7714.CR2', { attrs: { size: 6, mimetype: 'image/x-canon-cr2', sha1: 'cc' } });
+      const copy = await vfs.get(ADMIN_ACCESS, '/again/IMG_7713.CR2');
+
+      const res = await client.execJson<SortScan>('raw /again --sort');
+      assertEquals(res.sorted, [{ raw: '/again/IMG_7713.CR2', dest: '/again/IMG_7713.JPG/versions/IMG_7713.CR2' }]);
+      assertEquals(res.errors, [{ raw: '/again/IMG_7714.CR2', error: 'already exists: /again/IMG_7714.JPG/versions/IMG_7714.CR2' }]);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/again/IMG_7713.CR2'), false);
+      const version = await vfs.get(ADMIN_ACCESS, '/again/IMG_7713.JPG/versions/IMG_7713.CR2');
+      assertEquals(version.id, copy.id);
+      assertEquals((version.attrs as { sourceId?: string }).sourceId, (await vfs.get(ADMIN_ACCESS, '/again/IMG_7713.JPG')).id);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/again/IMG_7714.CR2'), true);
+    });
+
     await t.step("--sort deletes the RAW's regions and lets go of a person left with none", async () => {
       await client.exec('mkdir -p /faces');
       await seed('/faces/FACE.CR2', 'image/x-canon-cr2');

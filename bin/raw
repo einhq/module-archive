@@ -22,7 +22,9 @@
  * it out, and it stays on the durable disk tier. Softlinks to it follow it, but a
  * cover that showed it shows the partner instead. Its
  * regions are deleted, and their people tidied, so a face on the RAW no longer
- * counts beside the same face on its partner. A RAW with no such partner, or
+ * counts beside the same face on its partner. A version of the RAW's name already
+ * there is replaced when it holds the same bytes (the RAW is a copy of it, as a
+ * resumed import makes), and is an error otherwise. A RAW with no such partner, or
  * with several equally-likely ones, is left as is. Sorting a non-RAW file sorts
  * the RAWs of its name that belong under it.
  *
@@ -33,13 +35,13 @@
 import type { CmdReturn, Command, NodeChildEntry } from '@ein/client';
 import { COVER_LINK_NAME, isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MIMETYPES, setCover } from '@ein/client';
 import { basename, dirname, extname, join } from '@std/path';
-import type { RawFileReport, RawFileSort, RawPartner, RawScanReport, RawSortOutcome, RawSortReport, RawUnmatchedReport } from '@archive/media/api';
+import type { MediaHashes, RawFileReport, RawFileSort, RawPartner, RawScanReport, RawSortOutcome, RawSortReport, RawUnmatchedReport } from '@archive/media/api';
 import { albumMembers } from '@archive/media/album-members';
 import { REGION_TYPE, type RegionAttrs, regionsPathOf } from '@archive/media/regions';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
 import { releasePerson } from '@archive/people/person';
 
-type FileAttrsView = { mimetype?: string; takenAt?: string; cameraPath?: string; sourceId?: string };
+type FileAttrsView = { mimetype?: string; takenAt?: string; cameraPath?: string; sourceId?: string } & MediaHashes;
 
 type FileMeta = { path: string; name: string } & FileAttrsView;
 
@@ -66,7 +68,18 @@ function metaFrom(path: string, attrs: FileAttrsView): FileMeta {
     takenAt: attrs.takenAt,
     cameraPath: attrs.cameraPath,
     sourceId: attrs.sourceId,
+    sha256: attrs.sha256,
+    sha1: attrs.sha1,
+    md5: attrs.md5,
   };
+}
+
+/** Whether two files hold the same bytes, by the strongest hash both carry; never when they share none. */
+function sameBytes(a: MediaHashes, b: MediaHashes): boolean {
+  for (const hash of ['sha256', 'sha1', 'md5'] as const) {
+    if (a[hash] && b[hash]) return a[hash] === b[hash];
+  }
+  return false;
 }
 
 const partnerOf = ({ path, score, reasons }: Candidate): RawPartner => ({ path, score, reasons });
@@ -214,8 +227,15 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
   const name = basename(target.path);
   const versionsDir = `${best.path}/versions`;
   const dest = `${versionsDir}/${name}`;
+  // A version already there with the same bytes is this RAW filed before, and the RAW a copy of
+  // it: it takes the version's place, so the softlinks to the copy follow it.
+  let replace = false;
   if (await cmd.sys.vfs.exists(cmd.access, dest)) {
-    return { action: 'error', partner: best.path, error: `already exists: ${dest}` };
+    const existing = await cmd.sys.vfs.get(cmd.access, dest, { follow: false });
+    if (!sameBytes(target, existing.attrs as MediaHashes)) {
+      return { action: 'error', partner: best.path, error: `already exists: ${dest}` };
+    }
+    replace = true;
   }
 
   try {
@@ -223,7 +243,7 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
     // frozen + sourceId. frozen keeps it on the durable disk tier despite sourceId,
     // and both attrs are set in one update so it is never transiently 'volatile'.
     await cmd.sys.vfs.ensure(cmd.access, 'directory', best.path, 'versions', { props: { mode: 0o770 } });
-    const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: true, relink: true });
+    const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: !replace, relink: true });
     if (moved.status === 'rejected') throw moved.reason;
     await cmd.sys.vfs.update(cmd.access, dest, { attrs: { sourceId: partnerNode.id, frozen: true } });
     // A cover that showed the RAW shows its partner, since the version is left out of every listing.
