@@ -4,6 +4,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, assertFailure, createTestContext } from '@ein/testing';
 import type { PersonListEntry } from '@archive/people/api';
+import type { TrashPutResult, TrashRestoreResult } from '@ein/api';
 import { REGION_TYPE } from '@archive/media/regions';
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -47,6 +48,16 @@ Deno.test({ name: 'person-list', sanitizeResources: false, sanitizeOps: false },
     await t.step('leaves out people in fewer than --min files', async () => {
       const people = await client.execJson<PersonListEntry[]>('person-list --min 1');
       assertEquals(people.map((p) => p.id), ['anna', 'bert']);
+    });
+
+    await t.step('leaves out a picture in the trash until it is restored', async () => {
+      const [entry] = (await client.execJson<TrashPutResult>('trash put /tmp/c.jpg')).entries;
+      try {
+        assertEquals((await client.execJson<PersonListEntry[]>('person-list')).find((p) => p.id === 'bert')?.pictures, 1);
+      } finally {
+        await client.execJson<TrashRestoreResult>(`trash restore ${entry.id}`);
+      }
+      assertEquals((await client.execJson<PersonListEntry[]>('person-list')).find((p) => p.id === 'bert')?.pictures, 2);
     });
 
     await t.step('refuses an unknown sort', async () => {

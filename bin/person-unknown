@@ -10,10 +10,13 @@
  * and given crops. Fetching per person would put the page back into the 1+N
  * pattern that makes the albums page slow, and reading every person to rank
  * them would make every page cost the whole set.
+ *
+ * A face or recording on a file in a trash is not counted or shown, as the person's own face list
+ * (`person-faces`) does not show it; it counts again once the file is restored.
  */
-import type { Access, AttrCondition, CmdReturn, Command, NodeVFS } from '@ein/client';
+import type { Access, AttrCondition, CmdReturn, Command, NodeAggregateQuery, NodeVFS } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
-import { type PersonNodeAttrs, type VoiceView, voiceView, withRecordings } from '@archive/people/person';
+import { heldScope, type PersonNodeAttrs, type VoiceView, voiceView, withRecordings } from '@archive/people/person';
 import { VOICE_EMBEDDING_TYPE } from '@archive/media/speakers';
 import { REGION_TYPE } from '@archive/media/regions';
 import type { UnknownFaceThumb, UnknownListResult, UnknownPerson, UnknownVoiceThumb } from '@archive/people/api';
@@ -21,14 +24,17 @@ import type { UnknownFaceThumb, UnknownListResult, UnknownPerson, UnknownVoiceTh
 const FACES = { types: [REGION_TYPE], where: [] as AttrCondition[] };
 const VOICES = { types: ['embedding'], where: [{ ref: 'embeddingType', op: 'eq', value: VOICE_EMBEDDING_TYPE }] as AttrCondition[] };
 
+/** What every aggregate here leaves out: the faces and voices of files in a trash (`heldScope`). */
+type Scope = Pick<NodeAggregateQuery, 'notWithin' | 'notWithinBy'>;
+
 /**
  * How many of `of` (regions, or voice embeddings) each person holds, `personId → count`, in one
  * aggregate. `ids` narrows it to those people; without it every person is counted.
  */
-const countsByPerson = async (vfs: NodeVFS, access: Access, of: typeof FACES, ids?: string[]): Promise<Map<string, number>> => {
+const countsByPerson = async (vfs: NodeVFS, access: Access, scope: Scope, of: typeof FACES, ids?: string[]): Promise<Map<string, number>> => {
   if (ids?.length === 0) return new Map();
   const person: AttrCondition = ids ? heldBy(ids) : { ref: 'personId', op: 'exists' };
-  const buckets = await vfs.aggregate(access, { types: of.types, where: [...of.where, person], group: [{ ref: 'personId' }] });
+  const buckets = await vfs.aggregate(access, { types: of.types, where: [...of.where, person], group: [{ ref: 'personId' }], ...scope });
   return new Map(buckets.map((bucket) => [bucket.key[0], bucket.count]));
 };
 
@@ -46,7 +52,7 @@ const append = <T>(map: Map<string, T[]>, key: string, value: T) => {
  * gives every region's confidence, and only the faces kept are read and resolved, so a person
  * with thousands of faces costs no more than one with four.
  */
-const topFaces = async (vfs: NodeVFS, access: Access, ids: string[], per: number): Promise<Map<string, UnknownFaceThumb[]>> => {
+const topFaces = async (vfs: NodeVFS, access: Access, scope: Scope, ids: string[], per: number): Promise<Map<string, UnknownFaceThumb[]>> => {
   const out = new Map<string, UnknownFaceThumb[]>();
   if (ids.length === 0 || per === 0) return out;
 
@@ -56,6 +62,7 @@ const topFaces = async (vfs: NodeVFS, access: Access, ids: string[], per: number
     where: [heldBy(ids)],
     group: [{ column: 'id' }, { ref: 'personId' }],
     sum: 'confidence',
+    ...scope,
   });
   for (const { key: [id, personId], sum } of buckets) {
     append(byPerson, personId, { id, confidence: sum ?? 0 });
@@ -79,11 +86,11 @@ const topFaces = async (vfs: NodeVFS, access: Access, ids: string[], per: number
  * The `per` recordings each of `ids` speaks longest in, with each recording's kind. The voices are
  * read without a path, since how long one speaks is in its turns; only the ones kept are resolved.
  */
-const topVoices = async (vfs: NodeVFS, access: Access, ids: string[], per: number): Promise<Map<string, VoiceView[]>> => {
+const topVoices = async (vfs: NodeVFS, access: Access, scope: Scope, ids: string[], per: number): Promise<Map<string, VoiceView[]>> => {
   const out = new Map<string, VoiceView[]>();
   if (ids.length === 0 || per === 0) return out;
 
-  const buckets = await vfs.aggregate(access, { types: VOICES.types, where: [...VOICES.where, heldBy(ids)], group: [{ column: 'id' }] });
+  const buckets = await vfs.aggregate(access, { types: VOICES.types, where: [...VOICES.where, heldBy(ids)], group: [{ column: 'id' }], ...scope });
   const nodes = await vfs.getNodesByIds<{ personId?: string }>(access, buckets.map((bucket) => bucket.key[0]));
 
   const byPerson = new Map<string, { id: string; talkSeconds: number }[]>();
@@ -140,6 +147,7 @@ const personUnknown = async (cmd: Command): CmdReturn => {
 
   const vfs = cmd.sys.vfs;
   const access = cmd.access;
+  const scope = await heldScope(vfs);
 
   const requestedPerson = flags.person;
   if (requestedPerson) {
@@ -152,10 +160,10 @@ const personUnknown = async (cmd: Command): CmdReturn => {
         if (node.attrs.unnamed === true) {
           const ids = [node.id];
           const [faceCounts, voiceCounts, faces, voices] = await Promise.all([
-            countsByPerson(vfs, access, FACES, ids),
-            countsByPerson(vfs, access, VOICES, ids),
-            topFaces(vfs, access, ids, facesPer),
-            topVoices(vfs, access, ids, facesPer),
+            countsByPerson(vfs, access, scope, FACES, ids),
+            countsByPerson(vfs, access, scope, VOICES, ids),
+            topFaces(vfs, access, scope, ids, facesPer),
+            topVoices(vfs, access, scope, ids, facesPer),
           ]);
           const person: UnknownPerson = {
             id: node.id,
@@ -198,8 +206,8 @@ const personUnknown = async (cmd: Command): CmdReturn => {
   const countAll = minFaces > 0 || (sort === 'faces' && limit > 0);
   const [unnamed, allFaces, allVoices] = await Promise.all([
     vfs.aggregate(access, { types: ['person'], where: [{ ref: 'unnamed', op: 'exists' }], group: [{ column: 'id' }, { ref: 'createdAt' }] }),
-    countAll ? countsByPerson(vfs, access, FACES) : undefined,
-    countAll ? countsByPerson(vfs, access, VOICES) : undefined,
+    countAll ? countsByPerson(vfs, access, scope, FACES) : undefined,
+    countAll ? countsByPerson(vfs, access, scope, VOICES) : undefined,
   ]);
 
   // Evidence first: a face and a recording each count as one sighting.
@@ -221,8 +229,8 @@ const personUnknown = async (cmd: Command): CmdReturn => {
   const [nodes, paths, faceCounts, voiceCounts] = await Promise.all([
     vfs.getNodesByIds<PersonNodeAttrs>(access, pageIds),
     vfs.resolveIdPaths(access, pageIds),
-    allFaces ?? countsByPerson(vfs, access, FACES, pageIds),
-    allVoices ?? countsByPerson(vfs, access, VOICES, pageIds),
+    allFaces ?? countsByPerson(vfs, access, scope, FACES, pageIds),
+    allVoices ?? countsByPerson(vfs, access, scope, VOICES, pageIds),
   ]);
   const page: UnknownPerson[] = pageIds.flatMap((id) => {
     const node = nodes.get(id);
@@ -243,8 +251,8 @@ const personUnknown = async (cmd: Command): CmdReturn => {
   // 3. The page's crops and voices: the best few of each person's faces and recordings.
   if (facesPer > 0) {
     const [faces, voices] = await Promise.all([
-      topFaces(vfs, access, page.map((p) => p.id), facesPer),
-      topVoices(vfs, access, page.filter((p) => p.voiceCount > 0).map((p) => p.id), facesPer),
+      topFaces(vfs, access, scope, page.map((p) => p.id), facesPer),
+      topVoices(vfs, access, scope, page.filter((p) => p.voiceCount > 0).map((p) => p.id), facesPer),
     ]);
     for (const p of page) {
       p.faces = faces.get(p.id) ?? [];

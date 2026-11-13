@@ -4,6 +4,7 @@
  */
 
 import { PEOPLE_ROOT } from '@archive/paths';
+import type { TrashPutResult, TrashRestoreResult } from '@ein/api';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS } from '@ein/testing';
 import { captureTime, createTestContext } from '@ein/testing';
@@ -179,6 +180,27 @@ Deno.test({
 
       const byFile = await client.execJson<FaceList>(`person-faces aaa --sort file`);
       assertEquals(byFile.faces.map((f) => f.filePath), ['/img/aaa-0.jpg', '/img/aaa-1.jpg', '/img/aaa-2.jpg']);
+    });
+
+    await t.step('a face on a file in the trash is neither counted nor shown, until the file is restored', async () => {
+      const { batch } = await client.execJson<TrashPutResult>('trash put --batch /img/aaa-0.jpg /img/bbb-0.jpg');
+      const counts = async () => {
+        const [page, one, list] = await Promise.all([
+          client.execJson<UnknownList>('person-unknown'),
+          client.execJson<UnknownList>(`person-unknown --person ${big.id}`),
+          client.execJson<FaceList>(`person-faces ${big.path}`),
+        ]);
+        const card = (id: string) => page.people.find((p) => p.id === id)!;
+        return { card: card(big.id).faceCount, crops: card(big.id).faces.length, one: one.people[0].faceCount, list: list.total, small: card(small.id).faceCount };
+      };
+      try {
+        assertEquals(await counts(), { card: 2, crops: 2, one: 2, list: 2, small: 0 });
+        // A person whose every face is in the trash still holds them, so tidying up keeps them.
+        assertEquals(await client.execJson<{ kind: string; person: string }[]>('person-check'), []);
+      } finally {
+        await client.execJson<TrashRestoreResult>(`trash restore ${batch}`);
+      }
+      assertEquals(await counts(), { card: 3, crops: 3, one: 3, list: 3, small: 1 });
     });
 
     await t.step('person-faces sorts chronologically, undated faces last', async () => {

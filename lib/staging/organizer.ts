@@ -63,7 +63,7 @@ import { accessOfUser, isAdmin } from '@ein/client';
 import { USERS_PATH } from '@ein/paths';
 import { basename, dirname } from '@std/path';
 import { getChildren, getPartners, makeCtx } from '@archive/people/genealogy';
-import { isUnnamed, type PersonNodeAttrs } from '@archive/people/person';
+import { heldScope, isUnnamed, type PersonNodeAttrs } from '@archive/people/person';
 import { NODE_TYPE_PERSON } from '@archive/people/types';
 import { LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
 import { REGIONS_DIR } from '@archive/media/regions';
@@ -365,9 +365,17 @@ const readHousehold = async (vfs: Vfs, access: Access, user: string): Promise<Se
   return new Set(nodes.flatMap((node) => node ? [node.id] : []));
 };
 
-/** Each person's share of the library's face regions: one aggregate over the `person` index. */
+/**
+ * Each person's share of the library's face regions: one aggregate over the `person` index,
+ * leaving out the faces of files in a trash (`heldScope`).
+ */
 const readFaceShare = async (vfs: Vfs, access: Access): Promise<Map<string, number>> => {
-  const buckets = await vfs.aggregate(access, { types: ['media-region'], where: [{ ref: 'personId', op: 'exists' }], group: [{ ref: 'personId' }] });
+  const buckets = await vfs.aggregate(access, {
+    types: ['media-region'],
+    where: [{ ref: 'personId', op: 'exists' }],
+    group: [{ ref: 'personId' }],
+    ...await heldScope(vfs),
+  });
   const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
   return new Map(buckets.map((bucket) => [String(bucket.key[0]), total > 0 ? bucket.count / total : 0]));
 };

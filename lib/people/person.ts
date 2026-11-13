@@ -23,8 +23,9 @@
 import { fileOfSpeaker, longestTurn, type Span } from '@archive/media/speakers';
 import { PEOPLE_ROOT } from '@archive/paths';
 import { moveSources, readSources, SOURCES_DIR } from '@archive/sources';
-import type { AttrCondition, Command } from '@ein/client';
-import { unlistedRoots } from '@ein/client';
+import type { AttrCondition, Command, NodeAggregateQuery } from '@ein/client';
+import { ADMIN_ACCESS, unlistedRoots } from '@ein/client';
+import { HOMES_PATH, USER_TRASH_DIR } from '@ein/paths';
 import { basename, dirname, resolve } from '@std/path';
 import { ulid } from '@std/ulid';
 import { CHILDREN_DIR, createRelationPair, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, removeRelationPair, wouldCreateCycle } from '@archive/people/genealogy';
@@ -192,8 +193,31 @@ export const regionsOf = (vfs: Vfs, access: Access, personId: string) =>
 const VOICE_HOLDINGS: AttrCondition[] = [{ ref: 'embeddingType', op: 'eq', value: 'voice' }, { ref: 'personId', op: 'exists' }];
 
 /**
+ * The users' trashes, `<home>/.trash`, of the homes that have one: the homes in one read and their
+ * entries in another, as each one named costs the aggregate a walk. Read with administrative
+ * access, as the unlisted trees are: leaving rows out of a count reveals nothing.
+ */
+const trashRoots = async (vfs: Vfs): Promise<string[]> => {
+  const homes = await vfs.children(ADMIN_ACCESS, HOMES_PATH).catch(() => []);
+  const links = await vfs.getChildLinksByIds(ADMIN_ACCESS, homes.map((home) => home.node.id));
+  return homes.filter((home) => links.get(home.node.id)?.some((link) => link.name === USER_TRASH_DIR)).map((home) => `${HOMES_PATH}/${home.name}/${USER_TRASH_DIR}`);
+};
+
+/**
+ * The scope that leaves out of an aggregate the faces, boxes and voices of files in a trash, and
+ * of files in `also`: a list of them (`regionsOf`, `person-faces`) does not show what lies in a
+ * trash, so a count must not either. A face or voice lies under its file, below where `notWithin`
+ * reaches, so it is judged by the file it names; one that names no file is kept.
+ */
+export const heldScope = async (vfs: Vfs, also: readonly string[] = []): Promise<Pick<NodeAggregateQuery, 'notWithin' | 'notWithinBy'>> => {
+  const roots = [...also, ...await trashRoots(vfs)];
+  return roots.length > 0 ? { notWithin: roots, notWithinBy: 'fileId' } : {};
+};
+
+/**
  * How many regions and voices each person holds, `personId → count`, in two aggregates. A
- * person missing from the map holds nothing: an orphan, if nobody named them.
+ * person missing from the map holds nothing: an orphan, if nobody named them. What lies in a
+ * trash is held too, as it comes back with a restore; only emptying the trash lets go of it.
  */
 export const holdingsByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Promise<Map<string, number>> => {
   const counts = new Map<string, number>();
@@ -208,13 +232,11 @@ export const holdingsByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Pr
 /**
  * How many files of the library each person is seen or heard in, `personId → count`: a picture
  * with a face or box of theirs, a recording with their voice, each once however many of them it
- * holds. Files in an unlisted tree (staging) are left out, as search leaves them out; so is a box
- * that names no file.
+ * holds. Files in an unlisted tree (staging) are left out, as search leaves them out, and so are
+ * files in a trash (`heldScope`); so is a box that names no file.
  */
 export const picturesByPerson = async (cmd: Pick<Command, 'sys' | 'access'>): Promise<Map<string, number>> => {
-  const unlisted = await unlistedRoots(cmd.sys.vfs);
-  // A face or voice lies under its file, below where `notWithin` reaches: it is judged by the file it names.
-  const listed = unlisted.length > 0 ? { notWithin: [...unlisted], notWithinBy: 'fileId' } : {};
+  const listed = await heldScope(cmd.sys.vfs, await unlistedRoots(cmd.sys.vfs));
   const byFile = [
     ...await cmd.sys.vfs.aggregate(cmd.access, {
       types: [REGION_TYPE],
