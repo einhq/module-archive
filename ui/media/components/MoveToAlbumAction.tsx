@@ -52,7 +52,8 @@ export function MoveToAlbumAction({ selection, items, album }: { selection: Medi
           if (baseName(from) !== baseName(to)) await execCommand(`mv -n ${shq(to)} ${shq(from)}`);
           else byDir.set(dir, [...byDir.get(dir) ?? [], to]);
         }
-        for (const [dir, paths] of byDir) await execCommand(`mv -n ${paths.map(shq).join(' ')} ${shq(`${dir}/`)}`);
+        // No trailing slash: `mv` takes one only for a plain directory, and these are albums too.
+        for (const [dir, paths] of byDir) await execCommand(`mv -n ${paths.map(shq).join(' ')} ${shq(dir)}`);
         for (const { link, target } of result.unlinked) await execCommand(`ln -s ${shq(target)} ${shq(link)}`);
         mediaRestored.value = { paths: gone, at: Date.now() };
       };
