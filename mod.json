@@ -142,6 +142,8 @@
     "@archive/weather/at": "./lib/weather/at.ts",
     "@archive/weather/cache": "./lib/weather/cache.ts",
     "@archive/weather/fetch": "./lib/weather/fetch.ts",
+    "@archive/weather/forecast": "./lib/weather/forecast.ts",
+    "@archive/weather/kinds": "./lib/weather/kinds.ts",
     "@archive/weather/open-meteo": "./lib/weather/open-meteo.ts",
     "@archive/weather/photo": "./lib/weather/photo.ts",
     "@archive/weather/smhi": "./lib/weather/smhi.ts",
@@ -389,7 +391,7 @@
         "type": "boolean",
         "default": "true",
         "label": "Look up the weather",
-        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a track's trips. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
+        "description": "Let EiN ask SMHI and Open-Meteo what the weather was at a place and time, for photos and for the days of a track's trips, and Open-Meteo for the forecast a dashboard's weather card shows. Each lookup sends the coordinates and the date to them; turn it off to keep them from being sent.",
         "group": "Places"
       },
       {
@@ -433,6 +435,12 @@
       "kind": "option",
       "default": "https://archive-api.open-meteo.com/v1/archive",
       "description": "Where weather asks Open-Meteo's historical weather API for the hourly weather of places with no SMHI station near them."
+    },
+    {
+      "key": "OPEN_METEO_FORECAST_URL",
+      "kind": "option",
+      "default": "https://api.open-meteo.com/v1/forecast",
+      "description": "Where weather-forecast, and the dashboard's weather card, ask Open-Meteo's forecast API for the weather now and in the days ahead."
     }
   ],
   "nodeTypes": [
@@ -690,7 +698,8 @@
       "/trips": "ui/location/pages/trips.tsx",
       "/year": "ui/pages/year.tsx",
       "/cards/archive/picture": "ui/cards/picture.tsx",
-      "/cards/archive/birthdays": "ui/cards/birthdays.tsx"
+      "/cards/archive/birthdays": "ui/cards/birthdays.tsx",
+      "/cards/archive/weather": "ui/cards/weather.tsx"
     },
     "open": {
       "person": "/people/{name}",

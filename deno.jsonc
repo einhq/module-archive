@@ -133,6 +133,8 @@
     "@archive/weather/at": "./lib/weather/at.ts",
     "@archive/weather/cache": "./lib/weather/cache.ts",
     "@archive/weather/fetch": "./lib/weather/fetch.ts",
+    "@archive/weather/forecast": "./lib/weather/forecast.ts",
+    "@archive/weather/kinds": "./lib/weather/kinds.ts",
     "@archive/weather/open-meteo": "./lib/weather/open-meteo.ts",
     "@archive/weather/photo": "./lib/weather/photo.ts",
     "@archive/weather/smhi": "./lib/weather/smhi.ts",

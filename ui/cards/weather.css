@@ -1,0 +1,193 @@
+.wx {
+  display: flex;
+  height: 100%;
+  gap: 1.2em;
+  padding: 0.8em 1em;
+  overflow: hidden;
+  line-height: 1.25;
+}
+
+.wx-side {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 0.9em;
+  min-width: 0;
+}
+
+.wx-place {
+  overflow: hidden;
+  color: var(--mrx-text-secondary);
+  font-size: 0.9em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wx-now {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+
+.wx-temp {
+  font-size: 3.2em;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.wx-words {
+  font-weight: 600;
+}
+
+.wx-detail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.7em;
+  color: var(--mrx-text-secondary);
+  font-size: 0.82em;
+}
+
+.wx-detail span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  white-space: nowrap;
+}
+
+.wx-hours {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding-top: 0.6em;
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  text-align: center;
+}
+
+.wx-hour {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-small {
+  color: var(--mrx-text-secondary);
+  font-size: 0.75em;
+}
+
+.wx-wet {
+  color: #60a5fa;
+  font-size: 0.75em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-days {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wx-side + .wx-days {
+  padding-left: 1.2em;
+  border-left: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.wx-side > .wx-days {
+  padding-top: 0.3em;
+  border-top: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.wx-days[data-empty] {
+  border: none;
+}
+
+.wx-day {
+  display: grid;
+  grid-template-columns: 3.4em 1.7em 2.2em minmax(2em, 1fr) 2.2em 3em;
+  align-items: center;
+  gap: 0.5em;
+  height: 2.1em;
+  font-variant-numeric: tabular-nums;
+}
+
+.wx-day > :nth-child(3) {
+  color: var(--mrx-text-secondary);
+  text-align: right;
+}
+
+/* The day's span of temperature within the span of all the days shown. */
+.wx-range {
+  position: relative;
+  height: 0.32em;
+  border-radius: 1em;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+
+.wx-range > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 1em;
+  background: linear-gradient(90deg, #60a5fa, #fbbf24);
+}
+
+.wx-icon .wx-sun {
+  fill: #fbbf24;
+  stroke: #fbbf24;
+  stroke-linecap: round;
+  stroke-width: 3.5;
+}
+
+.wx-icon .wx-moon {
+  fill: #e2e8f0;
+  stroke: #94a3b8;
+  stroke-width: 1.5;
+}
+
+.wx-icon .wx-cloud {
+  fill: #e5eaf1;
+  stroke: #94a3b8;
+  stroke-width: 1.5;
+}
+
+.wx-icon .wx-cloud-dark {
+  fill: #9aa8bb;
+  stroke: #64748b;
+}
+
+.wx-icon .wx-drop {
+  stroke: #60a5fa;
+  stroke-linecap: round;
+  stroke-width: 3.2;
+}
+
+.wx-icon .wx-drizzle {
+  stroke-width: 2.6;
+}
+
+.wx-icon .wx-flake {
+  fill: #dbeafe;
+  stroke: #60a5fa;
+  stroke-width: 1.2;
+}
+
+.wx-icon .wx-bolt {
+  fill: #facc15;
+  stroke: #ca8a04;
+  stroke-linejoin: round;
+  stroke-width: 1.2;
+}
+
+.wx-icon .wx-fog {
+  stroke: #94a3b8;
+  stroke-linecap: round;
+  stroke-width: 3;
+}

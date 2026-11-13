@@ -61,5 +61,33 @@
         }
       }
     }
+  },
+  {
+    "name": "weather",
+    "label": "Weather",
+    "description": "The weather at a place now, and as the card has room the next hours and the days ahead, from Open-Meteo's forecast.",
+    "icon": "sun",
+    "color": "cyan",
+    "route": "/cards/archive/weather",
+    "frame": "plain",
+    "size": [4, 4],
+    "min": [2, 2],
+    "params": {
+      "type": "object",
+      "required": ["place"],
+      "properties": {
+        "place": {
+          "type": "string",
+          "title": "Place",
+          "description": "A town or an address, as the map finds it, or coordinates such as 57.71, 11.97."
+        },
+        "label": {
+          "type": "string",
+          "title": "Label",
+          "description": "What to call the place in place of what you typed."
+        },
+        "days": { "type": "integer", "title": "Days ahead", "default": 5, "minimum": 1, "maximum": 10 }
+      }
+    }
   }
 ]

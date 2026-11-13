@@ -1,0 +1,136 @@
+#!ts
+/**
+ * weather-forecast — the weather at a place now and in the hours and days ahead.
+ *
+ *   weather-forecast <lat> <lng> [--days=<n>] [--hours=<n>]
+ *   weather-forecast --lat=<lat> --lng=<lng> …
+ *   weather-forecast --place=<name> …
+ *
+ * Answers the weather now, `--hours` hours from the one under way (24 unless given) and `--days`
+ * days from today in the place's time zone (7 unless given), from Open-Meteo's forecast
+ * (`@archive/weather/forecast`, `OPEN_METEO_FORECAST_URL`): the kind of weather, the temperature,
+ * rain and snow, the wind, and the sunrise and sunset of each day. A forecast is answered from
+ * memory for ten minutes, so the screens showing a dashboard's weather card ask once between them.
+ *
+ * `--place` names the place instead of its coordinates: the first hit of a Nominatim search
+ * (`NOMINATIM_SEARCH_URL`), asked once.
+ *
+ * It asks nobody when `CFG_WEATHER` is `false`, which keeps the place from being sent.
+ *
+ * A western or southern coordinate takes the flag form: parseArgs reads the leading `-` of a
+ * positional `-3.5` as a flag (wow/notes/negative-argument-values.md).
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, readSettings, reportUnknownFlags } from '@ein/client';
+import type { WeatherForecast } from '@archive/weather/api';
+import { weatherOn } from '@archive/weather/at';
+import { fetchForecast, MAX_FORECAST_DAYS, OPEN_METEO_FORECAST_URL, placeNamed } from '@archive/weather/forecast';
+import { weatherWords } from '@archive/weather/kinds';
+
+const USAGE = 'weather-forecast: usage: weather-forecast <lat> <lng>, weather-forecast --lat=<lat> --lng=<lng>, or weather-forecast --place=<name>; ' +
+  `then --days=<1–${MAX_FORECAST_DAYS}> and --hours=<0–${MAX_FORECAST_DAYS * 24}>\n`;
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const compass = (degrees: number): string => COMPASS[Math.round(degrees / 45) % 8];
+
+const weatherForecast = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['lat', 'lng', 'place', 'days', 'hours'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const positionals = flags._.map(String);
+  const place = flags.place === undefined ? undefined : String(flags.place).trim();
+  const flagForm = place !== undefined || flags.lat !== undefined || flags.lng !== undefined;
+  const [latArg, lngArg, ...extra] = flagForm ? [flags.lat, flags.lng, ...positionals] : positionals;
+  const days = Number(flags.days ?? 7);
+  const hours = Number(flags.hours ?? 24);
+  const placed = place ? !latArg && !lngArg : !!latArg && !!lngArg && Math.abs(Number(latArg)) <= 90 && Math.abs(Number(lngArg)) <= 180;
+  if (
+    !placed || extra.length > 0 || !Number.isInteger(days) || days < 1 || days > MAX_FORECAST_DAYS ||
+    !Number.isInteger(hours) || hours < 0 || hours > MAX_FORECAST_DAYS * 24
+  ) {
+    await cmd.writeError(USAGE);
+    return 1;
+  }
+
+  if (!weatherOn(await readSettings(cmd, cmd.access))) {
+    await cmd.writeError('weather-forecast: weather lookups are turned off: set CFG_WEATHER to true to let EiN send places to Open-Meteo\n');
+    return 1;
+  }
+
+  let forecast: WeatherForecast;
+  try {
+    let lat = Number(latArg);
+    let lng = Number(lngArg);
+    let found: string | undefined;
+    if (place) {
+      const hit = await placeNamed(place, cmd.env.NOMINATIM_SEARCH_URL || undefined).catch((error) => {
+        throw new Error(`looking up ${JSON.stringify(place)} failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      if (!hit) throw new Error(`no place called ${JSON.stringify(place)} was found`);
+      ({ lat, lng, name: found } = hit);
+    }
+    const answer = await fetchForecast(cmd.env.OPEN_METEO_FORECAST_URL || OPEN_METEO_FORECAST_URL, lat, lng, days, hours);
+    forecast = found === undefined ? answer : { ...answer, place: found };
+  } catch (error) {
+    await cmd.writeError(`weather-forecast: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  if (cmd.json) {
+    await cmd.writeJSON(forecast satisfies WeatherForecast);
+    return 0;
+  }
+
+  const zone = forecast.timezone;
+  const clock = (iso: string): string => new Date(iso).toLocaleTimeString('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit' });
+  const { now } = forecast;
+  await cmd.writeLn(`${forecast.place ?? `${forecast.lat}, ${forecast.lng}`} (${zone})`);
+  await cmd.writeLn(
+    `  now  ${now.temperature} °C, feels like ${now.feelsLike} °C, ${weatherWords(now.code).toLowerCase()}, wind ${now.windSpeed} m/s from ${compass(now.windDirection)}, ` +
+      `gusts ${now.windGusts} m/s, ${now.cloudCover} % cloud${now.precipitation ? `, ${now.precipitation} mm` : ''}`,
+  );
+  if (forecast.hours.length) await cmd.writeLn('hours');
+  for (const hour of forecast.hours) {
+    const chance = hour.precipitationChance === undefined ? '' : ` (${hour.precipitationChance} %)`;
+    await cmd.writeLn(
+      `  ${clock(hour.time)}  ${`${hour.temperature} °C`.padEnd(8)} ${weatherWords(hour.code).toLowerCase().padEnd(18)} ${`${hour.precipitation} mm${chance}`.padEnd(14)} ` +
+        `${hour.windSpeed} m/s ${compass(hour.windDirection)}`,
+    );
+  }
+  await cmd.writeLn('days');
+  for (const day of forecast.days) {
+    const chance = day.precipitationChance === undefined ? '' : ` (${day.precipitationChance} %)`;
+    const sun = day.sunrise && day.sunset ? `  sun ${clock(day.sunrise)}–${clock(day.sunset)}` : '';
+    await cmd.writeLn(
+      `  ${day.date}  ${`${day.temperatureMin}–${day.temperatureMax} °C`.padEnd(13)} ${weatherWords(day.code).toLowerCase().padEnd(18)} ${
+        `${day.precipitation} mm${chance}`.padEnd(14)
+      } ` +
+        `${day.windSpeedMax} m/s ${compass(day.windDirection)}${sun}`,
+    );
+  }
+  return 0;
+};
+
+weatherForecast.spec = {
+  name: 'weather-forecast',
+  effect: 'read' as const,
+  description: 'The weather at a place now and in the hours and days ahead, from Open-Meteo',
+  args: [
+    { name: 'lat', type: 'string' as const, description: 'latitude (positional; use --lat= if negative)' },
+    { name: 'lng', type: 'string' as const, description: 'longitude (positional; use --lng= if negative)' },
+  ],
+  flags: [
+    { name: 'lat', type: 'string' as const, description: 'latitude, as --lat=<n>, the form a negative one needs' },
+    { name: 'lng', type: 'string' as const, description: 'longitude, as --lng=<n>, the form a negative one needs' },
+    { name: 'place', type: 'string' as const, description: 'the place by name instead of coordinates, as --place=Göteborg: the first hit of a Nominatim search' },
+    { name: 'days', type: 'string' as const, description: `the days ahead from today, 1 to ${MAX_FORECAST_DAYS} (default 7)` },
+    { name: 'hours', type: 'string' as const, description: 'the hours ahead from the one under way (default 24)' },
+  ],
+  examples: [
+    'weather-forecast 57.71 11.97',
+    'weather-forecast --place=Göteborg --days=3 --hours=12',
+    'weather-forecast --lat=48.85 --lng=-3.01',
+  ],
+  returns: 'WeatherForecast: the weather now, an entry per hour ahead and per day ahead, each with its WMO weather code, temperature, rain and snow, and wind.',
+};
+
+export default weatherForecast;
