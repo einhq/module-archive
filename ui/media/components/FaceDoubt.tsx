@@ -1,7 +1,8 @@
-import { Button, type ComboboxItem, Group, Stack, Text } from '@mantine/core';
+import { Button, type ButtonProps, type ComboboxItem, Group, Stack, Text } from '@mantine/core';
 import { useMemo, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { shq } from '@ein/ui/lib';
+import { TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { MediaFace, MediaFaceDoubt } from '@archive/media/api';
 import { usePeople } from '../../people/hooks/usePeople.ts';
@@ -11,18 +12,95 @@ import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
 /** Why the face is in question, in a sentence. */
 export const doubtReason = (doubt: MediaFaceDoubt): string => 'markedBy' in doubt ? `${doubt.markedBy} is not sure.` : `It looks more like ${doubt.likeName}.`;
 
+/**
+ * Says a face is not a person: a detected face is taken off its person and locked, so recognition
+ * does not put it back (`person-detach`); a tag, which only a human drew or an import carried, is
+ * removed (`face-remove`).
+ */
+const dismissFace = (face: MediaFace) => execCommand(`${face.hasFace ? 'person-detach' : 'face-remove'} ${shq(face.facePath)}`);
+
+/** "Not a person", or "Remove tag" for a tag, done on a second click. */
+function NotAPersonButton({ face, busy, disabled, onConfirm, ...props }: ButtonProps & {
+  face: MediaFace;
+  busy: boolean;
+  disabled: boolean;
+  onConfirm: () => void;
+}) {
+  const [armed, setArmed] = useState(false);
+  return (
+    <Button
+      size='xs'
+      variant={armed ? 'filled' : 'subtle'}
+      color={armed ? 'red' : 'gray'}
+      loading={busy}
+      disabled={disabled}
+      onClick={() => armed ? onConfirm() : setArmed(true)}
+      {...props}
+    >
+      {face.hasFace ? (armed ? 'Confirm not a person' : 'Not a person') : (armed ? 'Confirm remove' : 'Remove tag')}
+    </Button>
+  );
+}
+
+/**
+ * What the card of a face nobody has named offers (`FaceRow`): to name them, in the dialog the
+ * row's name opens, and — for whoever may edit the photo — to say the face is not a person.
+ */
+export function UnknownFaceActions({ face, canEdit, onName, onDone, onChanged }: {
+  /** The face as the photo holds it; without it, there is only the naming. */
+  face?: MediaFace;
+  canEdit: boolean;
+  onName: () => void;
+  onDone: () => void;
+  onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const dismiss = async (target: MediaFace) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await dismissFace(target);
+      await onChanged();
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <Button size='xs' variant='subtle' color='gray' justify='flex-start' leftSection={<TablerIcon name='user-edit' size={16} />} disabled={busy} onClick={onName}>
+        Name this person
+      </Button>
+      {canEdit && face && (
+        <NotAPersonButton
+          face={face}
+          busy={busy}
+          disabled={busy}
+          onConfirm={() => void dismiss(face)}
+          justify='flex-start'
+          leftSection={<TablerIcon name={face.hasFace ? 'user-off' : 'trash'} size={16} />}
+        />
+      )}
+      {error && <Text size='xs' c='red' px='xs'>{error}</Text>}
+    </>
+  );
+}
+
 /** The picker's value for a person still to be made, followed by their name. */
 const NEW_PERSON = 'new:';
 
-type Busy = 'mark' | 'confirm' | 'clear' | 'move' | 'unknown';
+type Busy = 'mark' | 'confirm' | 'clear' | 'move' | 'unknown' | 'dismiss';
 
 /**
- * Whether a named person's face in the lightbox really is them, asked in the row's card
- * (`FaceRow`).
+ * That a named person's face in the lightbox is wrong, said in the row's card (`FaceRow`).
  *
  * Whoever may edit the photo can say who the face is instead — somebody already in the archive,
  * or a new person under the name typed — and move it there (`person-detach`), make it unknown
  * again, on an unidentified person of its own to be named later (`person-detach --to-new-person`),
+ * say it is not a person at all (`dismissFace`),
  * or, not knowing, mark it doubtful (`face-doubt`): the person keeps the face, and their Faces tab lists it under
  * Doubtful until somebody answers. On a doubtful face it asks "Is this <name>?": yes keeps the
  * face as a human's assignment (`face-confirm`), and the same picker says who else. Somebody who
@@ -83,21 +161,24 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
     });
 
   const unknown = (
-    <Button
-      size='xs'
-      variant='subtle'
-      color='gray'
-      loading={busy === 'unknown'}
-      disabled={busy !== null}
-      onClick={() => void run('unknown', () => detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' }))}
-    >
-      Make unknown
-    </Button>
+    <>
+      <Button
+        size='xs'
+        variant='subtle'
+        color='gray'
+        loading={busy === 'unknown'}
+        disabled={busy !== null}
+        onClick={() => void run('unknown', () => detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' }))}
+      >
+        Make unknown
+      </Button>
+      <NotAPersonButton face={face} busy={busy === 'dismiss'} disabled={busy !== null} onConfirm={() => void run('dismiss', () => dismissFace(face))} />
+    </>
   );
 
   return (
     <Stack gap='xs'>
-      <Text size='sm' fw={500}>{doubt ? `Is this ${name}?` : `Not sure this is ${name}?`}</Text>
+      <Text size='sm' fw={500}>{doubt ? `Is this ${name}?` : `Who is this, if not ${name}?`}</Text>
       {doubt && <Text size='xs' c='dimmed'>{doubtReason(doubt)}</Text>}
       {canEdit && doubt && (
         <Group gap='xs'>

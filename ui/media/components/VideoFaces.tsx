@@ -83,7 +83,7 @@ const boxNow = (face: MediaFace, track: TrackPoint[] | undefined, time: number):
  * selected to change who it is or to remove it. Its box stays where it is: it holds at its own
  * second and along its track, not on whatever frame is paused on.
  */
-export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onNamePerson, scale, ...editing }: {
+export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHover, onOpenPerson, onReviewUnknown, scale, ...editing }: {
   mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | null>;
   faces: MediaFace[];
   /** The face the sidebar follows, by path. */
@@ -92,7 +92,7 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
   hoveredKey: string | null;
   onHover: (key: string | null) => void;
   onOpenPerson: (route: string) => void;
-  onNamePerson: (personPath: string, name: string) => Promise<void>;
+  onReviewUnknown: (personId: string) => void;
   /** The zoom the picture is scaled by (`FaceOverlay`'s `scale`). */
   scale?: number;
 } & Pick<ComponentProps<typeof FaceOverlay>, 'drawing' | 'saving' | 'onCreateFace' | 'onRemoveFace' | 'onChangePerson' | 'onDraftChange'>) {
@@ -118,7 +118,7 @@ export function VideoFaces({ mediaRef, faces, followed, pinned, hoveredKey, onHo
       followedKey={marks.find((mark) => mark.facePath === followed)?.key}
       onHover={onHover}
       onOpenPerson={onOpenPerson}
-      onNamePerson={onNamePerson}
+      onReviewUnknown={onReviewUnknown}
       scale={scale}
     />
   );

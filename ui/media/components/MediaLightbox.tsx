@@ -868,11 +868,6 @@ export function MediaLightbox() {
     }
   }, [clearSlideshowPhotoTransition, slideshowPhotoTransition?.incomingId]);
 
-  const namePerson = useCallback(async (personPath: string, name: string) => {
-    await execCommand(`person-name ${shq(personPath)} --name ${shq(name)}`);
-    await refetch();
-  }, [refetch]);
-
   const nameReviewedPerson = useCallback(async (personPath: string, name: string) => {
     const result = await execCommand<{ path: string }>(`person-name ${shq(personPath)} --name ${shq(name)}`);
     await refetch();
@@ -2196,7 +2191,7 @@ export function MediaLightbox() {
                         hoveredKey={hoveredFace}
                         onHover={setHoveredFace}
                         onOpenPerson={goTo}
-                        onNamePerson={namePerson}
+                        onReviewUnknown={setReviewPersonId}
                         scale={zoom.scale}
                         drawing={addingFace}
                         saving={savingFace}
@@ -2295,7 +2290,7 @@ export function MediaLightbox() {
                   hoveredKey={hoveredFace}
                   onHover={setHoveredFace}
                   onOpenPerson={goTo}
-                  onNamePerson={namePerson}
+                  onReviewUnknown={setReviewPersonId}
                   labelsOnly={slideshow}
                   motionClassName={slideshow ? kenBurnsClass : undefined}
                   motionRunning={loadedPhotoId === media.id}

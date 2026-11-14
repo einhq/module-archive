@@ -44,7 +44,7 @@ export function UnknownGlance({ face }: { face: UnknownFace }) {
       <FaceCrop facePath={face.facePath} size={PICTURE} alt={face.personName} />
       <Stack gap={2} style={{ minWidth: 0 }}>
         <Text size='sm' fw={600}>{face.personName}</Text>
-        <Text size='xs' c='dimmed'>Not named yet. Click the name to say who it is.</Text>
+        <Text size='xs' c='dimmed'>Not named yet.</Text>
       </Stack>
     </Group>
   );

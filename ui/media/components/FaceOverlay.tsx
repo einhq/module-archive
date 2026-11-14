@@ -14,14 +14,14 @@
  * one (or a name in the sidebar) fades in that one alone; `pinned` keeps them all up, which
  * is also how they are reachable without a pointer.
  *
- * Only a pinned box is a link: a click on it opens the person, or asks who an unnamed one is.
- * Unpinned, a box is part of the picture, so a double tap or double click that lands on a face
- * zooms instead of opening a person by accident. The lightbox's gestures leave alone what is
- * marked `data-face-link`.
+ * A shown name is a link, as the sidebar's names are: it opens the person, or the dialog that asks
+ * who an unnamed one is. Only a pinned box is a link as a whole: unpinned, a box is part of the
+ * picture, so a double tap or double click that lands on a face zooms instead of opening a person
+ * by accident. The lightbox's gestures leave alone what is marked `data-face-link`.
  */
 
 import { TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Box, Button, Group, Popover, TextInput } from '@mantine/core';
+import { Box, Button, Group } from '@mantine/core';
 import { type PointerEvent as ReactPointerEvent, type RefObject, useEffect, useRef, useState } from 'react';
 import { useContentRect } from '../hooks/useContentRect.ts';
 import type { FaceBox, MediaFace } from '../hooks/useMediaDetails.ts';
@@ -57,7 +57,8 @@ type FaceOverlayProps = {
   onHover: (key: string | null) => void;
   /** Navigate to a person's page; given the route, the same one the sidebar's names use. */
   onOpenPerson: (route: string) => void;
-  onNamePerson: (personPath: string, name: string) => Promise<void>;
+  /** Ask who an unnamed person is, in the dialog the sidebar's names open; given their id. */
+  onReviewUnknown: (personId: string) => void;
   /** Slideshow mode keeps pinned names but removes boxes and interactions. */
   labelsOnly?: boolean;
   /** Mirror the slideshow image motion so labels stay attached to faces. */
@@ -98,51 +99,6 @@ export function toFaceMarks(mediaFaces: MediaFace[]): FaceMark[] {
   }));
 }
 
-function NameFacePopover({ mark, onName, children }: { mark: FaceMark; onName: (name: string) => Promise<void>; children: React.ReactNode }) {
-  const [opened, setOpened] = useState(false);
-  const [value, setValue] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const submit = async () => {
-    if (!value.trim()) return;
-    setSaving(true);
-    try {
-      await onName(value.trim());
-      setOpened(false);
-      setValue('');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Popover opened={opened} onChange={setOpened} position='bottom' withArrow shadow='md' trapFocus>
-      <Popover.Target>
-        <Box onClick={() => setOpened((o) => !o)} style={{ width: '100%', height: '100%', cursor: 'pointer' }}>
-          {children}
-        </Box>
-      </Popover.Target>
-      <Popover.Dropdown p='xs'>
-        <Group gap='xs' wrap='nowrap'>
-          <TextInput
-            size='xs'
-            placeholder='Who is this?'
-            value={value}
-            autoFocus
-            onChange={(e) => setValue(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
-            }}
-          />
-          <ActionIcon size='sm' onClick={submit} loading={saving} disabled={!value.trim()} aria-label={`Name ${mark.label}`}>
-            <TablerIcon name='check' size={14} />
-          </ActionIcon>
-        </Group>
-      </Popover.Dropdown>
-    </Popover>
-  );
-}
-
 export function FaceOverlay(
   {
     mediaRef,
@@ -152,7 +108,7 @@ export function FaceOverlay(
     followedKey,
     onHover,
     onOpenPerson,
-    onNamePerson,
+    onReviewUnknown,
     labelsOnly = false,
     motionClassName,
     motionRunning = true,
@@ -189,6 +145,13 @@ export function FaceOverlay(
   // Pinned, drawing and the slideshow show every face; otherwise only the hovered one is drawn.
   const allShown = labelsOnly || drawing || pinned;
   const linked = pinned && !drawing && !labelsOnly;
+  // What a click on a face's name, or on a pinned box, does: what a click on the name in the sidebar does.
+  const openFace = (face: FaceMark) => {
+    // The route takes the person's directory name. Neither `personPath` itself (a VFS path no page
+    // answers to) nor `personId` (the node's ULID, which the person page cannot look up) will do.
+    if (face.named && face.personPath) onOpenPerson(`/people/${encodeURIComponent(face.personPath.split('/').pop() ?? face.personPath)}`);
+    else if (face.personId) onReviewUnknown(face.personId);
+  };
   const pointIn = (event: ReactPointerEvent<HTMLElement>): DrawPoint => {
     // The bounding rect is in transformed screen pixels; `rect` is not.
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -342,27 +305,42 @@ export function FaceOverlay(
         // By path: the key changes with the person, when a face is named or loses its name.
         const selected = pendingDraft?.face?.facePath === face.facePath;
         const shown = allShown || active;
+        // A face nobody is on, `Unassigned`, has nowhere to go.
+        const opens = !drawing && !labelsOnly && (face.named ? Boolean(face.personPath) : Boolean(face.personId));
+        // Only a name on show is a link: a hidden one under a finger, which hovers nothing, is not.
+        const nameLink = opens && shown && !linked;
         const label = (
           <Box
+            data-face-link={nameLink || undefined}
+            onClick={nameLink ? () => openFace(face) : undefined}
             style={{
               position: 'absolute',
               top: '100%',
               left: '50%',
               transform: `translateX(-50%) scale(${px(1)})`,
               transformOrigin: 'top center',
-              marginTop: 4,
-              padding: '1px 6px',
-              borderRadius: 4,
-              whiteSpace: 'nowrap',
-              fontSize: 12,
-              lineHeight: 1.5,
-              background: 'var(--mrx-scrim)',
-              color: face.named ? 'white' : 'var(--mantine-color-dimmed)',
-              opacity: !shown ? 0 : active ? 1 : labelsOnly ? 0.85 : 0.55,
-              transition: 'opacity 120ms',
+              // Padding rather than a margin: the pointer crossing from the box to its name stays
+              // on the face, and the name stays shown.
+              paddingTop: 4,
+              cursor: nameLink ? 'pointer' : undefined,
             }}
           >
-            {face.label}
+            <Box
+              style={{
+                padding: '1px 6px',
+                borderRadius: 4,
+                whiteSpace: 'nowrap',
+                fontSize: 12,
+                lineHeight: 1.5,
+                background: 'var(--mrx-scrim)',
+                color: face.named ? 'white' : 'var(--mantine-color-dimmed)',
+                textDecoration: nameLink && active ? 'underline' : undefined,
+                opacity: !shown ? 0 : active ? 1 : labelsOnly ? 0.85 : 0.55,
+                transition: 'opacity 120ms',
+              }}
+            >
+              {face.label}
+            </Box>
           </Box>
         );
 
@@ -380,7 +358,7 @@ export function FaceOverlay(
           borderRadius: px(3),
           boxShadow: !labelsOnly && active ? '0 0 0 9999px rgba(0,0,0,0.25)' : undefined,
           pointerEvents: labelsOnly ? 'none' : 'auto',
-          cursor: drawing ? (fixedBoxes ? 'pointer' : 'move') : linked ? 'pointer' : undefined,
+          cursor: drawing ? (fixedBoxes ? 'pointer' : 'move') : linked && opens ? 'pointer' : undefined,
           visibility: selected ? 'hidden' : undefined,
           // Entering slideshow must drop the boxes immediately; carrying the normal
           // border transition over would leave a brief outline around each label.
@@ -393,7 +371,7 @@ export function FaceOverlay(
           <Box
             data-face-mark={face.key}
             data-face-path={face.facePath || undefined}
-            data-face-link={linked || undefined}
+            data-face-link={(linked && opens) || undefined}
             data-tag={face.hasFace ? undefined : true}
             title={face.hasFace || labelsOnly ? undefined : TAG_TITLE}
             key={face.key}
@@ -401,26 +379,9 @@ export function FaceOverlay(
             // A finger points at nothing: a tap would leave the face lit, the picture dimmed around it.
             onPointerEnter={(event) => event.pointerType !== 'touch' && onHover(face.key)}
             onPointerLeave={(event) => event.pointerType !== 'touch' && onHover(null)}
+            onClick={linked && opens ? () => openFace(face) : undefined}
           >
-            {!linked ? label : face.named
-              ? (
-                <Box
-                  // The route takes the person's directory name. Neither `personPath` itself (a VFS
-                  // path no page answers to) nor `personId` (the node's ULID, which the person page
-                  // cannot look up) will do.
-                  onClick={() => face.personPath && onOpenPerson(`/people/${encodeURIComponent(face.personPath.split('/').pop() ?? face.personPath)}`)}
-                  style={{ width: '100%', height: '100%' }}
-                >
-                  {label}
-                </Box>
-              )
-              : face.personPath
-              ? (
-                <NameFacePopover mark={face} onName={(name) => onNamePerson(face.personPath!, name)}>
-                  {label}
-                </NameFacePopover>
-              )
-              : label}
+            {label}
           </Box>
         );
       })}

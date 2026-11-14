@@ -3,7 +3,7 @@ import { type FocusEvent, type ReactNode, useEffect, useRef, useState } from 're
 import { TablerIcon } from '@ein/ui/components';
 import { formatClock } from '@ein/ui/lib';
 import type { MediaFace } from '@archive/media/api';
-import { doubtReason, FaceDoubtForm } from './FaceDoubt.tsx';
+import { doubtReason, FaceDoubtForm, UnknownFaceActions } from './FaceDoubt.tsx';
 import { onScreen, ShowFace } from './ShowFace.tsx';
 
 /** How long a row is pointed at before its card opens, so passing over the list opens none. */
@@ -14,38 +14,43 @@ const CARD_WIDTH = 300;
 
 /**
  * A person or a face in the lightbox's sidebar, and a card about them: who they are (`glance`),
- * and what can be done with the face from the row — follow it in a video (`ShowFace`) and
- * question who it is (`FaceDoubtForm`).
+ * and what can be done with the face from the row — follow it in a video (`ShowFace`), say a named
+ * person's face is wrong (`FaceDoubtForm`), and name an unknown one or say it is not a person
+ * (`UnknownFaceActions`).
  *
  * With a pointer the card opens above the row after pointing at it for a moment, or on focusing
  * it, so nothing in the row moves under the pointer. On a phone, which has nothing to point with,
  * the actions stand in the row instead, and the card opens only for the question. What is on — a
  * face followed, a face in doubt — stays in the row either way, and is turned off or answered there.
  */
-export function FaceRow({ name, glance, videoFace, personFace, canEdit, mobile, highlighted, asking = false, onAsk, onShowFace, followed, onPointer, onChanged, children }: {
-  name: string;
-  /** Who it is, at the top of the card: a larger picture and what places them. */
-  glance?: ReactNode;
-  /** The face as a video moment holds it, to follow. */
-  videoFace?: MediaFace;
-  /** A named person's face, to question. */
-  personFace?: MediaFace;
-  canEdit: boolean;
-  mobile: boolean;
-  /** The face's box on the picture is pointed at. */
-  highlighted: boolean;
-  /** The question of who the face is stands open. */
-  asking?: boolean;
-  onAsk?: (open: boolean) => void;
-  onShowFace?: (facePath: string) => void;
-  /** The face being followed. */
-  followed?: string | null;
-  /** The row is pointed at, or no longer. */
-  onPointer: (inside: boolean) => void;
-  /** After the face's doubt or person changed, to read the photo again. */
-  onChanged: () => Promise<void>;
-  children: ReactNode;
-}) {
+export function FaceRow(
+  { name, glance, videoFace, personFace, unknown, canEdit, mobile, highlighted, asking = false, onAsk, onShowFace, followed, onPointer, onChanged, children }: {
+    name: string;
+    /** Who it is, at the top of the card: a larger picture and what places them. */
+    glance?: ReactNode;
+    /** The face as a video moment holds it, to follow. */
+    videoFace?: MediaFace;
+    /** A named person's face, to question. */
+    personFace?: MediaFace;
+    /** A person nobody has named: to name, as the row's name does, and their face, to say it is not a person. */
+    unknown?: { face?: MediaFace; onName: () => void };
+    canEdit: boolean;
+    mobile: boolean;
+    /** The face's box on the picture is pointed at. */
+    highlighted: boolean;
+    /** The question of who the face is stands open. */
+    asking?: boolean;
+    onAsk?: (open: boolean) => void;
+    onShowFace?: (facePath: string) => void;
+    /** The face being followed. */
+    followed?: string | null;
+    /** The row is pointed at, or no longer. */
+    onPointer: (inside: boolean) => void;
+    /** After the face's doubt or person changed, to read the photo again. */
+    onChanged: () => Promise<void>;
+    children: ReactNode;
+  },
+) {
   const [pointed, setPointed] = useState(false);
   const [focused, setFocused] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -73,7 +78,7 @@ export function FaceRow({ name, glance, videoFace, personFace, canEdit, mobile, 
   const following = follow !== undefined && followed === follow.facePath;
   const question = personFace?.personId && (personFace.doubt || canEdit) ? personFace : undefined;
   const doubt = question?.doubt;
-  const opened = asking || (!mobile && (pointed || focused) && (glance !== undefined || follow !== undefined || question !== undefined));
+  const opened = asking || (!mobile && (pointed || focused) && (glance !== undefined || follow !== undefined || question !== undefined || unknown !== undefined));
 
   const close = () => {
     clearTimeout(timer.current);
@@ -138,12 +143,12 @@ export function FaceRow({ name, glance, videoFace, personFace, canEdit, mobile, 
           {children}
           {follow && (mobile || following) && <ShowFace face={follow} name={name} onShow={onShowFace} followed={followed} />}
           {question && (mobile || doubt) && (
-            <Tooltip label={doubt ? `Is this ${name}? ${doubtReason(doubt)}` : `Not sure this is ${name}?`} withinPortal multiline maw={260} disabled={asking}>
+            <Tooltip label={doubt ? `Is this ${name}? ${doubtReason(doubt)}` : `This is not ${name}?`} withinPortal multiline maw={260} disabled={asking}>
               <ActionIcon
                 size='sm'
                 variant={doubt ? 'light' : 'subtle'}
                 color={doubt ? 'orange' : 'gray'}
-                aria-label={doubt ? `Is this ${name}?` : `Doubt that this is ${name}`}
+                aria-label={doubt ? `Is this ${name}?` : `This is not ${name}`}
                 onClick={() =>
                   onAsk?.(!asking)}
               >
@@ -188,9 +193,10 @@ export function FaceRow({ name, glance, videoFace, personFace, canEdit, mobile, 
                   leftSection={<TablerIcon name='help-circle' size={16} />}
                   onClick={() => onAsk?.(true)}
                 >
-                  {doubt ? 'Is this them?' : 'Not sure this is them?'}
+                  {doubt ? 'Is this them?' : 'This is wrong'}
                 </Button>
               )}
+              {unknown && <UnknownFaceActions face={unknown.face} canEdit={canEdit} onName={unknown.onName} onDone={close} onChanged={onChanged} />}
             </Stack>
           )}
         </Stack>

@@ -799,6 +799,7 @@ export function MediaSidebar(
                 name={face.personName}
                 glance={<UnknownGlance face={face} />}
                 videoFace={faces.find((candidate) => candidate.faceId === face.faceId)}
+                unknown={{ face: faces.find((candidate) => candidate.faceId === face.faceId), onName: () => onReviewUnknown(face.personId) }}
                 canEdit={canEdit}
                 mobile={mobile}
                 highlighted={hoveredFace === `u-${face.faceId}`}
