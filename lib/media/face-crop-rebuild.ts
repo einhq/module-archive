@@ -60,7 +60,7 @@ const perCall = <T>(items: ReadonlyArray<T>): T[][] => {
  * A crop that was not cut, and why. `code` is what a step that wanted it exits with
  * (`stepExitCode`): `STEP_EXIT_TEMPORARY` when EMS could not do it yet, so asking again later can.
  */
-export type FaceCropFailure = { output: string; reason: string; code: number };
+type FaceCropFailure = { output: string; reason: string; code: number };
 
 /**
  * Cut every crop of one image and record their bytes; returns the crops that were not cut. A
