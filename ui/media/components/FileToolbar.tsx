@@ -1,5 +1,5 @@
 /**
- * The file actions of the details panel's cog menu (`useFileActions`) as a row of icons floating
+ * The file actions (`useFileActions`) as a row of icons floating
  * over the top of the viewer, on a translucent rounded pill. Each icon is titled with its action;
  * one that is on (drawing faces, mirrored) is in the accent colour.
  *

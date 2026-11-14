@@ -2,16 +2,13 @@
  * desktop the details scroll above a foot that hides them, and a hidden panel leaves a handle at
  * the right edge. */
 
-.mrx-lightbox-side-column {
+.mrx-media-sidebar-framed {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   flex: none;
-  width: var(--mrx-lightbox-side-w);
   background: var(--mrx-surface-raised);
-}
-
-.mrx-lightbox-side-column > .mrx-scroll-box {
-  flex: 1 1 0;
 }
 
 /* As the app's navbar foot, mirrored: the collapse button on the side towards the picture, the

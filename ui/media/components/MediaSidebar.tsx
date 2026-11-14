@@ -20,15 +20,15 @@
  */
 
 import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Menu, Select, Stack, Text } from '@mantine/core';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Select, Stack, Text } from '@mantine/core';
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
-import type { MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
+import type { MediaDetails, MediaExif, MediaVersion, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
 import { MediaItem, notify, openTerminalTab, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
-import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
+import { mediaTerminalCommand } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
 import { FaceRow } from './FaceRow.tsx';
 import { PersonGlance, UnknownGlance } from './FaceGlance.tsx';
@@ -42,7 +42,7 @@ import { StagedDuplicates } from '../../staging/components/StagedDuplicates.tsx'
 import { restoredSteps } from './RestoredCompare.tsx';
 import { setShownCopy } from '../lib/shown-copy.ts';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
-import { useFileActions } from './FileActions.tsx';
+import { useRestoredCompare } from './FileActions.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { Comments } from '../../components/Comments.tsx';
 import { SidebarSection, useSectionOpen } from './SidebarSection.tsx';
@@ -367,18 +367,12 @@ export function MediaSidebar(
     followedFace,
     onOpenMap,
     canEdit,
-    addToAlbumPath,
-    canOrient,
-    orienting,
-    onTurn,
-    addingFace = false,
-    onAddFace,
-    onEditSubtitles,
-    onEditText,
     stackBusy = false,
     onStackPreview,
     onStackAction,
     onLayer,
+    headerActions,
+    foot,
   }: {
     media: MediaItem;
     mobile?: boolean;
@@ -396,23 +390,15 @@ export function MediaSidebar(
     /** Open the lightbox-owned, enlarged view of this media location. */
     onOpenMap?: () => void;
     canEdit: boolean;
-    /** The picture the edit menu's add-to-album row puts in an album; absent for the guest. */
-    addToAlbumPath?: string;
-    canOrient: boolean;
-    orienting: boolean;
-    onTurn: (change: OrientationChange) => Promise<void>;
-    addingFace?: boolean;
-    /** Desktop-only hand-off: the lightbox image itself owns the draw gesture. */
-    onAddFace?: () => void;
-    /** Open the subtitle editor: given for a video or a recording the reader may change. */
-    onEditSubtitles?: () => void;
-    /** Open the editor of the text in the picture: given for a photo the reader may change. */
-    onEditText?: () => void;
     stackBusy?: boolean;
     onStackPreview: (member: StackMemberRef) => void;
     onStackAction: (action: 'front' | 'separate' | 'allow', member: StackMemberRef) => Promise<void>;
-    /** A dialog or the edit menu of the sidebar's opened or closed over the lightbox, which leaves it the keys while open. */
+    /** A dialog of the sidebar's opened or closed over the lightbox, which leaves it the keys while open. */
     onLayer: (open: boolean) => void;
+    /** Buttons at the right of the file's name, the panel's top right corner. */
+    headerActions?: ReactNode;
+    /** A row under what scrolls, at the panel's foot; the panel's pattern runs down behind it. */
+    foot?: ReactNode;
   },
 ) {
   useSignals();
@@ -420,21 +406,7 @@ export function MediaSidebar(
   // Asked here rather than in the strip, so a picture with nothing like it has no row at all.
   const similar = useSimilarMedia(media.type === 'audio' ? undefined : media.path);
   const { details, addComment, removeComment, setTextLanguage, rawExif, loadRawExif, rawExifLoading } = result;
-  const fileActions = useFileActions({
-    media,
-    result,
-    mobile,
-    canEdit,
-    addToAlbumPath,
-    canOrient,
-    orienting,
-    onTurn,
-    addingFace,
-    onAddFace,
-    onEditText,
-    onEditSubtitles,
-  });
-  const [menuOpen, setMenuOpen] = useState(false);
+  const restoredCompare = useRestoredCompare({ media, result, canEdit });
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
   /** A comment's delete waits to be confirmed. */
@@ -442,7 +414,6 @@ export function MediaSidebar(
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
-    setMenuOpen(false);
     setAsking(null);
     setConfirmingComment(false);
   }
@@ -452,23 +423,7 @@ export function MediaSidebar(
   useLayoutEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [media.path]);
-  const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
-  const menuCheck = mobile ? 20 : 14;
-  useEffect(() => onLayer(fileActions.layer || asking !== null || menuOpen || confirmingComment), [fileActions.layer, asking, menuOpen, confirmingComment]);
-  // Escape closes the edit menu, and not the lightbox beneath. Mantine's menu answers Escape only
-  // with the focus inside it, and a click on its button leaves the focus on the button, so the key
-  // is taken here, at the window, first.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      setMenuOpen(false);
-    };
-    globalThis.addEventListener('keydown', onKeyDown, true);
-    return () => globalThis.removeEventListener('keydown', onKeyDown, true);
-  }, [menuOpen]);
+  useEffect(() => onLayer(restoredCompare.open || asking !== null || confirmingComment), [restoredCompare.open, asking, confirmingComment]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
   // a folder above it, changes.
   const changed = sharingChanged.value;
@@ -515,11 +470,18 @@ export function MediaSidebar(
   const summary = summaryLine(exif, media);
   const openPathInTerminal = () => openTerminalTab(mediaTerminalCommand(media.path));
 
-  return (
+  // The pattern at the panel's foot lies behind the scrolling details, or with a `foot` row behind
+  // the frame that holds both, so it reaches the bottom edge.
+  const ground = (
+    <Box className='mrx-sidebar-foot'>
+      <HatField pattern='neutral' kind='foot' />
+    </Box>
+  );
+  const scroller = (
     <ScrollBox
       data-media-sidebar
       viewportRef={scrollRef}
-      frameStyle={{
+      frameStyle={foot ? { flex: '1 1 0', minHeight: 0 } : {
         width: mobile ? '100%' : SIDEBAR_WIDTH,
         minWidth: mobile ? 0 : SIDEBAR_WIDTH,
         flex: mobile ? '1 1 100%' : undefined,
@@ -528,11 +490,7 @@ export function MediaSidebar(
         background: 'var(--mrx-surface-raised)',
         isolation: 'isolate',
       }}
-      ground={
-        <Box className='mrx-sidebar-foot'>
-          <HatField pattern='neutral' kind='foot' />
-        </Box>
-      }
+      ground={foot ? undefined : ground}
       style={{
         overflowY: mobile ? 'scroll' : 'auto',
         overscrollBehavior: 'contain',
@@ -541,7 +499,7 @@ export function MediaSidebar(
       }}
     >
       <Stack p='lg' gap='xl'>
-        {/* Identity: the filename is the download, and the edit actions sit beside it. */}
+        {/* Identity: the filename is the download, and the lightbox's buttons sit beside it. */}
         <Group justify='space-between' gap='xs' wrap='nowrap' align='flex-start'>
           <Box style={{ minWidth: 0 }}>
             <Group gap={6} wrap='nowrap'>
@@ -578,37 +536,7 @@ export function MediaSidebar(
             </Group>
           </Box>
 
-          {fileActions.actions.length > 0 && (
-            // On a phone its rows are a thumb's, like the lightbox bar's menu.
-            <Menu
-              opened={menuOpen}
-              onChange={setMenuOpen}
-              position='bottom-end'
-              withinPortal
-              shadow='md'
-              styles={mobile ? THUMB_MENU_STYLES : undefined}
-            >
-              <Menu.Target>
-                <ActionIcon variant='subtle' color='gray' size={mobile ? 'xl' : 'lg'} loading={orienting} aria-label='Edit media'>
-                  <TablerIcon name='settings' size={mobile ? 24 : 20} />
-                </ActionIcon>
-              </Menu.Target>
-              <Menu.Dropdown>
-                {fileActions.actions.map((action) => (
-                  <Menu.Item
-                    key={action.key}
-                    leftSection={<TablerIcon name={action.icon} size={menuIcon} />}
-                    rightSection={action.checked ? <TablerIcon name='check' size={menuCheck} /> : undefined}
-                    color={action.checked ? 'marine' : undefined}
-                    disabled={action.disabled}
-                    onClick={action.onClick}
-                  >
-                    {action.label}
-                  </Menu.Item>
-                ))}
-              </Menu.Dropdown>
-            </Menu>
-          )}
+          {headerActions && <Group gap={4} wrap='nowrap' style={{ flexShrink: 0 }}>{headerActions}</Group>}
         </Group>
 
         {details?.description && <DescriptionSection description={details.description} />}
@@ -758,7 +686,8 @@ export function MediaSidebar(
                     onClick={onOpenMap}
                     aria-label='Enlarge map'
                     title='Enlarge map'
-                    style={{ position: 'absolute', top: '50%', right: 8, zIndex: 1, transform: 'translateY(-50%)' }}
+                    // Under Leaflet's layers button (10 px in, 46 px high), so its list opens over this.
+                    style={{ position: 'absolute', top: 64, right: 11, zIndex: 1 }}
                   >
                     <TablerIcon name='maximize' size={22} />
                   </ActionIcon>
@@ -786,7 +715,7 @@ export function MediaSidebar(
           />
         )}
 
-        {versions.length > 0 && <VersionsSection versions={versions} onCompare={fileActions.compare} onShow={canEdit ? (name) => void showCopy(name) : undefined} />}
+        {versions.length > 0 && <VersionsSection versions={versions} onCompare={restoredCompare.compare} onShow={canEdit ? (name) => void showCopy(name) : undefined} />}
 
         {similar?.length !== 0 && (
           <SidebarSection id='similar' label='Similar' icon='photo-search'>
@@ -882,7 +811,15 @@ export function MediaSidebar(
           </SidebarSection>
         )}
       </Stack>
-      {fileActions.dialogs}
+      {restoredCompare.dialog}
     </ScrollBox>
+  );
+  if (!foot) return scroller;
+  return (
+    <Box className='mrx-media-sidebar-framed' style={{ width: SIDEBAR_WIDTH }}>
+      {ground}
+      {scroller}
+      {foot}
+    </Box>
   );
 }

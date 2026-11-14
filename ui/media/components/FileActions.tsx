@@ -1,8 +1,8 @@
 /**
  * What may be done to the file the lightbox shows: edit it, share it, put it in an album, draw its
- * faces, write its text or subtitles, restore it, remove a blemish, turn or mirror it. The details
- * panel lists them in its cog menu and the floating toolbar as icons over the picture; each holds
- * the dialogs its actions open, so either works without the other.
+ * faces, write its text or subtitles, restore it, remove a blemish, turn or mirror it. The floating
+ * toolbar shows them as icons over the picture and holds the dialogs they open. A restored copy
+ * shown beside the picture (`useRestoredCompare`) is also the details panel's, from its versions.
  */
 
 import { type ReactNode, useRef, useState } from 'react';
@@ -15,7 +15,7 @@ import { RestoredCompare } from './RestoredCompare.tsx';
 import { BlemishDialog } from './BlemishDialog.tsx';
 import { useAddToAlbum } from './AddToAlbumAction.tsx';
 
-/** One action: a menu row or a toolbar icon. `checked` marks a mode that is on. */
+/** One action: a toolbar icon. `checked` marks a mode that is on. */
 type FileAction = { key: string; icon: string; label: string; onClick: () => void; disabled?: boolean; checked?: boolean };
 
 export type FileActionsOptions = {
@@ -44,32 +44,33 @@ type FileActions = {
   dialogs: ReactNode;
   /** A dialog of theirs is open, which has the keys. */
   layer: boolean;
-  /** Show a restored copy beside the picture. */
+};
+
+type RestoredCompareState = {
+  /** Show a restored copy beside the picture, or close it. */
   compare: (version: MediaVersion | null) => void;
+  /** What a restoration of `from` that has finished does: its copy beside the picture, or a note. */
+  restored: (from: string) => (answer: FileRestoreAnswer, shown?: boolean) => void;
+  /** The comparison, to be rendered beside whatever opens it. */
+  dialog: ReactNode;
+  /** It is open, which has the keys. */
+  open: boolean;
 };
 
 const reportError = (message: string | null) => {
   if (message) notify({ message, color: 'red' });
 };
 
-export function useFileActions(options: FileActionsOptions): FileActions {
-  const { media, result, mobile = false, canEdit, addToAlbumPath, canOrient, orienting, onTurn, addingFace = false, onAddFace, onEditText, onEditSubtitles } = options;
-  const { details, setDescription } = result;
-  const [editing, setEditing] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-  const [blemishing, setBlemishing] = useState(false);
-  /** The restored copy shown beside the picture. */
+/** A restored copy of the shown file beside the picture, and what a finished restoration does. */
+export function useRestoredCompare({ media, result, canEdit }: { media: MediaItem; result: UseMediaDetailsResult; canEdit: boolean }): RestoredCompareState {
+  const { details } = result;
   const [comparing, setComparing] = useState<MediaVersion | null>(null);
-  const album = useAddToAlbum(addToAlbumPath ? [addToAlbumPath] : [], reportError);
   /** The picture shown, for a restoration that finishes to know whether it is still the one shown. */
   const pathRef = useRef(media.path);
   pathRef.current = media.path;
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
-    setEditing(false);
-    setRestoring(false);
-    setBlemishing(false);
     setComparing(null);
   }
 
@@ -98,6 +99,38 @@ export function useFileActions(options: FileActionsOptions): FileActions {
       },
     });
   };
+
+  const dialog = (
+    <RestoredCompare
+      version={comparing}
+      original={media}
+      angle={details?.angle ?? 0}
+      mirror={details?.mirror ?? false}
+      canEdit={canEdit}
+      onClose={() => setComparing(null)}
+      onDiscarded={() => void result.refetch()}
+      onReplaced={restored(media.path)}
+      onShown={() => void result.refetch()}
+    />
+  );
+  return { compare: setComparing, restored, dialog, open: comparing !== null };
+}
+
+export function useFileActions(options: FileActionsOptions): FileActions {
+  const { media, result, mobile = false, canEdit, addToAlbumPath, canOrient, orienting, onTurn, addingFace = false, onAddFace, onEditText, onEditSubtitles } = options;
+  const { details, setDescription } = result;
+  const [editing, setEditing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [blemishing, setBlemishing] = useState(false);
+  const { restored, dialog: compareDialog, open: comparing } = useRestoredCompare({ media, result, canEdit });
+  const album = useAddToAlbum(addToAlbumPath ? [addToAlbumPath] : [], reportError);
+  const [shownPath, setShownPath] = useState(media.path);
+  if (shownPath !== media.path) {
+    setShownPath(media.path);
+    setEditing(false);
+    setRestoring(false);
+    setBlemishing(false);
+  }
 
   const restorable = canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '');
   const actions: FileAction[] = [];
@@ -152,17 +185,7 @@ export function useFileActions(options: FileActionsOptions): FileActions {
           onRestored={restored(media.path)}
         />
       )}
-      <RestoredCompare
-        version={comparing}
-        original={media}
-        angle={details?.angle ?? 0}
-        mirror={details?.mirror ?? false}
-        canEdit={canEdit}
-        onClose={() => setComparing(null)}
-        onDiscarded={() => void result.refetch()}
-        onReplaced={restored(media.path)}
-        onShown={() => void result.refetch()}
-      />
+      {compareDialog}
       {details && (
         <MediaEditModal
           opened={editing}
@@ -176,5 +199,5 @@ export function useFileActions(options: FileActionsOptions): FileActions {
   );
 
   const sharing = shareModalPath.value === media.path;
-  return { actions, dialogs, layer: editing || restoring || blemishing || comparing !== null || sharing || album.opened, compare: setComparing };
+  return { actions, dialogs, layer: editing || restoring || blemishing || comparing || sharing || album.opened };
 }

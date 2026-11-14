@@ -735,7 +735,7 @@ export function MediaLightbox() {
     // The unknown-person review dialog is layered above this modal and owns
     // Escape while it is open. Let its capture handler close only that layer.
     if (reviewPersonId) return;
-    // So does a dialog the sidebar or the toolbar opened, the edit or the sharing dialog, or its edit menu.
+    // So does a dialog the sidebar or the toolbar opened, the edit or the sharing dialog.
     if (dialogLayer) return;
     if (addingFace) {
       setAddingFace(false);
@@ -1820,10 +1820,10 @@ export function MediaLightbox() {
   // change the file, not for one who may only add it to an album.
   const mayUseToolbar = withDetails && canEdit;
   // The bar's actions, in the order they give way to the "more" menu from the end: the favourite
-  // and the slideshow, the view switches (the text, the faces, fullscreen), the toolbar and the
-  // download, which saves the original file as the file name in the details does. Each keeps its
-  // place in the bar as far as there is room (`barActionsShown`). A phone's bar holds the view
-  // switches only; the rest are always in its menu up in the corner.
+  // and the slideshow, the view switches (the text, the faces, fullscreen) and the download, which
+  // saves the original file as the file name in the details does. Each keeps its place in the bar
+  // as far as there is room (`barActionsShown`). A phone's bar holds the view switches only; the
+  // rest are always in its menu up in the corner, with the toolbar, which a computer's cog toggles.
   const favouriteAction: BarAction | undefined = mayStar
     ? {
       key: 'favourite',
@@ -1864,12 +1864,11 @@ export function MediaLightbox() {
     on: false,
     onClick: toggleFullscreen,
   });
-  const fileActions: BarAction[] = [];
-  if (mayUseToolbar) {
-    fileActions.push({ key: 'toolbar', icon: 'tools', label: showToolbar ? 'Hide toolbar' : 'Show toolbar', on: showToolbar, onClick: toggleToolbarVisible });
-  }
-  fileActions.push({ key: 'download', icon: 'download', label: 'Download', on: false, href: fileUrl(media.path), download: media.name });
-  const barActions = slideshow ? [] : isMobile ? viewActions : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, ...fileActions];
+  const toolbarAction: BarAction | undefined = mayUseToolbar
+    ? { key: 'toolbar', icon: 'settings', label: showToolbar ? 'Hide toolbar' : 'Show toolbar', on: showToolbar, onClick: toggleToolbarVisible }
+    : undefined;
+  const downloadAction: BarAction = { key: 'download', icon: 'download', label: 'Download', on: false, href: fileUrl(media.path), download: media.name };
+  const barActions = slideshow ? [] : isMobile ? viewActions : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction];
   barActionCountRef.current = barActions.length;
   const inBar = new Set(barActions.slice(0, barActionsShown).map((action) => action.key));
   const barButton = (action: BarAction | undefined) =>
@@ -1894,8 +1893,41 @@ export function MediaLightbox() {
   // The rows of the "more" menu, on a phone and a desktop alike, in the bar's order, with icons the
   // size of the rows around them: what the bar has no room for, and on a phone what it never holds.
   const menuActions = isMobile
-    ? [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions.filter((action) => !inBar.has(action.key)), ...fileActions]
+    ? [
+      ...(favouriteAction ? [favouriteAction] : []),
+      slideshowAction,
+      ...viewActions.filter((action) => !inBar.has(action.key)),
+      ...(toolbarAction ? [toolbarAction] : []),
+      downloadAction,
+    ]
     : barActions.filter((action) => !inBar.has(action.key));
+  // A computer's top right corner, of the details panel while it is open, else of the picture's
+  // background: the cog that shows the toolbar, and close.
+  const cornerButtons = (color: string) => (
+    <>
+      {toolbarAction && (
+        <Tooltip label={toolbarAction.label} withArrow>
+          <ActionIcon
+            variant='subtle'
+            color='gray'
+            size='lg'
+            loading={orienting}
+            onClick={toolbarAction.onClick}
+            aria-label={toolbarAction.label}
+            aria-pressed={showToolbar}
+            style={{ pointerEvents: 'auto' }}
+          >
+            <TablerIcon name='settings' size={20} color={showToolbar ? 'var(--mrx-accent)' : color} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+      <Tooltip label='Close' withArrow>
+        <ActionIcon variant='subtle' color='gray' size='lg' onClick={requestClose} aria-label='Close lightbox' style={{ pointerEvents: 'auto' }}>
+          <TablerIcon name='x' size={22} color={color} />
+        </ActionIcon>
+      </Tooltip>
+    </>
+  );
   const actionMenuItems = (iconSize: number) =>
     menuActions.map((action) => (
       <Menu.Item
@@ -1968,18 +2000,28 @@ export function MediaLightbox() {
       followedFace={followedFacePath}
       onOpenMap={mapPoint ? () => setMapOpen(true) : undefined}
       canEdit={canEdit}
-      addToAlbumPath={actionPath}
-      canOrient={canOrient}
-      orienting={orienting}
-      onTurn={turn}
-      addingFace={addingFace}
-      onAddFace={addFace}
-      onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
-      onEditText={mayWriteText ? () => setEditingText(true) : undefined}
       stackBusy={stackBusy}
       onStackPreview={previewStackMember}
       onStackAction={mutateStack}
       onLayer={setSidebarLayer}
+      headerActions={mobile ? undefined : cornerButtons(SIDE_ICON_COLOR)}
+      // The foot that hides the details, as the app's navbar collapses, mirrored; the chat at its
+      // other end while it is closed.
+      foot={mobile ? undefined : (
+        <Box className='mrx-lightbox-side-foot'>
+          <Divider mb='xs' />
+          <Group justify='space-between' wrap='nowrap'>
+            <Tooltip label='Hide details (i)' position='left' withArrow>
+              <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Hide details' onClick={() => toggleSheet(false)}>
+                <TablerIcon name='layout-sidebar-right-collapse' size={20} />
+              </ActionIcon>
+            </Tooltip>
+            <Group gap={4} wrap='nowrap'>
+              <DrawerButtons color={SIDE_ICON_COLOR} hideOpen />
+            </Group>
+          </Group>
+        </Box>
+      )}
     />
   );
   // The same element while the phone's closed panel waits to draw the picture shown, which React
@@ -2116,28 +2158,17 @@ export function MediaLightbox() {
 
           {!slideshow && !isMobile && (
             <Group
-              justify='space-between'
+              justify='flex-end'
+              gap={4}
               px='md'
               py='xs'
+              wrap='nowrap'
               style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, pointerEvents: 'none' }}
             >
-              <ActionIcon
-                variant='subtle'
-                color='gray'
-                size='lg'
-                onClick={requestClose}
-                aria-label='Close lightbox'
-                style={{ pointerEvents: 'auto' }}
-              >
-                <TablerIcon name='x' size={22} color='white' />
-              </ActionIcon>
-
               {/* The drawer (the chat), where there are no details to keep it: the top bar's button is covered. */}
-              {!withDetails && (
-                <Group gap={4} wrap='nowrap'>
-                  <DrawerButtons />
-                </Group>
-              )}
+              {!withDetails && <DrawerButtons />}
+              {/* The toolbar's cog and close, here while the details panel does not hold them. */}
+              {(!withDetails || !sidebarOpen) && cornerButtons('white')}
             </Group>
           )}
 
@@ -2565,7 +2596,7 @@ export function MediaLightbox() {
             </SwipeInfo>
 
             {viewActions.map(barButton)}
-            {fileActions.map(barButton)}
+            {barButton(downloadAction)}
 
             {!slideshow && !isMobile && menuActions.length > 0 && (
               <Menu position='top-end' shadow='md' withinPortal>
@@ -2698,24 +2729,7 @@ export function MediaLightbox() {
               inert={!sidebarOpen}
               style={{ '--mrx-lightbox-side-w': `${SIDEBAR_WIDTH}px` } as CSSProperties}
             >
-              {/* The details over a foot that hides them, as the app's navbar collapses, mirrored. */}
-              <Box className='mrx-lightbox-side-column'>
-                {detailsSidebar(false)}
-                <Box className='mrx-lightbox-side-foot'>
-                  <Divider mb='xs' />
-                  <Group justify='space-between' wrap='nowrap'>
-                    <Tooltip label='Hide details (i)' position='left' withArrow>
-                      <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Hide details' onClick={() => toggleSheet(false)}>
-                        <TablerIcon name='layout-sidebar-right-collapse' size={20} />
-                      </ActionIcon>
-                    </Tooltip>
-                    {/* The chat, at the other end, while it is closed. */}
-                    <Group gap={4} wrap='nowrap'>
-                      <DrawerButtons color={SIDE_ICON_COLOR} hideOpen />
-                    </Group>
-                  </Group>
-                </Box>
-              </Box>
+              {detailsSidebar(false)}
             </Box>
           )}
       </Box>
