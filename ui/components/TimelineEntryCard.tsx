@@ -126,7 +126,7 @@ const coverUrls = (entry: TimelineEntry): { url: string; fallback?: string } | u
   return entry.cover.thumb ? { url: thumbnailUrl(entry.cover.path, true), fallback: base } : { url: base };
 };
 
-/** Whose timeline a feed is: its album entries also open the album narrowed to them. */
+/** Whose timeline a feed is: an album entry's count of their pictures opens the album narrowed to them. */
 export type TimelineSubject = {
   /** The `search --subject` the album is narrowed by, `person:<slug>`. */
   subject: string;
@@ -189,14 +189,15 @@ export function TimelineEntryCard({ entry, subject }: TimelineEntryCardProps) {
             engagement, and the composed title already says both. */
         }
         <Group gap='xs' wrap='wrap'>
-          {entry.count !== undefined && <Text size='xs' c='dimmed'>{entry.count} items</Text>}
+          {/* On a subject's timeline the count is theirs, and opens the album showing just those. */}
+          {entry.count !== undefined && (narrowed
+            ? (
+              <Anchor component={Link} to={narrowed} size='xs' title={`Open the album showing only ${subject!.name}`}>
+                {entry.count} items
+              </Anchor>
+            )
+            : <Text size='xs' c='dimmed'>{entry.count} items</Text>)}
           {entry.points !== undefined && <Text size='xs' c='dimmed'>{entry.points} points</Text>}
-          {narrowed && (
-            <Anchor component={Link} to={narrowed} size='xs' style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <TablerIcon name='filter' size={12} />
-              Show only {subject!.name}
-            </Anchor>
-          )}
         </Group>
 
         {entry.description && (
