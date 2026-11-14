@@ -143,6 +143,8 @@ const STEP_SLIDE_MS = 420;
 const STEP_SLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 /** A step this soon after the last one is part of a run through the pictures: it fades, without the slide. */
 const STEP_RUN_MS = 500;
+/** The longest a step waits for its new picture to be decoded before it fades in all the same. */
+const STEP_DECODE_WAIT_MS = 300;
 /** How long a click on a side waits for a second one, which makes it a double-click that zooms. */
 const SIDE_CLICK_WAIT_MS = 250;
 /** How many pictures on each side of the shown one are fetched ahead, so a run of quick swipes finds them there. */
@@ -535,8 +537,14 @@ export function MediaLightbox() {
   const swipePendingRef = useRef<(() => void) | null>(null);
   /** Where the old picture fades out during a desktop step (`stepDesktop`), a copy of its pixels. */
   const stepOutgoingRef = useRef<HTMLDivElement | null>(null);
-  /** The incoming picture's start, from the step that switched to it, for the layout effect to slide from. */
-  const stepFromRef = useRef<number | null>(null);
+  /**
+   * The step that switched to the shown media, for the layout effect to animate: the old picture's
+   * leading edge (left going forward, right going back) to slide the new one's from, unless the step
+   * is part of a quick run, and the old copy's fade, held until the new picture can be drawn.
+   */
+  const stepFromRef = useRef<{ token: number; edge: number | null; side: 'left' | 'right'; copyFade: Animation | null } | null>(null);
+  /** Counts the desktop steps, so the wait of one a newer step has overtaken does nothing. */
+  const stepTokenRef = useRef(0);
   /** The running step's animations, stopped where they are by the next step. */
   const stepAnimationsRef = useRef<Animation[]>([]);
   /** When the last desktop step began, for a quick one after it to skip the slide (`STEP_RUN_MS`). */
@@ -1565,9 +1573,27 @@ export function MediaLightbox() {
   };
 
   /**
-   * A desktop step. The old picture's pixels are copied where they are drawn and fade out there;
-   * the step renders the new media, and the layout effect below fades it in from `stepFromRef`,
-   * its leading edge where the old one's was: the left edge going forward, the right going back.
+   * Where `contain` draws a picture of `pixels` in `box`, horizontally. The picture's own size
+   * when it has loaded, else the file's, so a picture not yet loaded is not taken for the whole box.
+   */
+  const drawnSpan = (box: DOMRect, picture: HTMLImageElement | HTMLVideoElement | null, item: MediaItem | null): { left: number; right: number } => {
+    const own = picture instanceof HTMLVideoElement
+      ? { width: picture.videoWidth, height: picture.videoHeight }
+      : picture
+      ? { width: picture.naturalWidth, height: picture.naturalHeight }
+      : null;
+    const pixels = own && own.width > 0 && own.height > 0 ? own : item && (item.type === 'photo' || item.type === 'video') ? displayDims(item) : undefined;
+    if (!pixels) return { left: box.left, right: box.right };
+    const inset = (box.width - pixels.width * Math.min(box.width / pixels.width, box.height / pixels.height)) / 2;
+    return { left: box.left + inset, right: box.right - inset };
+  };
+
+  /**
+   * A desktop step. The old picture is painted into a canvas where it is drawn this moment, a
+   * running step's slide and fade included, so a step in the middle of another stops it where it
+   * is; the canvas is drawn at once from what is already decoded, where a copied img would be
+   * decoded again and blink. The step renders the new media, and the layout effect below fades it
+   * in, sliding from the old picture's leading edge: its left going forward, its right going back.
    */
   const stepDesktop = (action: 'next' | 'previous') => {
     const surface = gestureSurfaceRef.current;
@@ -1575,77 +1601,85 @@ export function MediaLightbox() {
     const target = list[action === 'next' ? nextMediaIndex(currentMediaIndex.value, list.length) : prevMediaIndex(currentMediaIndex.value, list.length)];
     if (!surface || !target) return;
     const area = surface.getBoundingClientRect();
-    // The old picture as drawn this moment: its element's box, zoom and a running step's slide
-    // included, less `contain`'s letterboxing, at the opacity a running fade has it at. The copy
-    // goes on from there, so a step in the middle of another stops it where it is.
     const picture = mediaRef.current;
-    const box = (picture ?? zoomBoxRef.current)?.getBoundingClientRect();
+    const box = (picture ?? zoomBoxRef.current)?.getBoundingClientRect() ?? area;
     const shown = zoomBoxRef.current ? Number(getComputedStyle(zoomBoxRef.current).opacity) : 1;
+    const old = drawnSpan(box, picture, currentMediaItem.peek());
     stopStep();
-    let old = box ? { left: box.left, right: box.right } : { left: area.left, right: area.right };
-    const pixels = picture instanceof HTMLVideoElement
-      ? { w: picture.videoWidth, h: picture.videoHeight }
-      : picture
-      ? { w: picture.naturalWidth, h: picture.naturalHeight }
-      : null;
-    if (box && pixels && pixels.w > 0 && pixels.h > 0) {
-      const drawn = pixels.w * Math.min(box.width / pixels.w, box.height / pixels.h);
-      old = { left: box.left + (box.width - drawn) / 2, right: box.right - (box.width - drawn) / 2 };
-    }
+    let copyFade: Animation | null = null;
     const layer = stepOutgoingRef.current;
-    if (picture && box && layer) {
-      let copy: HTMLElement | null = null;
-      if (picture instanceof HTMLImageElement) copy = picture.cloneNode() as HTMLImageElement;
-      else if (pixels && pixels.w > 0) {
-        const canvas = document.createElement('canvas');
-        canvas.width = pixels.w;
-        canvas.height = pixels.h;
-        canvas.getContext('2d')?.drawImage(picture, 0, 0);
-        copy = canvas;
-      }
-      if (copy) {
-        copy.removeAttribute('class');
-        copy.setAttribute('aria-hidden', 'true');
-        Object.assign(copy.style, {
-          position: 'absolute',
-          left: `${box.left - area.left}px`,
-          top: `${box.top - area.top}px`,
-          width: `${box.width}px`,
-          height: `${box.height}px`,
-          objectFit: 'contain',
-          transform: 'none',
-        });
-        layer.replaceChildren(copy);
-        const fade = copy.animate([{ opacity: shown }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
-        void fade.finished.then(() => copy.remove(), () => {});
-        stepAnimationsRef.current.push(fade);
-      }
+    const ready = picture instanceof HTMLVideoElement ? picture.videoWidth > 0 : picture ? picture.complete && picture.naturalWidth > 0 : false;
+    if (picture && layer && ready && box.width > 0) {
+      const scale = globalThis.devicePixelRatio || 1;
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(box.width * scale);
+      canvas.height = Math.round(box.height * scale);
+      const pixels = picture instanceof HTMLVideoElement ? { w: picture.videoWidth, h: picture.videoHeight } : { w: picture.naturalWidth, h: picture.naturalHeight };
+      const fit = Math.min(canvas.width / pixels.w, canvas.height / pixels.h);
+      canvas.getContext('2d')?.drawImage(picture, (canvas.width - pixels.w * fit) / 2, (canvas.height - pixels.h * fit) / 2, pixels.w * fit, pixels.h * fit);
+      canvas.setAttribute('aria-hidden', 'true');
+      Object.assign(canvas.style, {
+        position: 'absolute',
+        left: `${box.left - area.left}px`,
+        top: `${box.top - area.top}px`,
+        width: `${box.width}px`,
+        height: `${box.height}px`,
+      });
+      layer.replaceChildren(canvas);
+      copyFade = canvas.animate([{ opacity: shown }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
+      copyFade.pause();
+      void copyFade.finished.then(() => canvas.remove(), () => {});
+      stepAnimationsRef.current.push(copyFade);
     }
-    // The new picture centred in the surface, as `contain` will draw it.
-    const dims = (target.type === 'photo' || target.type === 'video') ? displayDims(target) : undefined;
-    const width = dims ? dims.width * Math.min(area.width / dims.width, area.height / dims.height) : area.width;
-    const centredLeft = area.left + (area.width - width) / 2;
     const now = performance.now();
     const inRun = now - lastStepAtRef.current < STEP_RUN_MS;
     lastStepAtRef.current = now;
-    stepFromRef.current = inRun ? 0 : action === 'next' ? old.left - centredLeft : old.right - (centredLeft + width);
+    stepTokenRef.current += 1;
+    stepFromRef.current = {
+      token: stepTokenRef.current,
+      edge: inRun ? null : action === 'next' ? old.left : old.right,
+      side: action === 'next' ? 'left' : 'right',
+      copyFade,
+    };
     if (action === 'next') goToNextMedia();
     else goToPrevMedia();
   };
 
-  // Fades the stepped-to picture in and slides it from where `stepDesktop` put its leading edge, in
-  // the paint that first shows it; a step in a quick run has no slide.
+  // Fades the stepped-to picture in, and slides it from the old picture's leading edge (a step in a
+  // quick run has no slide). Laid out invisible in the paint that first shows it; the fades and the
+  // slide start together once its picture is decoded, or after a moment if it is slow to come, so
+  // neither a blank frame nor a half-drawn picture shows. Where it starts is measured then, from
+  // the picture as it is drawn.
   useLayoutEffect(() => {
-    const from = stepFromRef.current;
+    const step = stepFromRef.current;
     const box = zoomBoxRef.current;
     stepFromRef.current = null;
-    if (from === null || !box) return;
-    stepAnimationsRef.current.push(box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' }));
-    if (from !== 0) {
-      stepAnimationsRef.current.push(
-        box.animate([{ transform: `translate3d(${from}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], { duration: STEP_SLIDE_MS, easing: STEP_SLIDE_EASING }),
-      );
-    }
+    if (!step || !box) return;
+    const fadeIn = box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' });
+    fadeIn.pause();
+    stepAnimationsRef.current.push(fadeIn);
+    const picture = mediaRef.current;
+    let started = false;
+    const start = () => {
+      if (started || stepTokenRef.current !== step.token) return;
+      started = true;
+      if (step.edge !== null) {
+        const area = gestureSurfaceRef.current?.getBoundingClientRect();
+        const item = currentMediaItem.peek();
+        const span = area ? drawnSpan(area, mediaRef.current, item) : null;
+        const from = span ? step.edge - (step.side === 'left' ? span.left : span.right) : 0;
+        if (Math.abs(from) >= 1) {
+          stepAnimationsRef.current.push(
+            box.animate([{ transform: `translate3d(${from}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], { duration: STEP_SLIDE_MS, easing: STEP_SLIDE_EASING }),
+          );
+        }
+      }
+      fadeIn.play();
+      step.copyFade?.play();
+    };
+    if (picture instanceof HTMLImageElement) void picture.decode().then(start, start);
+    else start();
+    globalThis.setTimeout(start, STEP_DECODE_WAIT_MS);
   }, [media?.id]);
 
   // The arrow buttons and keys step: on a desktop by `stepDesktop`; elsewhere the neighbour slides
