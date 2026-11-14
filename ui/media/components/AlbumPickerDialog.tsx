@@ -1,4 +1,4 @@
-import { Alert, Button, Group, Loader, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { Alert, Button, CloseButton, Group, Loader, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import { ALBUMS_ROOT } from '@archive/paths';
 import { CoverAvatar, Dialog, DialogActions, TablerIcon } from '@ein/ui/components';
@@ -68,7 +68,7 @@ export function AlbumPickerDialog({ opened, title, subtitle, icon = 'library-plu
             }
           }}
           leftSection={<TablerIcon name='search' size={16} />}
-          rightSection={loading ? <Loader size={14} /> : undefined}
+          rightSection={loading ? <Loader size={14} /> : query ? <CloseButton size='sm' aria-label='Clear the search' onClick={() => setQuery('')} /> : undefined}
         />
         {/* Room for a few hits from the start, so the dialog does not grow under the pointer as they come. */}
         <Stack gap={2} mih={232}>
