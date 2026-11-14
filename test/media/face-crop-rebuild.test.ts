@@ -137,6 +137,33 @@ Deno.test('more faces than one call takes are cut in calls EMS accepts', async (
   }
 });
 
+Deno.test('the detector cuts a group photo, or a crowded video frame, in calls EMS accepts', async () => {
+  const cut = (body: Record<string, unknown>) => {
+    const targets = body.targets as unknown[];
+    if (targets.length > MAX_RENDITION_TARGETS) return { error: { code: 'invalid_request', message: 'too many targets' }, status: 400 };
+    return { result: { frame: { width: 6000, height: 4000 }, targets: targets.map(() => ({ path: '', width: 100, height: 120, bytes: 1 })) } };
+  };
+  const stub = startStubEms({ ops: { 'image.renditions': cut, 'video.poster': cut } });
+  const crops = (source: string, at?: number) =>
+    Array.from({ length: 39 }, (_, i) => ({ output: `${source}/regions/face-${i}/image.avif`, box: BOX, ...(at !== undefined ? { at } : {}) }));
+  try {
+    const photo: string[] = [];
+    assertEquals(await writeFaceCrops(fakeCommand(stub.url, photo), '/albums/a/group.jpg', crops('/albums/a/group.jpg'), { mimetype: 'image/jpeg' }), null);
+    assertEquals(photo.length, 39);
+    const video: string[] = [];
+    assertEquals(await writeFaceCrops(fakeCommand(stub.url, video), '/albums/a/MVI_1.MP4', crops('/albums/a/MVI_1.MP4', 4), { mimetype: 'video/mp4' }), null);
+    assertEquals(video.length, 39);
+    assertEquals(stub.requests.map((r) => [r.op, (r.body.targets as unknown[]).length]), [
+      ['image.renditions', 32],
+      ['image.renditions', 7],
+      ['video.poster', 32],
+      ['video.poster', 7],
+    ]);
+  } finally {
+    await stub.close();
+  }
+});
+
 Deno.test('a video crop is cut from the frame its face was seen in, one call a frame', async () => {
   const stub = startStubEms({
     ops: {

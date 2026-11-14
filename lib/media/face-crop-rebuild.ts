@@ -49,13 +49,20 @@ const byFrame = (crops: ReadonlyArray<FaceCropRequest>): FaceCropRequest[][] => 
   return [...frames.values()];
 };
 
+/** `items` in runs of at most `MAX_RENDITION_TARGETS`, what one EMS call takes. */
+const perCall = <T>(items: ReadonlyArray<T>): T[][] => {
+  const calls = [];
+  for (let start = 0; start < items.length; start += MAX_RENDITION_TARGETS) calls.push(items.slice(start, start + MAX_RENDITION_TARGETS));
+  return calls;
+};
+
 /**
  * Cut every crop of one image and record their bytes. Returns a message on failure, null on
- * success — for all of them at once, since they are one EMS call and one decode, so at most
- * `MAX_RENDITION_TARGETS` of them. A video's crops are one `video.poster` call per frame they
- * are cut from.
+ * success — for all of them at once. A photo's crops are one `image.renditions` call per
+ * `MAX_RENDITION_TARGETS` of them, a video's one `video.poster` call per frame they are cut from
+ * and as many targets; a group photo has more faces than one call takes.
  *
- * One call rather than one per face, because each call decodes the whole source. The stored
+ * Calls of many crops rather than one per face, because each call decodes the whole source. The stored
  * boxes are fractions of the display frame and dimension-free; EMS turns them into pixels
  * against the raster it decodes, so no dimensions travel with them — a RAW's embedded preview
  * against its sensor image, and a HEIC libheif has already turned, are its to reconcile. The
@@ -80,13 +87,15 @@ export const writeFaceCrops = async (
   const written = [];
   try {
     if (isVideo(source)) {
-      for (const group of byFrame(crops)) {
+      for (const group of byFrame(crops).flatMap(perCall)) {
         const at = group[0].at;
         const cut = await poster(cmd, input, { ...frame, ...(at !== undefined ? { at } : {}), targets: group.map((crop) => faceCropTarget(crop.output, crop.box)) });
         written.push(...cut.targets);
       }
     } else {
-      written.push(...(await renditions(cmd, input, { ...frame, targets: crops.map((crop) => faceCropTarget(crop.output, crop.box)) })).targets);
+      for (const group of perCall(crops)) {
+        written.push(...(await renditions(cmd, input, { ...frame, targets: group.map((crop) => faceCropTarget(crop.output, crop.box)) })).targets);
+      }
     }
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -204,10 +213,10 @@ export const rebuildFaceCrops = async (
     wanted.push({ output: cropPath, box: face.node.attrs.faceBox, ...secondOf(face.node.attrs.atSeconds) });
   }
 
-  // As many crops per decode as EMS takes in one call. The crops of a call succeed or fail
-  // together: the failure modes are the source's (unreadable, unreachable EMS), not a crop's.
-  for (let start = 0; start < wanted.length; start += MAX_RENDITION_TARGETS) {
-    const chunk = wanted.slice(start, start + MAX_RENDITION_TARGETS);
+  // A call's worth at a time, so a failure names only the crops it cut short. The crops of a call
+  // succeed or fail together: the failure modes are the source's (unreadable, unreachable EMS),
+  // not a crop's.
+  for (const chunk of perCall(wanted)) {
     const reason = await writeFaceCrops(cmd, source, chunk, attrs);
     for (const crop of chunk) {
       if (reason) result.failed.push({ path: crop.output, reason });
