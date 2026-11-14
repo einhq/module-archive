@@ -2,7 +2,7 @@ import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.t
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
-import { ActionIcon, Box, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Button, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect, type Signal, signal } from '@preact/signals-react';
 import { useSignals } from '@preact/signals-react/runtime';
@@ -537,9 +537,9 @@ export function MediaLightbox() {
   useEffect(() => setFollowedFacePath(null), [media?.id]);
   const followedFace = media?.type === 'video' ? currentDetails?.faces.find((face) => face.facePath === followedFacePath && face.atSeconds !== undefined) : undefined;
   const personFace = currentDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
-  // The text in a photo, which the "more" menu lays over it, and opens for writing, in a dialog
-  // beside the picture, to whoever may write the photo. Shown, it stays on from picture to
-  // picture, for paging through scanned pages, until the lightbox closes.
+  // The text in a photo, which the bar's text button lays over it, and the "more" menu opens for
+  // writing, in a dialog beside the picture, to whoever may write the photo. Each picture opens
+  // without it.
   const pictureText = withDetails && media?.type === 'photo' ? currentDetails?.content : undefined;
   const mayWriteText = withDetails && media?.type === 'photo' && currentDetails !== null && canEdit;
   const [showText, setShowText] = useState(false);
@@ -560,6 +560,9 @@ export function MediaLightbox() {
   }, [setTranscript]);
   /** A dialog over the picture has the keys: the text's or the subtitles'. */
   const editing = editingText || editingSubtitles;
+  useEffect(() => {
+    setShowText(false);
+  }, [media?.path]);
   useEffect(() => {
     if (isOpen) return;
     // Opened again, it reads the details anew: other pages change files too.
@@ -1742,7 +1745,7 @@ export function MediaLightbox() {
       : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
-  // The faces, text, fullscreen and download rows that open the "more" menu, on a phone and a desktop
+  // The faces, text editing, fullscreen and download rows that open the "more" menu, on a phone and a desktop
   // alike, with icons the size of the rows around them. Download saves the original file, as the
   // file name in the details does.
   const viewMenuItems = (iconSize: number) => (
@@ -1755,15 +1758,6 @@ export function MediaLightbox() {
           onClick={toggleFacesVisible}
         >
           {faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
-        </Menu.Item>
-      )}
-      {pictureText && (
-        <Menu.Item
-          leftSection={<TablerIcon name='text-scan-2' size={iconSize} color={showText ? 'var(--mrx-accent)' : undefined} />}
-          rightSection={isMobile ? undefined : <Kbd size='xs'>t</Kbd>}
-          onClick={toggleText}
-        >
-          {showText ? 'Hide text' : 'Show text'}
         </Menu.Item>
       )}
       {mayWriteText && (
@@ -2420,6 +2414,24 @@ export function MediaLightbox() {
                   </Group>
                 )}
             </SwipeInfo>
+
+            {!slideshow && pictureText && (
+              <Tooltip label={`${showText ? 'Hide' : 'Show'} the text in the picture (t)`} withArrow disabled={isMobile}>
+                <Button
+                  variant='subtle'
+                  color='gray'
+                  size={isMobile ? 'md' : 'sm'}
+                  px={isMobile ? 'xs' : 'sm'}
+                  style={{ flexShrink: 0 }}
+                  leftSection={<TablerIcon name='text-scan-2' size={barIconSize} color={showText ? 'var(--mrx-accent)' : 'white'} />}
+                  onClick={toggleText}
+                  aria-pressed={showText}
+                  c='white'
+                >
+                  {showText ? 'Hide text' : 'Show text'}
+                </Button>
+              </Tooltip>
+            )}
 
             {!slideshow && !isMobile && mayStar && (
               <Tooltip label={starred ? 'Unfavourite (s)' : 'Favourite (s)'} withArrow>
