@@ -14,42 +14,37 @@
   flex: 1 1 0;
 }
 
-/* As the app's navbar foot, mirrored: the button sits on the side towards the picture. */
+/* As the app's navbar foot, mirrored: the collapse button on the side towards the picture, the
+ * chat at the other end. */
 .mrx-lightbox-side-foot {
   flex: none;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   padding: 0 var(--mantine-spacing-md) var(--mantine-spacing-md);
 }
 
-.mrx-lightbox-side-foot > .mantine-Divider-root {
-  align-self: stretch;
-}
-
-/* A tab sticking out of the right edge, low but clear of the bar beneath the picture. */
+/* A tab sticking out of the right edge, low but clear of the bar beneath the picture, its buttons
+ * stacked. */
 .mrx-lightbox-side-handle {
   position: absolute;
   right: 0;
   bottom: 88px;
   z-index: 11;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 44px;
+  gap: 2px;
+  padding: 4px 2px 4px 4px;
   border-radius: var(--mantine-radius-md) 0 0 var(--mantine-radius-md);
   background: var(--mrx-surface-raised);
-  color: var(--mantine-color-text);
   box-shadow: var(--mantine-shadow-sm);
   opacity: 0.85;
-  transition: opacity var(--mrx-dur-fast) var(--mrx-ease), width var(--mrx-dur-fast) var(--mrx-ease);
+  transition: opacity var(--mrx-dur-fast) var(--mrx-ease);
 }
 
 .mrx-lightbox-side-handle:hover,
-.mrx-lightbox-side-handle:focus-visible {
+.mrx-lightbox-side-handle:focus-within {
   opacity: 1;
-  width: 42px;
 }
 
 /* The map is a stacking context of its own, under the enlarge button over it; while its layer

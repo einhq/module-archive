@@ -2,7 +2,7 @@ import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.t
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
-import { ActionIcon, Box, Divider, Group, Kbd, Menu, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { ActionIcon, Box, Divider, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect, type Signal, signal } from '@preact/signals-react';
 import { useSignals } from '@preact/signals-react/runtime';
@@ -257,6 +257,9 @@ const LIGHTBOX_ICON_SIZE = 18;
  */
 /** Where a phone's toolbar floats: under the date's pill, two lines high, and the menu button beside it. */
 const MOBILE_TOOLBAR_TOP_PX = 68;
+
+/** The icons on the details panel's surface and its handle, as Mantine's subtle grey buttons have them. */
+const SIDE_ICON_COLOR = 'var(--mantine-color-gray-light-color)';
 
 const TAKEN_PILL_STYLE: CSSProperties = {
   pointerEvents: 'auto',
@@ -1813,8 +1816,9 @@ export function MediaLightbox() {
       : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
-  // The details panel's file actions, floating over the picture when asked for.
-  const mayUseToolbar = withDetails && (canEdit || actionPath !== undefined);
+  // The details panel's file actions, floating over the picture when asked for: for whoever may
+  // change the file, not for one who may only add it to an album.
+  const mayUseToolbar = withDetails && canEdit;
   // The bar's actions, in the order they give way to the "more" menu from the end: the favourite
   // and the slideshow, the view switches (the text, the faces, fullscreen), the toolbar and the
   // download, which saves the original file as the file name in the details does. Each keeps its
@@ -1843,14 +1847,13 @@ export function MediaLightbox() {
   if (pictureText) {
     viewActions.push({ key: 'text', icon: 'text-scan-2', label: showText ? 'Hide text' : 'Show text', shortcut: 't', on: showText, onClick: toggleTextVisible });
   }
-  if (media?.type === 'photo' || media?.type === 'video') {
+  if ((media?.type === 'photo' || media?.type === 'video') && faceCount > 0) {
     viewActions.push({
       key: 'faces',
       icon: 'user-square-rounded',
-      label: faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`,
+      label: `${showFaces ? 'Unpin' : 'Pin'} faces`,
       shortcut: 'f',
-      on: showFaces && faceCount > 0,
-      disabled: faceCount === 0,
+      on: showFaces,
       onClick: toggleFacesVisible,
     });
   }
@@ -2083,6 +2086,9 @@ export function MediaLightbox() {
                 position='bottom-end'
                 shadow='md'
                 withinPortal
+                // Fixed: laid out once before it is placed, an absolute dropdown would stick out past
+                // the screen's right edge, and a phone widens the page to it, the picture with it.
+                floatingStrategy='fixed'
                 keepMounted
                 keepMountedMode='display-none'
                 // Sized for a thumb, like the bar's buttons.
@@ -2126,10 +2132,12 @@ export function MediaLightbox() {
                 <TablerIcon name='x' size={22} color='white' />
               </ActionIcon>
 
-              {/* The drawer (the chat): the top bar's button is covered. */}
-              <Group gap={4} wrap='nowrap'>
-                <DrawerButtons />
-              </Group>
+              {/* The drawer (the chat), where there are no details to keep it: the top bar's button is covered. */}
+              {!withDetails && (
+                <Group gap={4} wrap='nowrap'>
+                  <DrawerButtons />
+                </Group>
+              )}
             </Group>
           )}
 
@@ -2616,13 +2624,19 @@ export function MediaLightbox() {
             </ActionIcon>
           )}
 
-          {/* Hidden, the details leave a handle at the right edge, above the bar, to bring them back. */}
+          {
+            /* Hidden, the details leave a handle at the right edge, above the bar, to bring them back,
+              with the chat's button beneath while the chat is closed. */
+          }
           {withDetails && !slideshow && !isMobile && !sidebarOpen && (
-            <Tooltip label='Show details (i)' position='left' withArrow>
-              <UnstyledButton className='mrx-lightbox-side-handle' aria-label='Show details' onClick={() => toggleSheet(true)}>
-                <TablerIcon name='layout-sidebar-right-expand' size={20} />
-              </UnstyledButton>
-            </Tooltip>
+            <Box className='mrx-lightbox-side-handle'>
+              <Tooltip label='Show details (i)' position='left' withArrow>
+                <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Show details' onClick={() => toggleSheet(true)}>
+                  <TablerIcon name='layout-sidebar-right-expand' size={20} />
+                </ActionIcon>
+              </Tooltip>
+              <DrawerButtons color={SIDE_ICON_COLOR} hideOpen tooltipPosition='left' />
+            </Box>
           )}
         </Box>
 
@@ -2689,11 +2703,17 @@ export function MediaLightbox() {
                 {detailsSidebar(false)}
                 <Box className='mrx-lightbox-side-foot'>
                   <Divider mb='xs' />
-                  <Tooltip label='Hide details (i)' position='left' withArrow>
-                    <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Hide details' onClick={() => toggleSheet(false)}>
-                      <TablerIcon name='layout-sidebar-right-collapse' size={20} />
-                    </ActionIcon>
-                  </Tooltip>
+                  <Group justify='space-between' wrap='nowrap'>
+                    <Tooltip label='Hide details (i)' position='left' withArrow>
+                      <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Hide details' onClick={() => toggleSheet(false)}>
+                        <TablerIcon name='layout-sidebar-right-collapse' size={20} />
+                      </ActionIcon>
+                    </Tooltip>
+                    {/* The chat, at the other end, while it is closed. */}
+                    <Group gap={4} wrap='nowrap'>
+                      <DrawerButtons color={SIDE_ICON_COLOR} hideOpen />
+                    </Group>
+                  </Group>
                 </Box>
               </Box>
             </Box>
