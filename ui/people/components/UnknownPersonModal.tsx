@@ -227,7 +227,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
   };
 
   /**
-   * A recording opens in the lightbox, which is drawn under every dialog. Over the lightbox this
+   * A recording opens in the lightbox, which is drawn under a dialog opened over it. Over the lightbox this
    * dialog goes before its list changes; over a page it steps aside while the lightbox is up and
    * comes back as it was.
    */
