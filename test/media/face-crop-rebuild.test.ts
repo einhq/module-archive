@@ -1,5 +1,5 @@
 /**
- * What `writeFaceCrop` asks EMS for, per source family.
+ * What `writeFaceCrop` asks EMS for, per source family, and what a call EMS refuses leaves uncut.
  *
  * No dimensions travel: the box is a fraction of the display frame, and EMS resolves it against
  * the raster it decodes (a RAW's sensor image, a HEIC libheif has already turned). What the
@@ -7,7 +7,7 @@
  */
 
 import { assertEquals } from '@std/assert';
-import type { Command } from '@ein/client';
+import { type Command, STEP_EXIT_TEMPORARY } from '@ein/client';
 import { startStubEms } from '@ems/testing';
 import { CROP_PADDING, CROP_QUALITY, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { MAX_RENDITION_TARGETS } from '@ems/client';
@@ -91,7 +91,7 @@ Deno.test('every crop of an image is one call, and one decode', async () => {
       { output: '/albums/a/IMG_8197.JPG/faces/face-0/image.avif', box: BOX },
       { output: '/albums/a/IMG_8197.JPG/faces/manual-0/image.avif', box: { x: 0.2, y: 0.3, width: 0.4, height: 0.6 } },
     ], { mimetype: 'image/jpeg' });
-    assertEquals(failure, null);
+    assertEquals(failure, []);
     assertEquals(stub.requests.length, 1);
     const targets = stub.requests[0].body.targets as { output: { path: string }; crop: unknown }[];
     assertEquals(targets.map((t) => t.output.path), ['/host/albums/a/IMG_8197.JPG/faces/face-0/image.avif', '/host/albums/a/IMG_8197.JPG/faces/manual-0/image.avif']);
@@ -102,7 +102,7 @@ Deno.test('every crop of an image is one call, and one decode', async () => {
       '/albums/a/IMG_8197.JPG/faces/face-0/image.avif': { width: 300, height: 384 },
       '/albums/a/IMG_8197.JPG/faces/manual-0/image.avif': { width: 301, height: 384 },
     });
-    assertEquals(await writeFaceCrops(fakeCommand(stub.url, synced), '/albums/a/x.jpg', [], {}), null);
+    assertEquals(await writeFaceCrops(fakeCommand(stub.url, synced), '/albums/a/x.jpg', [], {}), []);
     assertEquals(stub.requests.length, 1);
   } finally {
     await stub.close();
@@ -148,10 +148,10 @@ Deno.test('the detector cuts a group photo, or a crowded video frame, in calls E
     Array.from({ length: 39 }, (_, i) => ({ output: `${source}/regions/face-${i}/image.avif`, box: BOX, ...(at !== undefined ? { at } : {}) }));
   try {
     const photo: string[] = [];
-    assertEquals(await writeFaceCrops(fakeCommand(stub.url, photo), '/albums/a/group.jpg', crops('/albums/a/group.jpg'), { mimetype: 'image/jpeg' }), null);
+    assertEquals(await writeFaceCrops(fakeCommand(stub.url, photo), '/albums/a/group.jpg', crops('/albums/a/group.jpg'), { mimetype: 'image/jpeg' }), []);
     assertEquals(photo.length, 39);
     const video: string[] = [];
-    assertEquals(await writeFaceCrops(fakeCommand(stub.url, video), '/albums/a/MVI_1.MP4', crops('/albums/a/MVI_1.MP4', 4), { mimetype: 'video/mp4' }), null);
+    assertEquals(await writeFaceCrops(fakeCommand(stub.url, video), '/albums/a/MVI_1.MP4', crops('/albums/a/MVI_1.MP4', 4), { mimetype: 'video/mp4' }), []);
     assertEquals(video.length, 39);
     assertEquals(stub.requests.map((r) => [r.op, (r.body.targets as unknown[]).length]), [
       ['image.renditions', 32],
@@ -180,11 +180,35 @@ Deno.test('a video crop is cut from the frame its face was seen in, one call a f
       { output: '/albums/a/MVI_1.MP4/regions/face-1/image.avif', box: BOX, at: 40 },
       { output: '/albums/a/MVI_1.MP4/regions/face-2/image.avif', box: { x: 0.6, y: 0.2, width: 0.1, height: 0.2 }, at: 12.5 },
     ], { mimetype: 'video/mp4', angle: 90 });
-    assertEquals(failure, null);
+    assertEquals(failure, []);
     assertEquals(stub.requests.map((r) => [r.op, r.body.at, (r.body.targets as unknown[]).length]), [['video.poster', 12.5, 2], ['video.poster', 40, 1]]);
     assertEquals(stub.requests[0].body.file, { path: '/host/albums/a/MVI_1.MP4', angle: 90, mirror: false, mimetype: 'video/mp4' });
     assertEquals(synced.length, 3);
     assertEquals(updated['/albums/a/MVI_1.MP4/regions/face-1/image.avif'], { width: 200, height: 220 });
+  } finally {
+    await stub.close();
+  }
+});
+
+Deno.test('a video frame EMS cannot cut fails its own crops, and the other frames are cut', async () => {
+  const stub = startStubEms({
+    ops: {
+      'video.poster': (body) =>
+        body.at === 40 ? { error: { code: 'deadline_exceeded', message: 'too slow' }, status: 504 } : {
+          result: { frame: { width: 1920, height: 1080 }, t: body.at, targets: (body.targets as unknown[]).map(() => ({ path: '', width: 200, height: 220, bytes: 1 })) },
+        },
+    },
+  });
+  const synced: string[] = [];
+  try {
+    const failed = await writeFaceCrops(fakeCommand(stub.url, synced), '/albums/a/MVI_1.MP4', [
+      { output: '/albums/a/MVI_1.MP4/regions/face-0/image.avif', box: BOX, at: 12.5 },
+      { output: '/albums/a/MVI_1.MP4/regions/face-1/image.avif', box: BOX, at: 40 },
+      { output: '/albums/a/MVI_1.MP4/regions/face-2/image.avif', box: BOX, at: 61 },
+    ], { mimetype: 'video/mp4' });
+    assertEquals(failed.map((failure) => [failure.output, failure.code]), [['/albums/a/MVI_1.MP4/regions/face-1/image.avif', STEP_EXIT_TEMPORARY]]);
+    assertEquals(stub.requests.map((r) => r.body.at), [12.5, 40, 61]);
+    assertEquals(synced, ["file-sync '/albums/a/MVI_1.MP4/regions/face-0/image.avif'", "file-sync '/albums/a/MVI_1.MP4/regions/face-2/image.avif'"]);
   } finally {
     await stub.close();
   }

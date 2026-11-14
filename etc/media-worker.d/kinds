@@ -1,13 +1,15 @@
 # The archive's work in the media pool that takes the media worker's CPU budget, a kind a line, in
 # the order offered. `reserve` puts a kind in the share kept for the work after ingest
 # (CFG_CPU_NON_ENTRY_SLOTS). Every kind a pipeline step names with `requires: cpu` is here, or it
-# never runs (test/media/model-slots.test.ts). None calls EMS, so none names `ops=`, and only the
-# primary's worker takes them. They run on EiN's own data:
-unzip                    # a zip in a staging category expanded                (priority 100)
-interpret reserve        # what a file's metadata means: its time and place    (priority 100)
-face-assign reserve      # a kNN over every known face embedding               (priority 40)
-speaker-assign reserve   # the same for a recording's voices                   (priority 40)
-dedupe reserve           # a staged file's duplicate findings                  (priority 20)
-retime reserve           # staged files dated by a category's rules            (priority 20)
-organize reserve         # a staging category's groups planned again           (priority 15)
-sidecars reserve         # Takeout and XMP sidecars paired with files          (priority 30)
+# never runs (test/media/model-slots.test.ts). `ops=` names the EMS ops a kind's steps call: a
+# worker for another EMS instance takes the kind only when that instance serves them all. The rest
+# call no EMS, and only the primary's worker takes them; they run on EiN's own data:
+unzip                                                 # a zip in a staging category expanded                (priority 100)
+interpret reserve                                     # what a file's metadata means: its time and place    (priority 100)
+face-crops reserve ops=image.renditions,video.poster  # the face crops detection could not cut              (priority 100/50)
+face-assign reserve                                   # a kNN over every known face embedding               (priority 40)
+speaker-assign reserve                                # the same for a recording's voices                   (priority 40)
+dedupe reserve                                        # a staged file's duplicate findings                  (priority 20)
+retime reserve                                        # staged files dated by a category's rules            (priority 20)
+organize reserve                                      # a staging category's groups planned again           (priority 15)
+sidecars reserve                                      # Takeout and XMP sidecars paired with files          (priority 30)

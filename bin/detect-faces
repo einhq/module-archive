@@ -309,16 +309,20 @@ const detectFaces = async (cmd: Command): CmdReturn => {
   }
 
   // Every crop of a photo from one decode, a video's from one decode per frame, once every face
-  // node holds its box. A failure is reported and the faces kept: the crop nodes are left behind
-  // empty on purpose — that is what `generate-derivatives --size face` looks for, and rebuilding
-  // them needs only the boxes this run has already stored. Failing the whole detection over the
-  // crops would throw away the vectors too, which are the expensive half and the half that came
-  // out fine.
+  // node holds its box. A crop that fails is reported and its face kept: its node is left behind
+  // empty on purpose — the pipelines' `face-crops` step after this one cuts it again
+  // (`regenerate-face-crops --missing`), from the box this run has already stored. Failing the
+  // whole detection over the crops would throw away the vectors too, which are the expensive half
+  // and the half that came out fine.
   log('cropping faces', { count: crops.length });
-  const cropFailure = await writeFaceCrops(cmd, inputPath, crops, { mimetype, angle, mirror });
-  if (cropFailure) await cmd.writeError(`detect-faces: face crops: ${cropFailure}\n`);
-  log('faces cropped', { count: crops.length, cropped: !cropFailure });
-  if (verbose && !cropFailure) { for (const crop of crops) await cmd.writeLn(`  Created face crop: ${crop.output}`); }
+  const uncut = await writeFaceCrops(cmd, inputPath, crops, { mimetype, angle, mirror });
+  for (const failure of uncut) await cmd.writeError(`detect-faces: face crop ${failure.output}: ${failure.reason}\n`);
+  log('faces cropped', { count: crops.length, uncut: uncut.length });
+  if (verbose) {
+    for (const crop of crops) {
+      if (!uncut.some((failure) => failure.output === crop.output)) await cmd.writeLn(`  Created face crop: ${crop.output}`);
+    }
+  }
 
   log('all faces processed', { written: writtenFaces.length, continued: plan.continues.size });
 

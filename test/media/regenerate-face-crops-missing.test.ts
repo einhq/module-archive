@@ -7,6 +7,7 @@
 import { ALBUMS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
+import { STEP_EXIT_TEMPORARY } from '@ein/client';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -77,6 +78,14 @@ Deno.test({
       const result = await client.exec(`regenerate-face-crops --missing --file ${image}`);
       assertEquals(result.success, false);
       assertEquals(result.error?.includes(cropPath), true, `no attempt on ${cropPath}: ${result.error}`);
+    });
+
+    // Run as the face pipelines' step after detection, it waits for EMS rather than fail the crops.
+    await t.step('a crop EMS cannot cut yet is asked for again', async () => {
+      const image = await makeImage('waiting.jpg', 1);
+
+      const result = await client.exec(`regenerate-face-crops --missing --file ${image}; echo "exit $?"`, { json: false });
+      assertEquals(String(result.data).trim().split('\n').at(-1), `exit ${STEP_EXIT_TEMPORARY}`);
     });
 
     /**

@@ -11,7 +11,7 @@
 
 import type { Command } from '@ein/client';
 import { shq } from '@ein/client';
-import { MAX_RENDITION_TARGETS, poster, renditions } from '@ems/client';
+import { MAX_RENDITION_TARGETS, poster, renditions, stepExitCode } from '@ems/client';
 import { FACE_CROP_MIMETYPE, FACE_CROP_NAME, faceCropTarget } from '@archive/media/face-crop';
 import { REGION_TYPE, regionsPathOf } from '@archive/media/regions';
 import { type FracBox, normalizeAngle, normalizeMirror } from '@media/orientation';
@@ -57,10 +57,17 @@ const perCall = <T>(items: ReadonlyArray<T>): T[][] => {
 };
 
 /**
- * Cut every crop of one image and record their bytes. Returns a message on failure, null on
- * success — for all of them at once. A photo's crops are one `image.renditions` call per
- * `MAX_RENDITION_TARGETS` of them, a video's one `video.poster` call per frame they are cut from
- * and as many targets; a group photo has more faces than one call takes.
+ * A crop that was not cut, and why. `code` is what a step that wanted it exits with
+ * (`stepExitCode`): `STEP_EXIT_TEMPORARY` when EMS could not do it yet, so asking again later can.
+ */
+export type FaceCropFailure = { output: string; reason: string; code: number };
+
+/**
+ * Cut every crop of one image and record their bytes; returns the crops that were not cut. A
+ * photo's crops are one `image.renditions` call per `MAX_RENDITION_TARGETS` of them, a video's one
+ * `video.poster` call per frame they are cut from and as many targets; a group photo has more faces
+ * than one call takes. A call that fails fails its own crops and no others: a video's other frames
+ * are still cut.
  *
  * Calls of many crops rather than one per face, because each call decodes the whole source. The stored
  * boxes are fractions of the display frame and dimension-free; EMS turns them into pixels
@@ -77,33 +84,37 @@ export const writeFaceCrops = async (
   input: string,
   crops: ReadonlyArray<FaceCropRequest>,
   source: FaceSourceAttrs,
-): Promise<string | null> => {
-  if (crops.length === 0) return null;
+): Promise<FaceCropFailure[]> => {
   const frame = {
     angle: normalizeAngle(source.angle),
     mirror: normalizeMirror(source.mirror),
     ...(source.mimetype ? { mimetype: source.mimetype } : {}),
   };
+  const cut = (group: FaceCropRequest[]) => {
+    const targets = group.map((crop) => faceCropTarget(crop.output, crop.box));
+    if (!isVideo(source)) return renditions(cmd, input, { ...frame, targets });
+    const at = group[0].at;
+    return poster(cmd, input, { ...frame, ...(at !== undefined ? { at } : {}), targets });
+  };
+
+  const failed: FaceCropFailure[] = [];
   const written = [];
-  try {
-    if (isVideo(source)) {
-      for (const group of byFrame(crops).flatMap(perCall)) {
-        const at = group[0].at;
-        const cut = await poster(cmd, input, { ...frame, ...(at !== undefined ? { at } : {}), targets: group.map((crop) => faceCropTarget(crop.output, crop.box)) });
-        written.push(...cut.targets);
-      }
-    } else {
-      for (const group of perCall(crops)) {
-        written.push(...(await renditions(cmd, input, { ...frame, targets: group.map((crop) => faceCropTarget(crop.output, crop.box)) })).targets);
-      }
+  for (const group of isVideo(source) ? byFrame(crops).flatMap(perCall) : perCall(crops)) {
+    try {
+      written.push(...(await cut(group)).targets);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      failed.push(...group.map((crop) => ({ output: crop.output, reason, code: stepExitCode(error) })));
     }
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
   }
 
+  const uncut = new Set(failed.map((failure) => failure.output));
   for (const crop of crops) {
+    if (uncut.has(crop.output)) continue;
     const sync = await cmd.execute(`file-sync ${shq(crop.output)}`);
-    if (sync.code !== 0) return `${crop.output}: ${sync.stderr.trim() || 'file-sync failed'}`;
+    if (sync.code === 0) continue;
+    failed.push({ output: crop.output, reason: sync.stderr.trim() || 'file-sync failed', code: 1 });
+    uncut.add(crop.output);
   }
 
   // The encoded size, as EMS reports it, so a grid of crops can lay itself out before a single
@@ -111,15 +122,16 @@ export const writeFaceCrops = async (
   // its own.
   for (const rendition of written) {
     if (!(rendition.width > 0 && rendition.height > 0)) continue;
+    if (uncut.has(rendition.path)) continue;
     await cmd.sys.vfs.update(cmd.access, rendition.path, { attrs: { width: rendition.width, height: rendition.height } });
   }
 
-  return null;
+  return failed;
 };
 
-/** `writeFaceCrops` for one face; `at` is a video region's `atSeconds`. */
-export const writeFaceCrop = (cmd: Command, input: string, output: string, box: FracBox, source: FaceSourceAttrs, at?: unknown): Promise<string | null> =>
-  writeFaceCrops(cmd, input, [{ output, box, ...secondOf(at) }], source);
+/** `writeFaceCrops` for one face; `at` is a video region's `atSeconds`. Returns why it was not cut, or null. */
+export const writeFaceCrop = async (cmd: Command, input: string, output: string, box: FracBox, source: FaceSourceAttrs, at?: unknown): Promise<string | null> =>
+  (await writeFaceCrops(cmd, input, [{ output, box, ...secondOf(at) }], source))[0]?.reason ?? null;
 
 /** `{ at }` for a usable second, nothing otherwise. */
 const secondOf = (at: unknown): { at?: number } => typeof at === 'number' && Number.isFinite(at) ? { at } : {};
@@ -127,8 +139,8 @@ const secondOf = (at: unknown): { at?: number } => typeof at === 'number' && Num
 type FaceCropRebuild = {
   /** Crop paths written by this pass. */
   written: string[];
-  /** Crop paths whose rebuild failed, with the reason. */
-  failed: { path: string; reason: string }[];
+  /** Crop paths whose rebuild failed, with the reason and the exit code a step would give it (`FaceCropFailure`). */
+  failed: { path: string; reason: string; code: number }[];
   /** Faces left alone because their crop already had bytes. */
   present: number;
   /** Faces with no usable box. */
@@ -213,15 +225,11 @@ export const rebuildFaceCrops = async (
     wanted.push({ output: cropPath, box: face.node.attrs.faceBox, ...secondOf(face.node.attrs.atSeconds) });
   }
 
-  // A call's worth at a time, so a failure names only the crops it cut short. The crops of a call
-  // succeed or fail together: the failure modes are the source's (unreadable, unreachable EMS),
-  // not a crop's.
-  for (const chunk of perCall(wanted)) {
-    const reason = await writeFaceCrops(cmd, source, chunk, attrs);
-    for (const crop of chunk) {
-      if (reason) result.failed.push({ path: crop.output, reason });
-      else result.written.push(crop.output);
-    }
+  const failed = await writeFaceCrops(cmd, source, wanted, attrs);
+  for (const crop of wanted) {
+    const failure = failed.find((entry) => entry.output === crop.output);
+    if (failure) result.failed.push({ path: crop.output, reason: failure.reason, code: failure.code });
+    else result.written.push(crop.output);
   }
 
   return result;

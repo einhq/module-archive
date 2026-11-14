@@ -42,9 +42,9 @@ waits for rather than by a shared DAG:
    | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
    | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
    | `media-camera-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
-   | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100)                                                                                            |
-   | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50)                                                                                             |
-   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10)                                                                                          |
+   | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100), then `face-crops` (1 cpu)                                                                 |
+   | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50), then `face-crops` (1 cpu)                                                                  |
+   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10), then `face-crops` (1 cpu)                                                               |
    | `media-face-assign`    | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
    | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                                           | pool `diarize` (1 model slot; priority 30)                                                                                           |
    | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
@@ -142,9 +142,12 @@ waits for rather than by a shared DAG:
    **Face crops are the archive's own renditions.** A face crop (`regions/<region>/image.avif`)
    is a rendition like any other — it carries the source's `sourceId` and routes to the volatile
    tier — but it is _written_ by `detect-faces`, from a box rather than from a role of the table,
-   and it lands under the region instead of under `thumbnails/`. `regenerate-face-crops
-   --missing` cuts the crops an interrupted write left without bytes, or never created, which on
-   a multi-week crawl would otherwise stay as placeholders for good; without `--missing` it
+   and it lands under the region instead of under `thumbnails/`. A call EMS fails fails its own
+   crops and no others (a video's other frames are still cut), and the face pipelines' `face-crops`
+   step after detection, `regenerate-face-crops --missing --file`, cuts the ones left empty,
+   waiting while EMS cannot. `regenerate-face-crops --missing` cuts the crops an interrupted
+   write left without bytes, or never created, which on a multi-week crawl would otherwise stay
+   as placeholders for good; without `--missing` it
    re-encodes crops that exceed `MAX_CROP_DIMENSION`, both in resumable pages over the whole
    corpus. Turning a picture (`file-set-orientation`) cuts every one of its crops again, from the
    remapped boxes. Rebuilding needs no detection — the box is stored on the region and a crop is

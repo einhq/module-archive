@@ -6,15 +6,22 @@
  * This deliberately does not re-run detection: the box is the input, and a crop is reproducible
  * from it forever. A finite page plus an explicit cursor makes a corpus pass safe to resume in
  * production without one shell invocation owning tens of thousands of EMS calls.
+ *
+ * `--missing --file` is the face pipelines' `face-crops` step after `detect-faces`: the crops
+ * detection could not cut are cut there, and while EMS cannot cut them the step waits for it
+ * (`STEP_EXIT_TEMPORARY`) rather than leave them empty.
  */
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, verifyAccess } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq, STEP_EXIT_INPUT, STEP_EXIT_TEMPORARY, verifyAccess } from '@ein/client';
 import { FACE_CROP_NAME, faceCropRect, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { rebuildFaceCrops, writeFaceCrop } from '@archive/media/face-crop-rebuild';
 import { displayDims, type FracBox } from '@media/orientation';
 import { imageOfRegion, REGION_TYPE } from '@archive/media/regions';
 
 const DEFAULT_LIMIT = 100;
+
+/** The batch of `--file`: more faces than any one picture or video has, so the batch is all of them. */
+const FILE_LIMIT = 10_000;
 
 type FaceAttrs = {
   fileId?: string;
@@ -47,7 +54,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
 
   if (await reportUnknownFlags(cmd, unknown)) return 1;
 
-  const limit = flags.limit === undefined ? DEFAULT_LIMIT : Number(flags.limit);
+  const limit = flags.limit === undefined ? (flags.file ? FILE_LIMIT : DEFAULT_LIMIT) : Number(flags.limit);
   if (!Number.isInteger(limit) || limit <= 0) {
     await cmd.writeError(`regenerate-face-crops: invalid --limit '${flags.limit}'\n`);
     return 1;
@@ -95,6 +102,8 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     refused: 0,
     failed: 0,
   };
+  /** The exit codes of the failed crops (`FaceCropFailure`). */
+  const codes = new Set<number>();
 
   // `--missing`: the faces whose crop has no bytes or no node, cut again per picture, as
   // `detect-faces` cuts them, so a picture's crops come from one decode.
@@ -157,6 +166,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     const reason = await writeFaceCrop(cmd, sourcePath, cropPath, attrs.faceBox, file.attrs, attrs.atSeconds);
     if (reason) {
       stats.failed++;
+      codes.add(1);
       await cmd.writeError(`regenerate-face-crops: ${cropPath}: ${reason}\n`);
       continue;
     }
@@ -170,6 +180,7 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     stats.regenerated += rebuilt.written.length;
     for (const failure of rebuilt.failed) {
       stats.failed++;
+      codes.add(failure.code);
       await cmd.writeError(`regenerate-face-crops: ${failure.path}: ${failure.reason}\n`);
     }
   }
@@ -197,6 +208,10 @@ const regenerateFaceCrops = async (cmd: Command): CmdReturn => {
     }
   }
 
+  // Run as a pipeline step: a crop EMS could not cut yet is asked for again once it can, and one
+  // whose source EMS cannot read is not asked for again.
+  if (codes.has(STEP_EXIT_TEMPORARY)) return STEP_EXIT_TEMPORARY;
+  if (stats.refused === 0 && codes.size === 1 && codes.has(STEP_EXIT_INPUT)) return STEP_EXIT_INPUT;
   return stats.failed > 0 || stats.refused > 0 ? 1 : 0;
 };
 
@@ -206,7 +221,7 @@ regenerateFaceCrops.spec = {
   description: 'Re-encode a bounded, resumable batch of existing face crops without re-detecting faces, or with --missing cut the ones that have no bytes',
   args: [],
   flags: [
-    { name: 'limit', type: 'string' as const, description: `maximum face nodes to scan (default ${DEFAULT_LIMIT})` },
+    { name: 'limit', type: 'string' as const, description: `maximum face nodes to scan (default ${DEFAULT_LIMIT}, every face of --file)` },
     { name: 'after', type: 'string' as const, description: 'resume after the node id returned as nextAfter' },
     { name: 'file', type: 'path' as const, description: 'restrict the batch to one source image' },
     { name: 'missing', type: 'bool' as const, description: 'cut the crops an interrupted write left without bytes, or never created, instead' },

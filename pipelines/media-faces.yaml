@@ -29,6 +29,16 @@ steps:
     requires:
       models: 1
 
+  face-crops:
+    command: regenerate-face-crops --missing --file $NODE_PATH
+    description: The face crops detection could not cut, cut again from their boxes
+    dependsOn: [detect-faces]
+    pool: media
+    kind: face-crops
+    priority: 100
+    requires:
+      cpu: 1
+
 options:
   maxAttempts: 3
   priority: 10
