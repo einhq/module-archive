@@ -138,7 +138,7 @@ const SWIPE_FRAME_GAP_PX = 10;
  * A desktop step: the old picture fades out where it is while the new one fades in, starting
  * with its leading edge on the old one's and sliding to the centre.
  */
-const STEP_FADE_MS = 260;
+const STEP_FADE_MS = 130;
 const STEP_SLIDE_MS = 420;
 const STEP_SLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 /** How long a click on a side waits for a second one, which makes it a double-click that zooms. */
