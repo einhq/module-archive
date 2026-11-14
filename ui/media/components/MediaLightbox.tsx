@@ -537,7 +537,7 @@ export function MediaLightbox() {
   const stepOutgoingRef = useRef<HTMLDivElement | null>(null);
   /** The incoming picture's start, from the step that switched to it, for the layout effect to slide from. */
   const stepFromRef = useRef<number | null>(null);
-  /** The running step's animations, finished at once by the next step. */
+  /** The running step's animations, stopped where they are by the next step. */
   const stepAnimationsRef = useRef<Animation[]>([]);
   /** When the last desktop step began, for a quick one after it to skip the slide (`STEP_RUN_MS`). */
   const lastStepAtRef = useRef(-Infinity);
@@ -1557,9 +1557,9 @@ export function MediaLightbox() {
     swipeTimerRef.current = globalThis.setTimeout(complete, finish.handoverMs);
   }, [moveSwipe, settleSwipe, showSwipeInfo]);
 
-  /** Land a running desktop step at once: the copy gone, the new picture centred. */
-  const finishStep = () => {
-    for (const animation of stepAnimationsRef.current) animation.finish();
+  /** Stop a running desktop step where it is: its animations dropped and the last copy gone. */
+  const stopStep = () => {
+    for (const animation of stepAnimationsRef.current) animation.cancel();
     stepAnimationsRef.current = [];
     stepOutgoingRef.current?.replaceChildren();
   };
@@ -1570,15 +1570,18 @@ export function MediaLightbox() {
    * its leading edge where the old one's was: the left edge going forward, the right going back.
    */
   const stepDesktop = (action: 'next' | 'previous') => {
-    finishStep();
     const surface = gestureSurfaceRef.current;
     const list = albumMediaList.value;
     const target = list[action === 'next' ? nextMediaIndex(currentMediaIndex.value, list.length) : prevMediaIndex(currentMediaIndex.value, list.length)];
     if (!surface || !target) return;
     const area = surface.getBoundingClientRect();
-    // The old picture as drawn: its element's box, zoom included, less `contain`'s letterboxing.
+    // The old picture as drawn this moment: its element's box, zoom and a running step's slide
+    // included, less `contain`'s letterboxing, at the opacity a running fade has it at. The copy
+    // goes on from there, so a step in the middle of another stops it where it is.
     const picture = mediaRef.current;
     const box = (picture ?? zoomBoxRef.current)?.getBoundingClientRect();
+    const shown = zoomBoxRef.current ? Number(getComputedStyle(zoomBoxRef.current).opacity) : 1;
+    stopStep();
     let old = box ? { left: box.left, right: box.right } : { left: area.left, right: area.right };
     const pixels = picture instanceof HTMLVideoElement
       ? { w: picture.videoWidth, h: picture.videoHeight }
@@ -1613,7 +1616,7 @@ export function MediaLightbox() {
           transform: 'none',
         });
         layer.replaceChildren(copy);
-        const fade = copy.animate([{ opacity: 1 }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
+        const fade = copy.animate([{ opacity: shown }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
         void fade.finished.then(() => copy.remove(), () => {});
         stepAnimationsRef.current.push(fade);
       }
