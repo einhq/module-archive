@@ -35,6 +35,7 @@ import { forgetSubjectFacets, useSubjectFacets } from '../../hooks/useSubjectFac
 import { hasAnyFilter, MEDIA_KIND_FILTERS, type SearchFilters, type SearchKind, useAccessIds, useSearchBox } from '@ein/ui/hooks';
 import { useAlbumDirectories } from '../hooks/useAlbumDirectories.ts';
 import { useAlbumInfo } from '../hooks/useAlbumInfo.ts';
+import { useAlbumPeople } from '../hooks/useAlbumPeople.ts';
 import { useAlbumRaw } from '../hooks/useAlbumRaw.ts';
 import { useAlbumSeries } from '../hooks/useAlbumSeries.ts';
 import { useFreeEventDate } from '../hooks/useFreeEventDate.ts';
@@ -44,7 +45,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { albumRoute, stagingGroupRoute } from '../lib/album-path.ts';
 import { MediaFilters } from '../components/MediaFilters.tsx';
 import { mediaTypeFilter } from '../signals/album.ts';
-import { canWrite, filtersFromParams, isGuest, type MentionKind, paramsFromFilters, shq } from '@ein/ui/lib';
+import { canWrite, filtersFromParams, isGuest, type MentionChoices, type MentionKind, paramsFromFilters, shq } from '@ein/ui/lib';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useLocations } from '../../location/hooks/useLocations.ts';
 import { LOCATIONS_ROOT } from '@archive/paths';
@@ -123,6 +124,9 @@ export default function AlbumDetailPage() {
 
   const albumPath = id ? decodeURIComponent(id) : '/';
   // Another album — a folder, the next in a series — opens with the box as its address has it.
+  // `@` offers the people in this album's pictures, not everyone in the archive.
+  const albumPeople = useAlbumPeople(albumPath);
+  const choices = useMemo((): MentionChoices => ({ person: albumPeople }), [albumPeople]);
   const { setText, setMentions } = box;
   useEffect(() => {
     setText(filters.query ?? '');
@@ -338,6 +342,8 @@ export default function AlbumDetailPage() {
           }
           : undefined}
         // None when they would be empty, so a phone floats nothing over the other tabs' foot.
+        // The search box above the tabs, where it has the width.
+        controlsAbove
         controls={tab === 'media'
           ? (
             // How the media are searched, narrowed and ordered: the other tabs have no list for them to act on.
@@ -353,6 +359,7 @@ export default function AlbumDetailPage() {
                     onCommit={box.commit}
                     filters={filters}
                     kinds={MENTION_KINDS}
+                    choices={choices}
                     size='md'
                     placeholder='Search the album — words, or type @ to pick someone'
                     shortPlaceholder='Search the album…'
