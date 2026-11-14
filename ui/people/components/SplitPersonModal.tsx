@@ -104,7 +104,7 @@ export function SplitPersonModal({ personPath, personName, named, onClose, onApp
    * and see whether the same person keeps turning up.
    */
   const [photo, setPhoto] = useState<PhotoView | null>(null);
-  const openPhoto = (group: number[], face: number) => setPhoto(photoViewOf(group.map((member) => faces[member]), faces[face].filePath));
+  const openPhoto = (group: number[], face: number) => setPhoto(photoViewOf(group.map((member) => faces[member]), faces[face]));
 
   /** A group of one is nobody: it can stay or go, but it cannot become a person. */
   const isSingleton = (group: number[]) => group.length === 1;

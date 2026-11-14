@@ -340,7 +340,7 @@ export function UnknownPersonModal({ person, named, onClose, onName, onMerge, on
       picked={selection.isSelected(face.facePath)}
       picking={selection.active}
       onPick={(event) => pick(face.facePath, event)}
-      onOpen={() => setPhoto(photoViewOf(among, face.filePath))}
+      onOpen={() => setPhoto(photoViewOf(among, face))}
     />
   );
 

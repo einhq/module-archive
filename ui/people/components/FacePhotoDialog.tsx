@@ -1,25 +1,31 @@
-import { ActionIcon, Badge, Box, Center, Image } from '@mantine/core';
+import { ActionIcon, Badge, Box, Center, Group, Image, Tooltip } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
-import { useState } from 'react';
+import { type RefObject, useRef, useState } from 'react';
 import { Dialog, TablerIcon } from '@ein/ui/components';
 import { usePhone } from '@ein/ui/hooks';
-import { displayDims, gridUrl, mediaItemFrom, posterUrl } from '@ein/ui/lib';
+import { displayDims, gridUrl, lightboxRoute, mediaItemFrom, posterUrl } from '@ein/ui/lib';
 import type { PersonFace } from '../hooks/usePersonFaces.ts';
+import { useContentRect } from '../../media/hooks/useContentRect.ts';
+import { useMediaDetails } from '../../media/hooks/useMediaDetails.ts';
 import { formatTaken } from '../../media/lib/capture-time.ts';
 
 /** The photos behind a row of faces, one for each photo, and the one on show. */
 export type PhotoView = { photos: PersonFace[]; index: number };
 
-/** The photos behind faces, in the order shown and without repeats, opened at `filePath`'s; null when it has none. */
-export function photoViewOf(among: PersonFace[], filePath?: string): PhotoView | null {
+/**
+ * The photos behind faces, in the order shown and without repeats, opened at `opened`'s; null when
+ * it has none. A photo stands for the first of the faces in it, but the one opened for `opened`
+ * itself, whose box is the one marked.
+ */
+export function photoViewOf(among: PersonFace[], opened: PersonFace): PhotoView | null {
   const seen = new Set<string>();
   const photos: PersonFace[] = [];
   for (const face of among) {
     if (!face.filePath || seen.has(face.filePath)) continue;
     seen.add(face.filePath);
-    photos.push(face);
+    photos.push(face.filePath === opened.filePath ? opened : face);
   }
-  const index = photos.findIndex((face) => face.filePath === filePath);
+  const index = photos.findIndex((face) => face.filePath === opened.filePath);
   return index < 0 ? null : { photos, index };
 }
 
@@ -34,8 +40,9 @@ type Props = {
  * video to play): the lightbox is a
  * full-screen route under every dialog, so a review cannot open it and stay in sight. The arrows,
  * and ← →, step through the photos of the faces it was opened among — a group, or all of them —
- * so a group can be checked by flicking through it. Escape is the review dialog's to hand out:
- * it closes this first.
+ * so a group can be checked by flicking through it. A photo shows every face box on it, the face
+ * it was opened for marked, and the link beside the title opens it in the lightbox in a new tab.
+ * Escape is the review dialog's to hand out: it closes this first.
  */
 export function FacePhotoDialog({ view, onChange }: Props) {
   const phone = usePhone();
@@ -54,7 +61,24 @@ export function FacePhotoDialog({ view, onChange }: Props) {
       onClose={() => onChange(null)}
       title={face?.filePath?.split('/').pop()}
       subtitle={face?.takenAt ? formatTaken(face.takenAt, undefined, { weekday: 'short' }) : undefined}
-      aside={count > 1 && view && <Badge variant='light'>{view.index + 1} of {count}</Badge>}
+      aside={face?.filePath && (
+        <Group gap='xs' wrap='nowrap'>
+          {count > 1 && view && <Badge variant='light'>{view.index + 1} of {count}</Badge>}
+          <Tooltip label='Open in the lightbox, in a new tab'>
+            <ActionIcon
+              component='a'
+              href={lightboxRoute(face.filePath)}
+              target='_blank'
+              rel='noopener'
+              variant='subtle'
+              color='gray'
+              aria-label='Open in the lightbox, in a new tab'
+            >
+              <TablerIcon name='external-link' size={18} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      )}
       icon={face?.mimetype?.startsWith('video/') ? 'movie' : 'photo'}
       pattern='media'
       size='min(1200px, 96vw)'
@@ -82,10 +106,12 @@ export function FacePhotoDialog({ view, onChange }: Props) {
 }
 
 /**
- * The photo's display size, then its grid size, then nothing: a file may have neither. A video is
- * played from its poster. Keyed by the file, so each starts at the top.
+ * The photo's display size, then its grid size, then nothing: a file may have neither, with its
+ * face boxes over it. A video is played from its poster, without boxes: a video's box holds at one
+ * moment only. Keyed by the file, so each starts at the top.
  */
 function Photo({ face }: { face: PersonFace }) {
+  const imageRef = useRef<HTMLImageElement>(null);
   // The stored size picks the largest display size the photo has, rather than one never made for a small source.
   const ref = { path: face.filePath!, mimetype: face.mimetype, width: face.width, height: face.height, angle: face.angle };
   const item = mediaItemFrom(ref);
@@ -104,16 +130,58 @@ function Photo({ face }: { face: PersonFace }) {
   if (fallback > 1) return <TablerIcon name='photo-off' size={48} color='var(--mantine-color-gray-6)' />;
   const src = fallback === 0 ? item.fullUrl : gridUrl(item.path, true);
   return (
-    <Image
-      src={src}
-      srcSet={fallback === 0 && item.srcSet ? item.srcSet : undefined}
-      sizes='min(1200px, 96vw)'
-      alt=''
-      fit='contain'
-      w='100%'
-      h='100%'
-      onError={() => setFallback((current) => current + 1)}
-    />
+    <>
+      <Image
+        ref={imageRef}
+        src={src}
+        srcSet={fallback === 0 && item.srcSet ? item.srcSet : undefined}
+        sizes='min(1200px, 96vw)'
+        alt=''
+        fit='contain'
+        w='100%'
+        h='100%'
+        onError={() => setFallback((current) => current + 1)}
+      />
+      <FaceBoxes imageRef={imageRef} filePath={face.filePath!} marked={face.facePath} />
+    </>
+  );
+}
+
+/**
+ * Every face box on the photo, as the lightbox has them (`media-details`), over where the
+ * contained picture is drawn: the marked face in the accent with the rest of the photo dimmed, the
+ * others faint, a tag dashed. They are only a picture: the arrows and the photo stay reachable.
+ */
+function FaceBoxes({ imageRef, filePath, marked }: { imageRef: RefObject<HTMLImageElement | null>; filePath: string; marked: string }) {
+  const { details, detailsPath } = useMediaDetails(filePath);
+  const rect = useContentRect(imageRef);
+  if (!rect || detailsPath !== filePath || !details) return null;
+  return (
+    <Box style={{ position: 'absolute', ...rect, pointerEvents: 'none', overflow: 'hidden' }}>
+      {details.faces.map((face) => {
+        const active = face.facePath === marked;
+        return (
+          <Box
+            key={face.facePath}
+            data-face-path={face.facePath}
+            data-marked={active || undefined}
+            title={face.personName ?? 'Unassigned'}
+            style={{
+              position: 'absolute',
+              left: `${face.faceBox.x * 100}%`,
+              top: `${face.faceBox.y * 100}%`,
+              width: `${face.faceBox.width * 100}%`,
+              height: `${face.faceBox.height * 100}%`,
+              border: `2px ${face.hasFace ? 'solid' : 'dashed'} ${active ? 'var(--mrx-accent)' : 'rgba(255,255,255,0.6)'}`,
+              borderRadius: 3,
+              boxShadow: active ? '0 0 0 9999px rgba(0,0,0,0.35)' : undefined,
+              zIndex: active ? 1 : undefined,
+              animation: 'mrx-fade-in 150ms ease-out',
+            }}
+          />
+        );
+      })}
+    </Box>
   );
 }
 
