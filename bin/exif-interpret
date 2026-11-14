@@ -30,6 +30,7 @@ import { inboxOf } from '@archive/staging/duplicates';
 import { categoryTimeRules, timeStamps } from '@archive/staging/category';
 import { readSidecar, sidecarPoint, sidecarTime, writePosition } from '@archive/media/paired-sidecar';
 import { INTERPRETED_AT_ATTR } from '@archive/media/event-rules';
+import { isPlace } from '@archive/location/location-link';
 
 const exifInterpret = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -96,11 +97,13 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
   // The `position` child follows the GPS fix, else the paired sidecar's place where it is believed
   // (`sidecarPoint`: not a digitized copy's Google location, unless a person set it), and is removed
   // when neither gives one — the map and proximity search read the child, so it must not outlive the
-  // fix. A digitized copy's GPS fix is where it was scanned. A person's position (`positionManual`)
-  // outranks anything in the bytes, and is left as it is.
+  // fix. A fix at 0,0 is a camera's "no fix" (`isPlace`), as good as none. A digitized copy's GPS
+  // fix is where it was scanned. A person's position (`positionManual`) outranks anything in the
+  // bytes, and is left as it is.
   const positionPath = `${inputPath}/position`;
   const digitized = (stamps ? stamps.digitized : attrs.digitized) === true;
-  const point = gps?.latitude !== undefined && gps.longitude !== undefined && !digitized ? { lat: gps.latitude, lng: gps.longitude } : sidecarPoint(sidecar, digitized);
+  const fix = gps?.latitude !== undefined && gps.longitude !== undefined && isPlace(gps.latitude, gps.longitude) ? { lat: gps.latitude, lng: gps.longitude } : undefined;
+  const point = fix && !digitized ? fix : sidecarPoint(sidecar, digitized);
   if (attrs.positionManual !== undefined) {
     if (verbose) await cmd.writeLn('Location is a manual override, leaving it');
   } else if (point) {

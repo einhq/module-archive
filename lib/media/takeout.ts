@@ -30,6 +30,7 @@
  */
 
 import type { SidecarPoint, TakeoutAlbumSidecar, TakeoutSidecar } from '@archive/media/api';
+import { isPlace } from '@archive/location/location-link';
 
 type Json = Record<string, unknown>;
 
@@ -51,9 +52,7 @@ const pointOf = (value: unknown): SidecarPoint | undefined => {
   if (!isObject(value)) return undefined;
   const lat = Number(value.latitude);
   const lng = Number(value.longitude);
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return undefined;
-  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined;
-  return { lat, lng };
+  return isPlace(lat, lng) ? { lat, lng } : undefined;
 };
 
 /** Two points closer than this, in degrees, are one: Google rounds the two copies differently. */

@@ -21,6 +21,13 @@ export const LOCATION_LINK_NAME = 'location';
 /** The `position` child holding a file's GPS fix, or a location's shape. */
 export const POSITION_CHILD = 'position';
 
+/**
+ * Whether `lat`, `lng` is a place a file can be put: finite, on Earth, and not 0,0 — what a camera,
+ * phone or Google writes for a picture it has no fix for, never a place anyone took one.
+ */
+export const isPlace = (lat: number, lng: number): boolean =>
+  Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+
 /** `attrs.linkSource` on a link `location-link-media` made from a shape. */
 export const SHAPE_LINK_SOURCE = 'shape';
 

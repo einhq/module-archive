@@ -132,6 +132,23 @@ Deno.test({
       assertEquals(await hasLocation(file), false, 'the position child follows `where`');
     });
 
+    await t.step('a fix at 0,0 places nothing, and interpreting again removes one placed there', async () => {
+      const file = `${dir}/nofix.jpg`;
+      await cmd.shouldSucceed(`mkfile ${file}`);
+      dump = { ...FULL_DUMP, GPSLatitude: 0, GPSLongitude: 0 };
+      await cmd.shouldSucceed(`${env} exif-extract ${file} && exif-interpret ${file}`);
+      assertEquals((await exifOf(file)).where, undefined);
+      assertEquals(await hasLocation(file), false);
+
+      // An exif node read before 0,0 was refused still carries it, and its position child with it.
+      await vfs.update(ADMIN_ACCESS, `${file}/metadata/exif`, { attrs: { where: { gps: { longitude: 0, latitude: 0 } } } });
+      await vfs.ensure(ADMIN_ACCESS, 'position', file, 'position');
+      await client.exec(`echo '{"lat":0,"lng":0}' > ${file}/position`);
+      assertEquals(await hasLocation(file), true);
+      await cmd.shouldSucceed(`exif-interpret ${file}`);
+      assertEquals(await hasLocation(file), false);
+    });
+
     await t.step('a video replaced by a still loses its duration and codec', async () => {
       const file = `${dir}/clip.mov`;
       await cmd.shouldSucceed(`mkfile ${file}`);

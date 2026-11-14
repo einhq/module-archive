@@ -22,6 +22,7 @@
 
 import { isCaptureTime, isRawExtension, isRawMimetype } from '@ein/client';
 import type { SidecarPoint, XmpSidecar } from '@archive/media/api';
+import { isPlace } from '@archive/location/location-link';
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 
@@ -83,7 +84,7 @@ export const parseXmp = (packet: string): XmpSidecar | undefined => {
   if (created && first(packet, 'scan:DateApproximate')?.toLowerCase() === 'true') sidecar.approximate = true;
   const lat = coordinate(first(packet, 'exif:GPSLatitude'), 'S');
   const lng = coordinate(first(packet, 'exif:GPSLongitude'), 'W');
-  if (lat !== undefined && lng !== undefined && !(lat === 0 && lng === 0) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+  if (lat !== undefined && lng !== undefined && isPlace(lat, lng)) {
     sidecar.where = { lat, lng } satisfies SidecarPoint;
   }
   const title = first(packet, 'dc:title');

@@ -128,6 +128,13 @@ Deno.test({
       assertEquals(loc.lng, -122.3493);
     });
 
+    await t.step('0,0 and a point off the Earth are refused, and the position stays', async () => {
+      await cmd.shouldFail(`file-set-position ${ALBUMS_ROOT}/a/files/p.jpg --lat=0 --lng=0`);
+      await cmd.shouldFail(`file-set-position ${ALBUMS_ROOT}/a/files/p.jpg --lat=91 --lng=10`);
+      const loc = await client.execJson<{ lat: number; lng: number }>(`cat ${ALBUMS_ROOT}/a/files/p.jpg/position`);
+      assertEquals([loc.lat, loc.lng], [47.6205, -122.3493]);
+    });
+
     await t.step('with the flags, several files take one place in one call', async () => {
       await cmd.shouldSucceed(`file-set-position ${ALBUMS_ROOT}/a/files/p.jpg ${ALBUMS_ROOT}/a/files/q.jpg --lat=60.1 --lng=-5.2`);
       for (const name of ['p.jpg', 'q.jpg']) {

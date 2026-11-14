@@ -26,7 +26,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { resolve } from '@std/path';
-import { LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
+import { isPlace, LOCATION_LINK_NAME, POSITION_CHILD } from '@archive/location/location-link';
 
 /** Takes away a file's manual point, its `position` child and its `location` link. */
 const clearPosition = async (cmd: Command, path: string): Promise<void> => {
@@ -80,6 +80,10 @@ const fileSetPosition = async (cmd: Command): CmdReturn => {
   const lng = Number(lngArg);
   if (targets.length === 0 || latArg === undefined || lngArg === undefined || Number.isNaN(lat) || Number.isNaN(lng)) {
     await cmd.writeError('file-set-position: usage: file-set-position <file>... --lat=<n> --lng=<n>\n');
+    return 1;
+  }
+  if (!isPlace(lat, lng)) {
+    await cmd.writeError(`file-set-position: ${lat},${lng} is no place: latitude within ±90, longitude within ±180, and not 0,0\n`);
     return 1;
   }
 
