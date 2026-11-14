@@ -1626,7 +1626,9 @@ export function MediaLightbox() {
         height: `${box.height}px`,
       });
       layer.replaceChildren(canvas);
-      copyFade = canvas.animate([{ opacity: shown }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
+      // Eased in, the new picture's fade eased out: one holds on while the other arrives, so the two
+      // never both stand half through over the black and the picture does not dim between them.
+      copyFade = canvas.animate([{ opacity: shown }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-in', fill: 'forwards' });
       copyFade.pause();
       void copyFade.finished.then(() => canvas.remove(), () => {});
       stepAnimationsRef.current.push(copyFade);
@@ -1655,7 +1657,7 @@ export function MediaLightbox() {
     const box = zoomBoxRef.current;
     stepFromRef.current = null;
     if (!step || !box) return;
-    const fadeIn = box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' });
+    const fadeIn = box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-out' });
     fadeIn.pause();
     stepAnimationsRef.current.push(fadeIn);
     const picture = mediaRef.current;
