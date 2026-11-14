@@ -135,14 +135,14 @@ export function Comments({ comments, writable, onAdd, onRemove, onDialog }: {
         <>
           {
             /* Send sits inside the box, in its bottom-right corner as on the chat page, so it
-              stays beside the last line as the box grows. Enter is a new line; Ctrl+Enter posts. */
+              stays beside the last line as the box grows. Enter posts; Shift+Enter is a new line. */
           }
           <Textarea
             ref={boxRef}
             value={draft}
             onChange={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 void post();
               }

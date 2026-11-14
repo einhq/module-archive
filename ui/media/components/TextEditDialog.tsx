@@ -84,7 +84,9 @@ export function TextEditDialog({ opened, media, reloadToken, text, truncated, on
             value={draft}
             onChange={(event) => setDraft(event.currentTarget.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && current.whole && !saving) void save();
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              if (current.whole && !saving) void save();
             }}
             disabled={!current.whole || saving}
             data-autofocus
@@ -97,7 +99,7 @@ export function TextEditDialog({ opened, media, reloadToken, text, truncated, on
           {error && <Text size='sm' c='red' mt='xs'>{error}</Text>}
         </Box>
       </Box>
-      <DialogActions hint='Ctrl+Enter saves. Empty text removes it.'>
+      <DialogActions hint='Enter saves; Shift+Enter is a new line. Empty text removes it.'>
         <Button variant='default' onClick={onClose} disabled={saving}>Cancel</Button>
         <Button onClick={() => void save()} loading={saving} disabled={!current.whole}>Save</Button>
       </DialogActions>
