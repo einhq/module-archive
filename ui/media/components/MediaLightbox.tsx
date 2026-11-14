@@ -141,6 +141,8 @@ const SWIPE_FRAME_GAP_PX = 10;
 const STEP_FADE_MS = 130;
 const STEP_SLIDE_MS = 420;
 const STEP_SLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+/** A step this soon after the last one is part of a run through the pictures: it fades, without the slide. */
+const STEP_RUN_MS = 500;
 /** How long a click on a side waits for a second one, which makes it a double-click that zooms. */
 const SIDE_CLICK_WAIT_MS = 250;
 /** How many pictures on each side of the shown one are fetched ahead, so a run of quick swipes finds them there. */
@@ -537,6 +539,8 @@ export function MediaLightbox() {
   const stepFromRef = useRef<number | null>(null);
   /** The running step's animations, finished at once by the next step. */
   const stepAnimationsRef = useRef<Animation[]>([]);
+  /** When the last desktop step began, for a quick one after it to skip the slide (`STEP_RUN_MS`). */
+  const lastStepAtRef = useRef(-Infinity);
   /** The half of the picture the mouse is over, whose arrow shows; null off the picture. */
   const [hoverSide, setHoverSide] = useState<'previous' | 'next' | null>(null);
   const sideClickTimerRef = useRef<number | undefined>(undefined);
@@ -1618,22 +1622,27 @@ export function MediaLightbox() {
     const dims = (target.type === 'photo' || target.type === 'video') ? displayDims(target) : undefined;
     const width = dims ? dims.width * Math.min(area.width / dims.width, area.height / dims.height) : area.width;
     const centredLeft = area.left + (area.width - width) / 2;
-    stepFromRef.current = action === 'next' ? old.left - centredLeft : old.right - (centredLeft + width);
+    const now = performance.now();
+    const inRun = now - lastStepAtRef.current < STEP_RUN_MS;
+    lastStepAtRef.current = now;
+    stepFromRef.current = inRun ? 0 : action === 'next' ? old.left - centredLeft : old.right - (centredLeft + width);
     if (action === 'next') goToNextMedia();
     else goToPrevMedia();
   };
 
-  // Fades the stepped-to picture in and slides it from where `stepDesktop` put its leading edge,
-  // in the paint that first shows it.
+  // Fades the stepped-to picture in and slides it from where `stepDesktop` put its leading edge, in
+  // the paint that first shows it; a step in a quick run has no slide.
   useLayoutEffect(() => {
     const from = stepFromRef.current;
     const box = zoomBoxRef.current;
     stepFromRef.current = null;
     if (from === null || !box) return;
-    stepAnimationsRef.current.push(
-      box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' }),
-      box.animate([{ transform: `translate3d(${from}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], { duration: STEP_SLIDE_MS, easing: STEP_SLIDE_EASING }),
-    );
+    stepAnimationsRef.current.push(box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' }));
+    if (from !== 0) {
+      stepAnimationsRef.current.push(
+        box.animate([{ transform: `translate3d(${from}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], { duration: STEP_SLIDE_MS, easing: STEP_SLIDE_EASING }),
+      );
+    }
   }, [media?.id]);
 
   // The arrow buttons and keys step: on a desktop by `stepDesktop`; elsewhere the neighbour slides
