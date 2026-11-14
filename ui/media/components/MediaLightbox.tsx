@@ -134,8 +134,15 @@ const SHEET_VARIABLES = [
   '--sheet-transition',
 ];
 const SWIPE_FRAME_GAP_PX = 10;
-/** The settled frame's inset on a desktop, each side, clear of the arrows. */
-const SWIPE_ARROW_INSET_PX = 60;
+/**
+ * A desktop step: the old picture fades out where it is while the new one fades in, starting
+ * with its leading edge on the old one's and sliding to the centre.
+ */
+const STEP_FADE_MS = 260;
+const STEP_SLIDE_MS = 420;
+const STEP_SLIDE_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+/** How long a click on a side waits for a second one, which makes it a double-click that zooms. */
+const SIDE_CLICK_WAIT_MS = 250;
 /** How many pictures on each side of the shown one are fetched ahead, so a run of quick swipes finds them there. */
 const PRELOAD_DEPTH = 3;
 /** How many of those load at once, nearest first, so the next picture does not share the line with the farthest. */
@@ -524,6 +531,15 @@ export function MediaLightbox() {
   }, [showSwipeInfo]);
   // Switches to the swiped-to media; run early when a new touch lands before the slide is over.
   const swipePendingRef = useRef<(() => void) | null>(null);
+  /** Where the old picture fades out during a desktop step (`stepDesktop`), a copy of its pixels. */
+  const stepOutgoingRef = useRef<HTMLDivElement | null>(null);
+  /** The incoming picture's start, from the step that switched to it, for the layout effect to slide from. */
+  const stepFromRef = useRef<number | null>(null);
+  /** The running step's animations, finished at once by the next step. */
+  const stepAnimationsRef = useRef<Animation[]>([]);
+  /** The half of the picture the mouse is over, whose arrow shows; null off the picture. */
+  const [hoverSide, setHoverSide] = useState<'previous' | 'next' | null>(null);
+  const sideClickTimerRef = useRef<number | undefined>(undefined);
   const [stackPreview, setStackPreview] = useState<MediaItem | null>(null);
   const [stackBusy, setStackBusy] = useState(false);
   const [addingFace, setAddingFace] = useState(false);
@@ -1114,6 +1130,7 @@ export function MediaLightbox() {
   const resetZoom = useCallback(() => setZoom(ZOOM_IDENTITY, true), [setZoom]);
 
   const handleDoubleClick = useCallback((event: MouseEvent<HTMLElement>) => {
+    globalThis.clearTimeout(sideClickTimerRef.current);
     // Two taps arrive here too, as the browser's synthesized dblclick, after the touch
     // handler has already toggled on them; acting twice would undo it. A video's double-click
     // is its player's: fullscreen.
@@ -1536,9 +1553,92 @@ export function MediaLightbox() {
     swipeTimerRef.current = globalThis.setTimeout(complete, finish.handoverMs);
   }, [moveSwipe, settleSwipe, showSwipeInfo]);
 
-  // The arrow buttons and keys slide the neighbour in as a released swipe would. A press while
-  // a slide is still running lands that one and steps on at once, so holding a key or clicking
-  // quickly is never held back by the animation.
+  /** Land a running desktop step at once: the copy gone, the new picture centred. */
+  const finishStep = () => {
+    for (const animation of stepAnimationsRef.current) animation.finish();
+    stepAnimationsRef.current = [];
+    stepOutgoingRef.current?.replaceChildren();
+  };
+
+  /**
+   * A desktop step. The old picture's pixels are copied where they are drawn and fade out there;
+   * the step renders the new media, and the layout effect below fades it in from `stepFromRef`,
+   * its leading edge where the old one's was: the left edge going forward, the right going back.
+   */
+  const stepDesktop = (action: 'next' | 'previous') => {
+    finishStep();
+    const surface = gestureSurfaceRef.current;
+    const list = albumMediaList.value;
+    const target = list[action === 'next' ? nextMediaIndex(currentMediaIndex.value, list.length) : prevMediaIndex(currentMediaIndex.value, list.length)];
+    if (!surface || !target) return;
+    const area = surface.getBoundingClientRect();
+    // The old picture as drawn: its element's box, zoom included, less `contain`'s letterboxing.
+    const picture = mediaRef.current;
+    const box = (picture ?? zoomBoxRef.current)?.getBoundingClientRect();
+    let old = box ? { left: box.left, right: box.right } : { left: area.left, right: area.right };
+    const pixels = picture instanceof HTMLVideoElement
+      ? { w: picture.videoWidth, h: picture.videoHeight }
+      : picture
+      ? { w: picture.naturalWidth, h: picture.naturalHeight }
+      : null;
+    if (box && pixels && pixels.w > 0 && pixels.h > 0) {
+      const drawn = pixels.w * Math.min(box.width / pixels.w, box.height / pixels.h);
+      old = { left: box.left + (box.width - drawn) / 2, right: box.right - (box.width - drawn) / 2 };
+    }
+    const layer = stepOutgoingRef.current;
+    if (picture && box && layer) {
+      let copy: HTMLElement | null = null;
+      if (picture instanceof HTMLImageElement) copy = picture.cloneNode() as HTMLImageElement;
+      else if (pixels && pixels.w > 0) {
+        const canvas = document.createElement('canvas');
+        canvas.width = pixels.w;
+        canvas.height = pixels.h;
+        canvas.getContext('2d')?.drawImage(picture, 0, 0);
+        copy = canvas;
+      }
+      if (copy) {
+        copy.removeAttribute('class');
+        copy.setAttribute('aria-hidden', 'true');
+        Object.assign(copy.style, {
+          position: 'absolute',
+          left: `${box.left - area.left}px`,
+          top: `${box.top - area.top}px`,
+          width: `${box.width}px`,
+          height: `${box.height}px`,
+          objectFit: 'contain',
+          transform: 'none',
+        });
+        layer.replaceChildren(copy);
+        const fade = copy.animate([{ opacity: 1 }, { opacity: 0 }], { duration: STEP_FADE_MS, easing: 'ease-out', fill: 'forwards' });
+        void fade.finished.then(() => copy.remove(), () => {});
+        stepAnimationsRef.current.push(fade);
+      }
+    }
+    // The new picture centred in the surface, as `contain` will draw it.
+    const dims = (target.type === 'photo' || target.type === 'video') ? displayDims(target) : undefined;
+    const width = dims ? dims.width * Math.min(area.width / dims.width, area.height / dims.height) : area.width;
+    const centredLeft = area.left + (area.width - width) / 2;
+    stepFromRef.current = action === 'next' ? old.left - centredLeft : old.right - (centredLeft + width);
+    if (action === 'next') goToNextMedia();
+    else goToPrevMedia();
+  };
+
+  // Fades the stepped-to picture in and slides it from where `stepDesktop` put its leading edge,
+  // in the paint that first shows it.
+  useLayoutEffect(() => {
+    const from = stepFromRef.current;
+    const box = zoomBoxRef.current;
+    stepFromRef.current = null;
+    if (from === null || !box) return;
+    stepAnimationsRef.current.push(
+      box.animate([{ opacity: 0 }, { opacity: 1 }], { duration: STEP_FADE_MS, easing: 'ease-in' }),
+      box.animate([{ transform: `translate3d(${from}px, 0, 0)` }, { transform: 'translate3d(0, 0, 0)' }], { duration: STEP_SLIDE_MS, easing: STEP_SLIDE_EASING }),
+    );
+  }, [media?.id]);
+
+  // The arrow buttons and keys step: on a desktop by `stepDesktop`; elsewhere the neighbour slides
+  // in as a released swipe would. A press while a slide is still running lands that one and steps
+  // on at once, so holding a key or clicking quickly is never held back by the animation.
   const slideToMedia = useCallback((action: 'next' | 'previous') => {
     if (swipePendingRef.current) {
       globalThis.clearTimeout(swipeTimerRef.current);
@@ -1553,8 +1653,34 @@ export function MediaLightbox() {
       else goToPrevMedia();
       return;
     }
+    if (!isMobile) {
+      if (action === 'next' ? hasNextMedia.value : hasPrevMedia.value) stepDesktop(action);
+      return;
+    }
     finishPhotoSwipe(action, 0, 0);
-  }, [finishPhotoSwipe, slideshow]);
+  }, [finishPhotoSwipe, isMobile, slideshow]);
+
+  /** The half of the surface a point is on, the picture's centre between them. */
+  const sideAt = (clientX: number): 'previous' | 'next' => {
+    const area = gestureSurfaceRef.current?.getBoundingClientRect();
+    return area && clientX < area.left + area.width / 2 ? 'previous' : 'next';
+  };
+
+  /**
+   * A desktop click on a half of the picture steps that way, as its arrow does, once the wait for a
+   * double-click (a zoom) is over. Not on a zoomed picture, which a drag pans, nor while drawing a
+   * face; on a video, a recording or a document only off the player, which has clicks of its own.
+   */
+  const handleSurfaceClick = (event: MouseEvent<HTMLElement>) => {
+    if (slideshow) return stopSlideshow();
+    globalThis.clearTimeout(sideClickTimerRef.current);
+    if (isMobile || event.detail > 1 || lastPointerTypeRef.current === 'touch' || addingFace || isGestureControl(event.target)) return;
+    if (zoomable && isZoomed(zoomRef.current)) return;
+    const offPlayer = event.target === event.currentTarget || event.target === zoomBoxRef.current;
+    if (media?.type !== 'photo' && !offPlayer) return;
+    const side = sideAt(event.clientX);
+    sideClickTimerRef.current = globalThis.setTimeout(() => slideToMedia(side), SIDE_CLICK_WAIT_MS);
+  };
 
   useEffect(() => {
     if (!swipeTarget || swipeTarget.id !== media?.id) return;
@@ -1957,7 +2083,7 @@ export function MediaLightbox() {
   const handoff = swipeTarget?.id === media.id;
   if (handoff) swipePreviews.push({ item: swipeTarget, location: 'handoff' });
   const swipeList = albumMediaList.value;
-  if (!slideshow && swipeList.length > 1 && (media.type !== 'photo' || loadedPhotoId === media.id || handoff)) {
+  if (isMobile && !slideshow && swipeList.length > 1 && (media.type !== 'photo' || loadedPhotoId === media.id || handoff)) {
     const previous = swipeList[prevMediaIndex(currentMediaIndex.value, swipeList.length)];
     const next = swipeList[nextMediaIndex(currentMediaIndex.value, swipeList.length)];
     if (previous && next && previous.id === next.id) swipePreviews.push({ item: next, location: 'either' });
@@ -1970,7 +2096,7 @@ export function MediaLightbox() {
   // (the surface less the desktop arrows' inset) rather than pixels measured at render: when the
   // details sidebar opens or closes the surface resizes without a render, and a measured width
   // would leave the neighbours peeking in at its edges.
-  const swipeFrame = `(100% + ${isMobile ? 0 : 2 * SWIPE_ARROW_INSET_PX}px + ${SWIPE_FRAME_GAP_PX}px)`;
+  const swipeFrame = `(100% + ${SWIPE_FRAME_GAP_PX}px)`;
   const swipePreviewBase = {
     previous: `calc(-1 * ${swipeFrame})`,
     next: `calc${swipeFrame}`,
@@ -2177,10 +2303,14 @@ export function MediaLightbox() {
             ref={attachGestureSurface}
             data-lightbox-gesture-surface
             data-lightbox-zoom={zoomed ? zoom.scale.toFixed(2) : undefined}
-            onClick={slideshow ? stopSlideshow : undefined}
+            onClick={handleSurfaceClick}
             onDoubleClick={handleDoubleClick}
             onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
+            onPointerMove={(event) => {
+              if (!isMobile && event.pointerType !== 'touch') setHoverSide(sideAt(event.clientX));
+              handlePointerMove(event);
+            }}
+            onPointerLeave={() => setHoverSide(null)}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             // A drag on a zoomed picture pans it; the browser's own image drag would take over.
@@ -2209,7 +2339,6 @@ export function MediaLightbox() {
               // The swipe preview is absolutely positioned against this surface. Keep mobile
               // media full-width too, otherwise it visibly shrinks when the preview hands off
               // to the settled frame.
-              padding: isMobile ? 0 : `0 ${SWIPE_ARROW_INSET_PX}px`,
               minHeight: 0,
               position: 'relative',
               overflow: 'hidden',
@@ -2221,6 +2350,9 @@ export function MediaLightbox() {
               userSelect: zoomed ? 'none' : undefined,
             }}
           >
+            {/* A desktop step's old picture, fading out beneath the new one (`stepDesktop`). */}
+            <Box ref={stepOutgoingRef} data-lightbox-step-outgoing style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }} />
+
             {swipePreviews.filter(({ item }) => item.type === 'photo' || item.type === 'video').map(({ item, location }) => {
               const token = versionOf(item.path);
               return (
@@ -2229,8 +2361,8 @@ export function MediaLightbox() {
                   data-lightbox-swipe-preview={location}
                   style={{
                     position: 'absolute',
-                    // Over the same box as the settled frame, inside the desktop arrows' inset.
-                    inset: isMobile ? 0 : `0 ${SWIPE_ARROW_INSET_PX}px`,
+                    // Over the same box as the settled frame.
+                    inset: 0,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -2455,6 +2587,36 @@ export function MediaLightbox() {
                 />
               )}
             </Box>
+            {/* Over the picture, the arrow of the half the mouse is on, where there is a file that way. */}
+            {!slideshow && !isMobile && ([['previous', 'chevron-left', 'Previous media'], ['next', 'chevron-right', 'Next media']] as const).map((
+              [side, icon, label],
+            ) =>
+              hoverSide === side && (side === 'next' ? hasNextMedia.value : hasPrevMedia.value) && (
+                <ActionIcon
+                  key={side}
+                  variant='subtle'
+                  color='gray'
+                  size='xl'
+                  onClick={() => slideToMedia(side)}
+                  aria-label={label}
+                  style={{
+                    position: 'absolute',
+                    zIndex: 9,
+                    [side === 'previous' ? 'left' : 'right']: 12,
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    width: 48,
+                    height: 64,
+                    borderRadius: 'var(--mantine-radius-md)',
+                    background: 'rgba(0, 0, 0, 0.55)',
+                    backdropFilter: 'blur(4px)',
+                  }}
+                >
+                  <TablerIcon name={icon} size={32} color='white' />
+                </ActionIcon>
+              )
+            )}
+
             {showToolbar && mayUseToolbar && !slideshow && (
               <FileToolbar
                 media={media}
@@ -2613,47 +2775,6 @@ export function MediaLightbox() {
               </Menu>
             )}
           </Group>
-
-          {/* Nav arrows */}
-          {!slideshow && !isMobile && (
-            <ActionIcon
-              variant='subtle'
-              color='gray'
-              size='xl'
-              disabled={!hasPrevMedia.value}
-              onClick={() => slideToMedia('previous')}
-              aria-label='Previous media'
-              style={{
-                position: 'absolute',
-                left: 8,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                opacity: hasPrevMedia.value ? 0.8 : 0.2,
-              }}
-            >
-              <TablerIcon name='chevron-left' size={36} color='white' />
-            </ActionIcon>
-          )}
-
-          {!slideshow && !isMobile && (
-            <ActionIcon
-              variant='subtle'
-              color='gray'
-              size='xl'
-              disabled={!hasNextMedia.value}
-              onClick={() => slideToMedia('next')}
-              aria-label='Next media'
-              style={{
-                position: 'absolute',
-                right: 8,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                opacity: hasNextMedia.value ? 0.8 : 0.2,
-              }}
-            >
-              <TablerIcon name='chevron-right' size={36} color='white' />
-            </ActionIcon>
-          )}
 
           {
             /* Hidden, the details leave a handle at the right edge, above the bar, to bring them back,
