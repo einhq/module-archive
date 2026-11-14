@@ -256,7 +256,7 @@ const LIGHTBOX_ICON_SIZE = 18;
  * rather than trusting whatever the photograph has in that corner.
  */
 /** Where a phone's toolbar floats: under the date's pill, two lines high, and the menu button beside it. */
-const MOBILE_TOOLBAR_TOP_PX = 76;
+const MOBILE_TOOLBAR_TOP_PX = 68;
 
 const TAKEN_PILL_STYLE: CSSProperties = {
   pointerEvents: 'auto',
@@ -2433,9 +2433,9 @@ export function MediaLightbox() {
                 onLayer={setToolbarLayer}
                 // Below the phone's date and menu button at the top, between the desktop's close and chat buttons.
                 top={isMobile ? MOBILE_TOOLBAR_TOP_PX : 8}
-                // Larger on a phone than the bar's buttons: the picture's actions are aimed at, not glanced at.
+                // A phone's icons larger than the bar's, in buttons that keep eight in a narrow phone's width.
                 iconSize={isMobile ? 28 : barIconSize}
-                buttonSize={isMobile ? 52 : barButtonSize}
+                buttonSize={barButtonSize}
               />
             )}
           </Box>

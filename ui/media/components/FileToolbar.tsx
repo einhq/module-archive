@@ -19,7 +19,7 @@ type FileToolbarProps = FileActionsOptions & {
   onLayer: (open: boolean) => void;
   top: number;
   iconSize: number;
-  buttonSize: string | number;
+  buttonSize: string;
 };
 
 export function FileToolbar({ onLayer, top, iconSize, buttonSize, ...options }: FileToolbarProps) {
