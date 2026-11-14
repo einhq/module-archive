@@ -16,7 +16,7 @@ import { BlemishDialog } from './BlemishDialog.tsx';
 import { useAddToAlbum } from './AddToAlbumAction.tsx';
 
 /** One action: a menu row or a toolbar icon. `checked` marks a mode that is on. */
-export type FileAction = { key: string; icon: string; label: string; onClick: () => void; disabled?: boolean; checked?: boolean };
+type FileAction = { key: string; icon: string; label: string; onClick: () => void; disabled?: boolean; checked?: boolean };
 
 export type FileActionsOptions = {
   media: MediaItem;
@@ -38,7 +38,7 @@ export type FileActionsOptions = {
   onEditSubtitles?: () => void;
 };
 
-export type FileActions = {
+type FileActions = {
   actions: FileAction[];
   /** The dialogs the actions open, to be rendered beside whatever lists them. */
   dialogs: ReactNode;
