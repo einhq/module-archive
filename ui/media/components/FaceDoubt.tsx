@@ -14,15 +14,16 @@ export const doubtReason = (doubt: MediaFaceDoubt): string => 'markedBy' in doub
 /** The picker's value for a person still to be made, followed by their name. */
 const NEW_PERSON = 'new:';
 
-type Busy = 'mark' | 'confirm' | 'clear' | 'move';
+type Busy = 'mark' | 'confirm' | 'clear' | 'move' | 'unknown';
 
 /**
  * Whether a named person's face in the lightbox really is them, asked in the row's card
  * (`FaceRow`).
  *
  * Whoever may edit the photo can say who the face is instead — somebody already in the archive,
- * or a new person under the name typed — and move it there (`person-detach`), or, not knowing,
- * mark it doubtful (`face-doubt`): the person keeps the face, and their Faces tab lists it under
+ * or a new person under the name typed — and move it there (`person-detach`), make it unknown
+ * again, on an unidentified person of its own to be named later (`person-detach --to-new-person`),
+ * or, not knowing, mark it doubtful (`face-doubt`): the person keeps the face, and their Faces tab lists it under
  * Doubtful until somebody answers. On a doubtful face it asks "Is this <name>?": yes keeps the
  * face as a human's assignment (`face-confirm`), and the same picker says who else. Somebody who
  * may not edit the photo sees only that it is in question.
@@ -81,6 +82,19 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
       await execCommand(`person-name ${shq(created.path)} --name ${shq(target.slice(NEW_PERSON.length))}`);
     });
 
+  const unknown = (
+    <Button
+      size='xs'
+      variant='subtle'
+      color='gray'
+      loading={busy === 'unknown'}
+      disabled={busy !== null}
+      onClick={() => void run('unknown', () => detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' }))}
+    >
+      Make unknown
+    </Button>
+  );
+
   return (
     <Stack gap='xs'>
       <Text size='sm' fw={500}>{doubt ? `Is this ${name}?` : `Not sure this is ${name}?`}</Text>
@@ -102,6 +116,7 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
               Withdraw
             </Button>
           )}
+          {unknown}
         </Group>
       )}
       {canEdit && (
@@ -128,17 +143,20 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
         </Group>
       )}
       {canEdit && !doubt && (
-        <Button
-          data-autofocus
-          size='xs'
-          variant='light'
-          color='orange'
-          loading={busy === 'mark'}
-          disabled={busy !== null}
-          onClick={() => void run('mark', command('face-doubt'))}
-        >
-          Mark as doubtful
-        </Button>
+        <Group gap='xs'>
+          <Button
+            data-autofocus
+            size='xs'
+            variant='light'
+            color='orange'
+            loading={busy === 'mark'}
+            disabled={busy !== null}
+            onClick={() => void run('mark', command('face-doubt'))}
+          >
+            Mark as doubtful
+          </Button>
+          {unknown}
+        </Group>
       )}
       {error && <Text size='xs' c='red'>{error}</Text>}
     </Stack>
