@@ -43,11 +43,11 @@ export function useSimilarMedia(path: string | undefined): SearchHit[] | undefin
 /**
  * The lightbox's Similar strip: a small grid of the nearest pictures by what they show
  * (`useSimilarMedia` of `path`), skeletons while they load. A click opens one, and the lightbox
- * then walks these pictures; Show all opens the same search on the Media page, where the other
+ * then walks these pictures until Back returns to the one they are like; Show all opens the same search on the Media page, where the other
  * filters can narrow it. The caller leaves it out when there are none.
  */
 export function SimilarMedia({ path, similar, onNavigate }: { path: string; similar: SearchHit[] | undefined; onNavigate: (route: string) => void }) {
-  const open = (index: number) => openMediaAt(index, (similar ?? []).map(searchResultToMediaItem));
+  const open = (index: number) => openMediaAt(index, (similar ?? []).map(searchResultToMediaItem), { step: true });
 
   return (
     <Box>
