@@ -377,6 +377,7 @@ export function MediaSidebar(
     addingFace = false,
     onAddFace,
     onEditSubtitles,
+    onEditText,
     stackBusy = false,
     onStackPreview,
     onStackAction,
@@ -408,6 +409,8 @@ export function MediaSidebar(
     onAddFace?: () => void;
     /** Open the subtitle editor: given for a video or a recording the reader may change. */
     onEditSubtitles?: () => void;
+    /** Open the editor of the text in the picture: given for a photo the reader may change. */
+    onEditText?: () => void;
     stackBusy?: boolean;
     onStackPreview: (member: StackMemberRef) => void;
     onStackAction: (action: 'front' | 'separate' | 'allow', member: StackMemberRef) => Promise<void>;
@@ -649,6 +652,11 @@ export function MediaSidebar(
                     onClick={onAddFace}
                   >
                     Edit faces
+                  </Menu.Item>
+                )}
+                {canEdit && onEditText && (
+                  <Menu.Item leftSection={<TablerIcon name='text-scan-2' size={menuIcon} />} disabled={!details} onClick={onEditText}>
+                    {details?.content ? 'Edit text' : 'Add text'}
                   </Menu.Item>
                 )}
                 {canEdit && onEditSubtitles && (

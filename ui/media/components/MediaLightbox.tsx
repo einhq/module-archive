@@ -49,7 +49,7 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
-import { useAccessIds, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
+import { useAccessIds, usePersistedState, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import {
   albumMediaList,
@@ -537,18 +537,18 @@ export function MediaLightbox() {
   useEffect(() => setFollowedFacePath(null), [media?.id]);
   const followedFace = media?.type === 'video' ? currentDetails?.faces.find((face) => face.facePath === followedFacePath && face.atSeconds !== undefined) : undefined;
   const personFace = currentDetails?.faces.find((face) => face.facePath === personFacePath) ?? null;
-  // The text in a photo, which the bar's text button lays over it, and the "more" menu opens for
-  // writing, in a dialog beside the picture, to whoever may write the photo. Each picture opens
-  // without it.
+  // The text in a photo, which the bar's text button lays over it, and the sidebar's menu opens
+  // for writing, in a dialog beside the picture, to whoever may write the photo. Shown or hidden,
+  // it stays so from picture to picture and from visit to visit; off until first shown.
   const pictureText = withDetails && media?.type === 'photo' ? currentDetails?.content : undefined;
   const mayWriteText = withDetails && media?.type === 'photo' && currentDetails !== null && canEdit;
-  const [showText, setShowText] = useState(false);
+  const [textShown, setTextShown] = usePersistedState<'on' | 'off'>('lightbox.text', 'off');
+  const showText = textShown === 'on';
   const [editingText, setEditingText] = useState(false);
-  const toggleText = useCallback(() => setShowText((shown) => !shown), []);
+  const toggleText = useCallback(() => setTextShown(showText ? 'off' : 'on'), [setTextShown, showText]);
   const saveText = useCallback(async (text: string) => {
     await setText(text);
     setEditingText(false);
-    setShowText(text.trim() !== '');
   }, [setText]);
   // What is said in a video or a recording, opened for correcting, beside a player of its own, to
   // whoever may write the file. One with no transcript yet gets its first lines there.
@@ -561,13 +561,9 @@ export function MediaLightbox() {
   /** A dialog over the picture has the keys: the text's or the subtitles'. */
   const editing = editingText || editingSubtitles;
   useEffect(() => {
-    setShowText(false);
-  }, [media?.path]);
-  useEffect(() => {
     if (isOpen) return;
     // Opened again, it reads the details anew: other pages change files too.
     forgetMediaDetails();
-    setShowText(false);
     setEditingText(false);
     setEditingSubtitles(false);
   }, [isOpen]);
@@ -1745,7 +1741,7 @@ export function MediaLightbox() {
       : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
-  // The faces, text editing, fullscreen and download rows that open the "more" menu, on a phone and a desktop
+  // The faces, fullscreen and download rows that open the "more" menu, on a phone and a desktop
   // alike, with icons the size of the rows around them. Download saves the original file, as the
   // file name in the details does.
   const viewMenuItems = (iconSize: number) => (
@@ -1758,11 +1754,6 @@ export function MediaLightbox() {
           onClick={toggleFacesVisible}
         >
           {faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
-        </Menu.Item>
-      )}
-      {mayWriteText && (
-        <Menu.Item leftSection={<TablerIcon name='pencil' size={iconSize} />} onClick={() => setEditingText(true)}>
-          {pictureText ? 'Edit text' : 'Add text'}
         </Menu.Item>
       )}
       <Menu.Item leftSection={<TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} />} onClick={toggleFullscreen}>
@@ -1838,6 +1829,7 @@ export function MediaLightbox() {
         setFaceMessage(null);
       }}
       onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
+      onEditText={mayWriteText ? () => setEditingText(true) : undefined}
       stackBusy={stackBusy}
       onStackPreview={previewStackMember}
       onStackAction={mutateStack}
