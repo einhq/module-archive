@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import type { AlbumAddResult } from '@archive/media/api';
 import type { StagingUndoResult } from '@archive/staging/api';
 import { SelectionActionButton, TablerIcon, useSelectionBar } from '@ein/ui/components';
@@ -21,6 +21,24 @@ import { type AlbumChoice, AlbumPickerDialog } from './AlbumPickerDialog.tsx';
 export function AddToAlbumAction({ paths, onDone, iconSize = 14 }: { paths: string[]; onDone?: () => void; iconSize?: number }) {
   const access = useAccessIds();
   const { reportError } = useSelectionBar();
+  const { open, dialog } = useAddToAlbum(paths, reportError, onDone);
+  if (isGuest(access)) return null;
+  return (
+    <>
+      <SelectionActionButton icon={<TablerIcon name='library-plus' size={iconSize} />} onClick={open} disabled={paths.length === 0}>
+        Add to album
+      </SelectionActionButton>
+      {dialog}
+    </>
+  );
+}
+
+/**
+ * The album picker and what it does once an album is picked, for a control of the caller's own
+ * to open: `open` shows the picker, `opened` says it is up, `dialog` is to be rendered. An Undo
+ * that fails goes to `reportError`.
+ */
+export function useAddToAlbum(paths: string[], reportError: (message: string) => void, onDone?: () => void): { open: () => void; opened: boolean; dialog: ReactNode } {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,12 +80,10 @@ export function AddToAlbumAction({ paths, onDone, iconSize = 14 }: { paths: stri
     }
   };
 
-  if (isGuest(access)) return null;
-  return (
-    <>
-      <SelectionActionButton icon={<TablerIcon name='library-plus' size={iconSize} />} onClick={() => setOpen(true)} disabled={paths.length === 0}>
-        Add to album
-      </SelectionActionButton>
+  return {
+    open: () => setOpen(true),
+    opened: open,
+    dialog: (
       <AlbumPickerDialog
         opened={open}
         title='Add to an album'
@@ -77,6 +93,6 @@ export function AddToAlbumAction({ paths, onDone, iconSize = 14 }: { paths: stri
         onClose={() => setOpen(false)}
         onPick={(choice) => void addTo(choice)}
       />
-    </>
-  );
+    ),
+  };
 }

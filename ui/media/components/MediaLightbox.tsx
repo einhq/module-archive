@@ -2,7 +2,7 @@ import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.t
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
-import { ActionIcon, Box, Button, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect, type Signal, signal } from '@preact/signals-react';
 import { useSignals } from '@preact/signals-react/runtime';
@@ -49,7 +49,7 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
-import { useAccessIds, usePersistedState, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
+import { useAccessIds, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import {
   albumMediaList,
@@ -83,11 +83,23 @@ import { MediaSidebar, SIDEBAR_WIDTH } from './MediaSidebar.tsx';
 import { SubtitleEditDialog } from './SubtitleEditDialog.tsx';
 import { TextEditDialog } from './TextEditDialog.tsx';
 import { TextOverlay } from './TextOverlay.tsx';
+import { FileToolbar } from './FileToolbar.tsx';
 import { VideoPlayer } from './VideoPlayer.tsx';
 import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } from '../lib/capture-time.ts';
 import { qualifiedDate } from '@archive/people/date-qualifier';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
-import { facesVisible, infoSidebarOpen, lightboxCountHidden, lightboxRestedPath, toggleFacesVisible, toggleInfoSidebar } from '../signals/lightbox.ts';
+import {
+  facesVisible,
+  infoSidebarOpen,
+  lightboxCountHidden,
+  lightboxRestedPath,
+  textVisible,
+  toggleFacesVisible,
+  toggleInfoSidebar,
+  toggleTextVisible,
+  toggleToolbarVisible,
+  toolbarVisible,
+} from '../signals/lightbox.ts';
 
 /** Slide duration when the person has not set `CFG_USER_SLIDESHOW_SECONDS`. */
 const DEFAULT_SLIDE_SECONDS = 3;
@@ -136,6 +148,12 @@ const LIGHTBOX_REST_MS = 600;
 const NATIVE_EDGE_GESTURE_PX = 24;
 const GESTURE_CONTROL_SELECTOR =
   'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-link], [data-text-overlay], [data-video-controls], [data-document-reader]';
+
+/** A view switch of the bar's, or of the "more" menu when the bar has no room for it. */
+type BarView = { key: string; icon: string; label: string; shortcut?: string; on: boolean; disabled?: boolean; onClick: () => void };
+
+/** The bar's buttons' widths, by Mantine size, for the room a view switch not yet shown would take. */
+const BAR_BUTTON_PX: Record<string, number> = { lg: 34, xl: 44 };
 
 type SlideshowPhotoTransition = {
   outgoing: MediaItem;
@@ -338,6 +356,7 @@ export function MediaLightbox() {
     return () => globalThis.clearTimeout(timer);
   }, [sidebarOpen]);
   const showFaces = facesVisible.value;
+  const showToolbar = toolbarVisible.value;
   const isNarrow = useMediaQuery('(max-width: 48em)', false, { getInitialValueInEffect: false });
   const isCoarse = useMediaQuery('(hover: none) and (pointer: coarse)', false, { getInitialValueInEffect: false });
   const isLandscape = useMediaQuery('(orientation: landscape)', false, { getInitialValueInEffect: false });
@@ -488,8 +507,10 @@ export function MediaLightbox() {
   const [stackPreview, setStackPreview] = useState<MediaItem | null>(null);
   const [stackBusy, setStackBusy] = useState(false);
   const [addingFace, setAddingFace] = useState(false);
-  /** A dialog of the sidebar's is open over the lightbox: the keys it leaves are not the lightbox's either. */
+  /** A dialog of the sidebar's or the toolbar's is open over the lightbox: the keys it leaves are not the lightbox's either. */
   const [sidebarLayer, setSidebarLayer] = useState(false);
+  const [toolbarLayer, setToolbarLayer] = useState(false);
+  const dialogLayer = sidebarLayer || toolbarLayer;
   const [faceDraftReady, setFaceDraftReady] = useState(false);
   const [savingFace, setSavingFace] = useState(false);
   /** What the face editor last did, for the information bar; no colour for plain news. */
@@ -542,10 +563,8 @@ export function MediaLightbox() {
   // it stays so from picture to picture and from visit to visit; off until first shown.
   const pictureText = withDetails && media?.type === 'photo' ? currentDetails?.content : undefined;
   const mayWriteText = withDetails && media?.type === 'photo' && currentDetails !== null && canEdit;
-  const [textShown, setTextShown] = usePersistedState<'on' | 'off'>('lightbox.text', 'off');
-  const showText = textShown === 'on';
+  const showText = textVisible.value;
   const [editingText, setEditingText] = useState(false);
-  const toggleText = useCallback(() => setTextShown(showText ? 'off' : 'on'), [setTextShown, showText]);
   const saveText = useCallback(async (text: string) => {
     await setText(text);
     setEditingText(false);
@@ -696,8 +715,8 @@ export function MediaLightbox() {
     // The unknown-person review dialog is layered above this modal and owns
     // Escape while it is open. Let its capture handler close only that layer.
     if (reviewPersonId) return;
-    // So does a dialog the sidebar opened, the edit or the sharing dialog, or its edit menu.
-    if (sidebarLayer) return;
+    // So does a dialog the sidebar or the toolbar opened, the edit or the sharing dialog, or its edit menu.
+    if (dialogLayer) return;
     if (addingFace) {
       setAddingFace(false);
       setFaceDraftReady(false);
@@ -706,7 +725,7 @@ export function MediaLightbox() {
     }
     if (slideshow) stopSlideshow();
     else requestClose();
-  }, [addingFace, editingSubtitles, editingText, mapOpen, requestClose, reviewPersonId, sidebarLayer, slideshow, stopSlideshow]);
+  }, [addingFace, editingSubtitles, editingText, mapOpen, requestClose, reviewPersonId, dialogLayer, slideshow, stopSlideshow]);
 
   // Mounted with the lightbox's route, already open: that is an opening too.
   const infoPreviousOpenRef = useRef(false);
@@ -1664,10 +1683,10 @@ export function MediaLightbox() {
     ['ArrowLeft', () => !addingFace && !editing && slideToMedia('previous')],
     ['ArrowRight', () => !addingFace && !editing && slideToMedia('next')],
     ['Escape', handleEscape],
-    ['i', () => !sidebarLayer && !editing && toggleSheet(!infoSidebarOpen.value)],
-    ['f', () => !sidebarLayer && !editing && toggleFacesVisible()],
-    ['t', () => !sidebarLayer && !editing && pictureText && toggleText()],
-    ['s', () => !sidebarLayer && !editing && toggleStar()],
+    ['i', () => !dialogLayer && !editing && toggleSheet(!infoSidebarOpen.value)],
+    ['f', () => !dialogLayer && !editing && toggleFacesVisible()],
+    ['t', () => !dialogLayer && !editing && pictureText && toggleTextVisible()],
+    ['s', () => !dialogLayer && !editing && toggleStar()],
     // `+` is shifted on most layouts and `=` is its unshifted key on a US one. These keys
     // have no default worth suppressing, so they are left alone for whatever else listens.
     ['plus', () => zoomable && setZoom(stepZoom(zoomRef.current, 1, zoomFrame()), true), { preventDefault: false }],
@@ -1678,7 +1697,7 @@ export function MediaLightbox() {
   ]);
 
   // The players' keys rest while a layer over the lightbox has the keyboard, as the lightbox's own do.
-  const playerKeys = !sidebarLayer && !editing && !addingFace && !mapOpen && reviewPersonId === null && personFacePath === null;
+  const playerKeys = !dialogLayer && !editing && !addingFace && !mapOpen && reviewPersonId === null && personFacePath === null;
   const attachMediaElement = useCallback((el: HTMLVideoElement | null) => {
     mediaRef.current = el;
   }, []);
@@ -1718,6 +1737,34 @@ export function MediaLightbox() {
     return () => observer.disconnect();
   }, [slideshow]);
 
+  /**
+   * How many of the view switches (`barViews`) the bar has room for. Measured after each render
+   * and on every resize of the bar: one fewer while a text of the bar's is cut short, one more while
+   * the space left over takes another button and its gap.
+   */
+  const [barViewsShown, setBarViewsShown] = useState(3);
+  const [, setBarResized] = useState(0);
+  useEffect(() => {
+    const row = infoRowRef.current;
+    if (!row) return;
+    const observer = new ResizeObserver(() => setBarResized((n) => n + 1));
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, [media === null]);
+  useLayoutEffect(() => {
+    const row = infoRowRef.current;
+    if (!row || slideshow) return;
+    const style = getComputedStyle(row);
+    const gap = parseFloat(style.columnGap) || 0;
+    const items = [...row.children] as HTMLElement[];
+    const used = items.reduce((sum, item) => sum + item.offsetWidth, 0) + gap * Math.max(0, items.length - 1);
+    const free = row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - used;
+    const cut = [...row.querySelectorAll<HTMLElement>('[data-bar-text]')].some((text) => text.scrollWidth > text.clientWidth + 1);
+    const shown = row.querySelectorAll('[data-bar-view]').length;
+    if (cut && shown > 0) setBarViewsShown(shown - 1);
+    else if (!cut && free >= (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2) setBarViewsShown(shown + 1);
+  });
+
   if (!media) return null;
 
   const isVideo = media.type === 'video';
@@ -1741,24 +1788,48 @@ export function MediaLightbox() {
       : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
-  // The faces, fullscreen and download rows that open the "more" menu, on a phone and a desktop
-  // alike, with icons the size of the rows around them. Download saves the original file, as the
-  // file name in the details does.
+  // The details panel's file actions, floating over the picture when asked for.
+  const mayUseToolbar = withDetails && (canEdit || actionPath !== undefined);
+  // The view switches: the text, the faces and fullscreen. They sit in the bar, in this order, as
+  // far as there is room (`barViewsShown`); the rest are rows of the "more" menu.
+  const barViews: BarView[] = [];
+  if (pictureText) {
+    barViews.push({ key: 'text', icon: 'text-scan-2', label: showText ? 'Hide text' : 'Show text', shortcut: 't', on: showText, onClick: toggleTextVisible });
+  }
+  if (media?.type === 'photo' || media?.type === 'video') {
+    barViews.push({
+      key: 'faces',
+      icon: 'user-square-rounded',
+      label: faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`,
+      shortcut: 'f',
+      on: showFaces && faceCount > 0,
+      disabled: faceCount === 0,
+      onClick: toggleFacesVisible,
+    });
+  }
+  barViews.push({ key: 'fullscreen', icon: fullscreen ? 'minimize' : 'maximize', label: fullscreen ? 'Exit fullscreen' : 'Fullscreen', on: false, onClick: toggleFullscreen });
+  const shownViews = slideshow ? 0 : Math.min(barViewsShown, barViews.length);
+  // The view switches the bar has no room for, the toolbar and download: the rows of the "more"
+  // menu, on a phone and a desktop alike, with icons the size of the rows around them. Download
+  // saves the original file, as the file name in the details does.
   const viewMenuItems = (iconSize: number) => (
     <>
-      {(media?.type === 'photo' || media?.type === 'video') && (
+      {barViews.slice(shownViews).map((view) => (
         <Menu.Item
-          leftSection={<TablerIcon name='user-square-rounded' size={iconSize} color={showFaces && faceCount > 0 ? 'var(--mrx-accent)' : undefined} />}
-          rightSection={isMobile ? undefined : <Kbd size='xs'>f</Kbd>}
-          disabled={faceCount === 0}
-          onClick={toggleFacesVisible}
+          key={view.key}
+          leftSection={<TablerIcon name={view.icon} size={iconSize} color={view.on ? 'var(--mrx-accent)' : undefined} />}
+          rightSection={isMobile || !view.shortcut ? undefined : <Kbd size='xs'>{view.shortcut}</Kbd>}
+          disabled={view.disabled}
+          onClick={view.onClick}
         >
-          {faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`}
+          {view.label}
+        </Menu.Item>
+      ))}
+      {mayUseToolbar && (
+        <Menu.Item leftSection={<TablerIcon name='tools' size={iconSize} color={showToolbar ? 'var(--mrx-accent)' : undefined} />} onClick={toggleToolbarVisible}>
+          {showToolbar ? 'Hide toolbar' : 'Show toolbar'}
         </Menu.Item>
       )}
-      <Menu.Item leftSection={<TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} />} onClick={toggleFullscreen}>
-        {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-      </Menu.Item>
       <Menu.Item component='a' href={fileUrl(media.path)} download={media.name} leftSection={<TablerIcon name='download' size={iconSize} />}>
         Download
       </Menu.Item>
@@ -1801,6 +1872,15 @@ export function MediaLightbox() {
     handoff: '0px',
   };
 
+  // A video's box is drawn on a still frame, so the video stops for it; one that cannot be
+  // played has no frame to draw on.
+  const addFace = media.type === 'video' && currentDetails?.undecodable ? undefined : () => {
+    const video = mediaRef.current;
+    if (!addingFace && video instanceof HTMLVideoElement) video.pause();
+    setAddingFace((value) => !value);
+    setFaceDraftReady(false);
+    setFaceMessage(null);
+  };
   const detailsSidebar = (mobile: boolean) => (
     <MediaSidebar
       media={media}
@@ -1819,15 +1899,7 @@ export function MediaLightbox() {
       orienting={orienting}
       onTurn={turn}
       addingFace={addingFace}
-      // A video's box is drawn on a still frame, so the video stops for it; one that cannot be
-      // played has no frame to draw on.
-      onAddFace={media.type === 'video' && currentDetails?.undecodable ? undefined : () => {
-        const video = mediaRef.current;
-        if (!addingFace && video instanceof HTMLVideoElement) video.pause();
-        setAddingFace((value) => !value);
-        setFaceDraftReady(false);
-        setFaceMessage(null);
-      }}
+      onAddFace={addFace}
       onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
       onEditText={mayWriteText ? () => setEditingText(true) : undefined}
       stackBusy={stackBusy}
@@ -2301,6 +2373,28 @@ export function MediaLightbox() {
                 />
               )}
             </Box>
+            {showToolbar && mayUseToolbar && !slideshow && (
+              <FileToolbar
+                media={media}
+                result={detailsResult}
+                mobile={isMobile}
+                canEdit={canEdit}
+                addToAlbumPath={actionPath}
+                canOrient={canOrient}
+                orienting={orienting}
+                onTurn={turn}
+                addingFace={addingFace}
+                onAddFace={addFace}
+                onEditText={mayWriteText ? () => setEditingText(true) : undefined}
+                onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
+                onLayer={setToolbarLayer}
+                mediaRef={mediaRef}
+                // Below the phone's menu button in the corner, beside the desktop's close and details buttons.
+                minTop={isMobile ? 60 : 8}
+                iconSize={barIconSize}
+                buttonSize={barButtonSize}
+              />
+            )}
           </Box>
 
           <Group
@@ -2347,28 +2441,52 @@ export function MediaLightbox() {
                 : {}),
             }}
           >
-            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
-              {({ index, taken, takenLabel, takenTooltip }) => (
-                <>
-                  {!lightboxCountHidden.value && (
-                    <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
-                      <TablerIcon name='photo' size={barIconSize} style={{ flexShrink: 0 }} />
-                      <Text size='md' c='inherit' truncate='end'>
-                        {index + 1} of {albumMediaList.value.length}
-                      </Text>
-                    </Group>
-                  )}
+            {!slideshow && !isMobile && mayStar && (
+              <Tooltip label={starred ? 'Unfavourite (s)' : 'Favourite (s)'} withArrow>
+                <ActionIcon variant='subtle' color='gray' size={barButtonSize} onClick={toggleStar} aria-label={starred ? 'Unfavourite' : 'Favourite'} aria-pressed={starred}>
+                  <TablerIcon name={starred ? 'heart-filled' : 'heart'} size={barIconSize} color={starred ? 'var(--mantine-color-red-5)' : 'white'} />
+                </ActionIcon>
+              </Tooltip>
+            )}
 
-                  {(slideshow || !isMobile) && taken.date && (
-                    <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
-                      <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
-                        <TablerIcon name='calendar' size={barIconSize} style={{ flexShrink: 0 }} />
-                        <Text size='md' c='inherit' truncate='end'>{takenLabel}</Text>
-                      </Group>
-                    </Tooltip>
-                  )}
-                </>
-              )}
+            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
+              {({ index }) =>
+                !lightboxCountHidden.value && (
+                  <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
+                    <TablerIcon name='photo' size={barIconSize} style={{ flexShrink: 0 }} />
+                    <Text data-bar-text size='md' c='inherit' truncate='end'>
+                      {index + 1} of {albumMediaList.value.length}
+                    </Text>
+                  </Group>
+                )}
+            </SwipeInfo>
+
+            {!isMobile && (
+              <Tooltip label={slideshow ? 'Stop slideshow' : 'Start slideshow'} withArrow>
+                <ActionIcon
+                  variant='subtle'
+                  color='gray'
+                  size={barButtonSize}
+                  disabled={!slideshow && albumMediaList.value.length < 2}
+                  onClick={slideshow ? stopSlideshow : startSlideshow}
+                  aria-label={slideshow ? 'Stop slideshow' : 'Start slideshow'}
+                  style={{ flexShrink: 0 }}
+                >
+                  <TablerIcon name={slideshow ? 'player-stop' : 'player-play'} size={barIconSize} color='white' />
+                </ActionIcon>
+              </Tooltip>
+            )}
+
+            <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
+              {({ taken, takenLabel, takenTooltip }) =>
+                (slideshow || !isMobile) && taken.date && (
+                  <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
+                    <Group gap={6} wrap='nowrap' style={{ minWidth: 0 }}>
+                      <TablerIcon name='calendar' size={barIconSize} style={{ flexShrink: 0 }} />
+                      <Text data-bar-text size='md' c='inherit' truncate='end'>{takenLabel}</Text>
+                    </Group>
+                  </Tooltip>
+                )}
             </SwipeInfo>
 
             {addingFace && (
@@ -2402,57 +2520,34 @@ export function MediaLightbox() {
                   // their words until this one is down to its pin.
                   <Group gap={6} wrap='nowrap' style={{ minWidth: barIconSize, flexShrink: 1000 }}>
                     <TablerIcon name='map-pin' size={barIconSize} style={{ flexShrink: 0 }} />
-                    <Text size='md' c='inherit' truncate='end' maw={isMobile ? undefined : 360}>{where}</Text>
+                    <Text data-bar-text size='md' c='inherit' truncate='end' maw={isMobile ? undefined : 360}>{where}</Text>
                   </Group>
                 )}
             </SwipeInfo>
 
-            {!slideshow && pictureText && (
-              <Tooltip label={`${showText ? 'Hide' : 'Show'} the text in the picture (t)`} withArrow disabled={isMobile}>
-                <Button
-                  variant='subtle'
-                  color='gray'
-                  size={isMobile ? 'md' : 'sm'}
-                  px={isMobile ? 'xs' : 'sm'}
-                  style={{ flexShrink: 0 }}
-                  leftSection={<TablerIcon name='text-scan-2' size={barIconSize} color={showText ? 'var(--mrx-accent)' : 'white'} />}
-                  onClick={toggleText}
-                  aria-pressed={showText}
-                  c='white'
-                >
-                  {showText ? 'Hide text' : 'Show text'}
-                </Button>
-              </Tooltip>
-            )}
-
-            {!slideshow && !isMobile && mayStar && (
-              <Tooltip label={starred ? 'Unfavourite (s)' : 'Favourite (s)'} withArrow>
-                <ActionIcon variant='subtle' color='gray' size={barButtonSize} onClick={toggleStar} aria-label={starred ? 'Unfavourite' : 'Favourite'} aria-pressed={starred}>
-                  <TablerIcon name={starred ? 'heart-filled' : 'heart'} size={barIconSize} color={starred ? 'var(--mantine-color-red-5)' : 'white'} />
-                </ActionIcon>
-              </Tooltip>
-            )}
-
-            {!slideshow && !isMobile && (
-              <Tooltip label='Start slideshow' withArrow>
+            {barViews.slice(0, shownViews).map((view) => (
+              <Tooltip key={view.key} label={view.shortcut ? `${view.label} (${view.shortcut})` : view.label} withArrow disabled={isMobile}>
                 <ActionIcon
+                  data-bar-view
                   variant='subtle'
                   color='gray'
                   size={barButtonSize}
-                  disabled={albumMediaList.value.length < 2}
-                  onClick={startSlideshow}
-                  aria-label='Start slideshow'
+                  disabled={view.disabled}
+                  onClick={view.onClick}
+                  aria-label={view.label}
+                  aria-pressed={view.on}
+                  style={{ flexShrink: 0 }}
                 >
-                  <TablerIcon name='player-play' size={barIconSize} color='white' />
+                  <TablerIcon name={view.icon} size={barIconSize} color={view.on ? 'var(--mrx-accent)' : 'white'} />
                 </ActionIcon>
               </Tooltip>
-            )}
+            ))}
 
             {!slideshow && !isMobile && (
-              <Menu position='top-end' shadow='md' withinPortal keepMounted keepMountedMode='display-none'>
+              <Menu position='top-end' shadow='md' withinPortal>
                 <Menu.Target>
                   <Tooltip label='More' withArrow>
-                    <ActionIcon variant='subtle' color='gray' size={barButtonSize} aria-label='More actions'>
+                    <ActionIcon variant='subtle' color='gray' size={barButtonSize} aria-label='More actions' style={{ flexShrink: 0 }}>
                       <TablerIcon name='dots-vertical' size={barIconSize} color='white' />
                     </ActionIcon>
                   </Tooltip>

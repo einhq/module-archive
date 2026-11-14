@@ -26,7 +26,7 @@ import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
 import { SimilarMedia, useSimilarMedia } from './SimilarMedia.tsx';
 import type { MediaDetails, MediaExif, MediaVersion, OrientationChange, StackMemberRef, UseMediaDetailsResult } from '../hooks/useMediaDetails.ts';
-import { MediaItem, notify, openShareModal, openTerminalTab, shareModalPath, sharingChanged } from '@ein/ui/signals';
+import { MediaItem, notify, openTerminalTab, sharingChanged } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
 import { mediaTerminalCommand, THUMB_MENU_ICON_PX, THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import { faceKeyForPerson } from './FaceOverlay.tsx';
@@ -39,14 +39,10 @@ import { qualifiedDate } from '@archive/people/date-qualifier';
 import { FaceCrop } from '../../people/components/FaceCrop.tsx';
 import { NodeLabels } from '../../components/NodeLabels.tsx';
 import { StagedDuplicates } from '../../staging/components/StagedDuplicates.tsx';
-import { MediaEditModal } from './MediaEditModal.tsx';
-import { RESTORABLE, RestoreDialog } from './RestoreDialog.tsx';
-import type { FileRestoreAnswer } from '@media/api';
-import { RestoredCompare, restoredSteps } from './RestoredCompare.tsx';
+import { restoredSteps } from './RestoredCompare.tsx';
 import { setShownCopy } from '../lib/shown-copy.ts';
-import { BlemishDialog } from './BlemishDialog.tsx';
 import { readingLine, readingSources } from '../../location/lib/weather.ts';
-import { LightboxActionItems } from './LightboxActionItems.tsx';
+import { useFileActions } from './FileActions.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { Comments } from '../../components/Comments.tsx';
 import { SidebarSection, useSectionOpen } from './SidebarSection.tsx';
@@ -422,12 +418,21 @@ export function MediaSidebar(
   const access = useAccessIds();
   // Asked here rather than in the strip, so a picture with nothing like it has no row at all.
   const similar = useSimilarMedia(media.type === 'audio' ? undefined : media.path);
-  const { details, addComment, removeComment, setDescription, setTextLanguage, rawExif, loadRawExif, rawExifLoading } = result;
-  const [editing, setEditing] = useState(false);
-  const [restoring, setRestoring] = useState(false);
-  const [blemishing, setBlemishing] = useState(false);
-  /** The restored copy shown beside the picture. */
-  const [comparing, setComparing] = useState<MediaVersion | null>(null);
+  const { details, addComment, removeComment, setTextLanguage, rawExif, loadRawExif, rawExifLoading } = result;
+  const fileActions = useFileActions({
+    media,
+    result,
+    mobile,
+    canEdit,
+    addToAlbumPath,
+    canOrient,
+    orienting,
+    onTurn,
+    addingFace,
+    onAddFace,
+    onEditText,
+    onEditSubtitles,
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   /** The person row whose doubt question is open. */
   const [asking, setAsking] = useState<string | null>(null);
@@ -436,17 +441,10 @@ export function MediaSidebar(
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
-    setEditing(false);
-    setRestoring(false);
-    setBlemishing(false);
-    setComparing(null);
     setMenuOpen(false);
     setAsking(null);
     setConfirmingComment(false);
   }
-  /** The picture shown, for a comment posted on one to know whether it is still the one shown. */
-  const pathRef = useRef(media.path);
-  pathRef.current = media.path;
   const scrollRef = useRef<HTMLDivElement>(null);
   // A block, not an expression: newer browsers' scrollTo returns a promise, which React would take
   // for the effect's cleanup and call.
@@ -455,42 +453,7 @@ export function MediaSidebar(
   }, [media.path]);
   const menuIcon = mobile ? THUMB_MENU_ICON_PX : 16;
   const menuCheck = mobile ? 20 : 14;
-  const sharing = shareModalPath.value === media.path;
-  useEffect(() => onLayer(editing || restoring || blemishing || comparing !== null || sharing || asking !== null || menuOpen || confirmingComment), [
-    editing,
-    restoring,
-    blemishing,
-    comparing,
-    sharing,
-    asking,
-    menuOpen,
-    confirmingComment,
-  ]);
-  /**
-   * A restoration done: its copy beside the picture, when that is still the one shown; a note
-   * otherwise, since the lightbox has moved on while it ran.
-   */
-  const restored = (from: string) => (answer: FileRestoreAnswer, shown = false) => {
-    if (pathRef.current !== from) {
-      notify({ message: `The restored copy of ${from.split('/').pop()} is ready among its versions` });
-      return;
-    }
-    void result.refetch();
-    setComparing({
-      name: answer.name,
-      path: answer.path,
-      mimetype: answer.path.endsWith('.tif') ? 'image/tiff' : 'image/png',
-      thumbnails: true,
-      ...(shown ? { shown: true as const } : {}),
-      restored: {
-        steps: answer.restoration.steps.map((step) => ({ op: step.op, params: step.params })),
-        at: answer.restoration.at,
-        ...(answer.restoration.marked !== undefined ? { marked: answer.restoration.marked } : {}),
-        ...(answer.mask ? { mask: answer.mask } : {}),
-        ...(answer.marks ? { marks: answer.marks } : {}),
-      },
-    });
-  };
+  useEffect(() => onLayer(fileActions.layer || asking !== null || menuOpen || confirmingComment), [fileActions.layer, asking, menuOpen, confirmingComment]);
   // Escape closes the edit menu, and not the lightbox beneath. Mantine's menu answers Escape only
   // with the focus inside it, and a click on its button leaves the focus on the button, so the key
   // is taken here, at the window, first.
@@ -614,8 +577,7 @@ export function MediaSidebar(
             </Group>
           </Box>
 
-          {(canEdit || addToAlbumPath) && (
-            // Kept mounted, so the album picker outlives the menu closing on the click that opened it.
+          {fileActions.actions.length > 0 && (
             // On a phone its rows are a thumb's, like the lightbox bar's menu.
             <Menu
               opened={menuOpen}
@@ -623,8 +585,6 @@ export function MediaSidebar(
               position='bottom-end'
               withinPortal
               shadow='md'
-              keepMounted
-              keepMountedMode='display-none'
               styles={mobile ? THUMB_MENU_STYLES : undefined}
             >
               <Menu.Target>
@@ -633,72 +593,18 @@ export function MediaSidebar(
                 </ActionIcon>
               </Menu.Target>
               <Menu.Dropdown>
-                {canEdit && (
-                  <Menu.Item leftSection={<TablerIcon name='pencil' size={menuIcon} />} disabled={!details} onClick={() => setEditing(true)}>
-                    Edit
-                  </Menu.Item>
-                )}
-                {canEdit && (
-                  <Menu.Item leftSection={<TablerIcon name='share' size={menuIcon} />} onClick={() => openShareModal(media.path)}>
-                    Share
-                  </Menu.Item>
-                )}
-                {addToAlbumPath && <LightboxActionItems key={addToAlbumPath} path={addToAlbumPath} iconSize={menuIcon} />}
-                {canEdit && !mobile && (media.type === 'photo' || media.type === 'video') && onAddFace && (
+                {fileActions.actions.map((action) => (
                   <Menu.Item
-                    leftSection={<TablerIcon name='user-square-rounded' size={menuIcon} />}
-                    rightSection={addingFace ? <TablerIcon name='check' size={menuCheck} /> : undefined}
-                    color={addingFace ? 'marine' : undefined}
-                    onClick={onAddFace}
+                    key={action.key}
+                    leftSection={<TablerIcon name={action.icon} size={menuIcon} />}
+                    rightSection={action.checked ? <TablerIcon name='check' size={menuCheck} /> : undefined}
+                    color={action.checked ? 'marine' : undefined}
+                    disabled={action.disabled}
+                    onClick={action.onClick}
                   >
-                    Edit faces
+                    {action.label}
                   </Menu.Item>
-                )}
-                {canEdit && onEditText && (
-                  <Menu.Item leftSection={<TablerIcon name='text-scan-2' size={menuIcon} />} disabled={!details} onClick={onEditText}>
-                    {details?.content ? 'Edit text' : 'Add text'}
-                  </Menu.Item>
-                )}
-                {canEdit && onEditSubtitles && (
-                  <Menu.Item leftSection={<TablerIcon name='badge-cc' size={menuIcon} />} disabled={!details} onClick={onEditSubtitles}>
-                    {details?.hasTranscript ? 'Edit subtitles' : 'Add subtitles'}
-                  </Menu.Item>
-                )}
-                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && (
-                  <Menu.Item
-                    leftSection={<TablerIcon name='wand' size={menuIcon} />}
-                    onClick={() => setRestoring(true)}
-                  >
-                    Restore…
-                  </Menu.Item>
-                )}
-                {canEdit && media.type === 'photo' && RESTORABLE.has(details?.mimetype ?? '') && Boolean(details?.width && details.height) && (
-                  <Menu.Item
-                    leftSection={<TablerIcon name='brush' size={menuIcon} />}
-                    onClick={() => setBlemishing(true)}
-                  >
-                    Remove a blemish…
-                  </Menu.Item>
-                )}
-                {canEdit && canOrient && (
-                  <>
-                    <Menu.Item leftSection={<TablerIcon name='rotate-2' size={menuIcon} />} disabled={orienting} onClick={() => onTurn({ rotate: 'ccw' })}>
-                      Rotate left
-                    </Menu.Item>
-                    <Menu.Item leftSection={<TablerIcon name='rotate-clockwise-2' size={menuIcon} />} disabled={orienting} onClick={() => onTurn({ rotate: 'cw' })}>
-                      Rotate right
-                    </Menu.Item>
-                    <Menu.Item
-                      leftSection={<TablerIcon name='flip-vertical' size={menuIcon} />}
-                      rightSection={details?.mirror ? <TablerIcon name='check' size={menuCheck} /> : undefined}
-                      color={details?.mirror ? 'marine' : undefined}
-                      disabled={orienting}
-                      onClick={() => onTurn({ mirror: 'toggle' })}
-                    >
-                      Mirror horizontally
-                    </Menu.Item>
-                  </>
-                )}
+                ))}
               </Menu.Dropdown>
             </Menu>
           )}
@@ -878,7 +784,7 @@ export function MediaSidebar(
           />
         )}
 
-        {versions.length > 0 && <VersionsSection versions={versions} onCompare={setComparing} onShow={canEdit ? (name) => void showCopy(name) : undefined} />}
+        {versions.length > 0 && <VersionsSection versions={versions} onCompare={fileActions.compare} onShow={canEdit ? (name) => void showCopy(name) : undefined} />}
 
         {similar?.length !== 0 && (
           <SidebarSection id='similar' label='Similar' icon='photo-search'>
@@ -974,45 +880,7 @@ export function MediaSidebar(
           </SidebarSection>
         )}
       </Stack>
-      <RestoreDialog
-        opened={restoring}
-        onClose={() => setRestoring(false)}
-        path={media.path}
-        digitized={details?.digitized}
-        onRestored={restored(media.path)}
-      />
-      {blemishing && details?.width && details.height && (
-        <BlemishDialog
-          opened
-          onClose={() => setBlemishing(false)}
-          media={media}
-          angle={details.angle}
-          mirror={details.mirror}
-          width={details.width}
-          height={details.height}
-          onRestored={restored(media.path)}
-        />
-      )}
-      <RestoredCompare
-        version={comparing}
-        original={media}
-        angle={details?.angle ?? 0}
-        mirror={details?.mirror ?? false}
-        canEdit={canEdit}
-        onClose={() => setComparing(null)}
-        onDiscarded={() => void result.refetch()}
-        onReplaced={restored(media.path)}
-        onShown={() => void result.refetch()}
-      />
-      {details && (
-        <MediaEditModal
-          opened={editing}
-          onClose={() => setEditing(false)}
-          details={details}
-          setDescription={setDescription}
-          onSaved={result.refetch}
-        />
-      )}
+      {fileActions.dialogs}
     </ScrollBox>
   );
 }
