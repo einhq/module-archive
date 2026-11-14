@@ -74,6 +74,13 @@ const DAMAGE_FILTERS = [
   { value: 'faded', label: 'Faded', icon: <TablerIcon name='palette-off' size={18} />, steps: { unfade: true, dust: false } },
   { value: 'dust', label: 'Dusty', icon: <TablerIcon name='grain' size={18} />, steps: { unfade: false, dust: true } },
   { value: 'scratches', label: 'Scratched', icon: <TablerIcon name='slash' size={18} />, steps: { unfade: false, dust: true } },
+  { value: 'blurred', label: 'Out of focus', icon: <TablerIcon name='blur' size={18} />, steps: { unfade: false, dust: false, blur: true, blurKind: 'focus' } },
+  {
+    value: 'shaken',
+    label: 'Camera shake',
+    icon: <TablerIcon name='arrows-move-horizontal' size={18} />,
+    steps: { unfade: false, dust: false, blur: true, blurKind: 'motion' },
+  },
 ] as const;
 
 /**
@@ -116,7 +123,7 @@ export const handle = { fullBleed: true };
  *
  * The kind control belongs to both modes: "just the videos" is still the feed.
  *
- * The Damage filter lists the scans found faded, dusty or scratched (`find-damage`, a filter like
+ * The Damage filter lists the scans found faded, dusty, scratched, out of focus or shaken (`find-damage`, a filter like
  * any chip, `search --has damage=<kind>`), and Restore… in the selection bar restores a selection
  * of them in the background (`file-restore --queue`).
  */

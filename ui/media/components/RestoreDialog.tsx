@@ -9,13 +9,32 @@ import type { FileRestoreAnswer } from '@media/api';
 export const RESTORABLE = new Set(['image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/bmp']);
 
 /** The steps a restoration is asked for, as the dialogs hold them. */
-export type RestoreSteps = { unfade: boolean; dust: boolean; dark: boolean; fill: 'ns' | 'lama'; grain: boolean; strength: number };
+export type RestoreSteps = {
+  unfade: boolean;
+  dust: boolean;
+  dark: boolean;
+  fill: 'ns' | 'lama';
+  blur: boolean;
+  /** The blur to take out: the picture was out of focus, or the camera moved. */
+  blurKind: 'focus' | 'motion';
+  grain: boolean;
+  strength: number;
+};
 
 /** The steps first offered: faded colours for a scan, dust and scratches always. */
-export const restoreStepsFor = (digitized: boolean): RestoreSteps => ({ unfade: digitized, dust: true, dark: false, fill: 'ns', grain: false, strength: 0.5 });
+export const restoreStepsFor = (digitized: boolean): RestoreSteps => ({
+  unfade: digitized,
+  dust: true,
+  dark: false,
+  fill: 'ns',
+  blur: false,
+  blurKind: 'focus',
+  grain: false,
+  strength: 0.5,
+});
 
 /** Whether no step is asked for. */
-export const nothingToRestore = (steps: RestoreSteps): boolean => !steps.unfade && !steps.dust && !steps.grain;
+export const nothingToRestore = (steps: RestoreSteps): boolean => !steps.unfade && !steps.dust && !steps.blur && !steps.grain;
 
 /** The steps as `file-restore`'s flags. */
 export const restoreFlags = (steps: RestoreSteps): string =>
@@ -24,10 +43,14 @@ export const restoreFlags = (steps: RestoreSteps): string =>
     steps.dust && '--dust',
     steps.dust && steps.dark && '--dark',
     steps.dust && steps.fill !== 'ns' && `--fill ${steps.fill}`,
+    steps.blur && `--blur ${steps.blurKind}`,
     steps.grain && `--grain ${steps.strength}`,
   ].filter(Boolean).join(' ');
 
-/** The steps to tick: faded colours, dust and scratches (darker marks too, filled quickly or with care), grain. */
+/**
+ * The steps to tick: faded colours, dust and scratches (darker marks too, filled quickly or with
+ * care), blur (out of focus or camera shake), grain.
+ */
 export function RestoreChoices({ steps, onChange, disabled }: { steps: RestoreSteps; onChange: (steps: RestoreSteps) => void; disabled?: boolean }) {
   const set = (changes: Partial<RestoreSteps>) => onChange({ ...steps, ...changes });
   return (
@@ -57,6 +80,23 @@ export function RestoreChoices({ steps, onChange, disabled }: { steps: RestoreSt
               </Stack>
             </Radio.Group>
           </Stack>
+        )}
+      </Stack>
+      <Stack gap={6}>
+        <Checkbox
+          checked={steps.blur}
+          onChange={(event) => set({ blur: event.currentTarget.checked })}
+          disabled={disabled}
+          label='Blur'
+          description='Sharpens a picture that is out of focus or blurred by a moving camera. A model guesses the detail, so compare before you keep it.'
+        />
+        {steps.blur && (
+          <Radio.Group value={steps.blurKind} onChange={(value) => set({ blurKind: value as 'focus' | 'motion' })} pl={32}>
+            <Stack gap={4}>
+              <Radio size='xs' value='focus' disabled={disabled} label='Out of focus' />
+              <Radio size='xs' value='motion' disabled={disabled} label='Camera shake' />
+            </Stack>
+          </Radio.Group>
         )}
       </Stack>
       <Stack gap={6}>
@@ -99,7 +139,7 @@ type Props = {
 
 /**
  * What to restore in a picture, asked before `file-restore` runs: faded colours, dust and scratches
- * (darker marks too, filled quickly or with care), grain. The picture itself is never changed: the
+ * (darker marks too, filled quickly or with care), blur, grain. The picture itself is never changed: the
  * result is a copy kept among its versions. It takes from seconds to a few minutes, by the size of
  * the picture and the steps, and the dialog waits for it.
  */

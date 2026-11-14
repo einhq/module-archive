@@ -53,15 +53,16 @@ Deno.test('the mask is a one-channel PNG of the rows given, band by band', async
   assertEquals(rows.flatMap((row) => [...row.subarray(1)]), [...pixels]);
 });
 
-Deno.test('a copy is made again with its colours, fill and grain, and no dust finder', () => {
+Deno.test('a copy is made again with its colours, fill, blur and grain, and no dust finder', () => {
   assertEquals(
     againFlags([
       { op: 'image.unfade', params: {} },
       { op: 'image.defects', params: { dark: true } },
       { op: 'image.inpaint', params: { method: 'lama' } },
+      { op: 'image.deblur', params: { blur: 'motion' } },
       { op: 'image.denoise', params: { strength: 0.4 } },
     ]),
-    ['--unfade', '--fill', 'lama', '--grain', '0.4'],
+    ['--unfade', '--fill', 'lama', '--blur', 'motion', '--grain', '0.4'],
   );
   assertEquals(againFlags([{ op: 'image.defects', params: {} }, { op: 'image.inpaint', params: { method: 'ns' } }]), []);
 });

@@ -181,7 +181,7 @@ function TextLanguage({ details, canEdit, onSet }: { details: MediaDetails; canE
 }
 
 /** What `find-damage` found, as the Damage row says it. */
-const DAMAGE_WORDS: Record<string, string> = { faded: 'faded colours', dust: 'dust', scratches: 'scratches' };
+const DAMAGE_WORDS: Record<string, string> = { faded: 'faded colours', dust: 'dust', scratches: 'scratches', blurred: 'out of focus', shaken: 'camera shake' };
 const damageLabel = (kinds: string[]): string => {
   const words = kinds.map((kind) => DAMAGE_WORDS[kind] ?? kind).join(', ');
   return words ? words[0].toUpperCase() + words.slice(1) : 'None found';

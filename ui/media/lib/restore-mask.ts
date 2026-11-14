@@ -159,12 +159,13 @@ const chunk = (type: string, data: Uint8Array): Uint8Array<ArrayBuffer> => {
 
 /**
  * The `file-restore` flags that make a restored copy again with a mask given in place of its
- * dust step: the same colours, fill and grain.
+ * dust step: the same colours, fill, blur and grain.
  */
 export const againFlags = (steps: { op: string; params: Record<string, unknown> }[]): string[] =>
   steps.flatMap((step) => {
     if (step.op === 'image.unfade') return ['--unfade'];
     if (step.op === 'image.inpaint' && typeof step.params.method === 'string' && step.params.method !== 'ns') return ['--fill', step.params.method];
+    if (step.op === 'image.deblur' && (step.params.blur === 'focus' || step.params.blur === 'motion')) return ['--blur', step.params.blur];
     if (step.op === 'image.denoise' && typeof step.params.strength === 'number') return ['--grain', String(step.params.strength)];
     return [];
   });

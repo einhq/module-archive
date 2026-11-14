@@ -15,6 +15,7 @@ const STEP_NAMES: Record<string, string> = {
   'image.unfade': 'faded colours',
   'image.defects': 'dust and scratches',
   'image.inpaint': 'dust and scratches',
+  'image.deblur': 'blur',
   'image.denoise': 'grain',
 };
 
