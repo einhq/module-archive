@@ -2,7 +2,7 @@ import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.t
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
-import { ActionIcon, Box, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Divider, Group, Kbd, Menu, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect, type Signal, signal } from '@preact/signals-react';
 import { useSignals } from '@preact/signals-react/runtime';
@@ -80,6 +80,7 @@ import { FaceOverlay, toFaceMarks } from './FaceOverlay.tsx';
 import { VideoFaces } from './VideoFaces.tsx';
 import { type FacePersonChange, FacePersonDialog } from './FacePersonDialog.tsx';
 import { MediaSidebar, SIDEBAR_WIDTH } from './MediaSidebar.tsx';
+import './lightbox-side.css';
 import { SubtitleEditDialog } from './SubtitleEditDialog.tsx';
 import { TextEditDialog } from './TextEditDialog.tsx';
 import { TextOverlay } from './TextOverlay.tsx';
@@ -95,7 +96,6 @@ import {
   lightboxRestedPath,
   textVisible,
   toggleFacesVisible,
-  toggleInfoSidebar,
   toggleTextVisible,
   toggleToolbarVisible,
   toolbarVisible,
@@ -149,8 +149,22 @@ const NATIVE_EDGE_GESTURE_PX = 24;
 const GESTURE_CONTROL_SELECTOR =
   'button, a, input, textarea, select, audio, [role="button"], [role="slider"], [data-face-link], [data-text-overlay], [data-video-controls], [data-document-reader]';
 
-/** A view switch of the bar's, or of the "more" menu when the bar has no room for it. */
-type BarView = { key: string; icon: string; label: string; shortcut?: string; on: boolean; disabled?: boolean; onClick: () => void };
+/**
+ * A button of the bar's, or a row of the "more" menu when the bar has no room for it. `on` paints
+ * its icon `onColor` (the accent unless given); `href` makes it a link that saves `download`.
+ */
+type BarAction = {
+  key: string;
+  icon: string;
+  label: string;
+  shortcut?: string;
+  on: boolean;
+  onColor?: string;
+  disabled?: boolean;
+  onClick?: () => void;
+  href?: string;
+  download?: string;
+};
 
 /** The bar's buttons' widths, by Mantine size, for the room a view switch not yet shown would take. */
 const BAR_BUTTON_PX: Record<string, number> = { lg: 34, xl: 44 };
@@ -241,6 +255,9 @@ const LIGHTBOX_ICON_SIZE = 18;
  * the bottom sheet has pushed the frame up to it — so it sits on its own dark rounded pill
  * rather than trusting whatever the photograph has in that corner.
  */
+/** Where a phone's toolbar floats: under the date's pill, two lines high, and the menu button beside it. */
+const MOBILE_TOOLBAR_TOP_PX = 76;
+
 const TAKEN_PILL_STYLE: CSSProperties = {
   pointerEvents: 'auto',
   minWidth: 0,
@@ -1738,11 +1755,13 @@ export function MediaLightbox() {
   }, [slideshow]);
 
   /**
-   * How many of the view switches (`barViews`) the bar has room for. Measured after each render
-   * and on every resize of the bar: one fewer while the bar cuts a text of its short, one more while
-   * the space left over takes another button and its gap.
+   * How many of the bar's actions (`barActions`) it has room for. Measured after each render and on
+   * every resize of the bar: one fewer while the bar cuts a text of its short, one more while the
+   * space left over takes another button and its gap. The last one takes no more than the room of
+   * the "more" button, which goes with it.
    */
-  const [barViewsShown, setBarViewsShown] = useState(3);
+  const [barActionsShown, setBarActionsShown] = useState(Infinity);
+  const barActionCountRef = useRef(0);
   const [, setBarResized] = useState(0);
   useEffect(() => {
     const row = infoRowRef.current;
@@ -1764,9 +1783,11 @@ export function MediaLightbox() {
       const cap = parseFloat(getComputedStyle(text).maxWidth);
       return Math.min(text.scrollWidth, Number.isNaN(cap) ? Infinity : cap) > text.clientWidth + 1;
     });
-    const shown = row.querySelectorAll('[data-bar-view]').length;
-    if (cut && shown > 0) setBarViewsShown(shown - 1);
-    else if (!cut && free >= (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2) setBarViewsShown(shown + 1);
+    const total = barActionCountRef.current;
+    const shown = row.querySelectorAll('[data-bar-action]').length;
+    const room = shown + 1 === total ? 0 : (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2;
+    if (cut && shown > 0) setBarActionsShown(shown - 1);
+    else if (!cut && shown < total && free >= room) setBarActionsShown(shown + 1);
   });
 
   if (!media) return null;
@@ -1794,14 +1815,36 @@ export function MediaLightbox() {
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
   // The details panel's file actions, floating over the picture when asked for.
   const mayUseToolbar = withDetails && (canEdit || actionPath !== undefined);
-  // The view switches: the text, the faces and fullscreen. They sit in the bar, in this order, as
-  // far as there is room (`barViewsShown`); the rest are rows of the "more" menu.
-  const barViews: BarView[] = [];
+  // The bar's actions, in the order they give way to the "more" menu from the end: the favourite
+  // and the slideshow, the view switches (the text, the faces, fullscreen), the toolbar and the
+  // download, which saves the original file as the file name in the details does. Each keeps its
+  // place in the bar as far as there is room (`barActionsShown`). A phone's bar holds the view
+  // switches only; the rest are always in its menu up in the corner.
+  const favouriteAction: BarAction | undefined = mayStar
+    ? {
+      key: 'favourite',
+      icon: starred ? 'heart-filled' : 'heart',
+      label: starred ? 'Unfavourite' : 'Favourite',
+      shortcut: 's',
+      on: starred,
+      onColor: 'var(--mantine-color-red-5)',
+      onClick: toggleStar,
+    }
+    : undefined;
+  const slideshowAction: BarAction = {
+    key: 'slideshow',
+    icon: 'player-play',
+    label: 'Start slideshow',
+    on: false,
+    disabled: albumMediaList.value.length < 2,
+    onClick: startSlideshow,
+  };
+  const viewActions: BarAction[] = [];
   if (pictureText) {
-    barViews.push({ key: 'text', icon: 'text-scan-2', label: showText ? 'Hide text' : 'Show text', shortcut: 't', on: showText, onClick: toggleTextVisible });
+    viewActions.push({ key: 'text', icon: 'text-scan-2', label: showText ? 'Hide text' : 'Show text', shortcut: 't', on: showText, onClick: toggleTextVisible });
   }
   if (media?.type === 'photo' || media?.type === 'video') {
-    barViews.push({
+    viewActions.push({
       key: 'faces',
       icon: 'user-square-rounded',
       label: faceCount === 0 ? 'No faces' : `${showFaces ? 'Unpin' : 'Pin'} faces`,
@@ -1811,34 +1854,58 @@ export function MediaLightbox() {
       onClick: toggleFacesVisible,
     });
   }
-  barViews.push({ key: 'fullscreen', icon: fullscreen ? 'minimize' : 'maximize', label: fullscreen ? 'Exit fullscreen' : 'Fullscreen', on: false, onClick: toggleFullscreen });
-  const shownViews = slideshow ? 0 : Math.min(barViewsShown, barViews.length);
-  // The view switches the bar has no room for, the toolbar and download: the rows of the "more"
-  // menu, on a phone and a desktop alike, with icons the size of the rows around them. Download
-  // saves the original file, as the file name in the details does.
-  const viewMenuItems = (iconSize: number) => (
-    <>
-      {barViews.slice(shownViews).map((view) => (
-        <Menu.Item
-          key={view.key}
-          leftSection={<TablerIcon name={view.icon} size={iconSize} color={view.on ? 'var(--mrx-accent)' : undefined} />}
-          rightSection={isMobile || !view.shortcut ? undefined : <Kbd size='xs'>{view.shortcut}</Kbd>}
-          disabled={view.disabled}
-          onClick={view.onClick}
+  viewActions.push({
+    key: 'fullscreen',
+    icon: fullscreen ? 'minimize' : 'maximize',
+    label: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+    on: false,
+    onClick: toggleFullscreen,
+  });
+  const fileActions: BarAction[] = [];
+  if (mayUseToolbar) {
+    fileActions.push({ key: 'toolbar', icon: 'tools', label: showToolbar ? 'Hide toolbar' : 'Show toolbar', on: showToolbar, onClick: toggleToolbarVisible });
+  }
+  fileActions.push({ key: 'download', icon: 'download', label: 'Download', on: false, href: fileUrl(media.path), download: media.name });
+  const barActions = slideshow ? [] : isMobile ? viewActions : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, ...fileActions];
+  barActionCountRef.current = barActions.length;
+  const inBar = new Set(barActions.slice(0, barActionsShown).map((action) => action.key));
+  const barButton = (action: BarAction | undefined) =>
+    action && inBar.has(action.key) && (
+      <Tooltip key={action.key} label={action.shortcut ? `${action.label} (${action.shortcut})` : action.label} withArrow disabled={isMobile}>
+        <ActionIcon
+          data-bar-action
+          variant='subtle'
+          color='gray'
+          size={barButtonSize}
+          disabled={action.disabled}
+          onClick={action.onClick}
+          aria-label={action.label}
+          aria-pressed={action.href ? undefined : action.on}
+          style={{ flexShrink: 0 }}
+          {...(action.href ? { component: 'a' as const, href: action.href, download: action.download } : {})}
         >
-          {view.label}
-        </Menu.Item>
-      ))}
-      {mayUseToolbar && (
-        <Menu.Item leftSection={<TablerIcon name='tools' size={iconSize} color={showToolbar ? 'var(--mrx-accent)' : undefined} />} onClick={toggleToolbarVisible}>
-          {showToolbar ? 'Hide toolbar' : 'Show toolbar'}
-        </Menu.Item>
-      )}
-      <Menu.Item component='a' href={fileUrl(media.path)} download={media.name} leftSection={<TablerIcon name='download' size={iconSize} />}>
-        Download
+          <TablerIcon name={action.icon} size={barIconSize} color={action.on ? action.onColor ?? 'var(--mrx-accent)' : 'white'} />
+        </ActionIcon>
+      </Tooltip>
+    );
+  // The rows of the "more" menu, on a phone and a desktop alike, in the bar's order, with icons the
+  // size of the rows around them: what the bar has no room for, and on a phone what it never holds.
+  const menuActions = isMobile
+    ? [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions.filter((action) => !inBar.has(action.key)), ...fileActions]
+    : barActions.filter((action) => !inBar.has(action.key));
+  const actionMenuItems = (iconSize: number) =>
+    menuActions.map((action) => (
+      <Menu.Item
+        key={action.key}
+        leftSection={<TablerIcon name={action.icon} size={iconSize} color={action.on ? action.onColor ?? 'var(--mrx-accent)' : undefined} />}
+        rightSection={isMobile || !action.shortcut ? undefined : <Kbd size='xs'>{action.shortcut}</Kbd>}
+        disabled={action.disabled}
+        onClick={action.onClick}
+        {...(action.href ? { component: 'a' as const, href: action.href, download: action.download } : {})}
+      >
+        {action.label}
       </Menu.Item>
-    </>
-  );
+    ));
   const kenBurnsClass = kenBurnsClassForIndex(currentMediaIndex.value, kenBurns);
   const zoomed = zoomable && isZoomed(zoom);
   const zoomTransition = zoomAnimating ? ZOOM_ANIMATION : 'none';
@@ -1992,8 +2059,9 @@ export function MediaLightbox() {
           )}
 
           {
-            /* A phone's row at the bottom has room for the counter and location only; the
-                slideshow, faces, fullscreen and the chat are in a menu up in the corner. Sideways a phone
+            /* A phone's row at the bottom has room for the counter, the location and the view
+                switches at most; the favourite, the slideshow, the toolbar, the download, the view
+                switches the row leaves out and the chat are in a menu up in the corner. Sideways a phone
                 has no swipe up to spare for the details either, so a button beside the menu
                 opens them, and is gone while they are open. */
           }
@@ -2033,22 +2101,7 @@ export function MediaLightbox() {
                   </ActionIcon>
                 </Menu.Target>
                 <Menu.Dropdown>
-                  {mayStar && (
-                    <Menu.Item
-                      leftSection={<TablerIcon name={starred ? 'heart-filled' : 'heart'} size={24} color={starred ? 'var(--mantine-color-red-5)' : undefined} />}
-                      onClick={toggleStar}
-                    >
-                      {starred ? 'Unfavourite' : 'Favourite'}
-                    </Menu.Item>
-                  )}
-                  <Menu.Item
-                    leftSection={<TablerIcon name='player-play' size={24} />}
-                    disabled={albumMediaList.value.length < 2}
-                    onClick={startSlideshow}
-                  >
-                    Start slideshow
-                  </Menu.Item>
-                  {viewMenuItems(24)}
+                  {actionMenuItems(24)}
                   <DrawerMenuItems iconSize={24} />
                 </Menu.Dropdown>
               </Menu>
@@ -2073,22 +2126,8 @@ export function MediaLightbox() {
                 <TablerIcon name='x' size={22} color='white' />
               </ActionIcon>
 
-              {/* The details, and the drawer (the chat) beside them: the top bar's button is covered. */}
+              {/* The drawer (the chat): the top bar's button is covered. */}
               <Group gap={4} wrap='nowrap'>
-                {withDetails && (
-                  <Tooltip label='Details (i)' withArrow>
-                    <ActionIcon
-                      variant='subtle'
-                      color='gray'
-                      size='lg'
-                      onClick={toggleInfoSidebar}
-                      aria-label='Toggle details'
-                      style={{ pointerEvents: 'auto' }}
-                    >
-                      <TablerIcon name='info-circle' size={20} color={sidebarOpen ? 'var(--mrx-accent)' : 'white'} />
-                    </ActionIcon>
-                  </Tooltip>
-                )}
                 <DrawerButtons />
               </Group>
             </Group>
@@ -2392,11 +2431,11 @@ export function MediaLightbox() {
                 onEditText={mayWriteText ? () => setEditingText(true) : undefined}
                 onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
                 onLayer={setToolbarLayer}
-                mediaRef={mediaRef}
-                // Below the phone's menu button in the corner, beside the desktop's close and details buttons.
-                minTop={isMobile ? 60 : 8}
-                iconSize={barIconSize}
-                buttonSize={barButtonSize}
+                // Below the phone's date and menu button at the top, between the desktop's close and chat buttons.
+                top={isMobile ? MOBILE_TOOLBAR_TOP_PX : 8}
+                // Larger on a phone than the bar's buttons: the picture's actions are aimed at, not glanced at.
+                iconSize={isMobile ? 28 : barIconSize}
+                buttonSize={isMobile ? 52 : barButtonSize}
               />
             )}
           </Box>
@@ -2445,13 +2484,7 @@ export function MediaLightbox() {
                 : {}),
             }}
           >
-            {!slideshow && !isMobile && mayStar && (
-              <Tooltip label={starred ? 'Unfavourite (s)' : 'Favourite (s)'} withArrow>
-                <ActionIcon variant='subtle' color='gray' size={barButtonSize} onClick={toggleStar} aria-label={starred ? 'Unfavourite' : 'Favourite'} aria-pressed={starred}>
-                  <TablerIcon name={starred ? 'heart-filled' : 'heart'} size={barIconSize} color={starred ? 'var(--mantine-color-red-5)' : 'white'} />
-                </ActionIcon>
-              </Tooltip>
-            )}
+            {barButton(favouriteAction)}
 
             <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
               {({ index }) =>
@@ -2465,21 +2498,15 @@ export function MediaLightbox() {
                 )}
             </SwipeInfo>
 
-            {!isMobile && (
-              <Tooltip label={slideshow ? 'Stop slideshow' : 'Start slideshow'} withArrow>
-                <ActionIcon
-                  variant='subtle'
-                  color='gray'
-                  size={barButtonSize}
-                  disabled={!slideshow && albumMediaList.value.length < 2}
-                  onClick={slideshow ? stopSlideshow : startSlideshow}
-                  aria-label={slideshow ? 'Stop slideshow' : 'Start slideshow'}
-                  style={{ flexShrink: 0 }}
-                >
-                  <TablerIcon name={slideshow ? 'player-stop' : 'player-play'} size={barIconSize} color='white' />
-                </ActionIcon>
-              </Tooltip>
-            )}
+            {slideshow && !isMobile
+              ? (
+                <Tooltip label='Stop slideshow' withArrow>
+                  <ActionIcon variant='subtle' color='gray' size={barButtonSize} onClick={stopSlideshow} aria-label='Stop slideshow' style={{ flexShrink: 0 }}>
+                    <TablerIcon name='player-stop' size={barIconSize} color='white' />
+                  </ActionIcon>
+                </Tooltip>
+              )
+              : barButton(slideshowAction)}
 
             <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
               {({ taken, takenLabel, takenTooltip }) =>
@@ -2529,25 +2556,10 @@ export function MediaLightbox() {
                 )}
             </SwipeInfo>
 
-            {barViews.slice(0, shownViews).map((view) => (
-              <Tooltip key={view.key} label={view.shortcut ? `${view.label} (${view.shortcut})` : view.label} withArrow disabled={isMobile}>
-                <ActionIcon
-                  data-bar-view
-                  variant='subtle'
-                  color='gray'
-                  size={barButtonSize}
-                  disabled={view.disabled}
-                  onClick={view.onClick}
-                  aria-label={view.label}
-                  aria-pressed={view.on}
-                  style={{ flexShrink: 0 }}
-                >
-                  <TablerIcon name={view.icon} size={barIconSize} color={view.on ? 'var(--mrx-accent)' : 'white'} />
-                </ActionIcon>
-              </Tooltip>
-            ))}
+            {viewActions.map(barButton)}
+            {fileActions.map(barButton)}
 
-            {!slideshow && !isMobile && (
+            {!slideshow && !isMobile && menuActions.length > 0 && (
               <Menu position='top-end' shadow='md' withinPortal>
                 <Menu.Target>
                   <Tooltip label='More' withArrow>
@@ -2557,7 +2569,7 @@ export function MediaLightbox() {
                   </Tooltip>
                 </Menu.Target>
                 <Menu.Dropdown>
-                  {viewMenuItems(14)}
+                  {actionMenuItems(14)}
                 </Menu.Dropdown>
               </Menu>
             )}
@@ -2602,6 +2614,15 @@ export function MediaLightbox() {
             >
               <TablerIcon name='chevron-right' size={36} color='white' />
             </ActionIcon>
+          )}
+
+          {/* Hidden, the details leave a handle at the right edge, above the bar, to bring them back. */}
+          {withDetails && !slideshow && !isMobile && !sidebarOpen && (
+            <Tooltip label='Show details (i)' position='left' withArrow>
+              <UnstyledButton className='mrx-lightbox-side-handle' aria-label='Show details' onClick={() => toggleSheet(true)}>
+                <TablerIcon name='layout-sidebar-right-expand' size={20} />
+              </UnstyledButton>
+            </Tooltip>
           )}
         </Box>
 
@@ -2663,7 +2684,18 @@ export function MediaLightbox() {
               inert={!sidebarOpen}
               style={{ '--mrx-lightbox-side-w': `${SIDEBAR_WIDTH}px` } as CSSProperties}
             >
-              {detailsSidebar(false)}
+              {/* The details over a foot that hides them, as the app's navbar collapses, mirrored. */}
+              <Box className='mrx-lightbox-side-column'>
+                {detailsSidebar(false)}
+                <Box className='mrx-lightbox-side-foot'>
+                  <Divider mb='xs' />
+                  <Tooltip label='Hide details (i)' position='left' withArrow>
+                    <ActionIcon variant='subtle' color='gray' size='lg' radius='md' aria-label='Hide details' onClick={() => toggleSheet(false)}>
+                      <TablerIcon name='layout-sidebar-right-collapse' size={20} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Box>
+              </Box>
             </Box>
           )}
       </Box>

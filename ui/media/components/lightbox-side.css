@@ -1,0 +1,59 @@
+/* The lightbox's details panel (MediaLightbox.tsx, MediaSidebar.tsx). Beside the picture on a
+ * desktop the details scroll above a foot that hides them, and a hidden panel leaves a handle at
+ * the right edge. */
+
+.mrx-lightbox-side-column {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: var(--mrx-lightbox-side-w);
+  background: var(--mrx-surface-raised);
+}
+
+.mrx-lightbox-side-column > .mrx-scroll-box {
+  flex: 1 1 0;
+}
+
+/* As the app's navbar foot, mirrored: the button sits on the side towards the picture. */
+.mrx-lightbox-side-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0 var(--mantine-spacing-md) var(--mantine-spacing-md);
+}
+
+.mrx-lightbox-side-foot > .mantine-Divider-root {
+  align-self: stretch;
+}
+
+/* A tab sticking out of the right edge, low but clear of the bar beneath the picture. */
+.mrx-lightbox-side-handle {
+  position: absolute;
+  right: 0;
+  bottom: 88px;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 44px;
+  border-radius: var(--mantine-radius-md) 0 0 var(--mantine-radius-md);
+  background: var(--mrx-surface-raised);
+  color: var(--mantine-color-text);
+  box-shadow: var(--mantine-shadow-sm);
+  opacity: 0.85;
+  transition: opacity var(--mrx-dur-fast) var(--mrx-ease), width var(--mrx-dur-fast) var(--mrx-ease);
+}
+
+.mrx-lightbox-side-handle:hover,
+.mrx-lightbox-side-handle:focus-visible {
+  opacity: 1;
+  width: 42px;
+}
+
+/* The map is a stacking context of its own, under the enlarge button over it; while its layer
+ * list is open the map comes up, list and all. */
+.mrx-sidebar-map:has(.leaflet-control-layers-expanded) > .leaflet-container {
+  z-index: 2;
+}

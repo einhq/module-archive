@@ -46,6 +46,7 @@ import { useFileActions } from './FileActions.tsx';
 import { UserText } from '../../components/UserText.tsx';
 import { Comments } from '../../components/Comments.tsx';
 import { SidebarSection, useSectionOpen } from './SidebarSection.tsx';
+import './lightbox-side.css';
 
 /** Wide enough for the iconed rows. */
 export const SIDEBAR_WIDTH = 400;
@@ -744,8 +745,9 @@ export function MediaSidebar(
             )}
             {position?.address && <Text size='xs' c='dimmed'>{position.address}</Text>}
             {mapPoint && (
-              <Box style={{ position: 'relative', borderRadius: 4, overflow: 'hidden' }}>
-                <MapView center={mapPoint} zoom={14} style={{ height: 180, minHeight: 180 }}>
+              // Small, so without the detail tiles and the attribution they bring.
+              <Box className='mrx-sidebar-map' style={{ position: 'relative', borderRadius: 4, overflow: 'hidden' }}>
+                <MapView center={mapPoint} zoom={14} details={false} style={{ height: 240, minHeight: 240 }}>
                   <MapShape shape={mapPoint} />
                 </MapView>
                 {onOpenMap && (

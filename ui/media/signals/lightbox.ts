@@ -3,10 +3,6 @@ import { signal } from '@preact/signals-react';
 /** Whether the lightbox shows its info sidebar. */
 export const infoSidebarOpen = signal<boolean>(true);
 
-export const toggleInfoSidebar = () => {
-  infoSidebarOpen.value = !infoSidebarOpen.value;
-};
-
 /**
  * The path of the picture the lightbox's viewer has stopped on: shown for a moment
  * (`LIGHTBOX_REST_MS`) with no step and no finger on it. Null while a run of swipes goes on. The

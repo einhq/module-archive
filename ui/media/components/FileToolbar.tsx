@@ -1,16 +1,15 @@
 /**
  * The file actions of the details panel's cog menu (`useFileActions`) as a row of icons floating
- * over the top of the picture, on a translucent rounded pill. Each icon is titled with its action;
+ * over the top of the viewer, on a translucent rounded pill. Each icon is titled with its action;
  * one that is on (drawing faces, mirrored) is in the accent colour.
  *
- * The row sits just inside the picture's top edge, measured from where the picture is drawn, and
- * no higher than `minTop` from the top of the surface it floats in, so it clears the buttons there.
+ * The row stays `top` from the top of the surface it floats in, whatever picture is shown, so it
+ * clears the buttons there.
  */
 
 import { TablerIcon } from '@ein/ui/components';
 import { ActionIcon, Group } from '@mantine/core';
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useContentRect } from '../hooks/useContentRect.ts';
+import { useEffect } from 'react';
 import { type FileActionsOptions, useFileActions } from './FileActions.tsx';
 
 const INSET_PX = 8;
@@ -18,38 +17,20 @@ const INSET_PX = 8;
 type FileToolbarProps = FileActionsOptions & {
   /** A dialog of the toolbar's opened or closed, which has the keys while open. */
   onLayer: (open: boolean) => void;
-  mediaRef: RefObject<HTMLImageElement | HTMLVideoElement | null>;
-  minTop: number;
+  top: number;
   iconSize: number;
-  buttonSize: string;
+  buttonSize: string | number;
 };
 
-export function FileToolbar({ onLayer, mediaRef, minTop, iconSize, buttonSize, ...options }: FileToolbarProps) {
+export function FileToolbar({ onLayer, top, iconSize, buttonSize, ...options }: FileToolbarProps) {
   const { actions, dialogs, layer } = useFileActions(options);
   useEffect(() => onLayer(layer), [layer]);
   useEffect(() => () => onLayer(false), []);
-  const rect = useContentRect(mediaRef);
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [top, setTop] = useState(minTop);
-
-  // Measured on every render rather than from `rect` alone: a zoom scales the picture's element
-  // without resizing it.
-  useLayoutEffect(() => {
-    const el = mediaRef.current;
-    const surface = ref.current?.offsetParent;
-    if (!el || !surface || !rect || el.clientHeight === 0) return setTop(minTop);
-    const box = el.getBoundingClientRect();
-    const scale = box.height / el.clientHeight;
-    const pictureTop = box.top + (rect.top - el.offsetTop) * scale - surface.getBoundingClientRect().top;
-    const next = Math.max(minTop, Math.round(pictureTop + INSET_PX));
-    setTop((current) => current === next ? current : next);
-  });
 
   if (actions.length === 0) return <>{dialogs}</>;
   return (
     <>
       <Group
-        ref={ref}
         data-lightbox-toolbar
         gap={2}
         wrap='nowrap'
