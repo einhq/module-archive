@@ -1739,7 +1739,7 @@ export function MediaLightbox() {
 
   /**
    * How many of the view switches (`barViews`) the bar has room for. Measured after each render
-   * and on every resize of the bar: one fewer while a text of the bar's is cut short, one more while
+   * and on every resize of the bar: one fewer while the bar cuts a text of its short, one more while
    * the space left over takes another button and its gap.
    */
   const [barViewsShown, setBarViewsShown] = useState(3);
@@ -1759,7 +1759,11 @@ export function MediaLightbox() {
     const items = [...row.children] as HTMLElement[];
     const used = items.reduce((sum, item) => sum + item.offsetWidth, 0) + gap * Math.max(0, items.length - 1);
     const free = row.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - used;
-    const cut = [...row.querySelectorAll<HTMLElement>('[data-bar-text]')].some((text) => text.scrollWidth > text.clientWidth + 1);
+    // Cut short by the bar, that is: a text held to a width of its own (the place's) counts only below that.
+    const cut = [...row.querySelectorAll<HTMLElement>('[data-bar-text]')].some((text) => {
+      const cap = parseFloat(getComputedStyle(text).maxWidth);
+      return Math.min(text.scrollWidth, Number.isNaN(cap) ? Infinity : cap) > text.clientWidth + 1;
+    });
     const shown = row.querySelectorAll('[data-bar-view]').length;
     if (cut && shown > 0) setBarViewsShown(shown - 1);
     else if (!cut && free >= (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2) setBarViewsShown(shown + 1);
