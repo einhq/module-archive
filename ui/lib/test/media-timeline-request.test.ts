@@ -21,3 +21,19 @@ Deno.test('a subtree is a facet of its own, listed by time', () => {
   const request = mediaTimelineSearchRequest({ within: '/home/anna/staging/files', ascending: true });
   assertEquals(request.filters, { within: '/home/anna/staging/files', sort: 'time' });
 });
+
+Deno.test('an album is laid out whole, and narrowed to a person it still is', () => {
+  assertEquals(mediaTimelineSearchRequest({ under: '/archive/albums/Summer' }).layout, true);
+  assertEquals(mediaTimelineSearchRequest({ under: '/archive/albums/Summer', filters: { subjects: ['person:anna-andersson'] } }).layout, true);
+});
+
+Deno.test('words, a picture or a label in an album page by cursor, since they drive the search', () => {
+  for (const filters of [{ query: 'sailboat' }, { like: '/archive/albums/Summer/boat.jpg' }, { tags: ['boats'] }]) {
+    assertEquals(mediaTimelineSearchRequest({ under: '/archive/albums/Summer', filters, rankByRelevance: true }).layout, false);
+  }
+});
+
+Deno.test('a search with no subject or container is never laid out', () => {
+  assertEquals(mediaTimelineSearchRequest({ filters: {} }).layout, false);
+  assertEquals(mediaTimelineSearchRequest({ camera: '/cameras/x100' }).layout, false);
+});

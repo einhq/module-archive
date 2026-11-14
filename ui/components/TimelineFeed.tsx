@@ -4,7 +4,7 @@ import { MoreLoader, PageLoader } from '@ein/ui/components';
 import { type CSSProperties, useEffect, useRef } from 'react';
 import { useHeaderHeight } from '@ein/ui/hooks';
 import type { TimelineGroup, TimelineKind } from '../lib/timeline-entries.ts';
-import { KIND_STYLE, spanLabel, TimelineEntryCard } from './TimelineEntryCard.tsx';
+import { KIND_STYLE, spanLabel, TimelineEntryCard, type TimelineSubject } from './TimelineEntryCard.tsx';
 
 /**
  * Row geometry — the date gutter, where the connector line runs, and centring
@@ -41,6 +41,8 @@ type TimelineFeedProps = {
   onGroupNode?: (key: string, node: HTMLElement | null) => void;
   /** What an empty feed says. The corpus-wide default is wrong for one person's life. */
   emptyMessage?: string;
+  /** Whose timeline this is, for links to the albums narrowed to them. */
+  subject?: TimelineSubject;
 };
 
 /**
@@ -52,7 +54,7 @@ type TimelineFeedProps = {
  * that is not a `Timeline.Item` — so a header cannot live there. `active` stays
  * at its default of -1: nothing in a chronology is "the current step".
  */
-export function TimelineFeed({ groups, loading, hasMore, sentinelRef, hasNewer, topSentinelRef, onTopGroupChange, onGroupNode, emptyMessage }: TimelineFeedProps) {
+export function TimelineFeed({ groups, loading, hasMore, sentinelRef, hasNewer, topSentinelRef, onTopGroupChange, onGroupNode, emptyMessage, subject }: TimelineFeedProps) {
   const headersRef = useRef(new Map<string, HTMLElement>());
   const headerHeight = useHeaderHeight();
 
@@ -120,7 +122,7 @@ export function TimelineFeed({ groups, loading, hasMore, sentinelRef, hasNewer, 
                 opposite={<Text size='xs' c='dimmed'>{spanLabel(entry)}</Text>}
                 bullet={<KindBullet kind={entry.kind} />}
               >
-                <TimelineEntryCard entry={entry} />
+                <TimelineEntryCard entry={entry} subject={subject} />
               </Timeline.Item>
             ))}
           </Timeline>

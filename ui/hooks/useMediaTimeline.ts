@@ -107,8 +107,8 @@ type UseMediaTimelineResult = {
  * `granularity`, with undated media collected at the end.
  */
 export function useMediaTimeline(opts: UseMediaTimelineOptions): UseMediaTimelineResult {
-  const { person, location, under, within, granularity = 'month', pageSize = 60, browseAll = false, scrollRoot = null } = opts;
-  const { filters: merged, anchor } = mediaTimelineSearchRequest(opts);
+  const { under, within, granularity = 'month', pageSize = 60, browseAll = false, scrollRoot = null } = opts;
+  const { filters: merged, anchor, layout } = mediaTimelineSearchRequest(opts);
 
   const { results, loading, error, hasMore, loadMore, removeResults, reload, hasNewer, anchorIndex, answeredAnchor, topSentinelRef, seams, outcome } = useSearch({
     ...merged,
@@ -116,11 +116,7 @@ export function useMediaTimeline(opts: UseMediaTimelineOptions): UseMediaTimelin
     browseAll,
     anchor,
     scrollRoot,
-    // Containers, people and locations already materialize their complete ordered
-    // sets on the server, and a subtree is laid out whole while it is small enough.
-    // One compact index gives their grids exact geometry; a subtree too large for one,
-    // cameras and general search page by cursor.
-    layout: under !== undefined || within !== undefined || person !== undefined || location !== undefined,
+    layout,
   });
 
   const items = useMemo(() => results.map(searchResultToMediaItem), [results]);

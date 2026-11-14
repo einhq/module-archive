@@ -4,7 +4,7 @@ import { Anchor, Avatar, Group, Stack, Text } from '@mantine/core';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { TimelineEntry, TimelineKind } from '../lib/timeline-entries.ts';
-import { fileUrl, thumbnailUrl } from '@ein/ui/lib';
+import { fileUrl, paramsFromFilters, thumbnailUrl } from '@ein/ui/lib';
 import { UserText } from './UserText.tsx';
 import { deviceRoute } from '../location/lib/device-route.ts';
 
@@ -126,7 +126,17 @@ const coverUrls = (entry: TimelineEntry): { url: string; fallback?: string } | u
   return entry.cover.thumb ? { url: thumbnailUrl(entry.cover.path, true), fallback: base } : { url: base };
 };
 
-type TimelineEntryCardProps = { entry: TimelineEntry };
+/** Whose timeline a feed is: its album entries also open the album narrowed to them. */
+export type TimelineSubject = {
+  /** The `search --subject` the album is narrowed by, `person:<slug>`. */
+  subject: string;
+  name: string;
+};
+
+/** An album, showing only the media of `subject` (the album page's search box, filled in). */
+const narrowedAlbumRoute = (path: string, subject: string): string => `/albums/${encodeURIComponent(path)}?${paramsFromFilters({ subjects: [subject] })}`;
+
+type TimelineEntryCardProps = { entry: TimelineEntry; subject?: TimelineSubject };
 
 /**
  * One happening, as it appears inside a Mantine `Timeline.Item`.
@@ -134,13 +144,14 @@ type TimelineEntryCardProps = { entry: TimelineEntry };
  * Deliberately small: the timeline's job is to say *when*, and a card that grows
  * into a preview of the album turns scanning a decade into scrolling one.
  */
-export function TimelineEntryCard({ entry }: TimelineEntryCardProps) {
+export function TimelineEntryCard({ entry, subject }: TimelineEntryCardProps) {
   const cover = coverUrls(entry);
   const { size, radius } = coverSize(entry.kind);
   const [src, setSrc] = useState(cover?.url);
   // What the missing picture *would* have been, not the kind — the bullet right
   // beside it already says the kind, and two cakes in a row say it twice.
   const placeholder = isPersonKind(entry.kind) ? 'user' : 'photo';
+  const narrowed = subject && (entry.kind === 'album' || entry.kind === 'auto-album') ? narrowedAlbumRoute(entry.path, subject.subject) : undefined;
 
   return (
     <Group wrap='nowrap' align='flex-start' gap='sm' className='mrx-timeline-item'>
@@ -180,6 +191,12 @@ export function TimelineEntryCard({ entry }: TimelineEntryCardProps) {
         <Group gap='xs' wrap='wrap'>
           {entry.count !== undefined && <Text size='xs' c='dimmed'>{entry.count} items</Text>}
           {entry.points !== undefined && <Text size='xs' c='dimmed'>{entry.points} points</Text>}
+          {narrowed && (
+            <Anchor component={Link} to={narrowed} size='xs' style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <TablerIcon name='filter' size={12} />
+              Show only {subject!.name}
+            </Anchor>
+          )}
         </Group>
 
         {entry.description && (

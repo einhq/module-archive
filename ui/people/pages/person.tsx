@@ -147,6 +147,7 @@ export default function PersonDetailPage() {
               sentinelRef={noSentinel}
               topSentinelRef={noSentinel}
               emptyMessage={`Nothing recorded for ${person.name} yet. Add an event to record something.`}
+              subject={{ subject: subjectArg('person', person.id), name: person.name }}
             />
           </Tabs.Panel>
 

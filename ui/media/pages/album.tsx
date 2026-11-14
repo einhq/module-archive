@@ -9,15 +9,30 @@ import { MoveToAlbumAction } from '../components/MoveToAlbumAction.tsx';
 import { SetCoverAction } from '../components/SetCoverAction.tsx';
 import { SetTimeAction } from '../components/SetTimeAction.tsx';
 import { StackAction } from '../components/StackAction.tsx';
-import { EntityDetailHeader, FillWindow, formatRange, GRID_GAP, HeaderChoices, HeaderDescription, ShareSelectionAction, SharingChip, TablerIcon } from '@ein/ui/components';
-import { Badge, Box, Button, Group, SimpleGrid, Stack, Tabs, Text, Tooltip } from '@mantine/core';
+import {
+  EntityDetailHeader,
+  FillWindow,
+  formatRange,
+  GRID_GAP,
+  hasPills,
+  HeaderChoices,
+  HeaderDescription,
+  HeaderFilterBar,
+  type PillKind,
+  SearchInput,
+  SearchPills,
+  ShareSelectionAction,
+  SharingChip,
+  TablerIcon,
+} from '@ein/ui/components';
+import { Alert, Badge, Box, Button, Group, Loader, SimpleGrid, Stack, Tabs, Text, Tooltip } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { AlbumSortSelect, useAlbumSort } from '../components/AlbumSort.tsx';
 import { DIRECTORY_GRID_COLS, DirectoryCard } from '../components/DirectoryCard.tsx';
 import type { AlbumScores, RawSortReport } from '@archive/media/api';
 import { setAutoAlbumPinned, useAutoAlbum } from '../hooks/useAutoAlbums.ts';
 import { forgetSubjectFacets, useSubjectFacets } from '../../hooks/useSubjectFacets.ts';
-import { MEDIA_KIND_FILTERS, type SearchKind, useAccessIds } from '@ein/ui/hooks';
+import { hasAnyFilter, MEDIA_KIND_FILTERS, type SearchFilters, type SearchKind, useAccessIds, useSearchBox } from '@ein/ui/hooks';
 import { useAlbumDirectories } from '../hooks/useAlbumDirectories.ts';
 import { useAlbumInfo } from '../hooks/useAlbumInfo.ts';
 import { useAlbumRaw } from '../hooks/useAlbumRaw.ts';
@@ -29,7 +44,10 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { albumRoute, stagingGroupRoute } from '../lib/album-path.ts';
 import { MediaFilters } from '../components/MediaFilters.tsx';
 import { mediaTypeFilter } from '../signals/album.ts';
-import { canWrite, isGuest, shq } from '@ein/ui/lib';
+import { canWrite, filtersFromParams, isGuest, type MentionKind, paramsFromFilters, shq } from '@ein/ui/lib';
+import { usePeople } from '../../people/hooks/usePeople.ts';
+import { useLocations } from '../../location/hooks/useLocations.ts';
+import { LOCATIONS_ROOT } from '@archive/paths';
 import { currentUser, execCommand, notify, sharingChanged } from '@ein/ui/signals';
 
 /**
@@ -50,7 +68,19 @@ type AlbumTab = typeof TABS[number];
 
 const isTab = (value: string | null): value is AlbumTab => value !== null && (TABS as readonly string[]).includes(value);
 
+/** What an `@` in the album's search box picks. Not an album: the search stays in this one. */
+const MENTION_KINDS: readonly MentionKind[] = ['person', 'location', 'label'];
+
 export const handle = { fullBleed: true };
+
+/** How confidently the organizer grouped a suggested album. */
+const matchBadge = (overall: number) => (
+  <Tooltip label='How confidently these were grouped together'>
+    <Badge size='lg' variant='filled' color={overall >= 0.8 ? 'green' : overall >= 0.6 ? 'yellow' : 'gray'}>
+      {Math.round(overall * 100)}% match
+    </Badge>
+  </Tooltip>
+);
 
 export default function AlbumDetailPage() {
   useSignals();
@@ -68,7 +98,36 @@ export default function AlbumDetailPage() {
     setSearchParams(next, { replace: true });
   };
 
+  // The search box narrows the media to the people, locations and labels picked with `@` and ranks
+  // them by the words; the URL carries it, so a person's timeline can link to the album narrowed
+  // to them. The album itself is not one of its filters: it is always this one.
+  const filters = useMemo((): SearchFilters => ({ ...filtersFromParams(searchParams), under: undefined }), [searchParams]);
+  // Only the filters' own keys are replaced: the tab and an open lightbox keep theirs.
+  const apply = useCallback((next: SearchFilters) => {
+    const params = new URLSearchParams(searchParams);
+    for (const key of paramsFromFilters(filters).keys()) params.delete(key);
+    for (const [key, value] of paramsFromFilters({ ...next, under: undefined })) params.append(key, value);
+    setSearchParams(params, { replace: true });
+  }, [setSearchParams, searchParams, filters]);
+  const box = useSearchBox({ filters, apply });
+  const searched = hasAnyFilter(filters);
+  const ranked = Boolean(filters.query?.trim());
+  const [searching, setSearching] = useState(false);
+  const { people } = usePeople();
+  const { locations } = useLocations(LOCATIONS_ROOT, { withCoordinates: false });
+  const nameOf = useCallback((kind: PillKind, value: string): string | undefined => {
+    if (kind === 'person') return people.find((person) => person.id === value)?.name;
+    if (kind === 'location') return locations.find((location) => location.id === value)?.name;
+    return undefined;
+  }, [people, locations]);
+
   const albumPath = id ? decodeURIComponent(id) : '/';
+  // Another album — a folder, the next in a series — opens with the box as its address has it.
+  const { setText, setMentions } = box;
+  useEffect(() => {
+    setText(filters.query ?? '');
+    setMentions([]);
+  }, [albumPath]);
   const { info, refetch: refetchInfo } = useAlbumInfo(albumPath);
   const { series, refetch: refetchSeries } = useAlbumSeries(albumPath);
   // Changing the album — its details, sharing, events, stacks, cover, uploads, putting it in the
@@ -279,24 +338,43 @@ export default function AlbumDetailPage() {
           }
           : undefined}
         // None when they would be empty, so a phone floats nothing over the other tabs' foot.
-        controls={(suggested?.overall !== undefined || tab === 'media') && (
-          <Group justify='flex-end' gap='xs'>
-            {suggested?.overall !== undefined && (
-              <Tooltip label='How confidently these were grouped together'>
-                <Badge size='lg' variant='filled' color={suggested.overall >= 0.8 ? 'green' : suggested.overall >= 0.6 ? 'yellow' : 'gray'}>
-                  {Math.round(suggested.overall * 100)}% match
-                </Badge>
-              </Tooltip>
-            )}
-            {/* How the media are narrowed and ordered: the other tabs have no list for them to act on. */}
-            {tab === 'media' && (
+        controls={tab === 'media'
+          ? (
+            // How the media are searched, narrowed and ordered: the other tabs have no list for them to act on.
+            <HeaderFilterBar
+              wide
+              input={
+                <Box style={{ flex: 1, minWidth: 0 }}>
+                  <SearchInput
+                    value={box.text}
+                    onChange={box.setText}
+                    mentions={box.mentions}
+                    onMentionsChange={box.setMentions}
+                    onCommit={box.commit}
+                    filters={filters}
+                    kinds={MENTION_KINDS}
+                    size='md'
+                    placeholder='Search the album — words, or type @ to pick someone'
+                    shortPlaceholder='Search the album…'
+                    rightSection={searching ? <Loader size={16} /> : undefined}
+                    pills={hasPills(filters) ? <SearchPills filters={filters} onPatch={box.patch} nameOf={nameOf} /> : undefined}
+                  />
+                </Box>
+              }
+            >
+              {suggested?.overall !== undefined && matchBadge(suggested.overall)}
               <HeaderChoices>
                 <MediaFilters available={available} />
-                <AlbumSortSelect value={sort} onChange={setSort} />
+                {/* Words rank the media by how well they match, which no order can change. */}
+                {!ranked && <AlbumSortSelect value={sort} onChange={setSort} />}
               </HeaderChoices>
-            )}
-          </Group>
-        )}
+            </HeaderFilterBar>
+          )
+          : suggested?.overall !== undefined && (
+            <Group justify='flex-end' gap='xs'>
+              {matchBadge(suggested.overall)}
+            </Group>
+          )}
       />
 
       {
@@ -320,16 +398,26 @@ export default function AlbumDetailPage() {
               </SimpleGrid>
             )}
 
-            {/* Media, split by the day it was taken */}
+            {box.unresolved.length > 0 && (
+              <Alert color='yellow' icon={<TablerIcon name='alert-triangle' size={16} />} onClose={box.dismissUnresolved} withCloseButton>
+                No match for {box.unresolved.map((name) => `@${name}`).join(' or ')} — searched as words instead.
+              </Alert>
+            )}
+
+            {/* Media, split by the day it was taken; searched by words, best match first in one grid. */}
             <MediaTimeline
               key={eventReload}
               album={albumPath}
               kinds={kinds}
+              filters={searched ? filters : undefined}
+              rankByRelevance={ranked}
+              grouped={!ranked}
               granularity='day'
               ascending={sort === 'oldest'}
               reloadToken={listChanges}
               markPinned={editable}
-              emptyMessage={directories.length > 0 ? 'No media here — open a folder above.' : 'This album is empty'}
+              onLoadingChange={setSearching}
+              emptyMessage={searched ? 'Nothing in this album matches.' : directories.length > 0 ? 'No media here — open a folder above.' : 'This album is empty'}
               selectionActions={({ selection, items, reload }) => (
                 <>
                   {/* A suggested album is the organizer's: its pictures are filed in the Sort stream. */}
