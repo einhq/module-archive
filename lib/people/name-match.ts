@@ -28,3 +28,48 @@ export const nameHasWholeWords = (query: string, name: string | undefined): bool
   const whole = new Set(wholeWords(name));
   return asked.every((word) => whole.has(word));
 };
+
+/** How well `word` matches one of `whole`: 0 a whole word, 1 the start of one, 2 inside one, 3 none. */
+const wordFit = (word: string, whole: string[]): number => {
+  let fit = 3;
+  for (const candidate of whole) {
+    if (candidate === word) return 0;
+    if (candidate.startsWith(word)) fit = Math.min(fit, 1);
+    else if (candidate.includes(word)) fit = Math.min(fit, 2);
+  }
+  return fit;
+};
+
+/**
+ * How well `query` names a person whose names are `names`, the name they go by first: lower is
+ * better, for ordering what `namesHaveWords` lets through. The name itself typed out comes first;
+ * then each typed word scores by whether it is a whole word of a name, starts one or is inside one,
+ * so "Johan Johansson" puts Johan Johansson before Abraham Johansson, whose "johansson" only starts
+ * with "johan"; a word out of the name's order, or found only in a full or birth name, counts a
+ * little against.
+ */
+export const nameMatchRank = (query: string, names: (string | undefined)[]): number => {
+  const words = [...new Set(wholeWords(query))];
+  const typed = wholeWords(query).join(' ');
+  const [own, ...others] = names.map((name) => wholeWords(name ?? ''));
+  if (own.join(' ') === typed) return 0;
+  if (others.some((name) => name.join(' ') === typed)) return 1;
+  const all = [own, ...others].flat();
+  return 2 + words.reduce((sum, word, index) => {
+    const inOwn = wordFit(word, own);
+    const inAny = wordFit(word, all);
+    if (inOwn > inAny) return sum + 10 * inAny + 3;
+    // Typed in the name's order: "johan" fits Johanna Johansson's first word, Abraham's second.
+    return sum + 10 * inOwn + (own[index] !== undefined && wordFit(word, [own[index]]) === inOwn ? 0 : 1);
+  }, 0);
+};
+
+/**
+ * `items` best match for `query` first (`nameMatchRank`), keeping their order among equals; each
+ * item's names come from `namesOf`, the name it goes by first.
+ */
+export const byNameMatch = <T>(items: readonly T[], query: string, namesOf: (item: T) => (string | undefined)[]): T[] =>
+  items
+    .map((item, index) => ({ item, index, rank: nameMatchRank(query, namesOf(item)) }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ item }) => item);

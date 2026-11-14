@@ -1,7 +1,7 @@
 import { Button, Group, type OptionsFilter, Paper, Select, Stack, Text } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
 import { PEOPLE_ROOT } from '@archive/paths';
-import { namesHaveWords, nameWords } from '@archive/people/name-match';
+import { byNameMatch, namesHaveWords, nameWords } from '@archive/people/name-match';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import type { PersonFace } from '../hooks/usePersonFaces.ts';
 import type { PersonVoice } from '../hooks/usePersonVoices.ts';
@@ -65,11 +65,12 @@ export function EvidenceSelectionBar({ faces, voices, total, named, onClear, onD
   // A searchable list cut to what matches, rather than an avatar row for everyone named.
   const people = useMemo(() => named.map((person) => ({ value: `${PEOPLE_ROOT}/${person.id}`, label: person.name })), [named]);
   const namesOf = useMemo(() => new Map(named.map((person) => [`${PEOPLE_ROOT}/${person.id}`, [person.name, person.fullname, person.birthname]])), [named]);
-  /** As the finder matches people: every typed word in one of a person's names, so "Anna Andersson" offers "Anna B Andersson". */
+  /** As the finder matches people: every typed word in one of a person's names, so "Anna Andersson" offers "Anna B Andersson"; the best match first. */
   const filter: OptionsFilter = ({ options, search }) => {
     const words = nameWords(search);
     if (words.length === 0) return options;
-    return options.filter((option) => 'value' in option && namesHaveWords(words, namesOf.get(option.value) ?? [option.label]));
+    const names = (option: (typeof options)[number]) => 'value' in option ? namesOf.get(option.value) ?? [option.label] : [];
+    return byNameMatch(options.filter((option) => namesHaveWords(words, names(option))), search, names);
   };
 
   // Reported from one place rather than at each open and close, which is how the two

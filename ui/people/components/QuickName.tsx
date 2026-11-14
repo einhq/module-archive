@@ -1,7 +1,7 @@
 import { Autocomplete, Button, Group, Loader, type OptionsFilter } from '@mantine/core';
 import { type KeyboardEvent, useMemo, useState } from 'react';
 import { PEOPLE_ROOT } from '@archive/paths';
-import { namesHaveWords, nameWords } from '@archive/people/name-match';
+import { byNameMatch, namesHaveWords, nameWords } from '@archive/people/name-match';
 import { notify } from '@ein/ui/signals';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import { PersonOption } from './PersonOption.tsx';
@@ -39,13 +39,18 @@ export function QuickName({ path, named, onName, onMerge, onDone, onBusy, form =
     return map;
   }, [named]);
   const names = useMemo(() => [...byName.keys()], [byName]);
-  /** As the finder matches people: every typed word in one of a person's names, so "Anna Andersson" offers "Anna B Andersson". */
+  /**
+   * As the finder matches people: every typed word in one of a person's names, so "Anna Andersson"
+   * offers "Anna B Andersson" — the best match first, so the name typed out is not cut off below
+   * everyone sharing a surname.
+   */
   const filter: OptionsFilter = ({ options, search, limit }) => {
     const words = nameWords(search);
-    return options.filter((option) => {
+    const namesOf = (option: (typeof options)[number]) => {
       const person = 'value' in option ? byName.get(option.value) : undefined;
-      return person && namesHaveWords(words, [person.name, person.fullname, person.birthname]);
-    }).slice(0, limit);
+      return person ? [person.name, person.fullname, person.birthname] : [];
+    };
+    return byNameMatch(options.filter((option) => namesHaveWords(words, namesOf(option))), search, namesOf).slice(0, limit);
   };
   const name = value.trim();
   const existing = useMemo(() => named.find((person) => person.name.toLocaleLowerCase() === name.toLocaleLowerCase()), [named, name]);
