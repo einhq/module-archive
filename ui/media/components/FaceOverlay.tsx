@@ -334,7 +334,6 @@ export function FaceOverlay(
                 lineHeight: 1.5,
                 background: 'var(--mrx-scrim)',
                 color: face.named ? 'white' : 'var(--mantine-color-dimmed)',
-                textDecoration: nameLink && active ? 'underline' : undefined,
                 opacity: !shown ? 0 : active ? 1 : labelsOnly ? 0.85 : 0.55,
                 transition: 'opacity 120ms',
               }}

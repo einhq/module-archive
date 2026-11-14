@@ -1,4 +1,4 @@
-import { Button, type ButtonProps, type ComboboxItem, Group, Stack, Text } from '@mantine/core';
+import { Button, type ButtonProps, type ComboboxItem, Divider, Group, Stack, Text } from '@mantine/core';
 import { useMemo, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { shq } from '@ein/ui/lib';
@@ -19,8 +19,8 @@ export const doubtReason = (doubt: MediaFaceDoubt): string => 'markedBy' in doub
  */
 const dismissFace = (face: MediaFace) => execCommand(`${face.hasFace ? 'person-detach' : 'face-remove'} ${shq(face.facePath)}`);
 
-/** "Not a person", or "Remove tag" for a tag, done on a second click. */
-function NotAPersonButton({ face, busy, disabled, onConfirm, ...props }: ButtonProps & {
+/** "Not a person", or "Remove tag" for a tag, done on a second click; orange, as the unknown-person dialog's. */
+function NotAPersonButton({ face, busy, disabled, onConfirm, variant = 'light', ...props }: ButtonProps & {
   face: MediaFace;
   busy: boolean;
   disabled: boolean;
@@ -30,8 +30,9 @@ function NotAPersonButton({ face, busy, disabled, onConfirm, ...props }: ButtonP
   return (
     <Button
       size='xs'
-      variant={armed ? 'filled' : 'subtle'}
-      color={armed ? 'red' : 'gray'}
+      variant={armed ? 'filled' : variant}
+      color='orange'
+      leftSection={<TablerIcon name={face.hasFace ? 'user-x' : 'trash'} size={16} />}
       loading={busy}
       disabled={disabled}
       onClick={() => armed ? onConfirm() : setArmed(true)}
@@ -80,8 +81,8 @@ export function UnknownFaceActions({ face, canEdit, onName, onDone, onChanged }:
           busy={busy}
           disabled={busy}
           onConfirm={() => void dismiss(face)}
+          variant='subtle'
           justify='flex-start'
-          leftSection={<TablerIcon name={face.hasFace ? 'user-off' : 'trash'} size={16} />}
         />
       )}
       {error && <Text size='xs' c='red' px='xs'>{error}</Text>}
@@ -98,7 +99,7 @@ type Busy = 'mark' | 'confirm' | 'clear' | 'move' | 'unknown' | 'dismiss';
  * That a named person's face in the lightbox is wrong, said in the row's card (`FaceRow`).
  *
  * Whoever may edit the photo can say who the face is instead — somebody already in the archive,
- * or a new person under the name typed — and move it there (`person-detach`), make it unknown
+ * or a new person under the name typed — and move it there (`person-detach`), mark it unknown
  * again, on an unidentified person of its own to be named later (`person-detach --to-new-person`),
  * say it is not a person at all (`dismissFace`),
  * or, not knowing, mark it doubtful (`face-doubt`): the person keeps the face, and their Faces tab lists it under
@@ -160,46 +161,10 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
       await execCommand(`person-name ${shq(created.path)} --name ${shq(target.slice(NEW_PERSON.length))}`);
     });
 
-  const unknown = (
-    <>
-      <Button
-        size='xs'
-        variant='subtle'
-        color='gray'
-        loading={busy === 'unknown'}
-        disabled={busy !== null}
-        onClick={() => void run('unknown', () => detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' }))}
-      >
-        Make unknown
-      </Button>
-      <NotAPersonButton face={face} busy={busy === 'dismiss'} disabled={busy !== null} onConfirm={() => void run('dismiss', () => dismissFace(face))} />
-    </>
-  );
-
   return (
     <Stack gap='xs'>
       <Text size='sm' fw={500}>{doubt ? `Is this ${name}?` : `Who is this, if not ${name}?`}</Text>
       {doubt && <Text size='xs' c='dimmed'>{doubtReason(doubt)}</Text>}
-      {canEdit && doubt && (
-        <Group gap='xs'>
-          <Button data-autofocus size='xs' color='teal' loading={busy === 'confirm'} disabled={busy !== null} onClick={() => void run('confirm', command('face-confirm'))}>
-            Yes
-          </Button>
-          {'markedBy' in doubt && (
-            <Button
-              size='xs'
-              variant='subtle'
-              color='gray'
-              loading={busy === 'clear'}
-              disabled={busy !== null}
-              onClick={() => void run('clear', command('face-doubt --clear'))}
-            >
-              Withdraw
-            </Button>
-          )}
-          {unknown}
-        </Group>
-      )}
       {canEdit && (
         <Group gap='xs' wrap='nowrap' align='flex-end'>
           <EntityPicker
@@ -223,21 +188,65 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
           <Button size='xs' loading={busy === 'move'} disabled={!target || busy !== null} onClick={() => void move()}>Move</Button>
         </Group>
       )}
-      {canEdit && !doubt && (
-        <Group gap='xs'>
-          <Button
-            data-autofocus
-            size='xs'
-            variant='light'
-            color='orange'
-            loading={busy === 'mark'}
-            disabled={busy !== null}
-            onClick={() => void run('mark', command('face-doubt'))}
-          >
-            Mark as doubtful
-          </Button>
-          {unknown}
-        </Group>
+      {canEdit && (
+        <>
+          <Divider />
+          {/* One answer to a line, the width of the card. */}
+          <Stack gap={6}>
+            {doubt && (
+              <Button
+                data-autofocus
+                size='xs'
+                color='teal'
+                leftSection={<TablerIcon name='check' size={16} />}
+                loading={busy === 'confirm'}
+                disabled={busy !== null}
+                onClick={() => void run('confirm', command('face-confirm'))}
+              >
+                Yes
+              </Button>
+            )}
+            {doubt && 'markedBy' in doubt && (
+              <Button
+                size='xs'
+                variant='light'
+                color='gray'
+                leftSection={<TablerIcon name='arrow-back-up' size={16} />}
+                loading={busy === 'clear'}
+                disabled={busy !== null}
+                onClick={() => void run('clear', command('face-doubt --clear'))}
+              >
+                Withdraw
+              </Button>
+            )}
+            {!doubt && (
+              <Button
+                data-autofocus
+                size='xs'
+                variant='light'
+                color='yellow'
+                leftSection={<TablerIcon name='help-circle' size={16} />}
+                loading={busy === 'mark'}
+                disabled={busy !== null}
+                onClick={() => void run('mark', command('face-doubt'))}
+              >
+                Mark as doubtful
+              </Button>
+            )}
+            <Button
+              size='xs'
+              variant='light'
+              color='blue'
+              leftSection={<TablerIcon name='user-question' size={16} />}
+              loading={busy === 'unknown'}
+              disabled={busy !== null}
+              onClick={() => void run('unknown', () => detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' }))}
+            >
+              Mark as unknown
+            </Button>
+            <NotAPersonButton face={face} busy={busy === 'dismiss'} disabled={busy !== null} onConfirm={() => void run('dismiss', () => dismissFace(face))} />
+          </Stack>
+        </>
       )}
       {error && <Text size='xs' c='red'>{error}</Text>}
     </Stack>
