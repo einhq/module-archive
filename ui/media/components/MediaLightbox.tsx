@@ -1791,11 +1791,17 @@ export function MediaLightbox() {
     }
     const stills = stepCopyAnimationsRef.current;
     if (turns && stills.length > 0) {
-      const at = Number(stills[0].currentTime ?? 0);
-      for (const animation of stills) animation.reverse();
-      holdBox();
+      // Turned at once and all at the same point: `reverse()` turns an animation a frame later,
+      // by then out of step with the stills just made.
+      const clock = last.mode === 'slide' ? stepBoxAnimationsRef.current[0] : stills[0];
+      const at = Number(clock?.currentTime ?? 0);
       step.mode = 'reverse';
       step.backward = last.mode === 'slide' || !last.backward;
+      for (const animation of stills) {
+        animation.playbackRate = step.backward ? -1 : 1;
+        animation.currentTime = at;
+      }
+      holdBox();
       step.endsAt = now + (step.backward ? at : STEP_MS - at);
     } else if (waiting || moving || quick) {
       step.mode = 'cut';
