@@ -1675,9 +1675,6 @@ export function MediaLightbox() {
     const width = shown.right - shown.left;
     const height = shown.bottom - shown.top;
     if (width < 1 || height < 1) return null;
-    const pixels = picture instanceof HTMLVideoElement ? { w: picture.videoWidth, h: picture.videoHeight } : { w: picture.naturalWidth, h: picture.naturalHeight };
-    const across = pixels.w / (rect.right - rect.left);
-    const down = pixels.h / (rect.bottom - rect.top);
     // On whole device pixels, the picture drawn at its own fraction inside: a canvas set at a
     // fraction of a pixel would be resampled, and look softer than the picture it stands in for.
     const scale = globalThis.devicePixelRatio || 1;
@@ -1691,16 +1688,16 @@ export function MediaLightbox() {
     const context = canvas.getContext('2d');
     if (context) {
       context.imageSmoothingQuality = 'high';
+      // The whole picture over its whole rectangle, the canvas cutting off what lies outside it. A
+      // part picked by a source rectangle is counted in the image's own pixels, which a photo picked
+      // from `srcset` by width does not have as its natural size: that is scaled to the slot, so the
+      // part came out too small.
       context.drawImage(
         picture,
-        (shown.left - rect.left) * across,
-        (shown.top - rect.top) * down,
-        width * across,
-        height * down,
-        (shown.left - left) * scale,
-        (shown.top - top) * scale,
-        width * scale,
-        height * scale,
+        (rect.left - left) * scale,
+        (rect.top - top) * scale,
+        (rect.right - rect.left) * scale,
+        (rect.bottom - rect.top) * scale,
       );
     }
     Object.assign(canvas.style, { position: 'absolute', left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
