@@ -151,6 +151,12 @@ const STEP_FADE_IN: Keyframe[] = [
 ];
 /** The longest a step waits for its new picture to be decoded before it shows it all the same. */
 const STEP_DECODE_WAIT_MS = 300;
+/**
+ * A step turned back while it moves heads for the other picture at once, from where the screen has
+ * it, on a curve that sets off at speed: the longer the way left, the longer it takes.
+ */
+const STEP_TURN_MIN_MS = 120;
+const STEP_TURN_EASING = 'cubic-bezier(0, 0, 0.2, 1)';
 
 /** A rectangle in the gesture surface's own coordinates. */
 type StepRect = { left: number; top: number; right: number; bottom: number };
@@ -158,15 +164,18 @@ type StepRect = { left: number; top: number; right: number; bottom: number };
 /** A still of a picture in a desktop step, in a frame of its own that cuts it to the step's frame. */
 type StepCopy = { frame: HTMLDivElement; canvas: HTMLCanvasElement; rect: StepRect };
 
+/** Where a picture of a step stands: slid `x` across, this opaque, cut to `frame`. */
+type StepPose = { x: number; opacity: number; frame: StepRect };
+
 /**
  * A desktop step. A slide waits for the new picture to be decoded and then moves; a cut, a step
- * hard on the heels of another, shows the new picture as soon as it can be drawn; a reversal runs
- * the copies of both pictures back to where the step it turns began.
+ * hard on the heels of another, shows the new picture as soon as it can be drawn; a turn, a step
+ * back against one still moving, takes stills of both pictures from where they stand to the other.
  */
 type DesktopStep = {
   action: 'next' | 'previous';
-  mode: 'slide' | 'cut' | 'reverse';
-  /** Which way the slide moves the pictures: 1 to the left (forward), -1 to the right; a reversal runs its slide's back. */
+  mode: 'slide' | 'cut' | 'turn';
+  /** Which way the slide moves the pictures: 1 to the left (forward), -1 to the right; a turn keeps its slide's. */
   sign: 1 | -1;
   /** How far the pictures slide, in pixels. */
   distance: number;
@@ -176,10 +185,10 @@ type DesktopStep = {
   /** A slide's still of the old picture, and how opaque the picture was. */
   copy: StepCopy | null;
   shown: number;
-  /** A reversal's still of the new picture, sliding in when it turned. */
+  /** The still of the new picture, sliding in when its slide turned or was cut. */
   incoming: StepCopy | null;
-  /** A reversal's stills run back, rather than on again as a reversal of a reversal does. */
-  backward: boolean;
+  /** A turn heads back to the picture its slide left, rather than on again as a turn of a turn does. */
+  back: boolean;
   /** When the step's motion is over (`performance.now()`); null until it starts. */
   endsAt: number | null;
 };
@@ -589,6 +598,10 @@ export function MediaLightbox() {
   /** The animations of the step's stills, and those of the shown picture's box. */
   const stepCopyAnimationsRef = useRef<Animation[]>([]);
   const stepBoxAnimationsRef = useRef<Animation[]>([]);
+  /** The shown picture's box is hidden, stills standing in for it (`holdBox`). */
+  const boxHeldRef = useRef(false);
+  /** A step's switch to its media, waiting for the frame that puts the step's stills on screen. */
+  const stepSwitchRef = useRef<(() => void) | null>(null);
   /** When the last desktop step began: one sooner than `STEP_MS` after it cuts. */
   const lastStepAtRef = useRef(-Infinity);
   /** The half of the picture the mouse is over, whose arrow shows; null off the picture. */
@@ -1665,22 +1678,32 @@ export function MediaLightbox() {
     const pixels = picture instanceof HTMLVideoElement ? { w: picture.videoWidth, h: picture.videoHeight } : { w: picture.naturalWidth, h: picture.naturalHeight };
     const across = pixels.w / (rect.right - rect.left);
     const down = pixels.h / (rect.bottom - rect.top);
+    // On whole device pixels, the picture drawn at its own fraction inside: a canvas set at a
+    // fraction of a pixel would be resampled, and look softer than the picture it stands in for.
     const scale = globalThis.devicePixelRatio || 1;
+    const left = Math.floor(shown.left * scale) / scale;
+    const top = Math.floor(shown.top * scale) / scale;
+    const right = Math.ceil(shown.right * scale) / scale;
+    const bottom = Math.ceil(shown.bottom * scale) / scale;
     const canvas = document.createElement('canvas');
-    canvas.width = Math.round(width * scale);
-    canvas.height = Math.round(height * scale);
-    canvas.getContext('2d')?.drawImage(
-      picture,
-      (shown.left - rect.left) * across,
-      (shown.top - rect.top) * down,
-      width * across,
-      height * down,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
-    Object.assign(canvas.style, { position: 'absolute', left: `${shown.left}px`, top: `${shown.top}px`, width: `${width}px`, height: `${height}px` });
+    canvas.width = Math.round((right - left) * scale);
+    canvas.height = Math.round((bottom - top) * scale);
+    const context = canvas.getContext('2d');
+    if (context) {
+      context.imageSmoothingQuality = 'high';
+      context.drawImage(
+        picture,
+        (shown.left - rect.left) * across,
+        (shown.top - rect.top) * down,
+        width * across,
+        height * down,
+        (shown.left - left) * scale,
+        (shown.top - top) * scale,
+        width * scale,
+        height * scale,
+      );
+    }
+    Object.assign(canvas.style, { position: 'absolute', left: `${left}px`, top: `${top}px`, width: `${right - left}px`, height: `${bottom - top}px` });
     const frame = document.createElement('div');
     frame.setAttribute('aria-hidden', 'true');
     Object.assign(frame.style, { position: 'absolute', inset: '0' });
@@ -1706,8 +1729,7 @@ export function MediaLightbox() {
     const shift = step.sign * step.distance;
     const [shiftFrom, shiftTo] = role === 'out' ? [0, -shift] : [shift, 0];
     const move = (x: number) => `translate3d(${x}px, 0, 0)`;
-    // Held at both ends: a reversal runs the stills back to their start, where they must stay put.
-    const timing: KeyframeAnimationOptions = { duration: STEP_MS, easing: STEP_EASING, fill: 'both' };
+    const timing: KeyframeAnimationOptions = { duration: STEP_MS, easing: STEP_EASING, fill: 'forwards' };
     const fade = role === 'out' ? { opacity: [step.shown, 0] } : STEP_FADE_IN;
     const fadeTiming = role === 'out' ? timing : { ...timing, easing: 'linear' };
     if (target instanceof HTMLElement) {
@@ -1733,6 +1755,7 @@ export function MediaLightbox() {
   const releaseBox = () => {
     for (const animation of stepBoxAnimationsRef.current) animation.cancel();
     stepBoxAnimationsRef.current = [];
+    boxHeldRef.current = false;
   };
 
   /** Hides the shown picture's box while stills stand in for it. */
@@ -1742,6 +1765,7 @@ export function MediaLightbox() {
     if (!hold) return;
     hold.pause();
     stepBoxAnimationsRef.current = [hold];
+    boxHeldRef.current = true;
   };
 
   const dropCopies = () => {
@@ -1751,20 +1775,91 @@ export function MediaLightbox() {
   };
 
   /**
+   * Stands the step in flight still where the screen has it this moment. The shown picture, sliding
+   * in, hands over to a still of itself, and each still keeps where it stands as its own style. An
+   * animation's moment is taken from the clock, not from the last frame the page drew: a render
+   * holds the page back while the screen goes on.
+   */
+  const freezeStep = (last: DesktopStep | null) => {
+    const now = performance.now();
+    const momentOf = (animation: Animation) =>
+      animation.startTime === null ? Number(animation.currentTime ?? 0) : (now - Number(animation.startTime)) * animation.playbackRate;
+    const picture = mediaRef.current;
+    const sliding = boxHeldRef.current ? undefined : stepBoxAnimationsRef.current[0];
+    if (last?.mode === 'slide' && sliding && last.from && last.to && pictureReady(picture)) {
+      const incoming = paintCopy(picture, last.to);
+      if (incoming) {
+        const moment = momentOf(sliding);
+        const motion = stepMotion(incoming, 'in', last, last.from, incoming.rect);
+        for (const animation of motion) animation.currentTime = moment;
+        stepCopyAnimationsRef.current.push(...motion);
+        last.incoming = incoming;
+      }
+    }
+    for (const animation of stepCopyAnimationsRef.current) {
+      animation.currentTime = momentOf(animation);
+      try {
+        animation.commitStyles();
+      } catch {
+        // A still no longer drawn has nowhere to stand.
+      }
+      animation.cancel();
+    }
+    stepCopyAnimationsRef.current = [];
+    holdBox();
+  };
+
+  /** Takes a still from where it stands to `pose`. */
+  const poseTo = (still: StepCopy, pose: StepPose, duration: number): Animation[] => {
+    const surface = gestureSurfaceRef.current;
+    if (!surface) return [];
+    const stage = { left: 0, top: 0, right: surface.clientWidth, bottom: surface.clientHeight };
+    const timing: KeyframeAnimationOptions = { duration, easing: STEP_TURN_EASING, fill: 'forwards' };
+    return [
+      still.frame.animate({ clipPath: insetOf(pose.frame, stage) }, timing),
+      still.canvas.animate({ transform: `translate3d(${pose.x}px, 0, 0)`, opacity: pose.opacity }, timing),
+    ];
+  };
+
+  /** How far across a still stands. */
+  const shiftOf = (still: StepCopy) => {
+    const transform = getComputedStyle(still.canvas).transform;
+    return transform === 'none' ? 0 : new DOMMatrixReadOnly(transform).m41;
+  };
+
+  /**
+   * Switches to the step's media a frame later: the stills the step has put up reach the screen
+   * first, before the render the switch sets off holds the page back.
+   */
+  const scheduleSwitch = (step: DesktopStep) => {
+    const run = () => {
+      if (stepSwitchRef.current !== run) return;
+      stepSwitchRef.current = null;
+      if (!currentMediaItem.peek()) return;
+      stepArrivalRef.current = step;
+      if (step.action === 'next') goToNextMedia();
+      else goToPrevMedia();
+    };
+    stepSwitchRef.current = run;
+    requestAnimationFrame(() => globalThis.setTimeout(run, 0));
+  };
+
+  /**
    * A desktop step (`STEP_MS`). A slide leaves a still of the old picture where it is drawn, to move
-   * out once the new picture can be drawn. A step sooner than `STEP_MS` after the last cuts: what
-   * shows stands still, the shown picture at rest if it has loaded, until the new picture can be
-   * drawn. A step back against one still moving runs the stills of both pictures back from where
-   * they are, the shown picture handing over to a still of itself at the same point of its motion.
+   * out once the new picture can be drawn. A step sooner than `STEP_MS` after the last, or while
+   * stills stand in, cuts: what shows stands still until the new picture can be drawn. A step back
+   * against one still moving turns it: both pictures, as stills, head from where they stand to the
+   * ends the other way.
    */
   const stepDesktop = (action: 'next' | 'previous') => {
+    // A switch still waiting for its frame is made first, so this step goes on from its media.
+    stepSwitchRef.current?.();
     const surface = gestureSurfaceRef.current;
     const list = albumMediaList.value;
     const target = list[action === 'next' ? nextMediaIndex(currentMediaIndex.value, list.length) : prevMediaIndex(currentMediaIndex.value, list.length)];
     if (!surface || !target) return;
     const now = performance.now();
     const last = stepRef.current;
-    const waiting = last !== null && last.endsAt === null;
     const moving = last !== null && last.endsAt !== null && now < last.endsAt;
     const quick = now - lastStepAtRef.current < STEP_MS;
     lastStepAtRef.current = now;
@@ -1779,51 +1874,34 @@ export function MediaLightbox() {
       copy: null,
       shown: 1,
       incoming: null,
-      backward: false,
+      back: false,
       endsAt: null,
     };
-    const turned = moving && last.mode !== 'cut' && last.action !== action ? last : null;
-    const outlines = turned?.from && turned.to ? { from: turned.from, to: turned.to } : null;
-    // The shown picture, sliding in, hands over to a still of itself.
-    const incoming = turned && outlines ? (turned.mode === 'slide' ? (pictureReady(picture) ? paintCopy(picture, outlines.to) : null) : turned.incoming) : null;
-    if (turned && outlines && (turned.copy || incoming)) {
-      const clock = turned.mode === 'slide' ? stepBoxAnimationsRef.current[0] : stepCopyAnimationsRef.current[0];
-      const at = Number(clock?.currentTime ?? 0);
-      Object.assign(step, {
-        mode: 'reverse',
-        sign: turned.sign,
-        distance: turned.distance,
-        from: turned.from,
-        to: turned.to,
-        copy: turned.copy,
-        shown: turned.shown,
-        incoming,
-        backward: turned.mode === 'slide' || !turned.backward,
-      });
-      // The stills' motions are made anew, all at once: a running one turned would run from the
-      // time of the last frame, the new ones from the next.
-      for (const animation of stepCopyAnimationsRef.current) animation.cancel();
-      const motion = [
-        ...(step.copy ? stepMotion(step.copy, 'out', step, outlines.from, outlines.to) : []),
-        ...(incoming ? stepMotion(incoming, 'in', step, outlines.from, incoming.rect) : []),
+    if (moving && last.mode !== 'cut' && last.action !== action && last.from && last.to) {
+      freezeStep(last);
+      const { from, to } = last;
+      const meet = intersectRect(from, to);
+      const shift = last.sign * last.distance;
+      const back = last.mode === 'slide' || !last.back;
+      Object.assign(step, { mode: 'turn', sign: last.sign, distance: last.distance, from, to, copy: last.copy, shown: last.shown, incoming: last.incoming, back });
+      const oldPose: StepPose = back ? { x: 0, opacity: last.shown, frame: from } : { x: -shift, opacity: 0, frame: meet };
+      const newPose: StepPose = back ? { x: shift, opacity: 0, frame: meet } : { x: 0, opacity: 1, frame: to };
+      const left = step.copy ? Math.abs(shiftOf(step.copy) - oldPose.x) : step.incoming ? Math.abs(shiftOf(step.incoming) - newPose.x) : 0;
+      const duration = STEP_TURN_MIN_MS + (STEP_MS - STEP_TURN_MIN_MS) * Math.min(1, left / Math.max(1, last.distance));
+      stepCopyAnimationsRef.current = [
+        ...(step.copy ? poseTo(step.copy, oldPose, duration) : []),
+        ...(step.incoming ? poseTo(step.incoming, newPose, duration) : []),
       ];
-      for (const animation of motion) {
-        animation.playbackRate = step.backward ? -1 : 1;
-        animation.currentTime = at;
-      }
-      stepCopyAnimationsRef.current = motion;
-      holdBox();
-      step.endsAt = now + (step.backward ? at : STEP_MS - at);
-    } else if (waiting || moving || quick) {
+      step.endsAt = now + duration;
+    } else if (moving || quick || boxHeldRef.current) {
       step.mode = 'cut';
-      const stills = stepCopyAnimationsRef.current;
-      const rect = pictureReady(picture) ? (waiting || moving ? restingRect() : shownRect()) : null;
-      for (const animation of stills) animation.pause();
-      if (picture && rect) {
+      if (moving || boxHeldRef.current) freezeStep(last);
+      else {
+        const rect = shownRect();
         dropCopies();
-        paintCopy(picture, rect);
+        if (rect && pictureReady(picture)) paintCopy(picture, rect);
+        holdBox();
       }
-      holdBox();
     } else {
       const rect = shownRect();
       dropCopies();
@@ -1833,20 +1911,19 @@ export function MediaLightbox() {
       step.shown = zoomBoxRef.current ? Number(getComputedStyle(zoomBoxRef.current).opacity) : 1;
     }
     stepRef.current = step;
-    stepArrivalRef.current = step;
-    if (action === 'next') goToNextMedia();
-    else goToPrevMedia();
+    scheduleSwitch(step);
   };
 
   // Takes up the step that switched to the shown media. Its box stays hidden behind the stills
   // until its picture is decoded, or a moment has passed, so neither a blank frame nor a half-drawn
   // picture shows. Then a slide moves, measured from the picture as it is drawn; a cut shows the
-  // picture; a reversal shows it once the stills are back where they began. Media shown any other
-  // way ends a step in flight.
+  // picture; a turn shows it once the stills have got where they head. Media shown any other way
+  // ends a step in flight.
   useLayoutEffect(() => {
     const step = stepArrivalRef.current;
     stepArrivalRef.current = null;
     if (!step) {
+      stepSwitchRef.current = null;
       if (stepRef.current) {
         stepRef.current = null;
         dropCopies();
@@ -1871,7 +1948,7 @@ export function MediaLightbox() {
         settle();
         return;
       }
-      if (step.mode === 'reverse') {
+      if (step.mode === 'turn') {
         void Promise.all(stepCopyAnimationsRef.current.map((animation) => animation.finished)).then(settle, () => {});
         return;
       }
