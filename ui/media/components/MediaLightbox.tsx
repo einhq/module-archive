@@ -166,7 +166,7 @@ type StepCopy = { frame: HTMLDivElement; canvas: HTMLCanvasElement; rect: StepRe
 type DesktopStep = {
   action: 'next' | 'previous';
   mode: 'slide' | 'cut' | 'reverse';
-  /** Which way the pictures move: 1 to the left (forward), -1 to the right. */
+  /** Which way the slide moves the pictures: 1 to the left (forward), -1 to the right; a reversal runs its slide's back. */
   sign: 1 | -1;
   /** How far the pictures slide, in pixels. */
   distance: number;
@@ -176,6 +176,8 @@ type DesktopStep = {
   /** A slide's still of the old picture, and how opaque the picture was. */
   copy: StepCopy | null;
   shown: number;
+  /** A reversal's still of the new picture, sliding in when it turned. */
+  incoming: StepCopy | null;
   /** A reversal's stills run back, rather than on again as a reversal of a reversal does. */
   backward: boolean;
   /** When the step's motion is over (`performance.now()`); null until it starts. */
@@ -1776,35 +1778,45 @@ export function MediaLightbox() {
       to: null,
       copy: null,
       shown: 1,
+      incoming: null,
       backward: false,
       endsAt: null,
     };
-    const turns = moving && last.mode !== 'cut' && last.action !== action;
-    if (turns && last.mode === 'slide' && last.from && last.to && pictureReady(picture)) {
-      const at = stepBoxAnimationsRef.current[0]?.currentTime ?? null;
-      const copy = paintCopy(picture, last.to);
-      if (copy && at !== null) {
-        const motion = stepMotion(copy, 'in', last, last.from, copy.rect);
-        for (const animation of motion) animation.currentTime = at;
-        stepCopyAnimationsRef.current.push(...motion);
-      }
-    }
-    const stills = stepCopyAnimationsRef.current;
-    if (turns && stills.length > 0) {
-      // Turned at once and all at the same point: `reverse()` turns an animation a frame later,
-      // by then out of step with the stills just made.
-      const clock = last.mode === 'slide' ? stepBoxAnimationsRef.current[0] : stills[0];
+    const turned = moving && last.mode !== 'cut' && last.action !== action ? last : null;
+    const outlines = turned?.from && turned.to ? { from: turned.from, to: turned.to } : null;
+    // The shown picture, sliding in, hands over to a still of itself.
+    const incoming = turned && outlines ? (turned.mode === 'slide' ? (pictureReady(picture) ? paintCopy(picture, outlines.to) : null) : turned.incoming) : null;
+    if (turned && outlines && (turned.copy || incoming)) {
+      const clock = turned.mode === 'slide' ? stepBoxAnimationsRef.current[0] : stepCopyAnimationsRef.current[0];
       const at = Number(clock?.currentTime ?? 0);
-      step.mode = 'reverse';
-      step.backward = last.mode === 'slide' || !last.backward;
-      for (const animation of stills) {
+      Object.assign(step, {
+        mode: 'reverse',
+        sign: turned.sign,
+        distance: turned.distance,
+        from: turned.from,
+        to: turned.to,
+        copy: turned.copy,
+        shown: turned.shown,
+        incoming,
+        backward: turned.mode === 'slide' || !turned.backward,
+      });
+      // The stills' motions are made anew, all at once: a running one turned would run from the
+      // time of the last frame, the new ones from the next.
+      for (const animation of stepCopyAnimationsRef.current) animation.cancel();
+      const motion = [
+        ...(step.copy ? stepMotion(step.copy, 'out', step, outlines.from, outlines.to) : []),
+        ...(incoming ? stepMotion(incoming, 'in', step, outlines.from, incoming.rect) : []),
+      ];
+      for (const animation of motion) {
         animation.playbackRate = step.backward ? -1 : 1;
         animation.currentTime = at;
       }
+      stepCopyAnimationsRef.current = motion;
       holdBox();
       step.endsAt = now + (step.backward ? at : STEP_MS - at);
     } else if (waiting || moving || quick) {
       step.mode = 'cut';
+      const stills = stepCopyAnimationsRef.current;
       const rect = pictureReady(picture) ? (waiting || moving ? restingRect() : shownRect()) : null;
       for (const animation of stills) animation.pause();
       if (picture && rect) {
@@ -1870,6 +1882,7 @@ export function MediaLightbox() {
         return;
       }
       const from = step.from ?? to;
+      step.from = from;
       step.to = to;
       releaseBox();
       stepBoxAnimationsRef.current = stepMotion(box, 'in', step, from, to);
