@@ -1,0 +1,144 @@
+#!ts
+/**
+ * camera-usage — what the maker notes of a camera's pictures say about it: its shutter count over
+ * time, the firmware it ran and the lenses used on it.
+ *
+ * The pictures are the files linked to it (`cameraPath`), and each one's maker notes are in the
+ * `raw` exiftool dump on its `metadata/exif` node. A dump runs to kilobytes, so the tags are
+ * projected out of it in the store, one aggregate per tag over a batch of exif nodes, rather than
+ * read whole; the rules for what a tag says are `@archive/camera/maker-notes`.
+ */
+import type { CmdReturn, Command } from '@ein/client';
+import { resolve } from '@std/path';
+import { NODE_TYPE_CAMERA } from '@archive/camera/camera';
+import type { CameraUsage } from '@archive/camera/api';
+import { MAKER_NOTE_TAGS, type NotedPicture, readMakerNotes, summariseUsage } from '@archive/camera/maker-notes';
+
+/** Ids per child-link lookup and per aggregate. */
+const IDS_PER_CALL = 2000;
+
+const chunked = <T>(items: T[], size: number): T[][] => Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size));
+
+/** The files linked to the camera, by id, with when each was taken where it says. */
+const cameraFiles = async (cmd: Command, camera: string): Promise<Map<string, string | undefined>> => {
+  const where = [{ ref: 'cameraPath', op: 'eq' as const, value: camera }];
+  const [all, dated] = await Promise.all([
+    cmd.sys.vfs.aggregate(cmd.access, { types: ['file'], where, group: [{ column: 'id' }] }),
+    cmd.sys.vfs.aggregate(cmd.access, { types: ['file'], where, group: [{ column: 'id' }, { ref: 'takenAt' }] }),
+  ]);
+  const files = new Map<string, string | undefined>(all.map((bucket) => [bucket.key[0], undefined]));
+  for (const bucket of dated) files.set(bucket.key[0], bucket.key[1]);
+  return files;
+};
+
+/** The exif node `<file>/metadata/exif` of each of `files` that has one, by its id: two hops of child links. */
+const exifNodes = async (cmd: Command, files: string[]): Promise<Map<string, string>> => {
+  const metadataOf = new Map<string, string>();
+  for (const chunk of chunked(files, IDS_PER_CALL)) {
+    for (const [file, children] of await cmd.sys.vfs.getChildLinksByIds(cmd.access, chunk)) {
+      const metadata = children.find((child) => child.name === 'metadata');
+      if (metadata) metadataOf.set(metadata.id, file);
+    }
+  }
+  const fileOf = new Map<string, string>();
+  for (const chunk of chunked([...metadataOf.keys()], IDS_PER_CALL)) {
+    for (const [metadata, children] of await cmd.sys.vfs.getChildLinksByIds(cmd.access, chunk)) {
+      const exif = children.find((child) => child.name === 'exif');
+      if (exif) fileOf.set(exif.id, metadataOf.get(metadata)!);
+    }
+  }
+  return fileOf;
+};
+
+/** The maker-note tags of each exif node in `ids`, as text, by its id. */
+const makerNoteTags = async (cmd: Command, ids: string[]): Promise<Map<string, Record<string, string>>> => {
+  const tags = new Map<string, Record<string, string>>();
+  for (const chunk of chunked(ids, IDS_PER_CALL)) {
+    const projected = await Promise.all(
+      MAKER_NOTE_TAGS.map((tag) =>
+        cmd.sys.vfs.aggregate(cmd.access, { ids: chunk, group: [{ column: 'id' }, { ref: { path: ['raw', tag] } }] })
+          .then((buckets) => ({ tag, buckets }))
+      ),
+    );
+    for (const { tag, buckets } of projected) {
+      for (const { key: [id, value] } of buckets) {
+        if (!tags.has(id)) tags.set(id, {});
+        tags.get(id)![tag] = value;
+      }
+    }
+  }
+  return tags;
+};
+
+const plural = (count: number, word: string) => `${count.toLocaleString('en-US')} ${word}${count === 1 ? '' : 's'}`;
+const span = (first?: string, last?: string) => (first ? (first === last ? ` on ${first}` : ` ${first} – ${last}`) : '');
+
+const cameraUsage = async (cmd: Command): CmdReturn => {
+  const targetArg = cmd.args.filter((arg) => !arg.startsWith('-'))[0];
+  if (!targetArg) {
+    await cmd.writeError('camera-usage: missing camera path\n');
+    return 1;
+  }
+  const camera = resolve(cmd.cwd, targetArg);
+
+  try {
+    const node = await cmd.sys.vfs.get(cmd.access, camera);
+    if (node.type !== NODE_TYPE_CAMERA) {
+      await cmd.writeError(`camera-usage: ${camera}: not a camera (${node.type})\n`);
+      return 1;
+    }
+  } catch {
+    await cmd.writeError(`camera-usage: ${camera}: not found\n`);
+    return 1;
+  }
+
+  const files = await cameraFiles(cmd, camera);
+  const fileOf = await exifNodes(cmd, [...files.keys()]);
+  const tags = await makerNoteTags(cmd, [...fileOf.keys()]);
+  const pictures = [...tags].map(([exif, each]): NotedPicture => {
+    const date = files.get(fileOf.get(exif)!);
+    return { ...(date ? { date } : {}), ...readMakerNotes(each) };
+  });
+  const usage = summariseUsage(camera, files.size, pictures);
+
+  if (cmd.json) {
+    await cmd.writeJSON(usage satisfies CameraUsage);
+    return 0;
+  }
+
+  await cmd.writeLn(`${plural(usage.files, 'file')} linked to ${camera}`);
+  const latest = usage.shutter.at(-1);
+  if (latest) {
+    const first = usage.shutter[0];
+    await cmd.writeLn(
+      `Shutter count: ${latest.count.toLocaleString('en-US')} on ${latest.date}${first !== latest ? ` (${first.count.toLocaleString('en-US')} on ${first.date})` : ''}`,
+    );
+  }
+  if (usage.firmware.length > 0) {
+    await cmd.writeLn('Firmware:');
+    for (const each of usage.firmware) await cmd.writeLn(`  ${each.version}: ${plural(each.files, 'picture')}${span(each.first, each.last)}`);
+  }
+  if (usage.lenses.length > 0) {
+    await cmd.writeLn('Lenses:');
+    for (const each of usage.lenses) await cmd.writeLn(`  ${each.lens}: ${plural(each.files, 'picture')}${span(each.first, each.last)}`);
+  }
+  if (!latest && usage.firmware.length === 0 && usage.lenses.length === 0) await cmd.writeLn('No shutter count, firmware or lens in its pictures.');
+  return 0;
+};
+
+cameraUsage.spec = {
+  name: 'camera-usage',
+  effect: 'read' as const,
+  description: "What a camera's pictures' maker notes say about it: its shutter count over time, the firmware it ran and the lenses used on it",
+  args: [
+    { name: 'target', type: 'path' as const, description: 'VFS path to camera node' },
+  ],
+  flags: [],
+  examples: [
+    'camera-usage /archive/cameras/canon-eos',
+  ],
+  returns:
+    "how many files are linked to the camera; its shutter count as the highest a day's pictures carry, oldest first; each firmware with the days it was first and last seen; each lens with how many pictures, most used first.",
+};
+
+export default cameraUsage;

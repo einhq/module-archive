@@ -69,3 +69,22 @@ export type CameraCoverResult = { path: string; cover: string; replaced?: string
 
 /** `camera-cover`: how many cameras it looked at, and the ones whose cover it wrote. */
 export type CameraCoverSweep = { scanned: number; updated: number; cameras: CameraCoverResult[] };
+
+/** When something was seen on a camera's pictures: on how many, and the first and last day (`YYYY-MM-DD`) of the dated ones. */
+export type CameraSighting = { files: number; first?: string; last?: string };
+
+/**
+ * `camera-usage`: what the maker notes of the pictures linked to a camera say about it. `files` is
+ * how many are linked; each list is empty when none of them carry it.
+ */
+export type CameraUsage = {
+  /** The camera's path. */
+  camera: string;
+  files: number;
+  /** How many pictures it had taken, as the highest count a day's pictures carry, oldest day first. */
+  shutter: { date: string; count: number }[];
+  /** Each firmware it ran, in the order it was first seen. */
+  firmware: ({ version: string } & CameraSighting)[];
+  /** Each lens used on it, most used first. */
+  lenses: ({ lens: string } & CameraSighting)[];
+};

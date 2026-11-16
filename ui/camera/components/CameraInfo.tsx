@@ -5,7 +5,8 @@ import { UserText } from '../../components/UserText.tsx';
 import type { CameraDetail, CameraOwner } from '../hooks/useCamera.ts';
 import { CameraOwners } from './CameraOwners.tsx';
 import { CameraDevice } from './CameraDevice.tsx';
-import { DEFAULT_CLIP_DAYS } from '@archive/camera/api';
+import { type CameraUsage, DEFAULT_CLIP_DAYS } from '@archive/camera/api';
+import { CameraUsageSections } from './CameraUsage.tsx';
 
 type CameraInfoProps = {
   camera: CameraDetail;
@@ -19,13 +20,15 @@ type CameraInfoProps = {
   relinking: boolean;
   /** `useCamera().setDevice`. */
   setDevice: (device: string | null) => Promise<void>;
+  /** What its pictures' maker notes say about it, once read. */
+  usage: CameraUsage | null;
 };
 
 /**
  * Everything known about a camera beside its timeline: its settings, who has owned it, the device it
- * is part of, and what it is.
+ * is part of, what its pictures say about it, and what it is.
  */
-export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setDevice }: CameraInfoProps) {
+export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, onRelink, relinking, setDevice, usage }: CameraInfoProps) {
   const matchable = Boolean(camera.serial || (camera.make && camera.model));
   const recorded = camera.make || camera.model || camera.serial || camera.timezone || camera.clockOffset || camera.digitizer || camera.quicktimeUtc;
 
@@ -76,6 +79,8 @@ export function CameraInfo({ camera, owners, editable, setOwner, removeOwner, on
       <CameraOwners camera={camera} owners={owners} editable={editable} setOwner={setOwner} removeOwner={removeOwner} />
 
       <CameraDevice device={camera.device} name={camera.deviceName} editable={editable} setDevice={setDevice} />
+
+      <CameraUsageSections usage={usage} />
 
       {camera.description && (
         <InfoSection title='About'>

@@ -1,0 +1,29 @@
+# Emitted by the scan (`media.speakers.stale`) when a recording's `voicesBy` names other voice
+# models than EMS runs now. `voiceprint-file -f` finds its voices again, and carries each voice a
+# person named or locked to the new voice it shares the most speech with; writing `speakersAt`
+# again announces the voices, which `media-speaker-assign` decides anew.
+#
+# A pipeline of its own, not a trigger on `media-voiceprint`, because a step's priority outranks
+# its trigger's: here the step has none, so these sit behind a new recording's voices (30) in the
+# diarize kind. The fact is the guard.
+name: media-voiceprint-stale
+description: Find a recording's voices again when other voice models found them, keeping every name given
+
+triggers:
+  - on: media.speakers.stale
+    wants: archive
+    skipIfAttr: undecodable
+    priority: 10
+
+steps:
+  voiceprint-file:
+    command: voiceprint-file -f $NODE_PATH
+    description: Sortformer turns stitched into voices again, each name given carried to the voice it now is
+    pool: media
+    kind: diarize
+    requires:
+      models: 1
+
+options:
+  maxAttempts: 2
+  priority: 10

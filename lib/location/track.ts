@@ -48,6 +48,8 @@ export type TrackPoint = {
   alt?: number;
   speed?: number;
   course?: number;
+  /** How far off the fix may be, in metres, as its receiver said. */
+  accuracy?: number;
   /** Why the fix is left out (a rule's name, or `manual`), on a read asking for rejected fixes. */
   rejected?: string;
   /** What a person said of the fix, which overrules the rules. */
@@ -371,7 +373,7 @@ export function toPoint(raw: Record<string, unknown>): TrackPoint {
     point.ts = ts.toISOString();
   }
 
-  for (const key of ['alt', 'speed', 'course'] as const) {
+  for (const key of ['alt', 'speed', 'course', 'accuracy'] as const) {
     if (raw[key] !== undefined) {
       const value = Number(raw[key]);
       if (Number.isFinite(value)) point[key] = value;

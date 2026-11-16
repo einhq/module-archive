@@ -1,6 +1,6 @@
 {
   "name": "archive",
-  "version": "0.20.42",
+  "version": "0.20.43",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
   "coreApi": "^0.15.7",
@@ -28,7 +28,7 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.14.3",
+    "ems": "^0.14.7",
     "media": "^0.4.7"
   },
   "imports": {
@@ -36,6 +36,7 @@
     "@archive/camera/camera": "./lib/camera/camera.ts",
     "@archive/camera/camera-zone": "./lib/camera/camera-zone.ts",
     "@archive/camera/clock-offset": "./lib/camera/clock-offset.ts",
+    "@archive/camera/maker-notes": "./lib/camera/maker-notes.ts",
     "@archive/camera/types": "./types/camera/mod.ts",
     "@archive/event-rules": "./lib/event-rules.ts",
     "@archive/events-anniversaries": "./lib/events-anniversaries.ts",

@@ -11,6 +11,7 @@ import { EventModal } from '../../people/components/EventModal.tsx';
 import { CameraEditModal } from '../components/CameraEditModal.tsx';
 import { CameraInfo } from '../components/CameraInfo.tsx';
 import { useCamera } from '../hooks/useCamera.ts';
+import { useCameraUsage } from '../hooks/useCameraUsage.ts';
 import { type CSSProperties, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CurrentPeopleLine } from '../../components/CurrentPeople.tsx';
@@ -51,6 +52,7 @@ export default function CameraDetailPage() {
   const facetFilters = useMemo(() => ({ subjects: camera ? [subjectArg('camera', camera.path)] : undefined }), [camera?.path]);
   const { facets } = useSubjectFacets(facetFilters, Boolean(camera));
   const { groups, loading: feedLoading, refetch: refetchFeed } = useSubjectTimeline('camera-timeline', camera?.path ?? null);
+  const { usage, refetch: refetchUsage } = useCameraUsage(camera?.path ?? null);
 
   // Only the first load: an owner change re-reads the camera, and swapping the
   // page for a loader then would lose the tab being worked in.
@@ -80,6 +82,7 @@ export default function CameraDetailPage() {
       setMessage(null);
       const result = await relink();
       forgetSubjectFacets();
+      refetchUsage();
       setMessage(
         result.linked > 0 || result.retimed > 0
           ? [
@@ -189,6 +192,7 @@ export default function CameraDetailPage() {
                   onRelink={runRelink}
                   relinking={busy}
                   setDevice={setDevice}
+                  usage={usage}
                 />
               </Grid.Col>
             </Grid>

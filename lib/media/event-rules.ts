@@ -16,6 +16,7 @@
 
 import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
 import { FACE_EMBEDDING_TYPE, FACE_MODEL } from '@archive/media/regions';
+import { VOICES_BY_ATTR } from '@archive/media/speakers';
 import { RENDITION_FACTS, TEXT_FACTS } from '@media/facts';
 import { RESTORABLE } from '@media/damage';
 import { weatherOwed } from '@archive/weather/photo';
@@ -93,6 +94,11 @@ export const MEDIA_EVENTS = {
    * gap.
    */
   speakersMissing: 'media.speakers.missing',
+  /**
+   * A recording's voices were found by other voice models than EMS runs now (`voicesBy`). Its own
+   * fact because the voice pipeline's ordinary trigger skips every file that has `speakersAt`.
+   */
+  speakersStale: 'media.speakers.stale',
   /**
    * A scan whose damage was never read (`find-damage`), or read by another method than EMS reads
    * with now (`damageBy`): a digitized picture EMS's restoration ops take. The reconciler's gap.
@@ -190,6 +196,11 @@ export type RuleContext = FileRuleContext & {
    * is read again. Undefined when EMS cannot be asked, which leaves the read ones alone.
    */
   damageGeneration?: string;
+  /**
+   * The voice models EMS runs now (`generations().voiceprint`). A recording whose `voicesBy` names
+   * others, or none, is diarized again. Undefined when EMS cannot be asked, which disables the check.
+   */
+  voiceGeneration?: string;
   /**
    * Whether `CFG_WEATHER` lets photos be given their weather. Undefined or false disables the
    * check: a photo is owed nothing while no lookup may be made.
@@ -367,6 +378,23 @@ export async function deriveGaps(
       source: MEDIA_EVENT_SOURCE,
       data: { mimetype: str(file.attrs.mimetype) ?? '' },
     });
+  }
+
+  // One whose voices were found by other voice models than EMS runs now. In the bulk lane: nobody
+  // waits on voices made again, and a whole archive's are hours of the card.
+  if (ctx.voiceGeneration && transcript?.attrs.speech === true && str(file.attrs.speakersAt)) {
+    const voicesBy = str(file.attrs[VOICES_BY_ATTR]);
+    if (voicesBy !== ctx.voiceGeneration) {
+      events.push({
+        type: MEDIA_EVENTS.speakersStale,
+        subject: filePath,
+        nodeId: file.id,
+        time: now,
+        source: MEDIA_EVENT_SOURCE,
+        lane: 'bulk',
+        data: { mimetype: str(file.attrs.mimetype) ?? '', voicesBy: voicesBy ?? '', expected: ctx.voiceGeneration },
+      });
+    }
   }
 
   const mimetype = str(file.attrs.mimetype) ?? '';

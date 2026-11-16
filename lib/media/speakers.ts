@@ -17,6 +17,13 @@ import type { VoiceSpeaker } from '@ems/client';
 export const SPEAKERS_DIR = 'speakers';
 export const VOICE_EMBEDDING_TYPE = 'voice';
 
+/**
+ * File-node attr: how the recording's voices were found, as EMS names it (`voices/<n>+<diarizer>+<embedder>`,
+ * `generations().voiceprint` in `@ems/client`), written with `speakersAt`. A recording whose voices
+ * were found otherwise is diarized again (`media.speakers.stale`).
+ */
+export const VOICES_BY_ATTR = 'voicesBy';
+
 /** A turn: seconds into the recording. */
 export type Span = [number, number];
 

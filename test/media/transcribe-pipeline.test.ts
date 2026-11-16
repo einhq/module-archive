@@ -1,6 +1,7 @@
 /**
  * The voices start from the transcript (the media module's `media.transcript.generated`) and from
- * the speakers gap, and no pipeline describes media.
+ * the speakers gap, are found again when other voice models found them, and no pipeline describes
+ * media.
  */
 
 import { assertEquals } from '@std/assert';
@@ -29,6 +30,16 @@ Deno.test('media-voiceprint starts from a transcript and from the speakers gap',
   const def = await read('media-voiceprint.yaml');
   assertEquals(def.triggers.map((trigger) => trigger.on).sort(), ['media.speakers.missing', 'media.transcript.generated']);
   for (const trigger of def.triggers) assertEquals(trigger.skipIfAttr, 'speakersAt');
+});
+
+Deno.test('media-voiceprint-stale diarizes again, forced, below a new recording', async () => {
+  const def = await read('media-voiceprint-stale.yaml');
+  assertEquals(def.triggers.map((trigger) => [trigger.on, trigger.skipIfAttr]), [['media.speakers.stale', 'undecodable']]);
+  const step = def.steps['voiceprint-file'];
+  assertEquals([step.command, step.kind], ['voiceprint-file -f $NODE_PATH', 'diarize']);
+  const fresh = (await read('media-voiceprint.yaml')).steps['voiceprint-file'] as { priority?: number };
+  assertEquals((step as { priority?: number }).priority, undefined);
+  assertEquals(def.triggers[0].priority! < fresh.priority!, true);
 });
 
 Deno.test('no pipeline describes media', () => {

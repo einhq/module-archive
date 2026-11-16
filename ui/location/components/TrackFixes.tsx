@@ -141,6 +141,9 @@ function useCluster(path: string, fix: TrackPoint): number | null {
 function verdictOf(fix: TrackPoint): string {
   if (fix.rejected === 'manual') return 'left out by hand';
   if (fix.rejected === 'excursion') return 'left out by the rules, as a GPS excursion';
+  if (fix.rejected === 'inaccurate') {
+    return `left out by the rules, as a fix ${fix.accuracy !== undefined ? `said to be ${Math.round(fix.accuracy)} m off` : 'said to be far off'}`;
+  }
   if (fix.rejected) return `left out by the rules (${fix.rejected})`;
   return fix.manual === 'accept' ? 'kept by hand' : 'kept';
 }

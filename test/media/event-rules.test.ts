@@ -264,6 +264,32 @@ Deno.test('gap: a recording with speech and no voices is a gap; one without spee
   assertEquals(await deriveGaps(VID, tree(voiced), 100), []);
 });
 
+const VOICES = 'voices/1+diar_streaming_sortformer_4spk-v2+speakerverification_en_titanet_large';
+const speakersFacts = (facts: Omit<DomainEvent, 'id'>[]) => facts.filter((f) => f.type === MEDIA_EVENTS.speakersStale);
+
+/** A video with voices, `voicesBy` among its attrs, whose transcript heard speech or not. */
+const voicedVideo = (attrs: Record<string, unknown>, speech = true) => {
+  const nodes = indexedVideo({ speakersAt: '2026-10-10T08:00:00Z', ...attrs });
+  nodes[`${VID}/metadata/transcript`] = transcribed({ speech });
+  return nodes;
+};
+
+Deno.test('voices: a recording whose voices other models found is diarized again, in the bulk lane', async () => {
+  const unmarked = speakersFacts(await deriveGaps(VID, tree(voicedVideo({}), { voiceGeneration: VOICES }), 100));
+  assertEquals(unmarked.map((f) => [f.subject, f.lane, f.data]), [[VID, 'bulk', { mimetype: 'video/mp4', voicesBy: '', expected: VOICES }]]);
+  const older = speakersFacts(await deriveGaps(VID, tree(voicedVideo({ voicesBy: 'diar_sortformer_4spk-v1+titanet' }), { voiceGeneration: VOICES }), 100));
+  assertEquals(older.map((f) => f.data?.voicesBy), ['diar_sortformer_4spk-v1+titanet']);
+});
+
+Deno.test('voices: current voices, none yet, no speech, an undecodable file or no answer from EMS ask nothing', async () => {
+  assertEquals(speakersFacts(await deriveGaps(VID, tree(voicedVideo({ voicesBy: VOICES }), { voiceGeneration: VOICES }), 100)), []);
+  // No voices yet is the speakers gap, not this one.
+  assertEquals(speakersFacts(await deriveGaps(VID, tree(voicedVideo({ speakersAt: undefined }), { voiceGeneration: VOICES }), 100)), []);
+  assertEquals(speakersFacts(await deriveGaps(VID, tree(voicedVideo({}, false), { voiceGeneration: VOICES }), 100)), []);
+  assertEquals(speakersFacts(await deriveGaps(VID, tree(voicedVideo({ undecodable: 'no audio' }), { voiceGeneration: VOICES }), 100)), []);
+  assertEquals(speakersFacts(await deriveGaps(VID, tree(voicedVideo({})), 100)), []);
+});
+
 Deno.test('rule: a fingerprint embedding or a chromaprint reports nothing of its own', async () => {
   const print = `${SND}/metadata/chromaprint`;
   const ctx = tree({

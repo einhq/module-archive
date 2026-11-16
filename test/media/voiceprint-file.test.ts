@@ -75,6 +75,8 @@ Deno.test({
       const file = await attrsOf(audio);
       assertEquals(file.speakerCount, 2);
       assertEquals(typeof file.speakersAt, 'string');
+      // The models the voices were found with, as EMS named them.
+      assertEquals(file.voicesBy, 'diar_sortformer_4spk-v1+titanet');
     });
 
     await t.step('a recording with no transcript yet is nothing to do, not a failure', async () => {

@@ -101,6 +101,8 @@ export type TrackPoint = {
   ts?: string;
   /** Metres per second, as the tracker reported it. Only on a read that was not simplified. */
   speed?: number;
+  /** How far off the fix may be, in metres, as the tracker reported it. Only on a read that was not simplified. */
+  accuracy?: number;
   /** Why the fix is left out, a rule's name or `manual`, on a `--rejected` read that was not simplified. */
   rejected?: string;
   /** What a person said of the fix (`track-mark`), on a read that was not simplified. */

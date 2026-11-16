@@ -7,7 +7,7 @@ description: Find the voices of a recording — who speaks when — with one voi
 # The guard is a marker on the file node, the same shape and for the same reason as `facesAt`:
 # `speakers/` is a directory someone else could have written, `speakersAt` says the diarizer
 # ran. `media.speakers.missing` is the reconciler's gap for a recording with speech and no
-# voices.
+# voices. Voices other models found are `media-voiceprint-stale`'s.
 #
 # `voiceprint-file` itself does nothing when the transcript says there is no speech, so the
 # trigger does not have to encode it.

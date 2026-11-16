@@ -34,25 +34,26 @@ waits for rather than by a shared DAG:
    their own guards and run overrides, so a stale-transcript fact can bypass the
    ordinary "transcript already exists" guard without defining another pipeline:
 
-   | pipeline               | fact                                                                                                   | resource                                                                                                                             |
-   | ---------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-   | `media-interpret`      | `metadata.extracted`                                                                                   | pool `interpret` (1 cpu, priority 100)                                                                                               |
-   | `media-camera`         | `metadata.interpreted` (has camera info)                                                               | inline                                                                                                                               |
-   | `media-geocode`        | `position.available`                                                                                   | inline                                                                                                                               |
-   | `media-stills`         | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
-   | `media-transcode`      | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
-   | `media-camera-cover`   | `renditions.made` (video)                                                                              | inline                                                                                                                               |
-   | `media-faces`          | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100), then `face-crops` (1 cpu)                                                                 |
-   | `media-video-faces`    | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50), then `face-crops` (1 cpu)                                                                  |
-   | `media-faces-stale`    | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10), then `face-crops` (1 cpu)                                                               |
-   | `media-face-assign`    | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
-   | `media-voiceprint`     | `transcript.generated`, `speakers.missing`; not `speakersAt`                                           | pool `diarize` (1 model slot; priority 30)                                                                                           |
-   | `media-speaker-assign` | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
-   | `media-speaker-faces`  | `faces.completed` (video with `speakersAt`)                                                            | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
-   | `media-duplicates`     | `duplicates.stale`                                                                                     | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
-   | `staging-retime`       | `staging.retime.requested` (a move into a category with other time rules)                              | pool `retime` (1 cpu, priority 20)                                                                                                   |
-   | `staging-sidecars`     | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed)                        | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
-   | `staging-organize`     | `staging.category.changed` (a category's files changed, or a run was asked for)                        | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
+   | pipeline                 | fact                                                                                                   | resource                                                                                                                             |
+   | ------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+   | `media-interpret`        | `metadata.extracted`                                                                                   | pool `interpret` (1 cpu, priority 100)                                                                                               |
+   | `media-camera`           | `metadata.interpreted` (has camera info)                                                               | inline                                                                                                                               |
+   | `media-geocode`          | `position.available`                                                                                   | inline                                                                                                                               |
+   | `media-stills`           | `metadata.extracted` or `renditions.stale`, not `undecodable`                                          | pool `stills` (1 cpu, priority 60), then a video's hover clip `transcode` (1 cpu)                                                    |
+   | `media-transcode`        | `metadata.extracted` or `renditions.stale` (video/audio), or `file.turned` (forced), not `undecodable` | pool `transcode` (2 cpu; the hover clip again when forced), then the storyboard `stills` (1 cpu) and the chapters `shots` (1 models) |
+   | `media-camera-cover`     | `renditions.made` (video)                                                                              | inline                                                                                                                               |
+   | `media-faces`            | `metadata.interpreted` (image)                                                                         | pool `faces` (1 model slot, priority 100), then `face-crops` (1 cpu)                                                                 |
+   | `media-video-faces`      | `metadata.interpreted` (video)                                                                         | pool `faces` (1 model slot, priority 50), then `face-crops` (1 cpu)                                                                  |
+   | `media-faces-stale`      | `faces.stale` (image/video), not `undecodable`                                                         | pool `faces` (1 model slot; priority 20/10), then `face-crops` (1 cpu)                                                               |
+   | `media-face-assign`      | `face.detected` (one per face)                                                                         | pool `face-assign` (1 cpu, exclusive)                                                                                                |
+   | `media-voiceprint`       | `transcript.generated`, `speakers.missing`; not `speakersAt`                                           | pool `diarize` (1 model slot; priority 30)                                                                                           |
+   | `media-voiceprint-stale` | `speakers.stale`, not `undecodable`                                                                    | pool `diarize` (1 model slot; priority 10)                                                                                           |
+   | `media-speaker-assign`   | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
+   | `media-speaker-faces`    | `faces.completed` (video with `speakersAt`)                                                            | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
+   | `media-duplicates`       | `duplicates.stale`                                                                                     | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
+   | `staging-retime`         | `staging.retime.requested` (a move into a category with other time rules)                              | pool `retime` (1 cpu, priority 20)                                                                                                   |
+   | `staging-sidecars`       | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed)                        | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
+   | `staging-organize`       | `staging.category.changed` (a category's files changed, or a run was asked for)                        | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
    **Families.** Every pipeline here that acts on a file wherever it lies names the family of work
    it does with `wants` (core's "Which processing a folder wants"): `renditions` (the media module's
@@ -1347,7 +1348,7 @@ thousand of them, and nothing names a turn. The few turns no voice could be told
 `speakers` directory as `unattributed`.
 
 `voiceprint-file` writes them from one `speech.voiceprint` call per recording: EMS runs
-[Sortformer](https://huggingface.co/nvidia/diar_sortformer_4spk-v1) to find who speaks when and
+streaming [Sortformer](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2) to find who speaks when and
 TitaNet to embed each turn into a 192-dim voiceprint, stitches its windows into file-wide voices
 and answers each with its turns and one voiceprint — its turns' vectors weighted by length. The
 diarizer cannot take a whole file (a 12-minute recording asked for 18 GiB on a 15.5 GiB card), so
@@ -1357,7 +1358,11 @@ sees a window. `personId` is left null for `assign-speakers`, exactly as `detect
 for `assign-faces` — except what a person decided: a re-run carries each assignment named by hand
 or locked to the new voice it shares the most speech with. `speakersAt` on the file is written
 last, and announces the voices (`media.speakers.detected`); `media.speakers.missing` is the
-reconciler's gap for a recording with speech and no voices.
+reconciler's gap for a recording with speech and no voices. Beside it `voicesBy` names the models
+and the stitching that found them, `voices/<n>+<diarizer>+<embedder>` as EMS names them: `media-scan` announces
+`media.speakers.stale`, in the bulk lane, for a recording with speech whose `voicesBy` is not what
+EMS runs (`generations().voiceprint`), which `media-voiceprint-stale` diarizes again with `-f`
+behind new recordings, carrying every voice named or locked by hand.
 
 **Whisper is untouched by any of this.** The transcript keeps its own segmentation, which breaks
 on pauses and says nothing about who is talking; the two are joined by time when shown
