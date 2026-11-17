@@ -45,8 +45,16 @@ Deno.test('readMakerNotes: a lens by name wherever one is written, else from its
   // A name of nothing but focal lengths reads as the same lens from numbers does.
   assertEquals(readMakerNotes({ Lens: '17.0-70.0 mm f/2.8-4.0' }).lens, '17–70mm f/2.8–4');
   assertEquals(readMakerNotes({ LensModel: '50mm' }).lens, '50mm');
-  // A Pentax lens type, and a lens nothing is known of.
+  // A Pentax lens type is named by exiftool's table, and not without it; a Nikon id too, before its focal lengths.
+  assertEquals(readMakerNotes({ LensID: '8 215', LensName: 'smc PENTAX-DA 18-135mm F3.5-5.6 ED AL [IF] DC WR' }).lens, 'smc PENTAX-DA 18-135mm F3.5-5.6 ED AL [IF] DC WR');
   assertEquals(readMakerNotes({ LensID: '4 36' }).lens, undefined);
+  assertEquals(
+    readMakerNotes({ Lens: '28 300 3.5 6.3', LensID: '26 40 3C 8E 2C 40 1C 02', LensName: 'Sigma 28-300mm F3.5-6.3 Macro' }).lens,
+    'Sigma 28-300mm F3.5-6.3 Macro',
+  );
+  // The camera's own name before the table's.
+  assertEquals(readMakerNotes({ LensModel: 'EF50mm f/1.8 II', LensID: '29', LensName: 'Canon EF 50mm f/1.8 II' }).lens, 'EF50mm f/1.8 II');
+  // A lens nothing is known of.
   assertEquals(readMakerNotes({ LensInfo: '0 0 0 0' }).lens, undefined);
 });
 

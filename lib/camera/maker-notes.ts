@@ -2,7 +2,8 @@
  * What a picture's maker notes say about the camera that took it: how many pictures the camera had
  * taken by then, the firmware it ran, and the lens on it. Read from the `raw` exiftool dump on the
  * file's `metadata/exif` node (`exiftool -n`, so values are unprinted: a lens may be a number, a
- * version a row of numbers), one tag at a time, which is how `camera-usage` projects them.
+ * version a row of numbers), one tag at a time, which is how `camera-usage` projects them. EMS adds
+ * `LensName`, the one printed tag: `LensID` as exiftool's lens table names it.
  *
  * Pure, so the rules can be tested without an archive.
  */
@@ -12,7 +13,8 @@ import type { CameraSighting, CameraUsage } from '@archive/camera/api';
 /** Where each fact is read from, first readable tag first. */
 const SHUTTER_TAGS = ['ShutterCount', 'ImageCount'] as const;
 const FIRMWARE_TAGS = ['CanonFirmwareVersion', 'FirmwareVersion', 'Firmware', 'Software'] as const;
-const LENS_TAGS = ['LensModel', 'Lens', 'LensID', 'LensInfo'] as const;
+/** A name the camera wrote comes before the table's, which may name a lens it cannot tell apart as `A or B`. */
+const LENS_TAGS = ['LensModel', 'Lens', 'LensName', 'LensID', 'LensInfo'] as const;
 /** The lens tags that may describe it by focal lengths and apertures instead; a `LensID` of numbers is a type. */
 const LENS_SPEC_TAGS = ['LensInfo', 'Lens'] as const;
 

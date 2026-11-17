@@ -3,6 +3,7 @@
  *
  * A track's `kind` picks one profile: the thresholds that tell a stop from drift and a trip from a
  * rest, and the units its distances and speeds are shown in. A track with no kind reads as a car.
+ * A trip's own kind can come from what its device's motion sensors said (`activityKind`).
  * Imports nothing, so the bins and the UI share it.
  */
 
@@ -85,6 +86,36 @@ const PROFILES: Record<TravelKind, TrackProfile> = {
 
 /** The profile of a track of this kind; anything that is not a kind reads as a car. */
 export const trackProfile = (kind?: unknown): TrackProfile => PROFILES[isTravelKind(kind) ? kind : 'car'];
+
+/** What a phone's motion sensors say it is doing, as Traccar Client logs it, and the kind that travels so. */
+const ACTIVITY_KINDS: Record<string, TravelKind> = { on_foot: 'foot', walking: 'foot', running: 'foot', on_bicycle: 'bike', in_vehicle: 'car' };
+
+/** One entry of a device's `activity` log: when it said it, epoch ms, and what it said. */
+export type ActivityEntry = { at: number; activity: string };
+
+/**
+ * The kind a device travelled as in `[start, end]` (epoch ms), by its activity log in time order:
+ * the kind it said longest, each entry holding until the next and the last before `start` from
+ * `start` on. `still`, and anything else that names no kind, counts for none; undefined when
+ * nothing else was said.
+ */
+export const activityKind = (log: ActivityEntry[], start: number, end: number): TravelKind | undefined => {
+  const held = new Map<TravelKind, number>();
+  log.forEach((entry, index) => {
+    const kind = Object.hasOwn(ACTIVITY_KINDS, entry.activity) ? ACTIVITY_KINDS[entry.activity] : undefined;
+    if (!kind) return;
+    const from = Math.max(entry.at, start);
+    const to = Math.min(log[index + 1]?.at ?? end, end);
+    if (to > from) held.set(kind, (held.get(kind) ?? 0) + to - from);
+  });
+  let best: TravelKind | undefined;
+  for (const [kind, ms] of held) if (best === undefined || ms > held.get(best)!) best = kind;
+  return best;
+};
+
+/** How a trip travelled, named to a person: `On foot`, `Bike (by its motion sensors)` when its device sensed it; undefined for none. */
+export const tripKindLabel = (trip: { kind?: string; sensed?: true }): string | undefined =>
+  isTravelKind(trip.kind) ? `${TRAVEL_KIND_LABELS[trip.kind]}${trip.sensed ? ' (by its motion sensors)' : ''}` : undefined;
 
 /** `12.4 nm` or `23.0 km`; under one unit with one decimal more. */
 export const formatDistance = (metres: number, units: TrackUnits): string => {

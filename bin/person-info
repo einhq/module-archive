@@ -2,6 +2,7 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { ageAt, CHILDREN_DIR, PARENTS_DIR, PARTNERS_DIR, readRelationDir } from '@archive/people/genealogy';
 import { basename, resolve } from '@std/path';
+import { toText } from '@std/streams/to-text';
 import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { PersonInfo } from '@archive/people/api';
 import { sourceFiles } from '@archive/sources';
@@ -39,6 +40,20 @@ const ageOf = (attrs: PersonAttrs): AgeInfo | null => {
   const reached = ageAt(attrs.born, atDeath ? attrs.died! : new Date());
   return reached ? { ...reached, approx: reached.approx || qualifiers.includes('about'), atDeath } : null;
 };
+
+/** An event's body, trimmed, or null when it has none or cannot be read. */
+async function readBody(cmd: Command, path: string): Promise<string | null> {
+  try {
+    const handle = await cmd.sys.vfs.open(cmd.access, path, { mode: 'r' });
+    try {
+      return (await toText(handle.readable)).trim() || null;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
 
 const personInfo = async (cmd: Command): CmdReturn => {
   const targetArg = cmd.args.filter((a) => !a.startsWith('-'))[0];
@@ -85,31 +100,25 @@ const personInfo = async (cmd: Command): CmdReturn => {
   }
 
   const events: EventInfo[] = [];
-  const eventsResult = await cmd.execute(`JSON_OUTPUT=1 ls ${JSON.stringify(`${target}/events`)}`);
-  if (eventsResult.code === 0) {
-    try {
-      for (const name of JSON.parse(eventsResult.stdout) as string[]) {
-        const path = `${target}/events/${name}`;
-        const ea = (await personAttrs(cmd, path)) as unknown as Record<string, string> | null;
-        if (ea) {
-          const ev: EventInfo = { name: ea.name || name, eventType: ea.eventType || 'generic' };
-          if (ea.date) ev.date = ea.date;
-          if (ea.date && isDateQualifier(ea[EVENT_QUALIFIER_ATTR])) ev.dateQualifier = ea[EVENT_QUALIFIER_ATTR];
-          // geo lives in a child `position` node (mirrors files), not an attr
-          if (await cmd.sys.vfs.exists(cmd.access, `${target}/events/${name}/position`)) ev.position = 'geo';
-          // The body is the story. `description` was declared here from the
-          // start and never filled, so every imported story has been invisible.
-          // `size` gates the read: most events have no body at all.
-          if (Number(ea.size) > 0) {
-            const body = await cmd.execute(`cat ${JSON.stringify(path)}`);
-            if (body.code === 0 && body.stdout.trim()) ev.description = body.stdout.trim();
-          }
-          events.push(ev);
-        }
-      }
-    } catch {
-      // no events
+  // Read straight from the VFS, never through a shell line: an event's name is
+  // whatever the member who added it chose, and this runs as whoever views the person.
+  const eventEntries = (await cmd.sys.vfs.children(cmd.access, `${target}/events`).catch(() => []))
+    .filter((e) => !e.name.startsWith('.'))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const { name, node } of eventEntries) {
+    const path = `${target}/events/${name}`;
+    const ea = node.attrs as Record<string, string>;
+    const ev: EventInfo = { name: ea.name || name, eventType: ea.eventType || 'generic' };
+    if (ea.date) ev.date = ea.date;
+    if (ea.date && isDateQualifier(ea[EVENT_QUALIFIER_ATTR])) ev.dateQualifier = ea[EVENT_QUALIFIER_ATTR];
+    // geo lives in a child `position` node (mirrors files), not an attr
+    if (await cmd.sys.vfs.exists(cmd.access, `${path}/position`)) ev.position = 'geo';
+    // The body is the story. `size` gates the read: most events have no body at all.
+    if (Number(ea.size) > 0) {
+      const body = await readBody(cmd, path);
+      if (body) ev.description = body;
     }
+    events.push(ev);
   }
 
   const age = ageOf(attrs);

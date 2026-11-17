@@ -51,9 +51,9 @@ Deno.test({
       assertEquals([fact?.subject, fact?.data?.cause], [track, 'points']);
     });
 
-    await t.step('a fix written to the device announces track.changed for its track', async () => {
+    await t.step("a fix written to the device's track announces track.changed for it", async () => {
       const fix = JSON.stringify({ lat: 59.2, lng: 18.2, ts: '2025-06-01T11:00:00Z' });
-      const fact = await nextChange(() => client.exec(`echo '${fix}' > ${deviceAt('the-tracker')}`));
+      const fact = await nextChange(() => client.exec(`echo '${fix}' > ${positionOf('the-tracker')}`));
       assertEquals([fact?.subject, fact?.data?.cause], [track, 'points']);
     });
 

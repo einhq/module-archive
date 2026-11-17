@@ -14,17 +14,15 @@
 import { DEV_PATH, devicePath } from '@ein/paths';
 import { CAMERAS_ROOT } from '@archive/paths';
 import type { TrackEntry } from '@archive/location/api';
-import { isTravelKind } from '@archive/location/track-profile';
+import { type ActivityEntry, isTravelKind } from '@archive/location/track-profile';
 import { fileSource, linkSource } from '@archive/sources';
-import type { Command, Gpx } from '@ein/client';
+import { type Command, type Gpx, readRange } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
 
 /** The child softlink of a camera that names the device it is part of: a phone's camera, its phone. */
 export const CAMERA_DEVICE_LINK = 'device';
 /** The track endpoint core's `tracker` driver keeps a device's position in. */
 const POSITION_ENDPOINT = 'position';
-/** Core's driver for phones and GPS loggers, which reads a GPX file written to its device. */
-const TRACKER_DRIVER = 'tracker';
 /** The child of a track that holds the GPX files it was read from. */
 const ROUTES_DIR = 'routes';
 /** Where a bare name, one without a `/`, is looked for: a device, then a camera, of that name. */
@@ -126,6 +124,9 @@ const cachedNode = (cmd: Command, nodes: NodeCache, path: string): Promise<Node 
 /** Where the device a track at `path` is an endpoint of would be, `/dev/<device>`: its parent under `/dev`. */
 const devicePathOf = (track: string): string | undefined => dirname(dirname(track)) === DEV_PATH ? dirname(track) : undefined;
 
+/** The device's log of what its motion sensors say it is doing (`still`, `on_foot`, `in_vehicle`, …), as core's `tracker` keeps it. */
+const ACTIVITY_ENDPOINT = 'activity';
+
 /** The device a track at `path` is an endpoint of, when it is one's. */
 const deviceAbove = async (cmd: Command, path: string, nodes: NodeCache): Promise<Node | undefined> => {
   const parent = devicePathOf(path);
@@ -164,6 +165,20 @@ const travelKind = (track: Record<string, unknown>, device?: Record<string, unkn
 export async function trackKind(cmd: Command, path: string, track: Node): Promise<string | undefined> {
   if (isTravelKind(track.attrs.kind)) return track.attrs.kind;
   return travelKind(track.attrs, (await deviceAbove(cmd, path, new Map()))?.attrs);
+}
+
+/**
+ * What the device the track at `path` is an endpoint of said it was doing from `start` to `end`
+ * (epoch ms), in time order, headed by the last it said before `start`, which holds from there.
+ * None for a track that is no device's, or whose device keeps no activity log.
+ */
+export async function trackActivity(cmd: Command, path: string, start: number, end: number): Promise<ActivityEntry[]> {
+  const device = devicePathOf(path);
+  if (device === undefined) return [];
+  const log = `${device}/${ACTIVITY_ENDPOINT}`;
+  const before = await readRange<{ value?: unknown }>(cmd.sys.vfs, cmd.access, log, { until: new Date(start), limit: 1 });
+  const within = await readRange<{ value?: unknown }>(cmd.sys.vfs, cmd.access, log, { since: new Date(start), until: new Date(end + 1) });
+  return [...before, ...within].flatMap((entry) => typeof entry.value?.value === 'string' ? [{ at: entry.at, activity: entry.value.value }] : []);
 }
 
 /**
@@ -431,16 +446,14 @@ const newTimes = async (cmd: Command, track: string, points: TrackPoint[]): Prom
 
 /**
  * Append the timed fixes of a GPX file (`points`, read from `bytes`) to the track at `track`, and
- * answer how many it had no fix at the time of. A device's `position` that core's `tracker` driver
- * keeps takes the file as raw input to its device, as `cat ride.gpx > /dev/<device>` gives it; any
- * other track takes the fixes as they are.
+ * answer how many it had no fix at the time of. A device's track takes the file as it is, as
+ * `cat ride.gpx > /dev/<device>/position` gives it, and core reads it as a tracker's; any other
+ * track takes the fixes as they are.
  */
 export async function appendGpx(cmd: Command, track: string, bytes: Uint8Array, points: TrackPoint[]): Promise<number> {
-  const device = basename(track) === POSITION_ENDPOINT ? devicePathOf(track) : undefined;
-  const driver = device && (await cmd.sys.vfs.get(cmd.access, device).catch(() => undefined))?.attrs.driver;
-  if (device && driver === TRACKER_DRIVER) {
+  if (devicePathOf(track)) {
     const added = await newTimes(cmd, track, points);
-    const handle = await cmd.sys.vfs.open(cmd.access, device, { mode: 'w' });
+    const handle = await cmd.sys.vfs.open(cmd.access, track, { mode: 'w' });
     try {
       await handle.write(bytes);
     } finally {

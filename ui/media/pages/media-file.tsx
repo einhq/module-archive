@@ -1,8 +1,9 @@
 import { Box } from '@mantine/core';
 import { effect } from '@preact/signals-react';
-import { useEffect, useLayoutEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { MediaLightbox } from '../components/MediaLightbox.tsx';
+import { slideshowFromSearch } from '../lib/slideshow-search.ts';
 import { lightboxRestedPath } from '../signals/lightbox.ts';
 import { usePageSubject, useSurface } from '@ein/ui/hooks';
 import { lightboxRoute } from '@ein/ui/lib';
@@ -14,12 +15,17 @@ export const handle = { fullBleed: true };
  * One media file in the lightbox. Opened from a grid it is shown full screen over the page,
  * walking the list it was opened from (`openMediaAt`); opened by its URL it is the page, and
  * walks what the page behind offers, or nothing, and says it is about the file (`usePageSubject`).
+ * Given to a screen (`?slideshow=screen`) it covers the whole window, as the full-screen surface
+ * does, with nothing of the shell around it.
  */
 export default function MediaPage() {
   const { id } = useParams();
   const path = id ? decodeURIComponent(id) : undefined;
   const navigate = useNavigate();
   const surface = useSurface();
+  // Read once: the slideshow takes the parameter out of the address as it starts.
+  const search = useLocation().search;
+  const [screen] = useState(() => slideshowFromSearch(search) === 'screen');
   usePageSubject({ title: path?.split('/').pop(), node: path });
 
   useLayoutEffect(() => {
@@ -41,6 +47,13 @@ export default function MediaPage() {
   useLayoutEffect(() => () => endLightbox(true), []);
 
   if (surface.kind !== 'page') return <MediaLightbox />;
+  if (screen) {
+    return (
+      <Box pos='fixed' style={{ inset: 0, zIndex: 'calc(var(--mantine-z-index-modal) - 2)' }}>
+        <MediaLightbox />
+      </Box>
+    );
+  }
   return (
     <Box h='calc(100dvh - var(--app-shell-header-height))' pos='relative'>
       <MediaLightbox />

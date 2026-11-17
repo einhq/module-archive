@@ -352,6 +352,14 @@ Deno.test({
       assertEquals(info.relations.some((r) => r.role === 'child'), true);
       assertEquals(info.events.some((e) => e.eventType === 'birth'), true);
     });
+    await t.step('person-info reads an event whose name is shell syntax without running it', async () => {
+      const name = 'y$(cd; echo ran > injproof)';
+      await cmd.shouldSucceed(`person-add-event ${PEOPLE_ROOT}/anna '${name}' --body "Story"`);
+      const info = await client.execJson<{ events: Array<{ name: string; description?: string }> }>(`person-info ${PEOPLE_ROOT}/anna`);
+      assertEquals(info.events.find((e) => e.description === 'Story')?.name, name);
+      assertEquals((await client.execJson<string[]>('ls ~')).includes('injproof'), false);
+      await cmd.shouldSucceed(`rm '${PEOPLE_ROOT}/anna/events/${name}'`);
+    });
     await t.step('person-info carries age, contact and named homes', async () => {
       await cmd.shouldSucceed(`attrs ${PEOPLE_ROOT}/erik -s birthname=Ek`);
       const info = await client.execJson<{

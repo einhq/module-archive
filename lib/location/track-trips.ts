@@ -3,7 +3,9 @@
  *
  * `deriveTrackTrips` cuts the track into trips (`@archive/location/trips`) with what the track
  * says of itself: the thresholds of how it travels (its kind, else its device's class), its
- * timezone, its homes and the edits in its attr `tripEdits`. A run reads the track only from the last stay or gap that ended a trip for good
+ * timezone, its homes and the edits in its attr `tripEdits`. Each trip travels as that kind, or,
+ * when the track has none, as its device's activity log says it went most of the way
+ * (`activityKind`). A run reads the track only from the last stay or gap that ended a trip for good
  * (`settledUntil`) and keeps what came before. It reads all of it when anything the trips were
  * derived with has changed, or when the track has more or fewer fixes before that point than it had.
  * A stay derived again from the same first fix keeps the location `track-places` gave it, and a
@@ -14,9 +16,9 @@
 
 import type { Command } from '@ein/client';
 import type { TrackTrips, Trip, TripEdits, TripPlace, TripStay } from '@archive/location/api';
-import { trackKind, trackOf } from '@archive/location/track';
+import { trackActivity, trackKind, trackOf } from '@archive/location/track';
 import { readTrackHomes } from '@archive/location/track-homes';
-import { trackProfile } from '@archive/location/track-profile';
+import { activityKind, isTravelKind, trackProfile } from '@archive/location/track-profile';
 import { keepTripWeather } from '@archive/location/trip-weather';
 import { numberTrips, segmentTrips, type TripFix, type TripHome, type TripSegmentation, type TripSettings } from '@archive/location/trips';
 import { albumTrackPaths } from '@archive/media/album-devices';
@@ -138,7 +140,9 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
   const { path: trackPath } = await trackOf(cmd, target);
   const node = await cmd.sys.vfs.get(cmd.access, trackPath);
   const attrs = node.attrs as Record<string, unknown>;
-  const profile = trackProfile(await trackKind(cmd, trackPath, node));
+  const setKind = await trackKind(cmd, trackPath, node);
+  const kind = isTravelKind(setKind) ? setKind : undefined;
+  const profile = trackProfile(kind);
   const timezone = typeof attrs.timezone === 'string' && attrs.timezone ? attrs.timezone : undefined;
   const edits = tripEditsOf(attrs);
   const homes: TripHome[] = (await readTrackHomes(cmd, trackPath)).homes.flatMap((home) =>
@@ -155,7 +159,7 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
     now: opts.now ?? Date.now(),
   };
   // What the trips are derived with, besides the track. Anything else reads the whole track.
-  const basis = JSON.stringify({ clusterRadiusM: profile.clusterRadiusM, longRestMs: profile.longRestMs, timezone, homes, edits });
+  const basis = JSON.stringify({ kind: kind ?? null, clusterRadiusM: profile.clusterRadiusM, longRestMs: profile.longRestMs, timezone, homes, edits });
 
   const empty: TrackTrips = { computedAt: new Date(settings.now!).toISOString(), basis, trips: [], stays: [] };
   const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [node.id])).get(node.id);
@@ -201,11 +205,19 @@ export const deriveTrackTrips = async (cmd: Command, target: string, opts: { ful
   // Where `track-places` placed a stay holds for the stay derived again from the same first fix.
   const placed = new Map((prior?.stays ?? []).filter((stay) => stay.location || stay.unnamed).map((stay) => [stay.start, stay]));
 
+  const activity = kind || seg.trips.length === 0 ? [] : await trackActivity(cmd, trackPath, Date.parse(seg.trips[0].start), Date.parse(seg.trips[seg.trips.length - 1].end));
+  const kindOf = (trip: Omit<Trip, 'albums'>): Pick<Trip, 'kind' | 'sensed'> => {
+    if (kind) return { kind };
+    const sensed = activityKind(activity, Date.parse(trip.start), Date.parse(trip.end));
+    return sensed ? { kind: sensed, sensed: true } : {};
+  };
+
   const tracksOf = new Map<string, Promise<string[]>>();
   const derived: Trip[] = [];
   for (const trip of seg.trips) {
     derived.push({
       ...trip,
+      ...kindOf(trip),
       from: shiftPlace(trip.from, offset),
       to: shiftPlace(trip.to, offset),
       destination: shiftPlace(trip.destination, offset),

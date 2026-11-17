@@ -2,7 +2,8 @@
  * staging-unzip: a zip uploaded into a staging category is expanded into the folder it lies in, by
  * a worker of the media pool, and removed once it is; over HTTP and over SFTP alike, and never
  * while its upload is still going on, whatever the upload changes on it meanwhile. What it takes out
- * is frozen when `/etc/frozen-uploads` lists its type, as an upload of it is.
+ * is frozen when `/etc/frozen-uploads` lists its type, as an upload of it is. A member's zip is
+ * expanded as the member, so a softlink they lay in the folder leads nowhere they could not write.
  *
  * The definition is the module's own, defined into a booted instance with a worker that takes
  * only its kind. `fixtures/trip.zip` holds two invented text files, one deflated, in folders two
@@ -122,6 +123,40 @@ Deno.test({
 
       for (const path of ['Exempelresa/dag-1/anteckningar.txt', 'Exempelresa/dag-2/väder.txt']) {
         assertEquals((await vfs.get(ADMIN_ACCESS, `${inbox}/frozen/${path}`)).attrs.frozen, true, path);
+      }
+    });
+    await t.step("a member's zip is expanded with the member's rights: a softlink to another home reaches nothing", async () => {
+      await run('user-create cleo && user-passwd cleo --new-password hunter2 && user-create dag');
+      const cleo = await harness.createShellClient({ username: 'cleo', password: 'hunter2' });
+      const { client: ssh, sftp } = await harness.connectSFTP({ username: 'cleo', password: 'hunter2' });
+      try {
+        const own = '/home/cleo/staging/files/egna';
+        const linked = '/home/cleo/staging/files/länkad';
+        // dag's home is one cleo may pass through but not read: the entry through the link fails,
+        // and the one beside it is still expanded.
+        assertEquals((await cleo.exec(`mkdir -p ${own} ${linked}/Exempelresa && ln -s /home/dag ${linked}/Exempelresa/dag-1`)).success, true);
+        const body = await Deno.readFile(ZIP);
+        for (const dir of [own, linked]) {
+          const handle = await sftp.open(`${dir}/trip.zip`, 'w');
+          await sftp.write(handle, body, 0, body.length, 0);
+          await sftp.close(handle);
+        }
+
+        await waitFor(async () => !(await vfs.exists(ADMIN_ACCESS, `${own}/trip.zip`)), 'the own zip to be expanded and removed');
+        const notes = await vfs.get(ADMIN_ACCESS, `${own}/Exempelresa/dag-1/anteckningar.txt`);
+        assertEquals(notes.props.uid, (await client.execJson<{ uid: number }>('user-info cleo')).uid);
+
+        const zip = await vfs.get(ADMIN_ACCESS, `${linked}/trip.zip`);
+        const instance = `/var/pipelines/instances/staging-unzip/${zip.id}`;
+        const status = async () => (await vfs.get<{ status?: string }>(ADMIN_ACCESS, instance).catch(() => undefined))?.attrs.status;
+        await waitFor(async () => ['completed', 'failed', 'cancelled'].includes((await status()) ?? ''), 'the run to end', 30000);
+        assertEquals(await status(), 'failed');
+        assertEquals(await vfs.exists(ADMIN_ACCESS, `${linked}/trip.zip`), true);
+        assertEquals(await vfs.exists(ADMIN_ACCESS, '/home/dag/anteckningar.txt'), false);
+        assertEquals((await client.execString(`cat ${linked}/Exempelresa/dag-2/väder.txt`)).trim(), 'Sol hela dagen.');
+      } finally {
+        ssh.end();
+        cleo.close();
       }
     });
   } finally {

@@ -8,6 +8,10 @@ description: Expand a zip that lands in a staging category beside it, then remov
 # failed attempt keeps the zip, and the step's error says why. What it takes out came in with the
 # upload, so `--as-upload` freezes a picture or a film as an upload of it would be frozen.
 #
+# The step runs as the zip's owner, through `runas`: what the zip holds lands with that account's
+# rights, so a softlink in the category reaches no further than its owner could write anyway, and
+# what is taken out is the owner's, as the upload was.
+#
 # Only a zip whose upload has ended is expanded. An upload or an SFTP put records the file's size,
 # sha256 and mimetype once its last byte is written, and that write is the `updated` event matched
 # here; an `updated` event while the bytes are still arriving (a mode or time set over SFTP) finds
@@ -24,7 +28,10 @@ trigger:
 
 steps:
   expand:
-    command: unzip -n --as-upload -d "$(dirname $NODE_PATH)" $NODE_PATH && rm $NODE_PATH
+    command: >-
+      owner=$(JSON_OUTPUT=1 props $NODE_PATH | jq -r .uid) &&
+      runas "$owner" unzip -n --as-upload -d "$(dirname $NODE_PATH)" $NODE_PATH &&
+      runas "$owner" rm $NODE_PATH
     description: Expand the zip beside it and remove it
     pool: media
     kind: unzip

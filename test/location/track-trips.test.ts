@@ -122,6 +122,35 @@ Deno.test({
       await cmd.shouldFailWith('trip-edit the-sailboat 2025-06-05 --split', 'no trip goes on');
       await cmd.shouldFailWith('trip-edit the-sailboat 2025-06-10', 'usage');
     });
+
+    await t.step("a phone's trips travel as its motion sensors said they went most of the way, and a kind set on its track wins", async () => {
+      const phone = positionOf('the-phone');
+      await cmd.shouldSucceed(mkTracker('the-phone', 'the-phone', {}, 'phone'));
+      // Traccar Client's body: a fix and what the phone was doing then, logged when it changes.
+      const post = (point: Point, activity: string) =>
+        cmd.shouldSucceed(
+          `echo '${JSON.stringify({ location: { coords: { latitude: point.lat, longitude: point.lng }, timestamp: point.ts, activity: { type: activity } } })}' > ${phone}`,
+        );
+      await cmd.shouldSucceed(`track-append ${phone} --json '${JSON.stringify([...rest(0, 4, 0), ...rest(5, 4, 10_000), ...rest(10, 4, 20_000)])}'`);
+      // A walk with a short ride at its end, and a bike ride; still at each stay.
+      const walk = out(4, 0, 10_000);
+      await post(walk[0], 'still');
+      await post(walk[1], 'on_foot');
+      await post(fix(4, 11.5, 8_000), 'in_vehicle');
+      await post(walk[3], 'in_vehicle');
+      await post(fix(5, 0, 10_000), 'still');
+      const ride = out(9, 10_000, 20_000);
+      await post(ride[0], 'on_bicycle');
+      for (const point of ride.slice(1)) await post(point, 'on_bicycle');
+      await post(fix(10, 0, 20_000), 'still');
+
+      const derived = await client.execJson<TrackTrips>('track-trips the-phone');
+      assertEquals(derived.trips.map((trip) => [trip.id, trip.kind, trip.sensed]), [['2025-06-05', 'foot', true], ['2025-06-10', 'bike', true]]);
+
+      await cmd.shouldSucceed(`attrs ${phone} -s kind=car`);
+      const set = await client.execJson<TrackTrips>('track-trips the-phone');
+      assertEquals(set.trips.map((trip) => [trip.kind, trip.sensed]), [['car', undefined], ['car', undefined]]);
+    });
   } finally {
     await testCtx.teardown();
   }

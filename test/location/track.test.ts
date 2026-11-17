@@ -158,13 +158,13 @@ Deno.test({
       assertEquals(after?.bbox, { north: 57.72, south: 57.69, east: 12.05, west: 11.97 });
     });
 
-    await t.step('track-list follows a track its device is written to', async () => {
+    await t.step("track-list follows a track written over its device's position", async () => {
       await tracker('live');
       const fixes = [
         { lat: 57.7, lng: 11.97, ts: '2022-02-01T08:00:00Z' },
         { lat: 57.75, lng: 11.9, ts: '2022-02-01T08:01:00Z' },
       ];
-      await cmd.shouldSucceed(`echo '${JSON.stringify(fixes)}' > ${deviceAt('live')}`);
+      await cmd.shouldSucceed(`echo '${JSON.stringify(fixes)}' > ${positionOf('live')}`);
 
       const summary = await listed('live');
       assertEquals(summary?.points, 2);

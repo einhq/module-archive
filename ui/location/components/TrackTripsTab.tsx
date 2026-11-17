@@ -4,7 +4,7 @@ import { openDialog } from '@ein/ui/signals';
 import { Link } from 'react-router-dom';
 import { useState } from 'react';
 import type { Trip, TripList, TripPlace } from '@archive/location/api';
-import { formatDistance } from '@archive/location/track-profile';
+import { formatDistance, tripKindLabel } from '@archive/location/track-profile';
 import { albumRoute } from '../../media/lib/album-path.ts';
 import { useTrackTrips } from '../hooks/useTrackTrips.ts';
 import { AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
@@ -176,6 +176,7 @@ function TripCard(
           />
         )}
         <Text size='sm' c='dimmed'>
+          {tripKindLabel(trip) && `${tripKindLabel(trip)} · `}
           {trip.days.length} {trip.days.length === 1 ? 'day' : 'days'} · {formatDistance(trip.distanceM, list.units)} · {formatDistance(trip.maxDistanceM, list.units)}{' '}
           out at most
         </Text>

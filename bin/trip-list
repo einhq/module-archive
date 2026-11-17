@@ -16,7 +16,7 @@ import type { TrackTrips, TripList, TripStay } from '@archive/location/api';
 import { basename } from '@std/path';
 import { TRACK_ARG, trackKind, trackOf } from '@archive/location/track';
 import { readTrackTrips } from '@archive/location/track-trips';
-import { formatDistance, trackProfile } from '@archive/location/track-profile';
+import { formatDistance, trackProfile, tripKindLabel } from '@archive/location/track-profile';
 import { matchTrip, tripAlbums } from '@archive/media/trip-album';
 
 /**
@@ -90,8 +90,9 @@ const tripList = async (cmd: Command): CmdReturn => {
       for (const trip of list.trips) {
         const days = trip.days.length === 1 ? '1 day' : `${trip.days.length} days`;
         const destination = trip.destination.stay === undefined ? undefined : list.stays[trip.destination.stay]?.name;
+        const kind = tripKindLabel(trip);
         await cmd.writeLn(
-          `${trip.id.padEnd(13)} ${days.padEnd(8)} ${formatDistance(trip.distanceM, units).padStart(9)}${trip.ongoing ? '  ongoing' : ''}${
+          `${trip.id.padEnd(13)} ${days.padEnd(8)} ${formatDistance(trip.distanceM, units).padStart(9)}${kind ? `  ${kind}` : ''}${trip.ongoing ? '  ongoing' : ''}${
             destination ? `  to ${destination}` : ''
           }${trip.album ? `  album ${trip.album}` : trip.albums.length ? `  maybe ${trip.albums.join(', ')}` : ''}`,
         );

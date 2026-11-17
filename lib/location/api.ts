@@ -230,6 +230,14 @@ export type Trip = {
   to: TripPlace;
   /** The farthest stay it reached from where it started; the farthest fix when it stayed nowhere. */
   destination: { lat: number; lng: number; stay?: number };
+  /**
+   * How it travelled (`TravelKind`): the kind a person set, its track's own `kind` or its device's
+   * `class`; without one, what its device's motion sensors said longest along the way, other than
+   * lying still (`activityKind`), and then `sensed`. None when neither says.
+   */
+  kind?: string;
+  /** `kind` is what its device's motion sensors said, not one a person set. */
+  sensed?: true;
   /** The length of its track, and how far from its start it got, in metres. */
   distanceM: number;
   maxDistanceM: number;
@@ -271,7 +279,7 @@ export type TrackTrips = {
    * in the track, and the next run reads all of it.
    */
   settledPoints?: number;
-  /** What they were derived with besides the track: thresholds, timezone, homes and edits. */
+  /** What they were derived with besides the track: the kind a person set, thresholds, timezone, homes and edits. */
   basis: string;
   trips: Trip[];
   stays: TripStay[];

@@ -1,3 +1,4 @@
+import { effect } from '@preact/signals-react';
 import { useCallback, useEffect, useMemo } from 'react';
 import { albumMediaList, currentMediaIndex, MediaItem, openMediaAt } from '@ein/ui/signals';
 import { ScrollRoot, type SearchOutcome, searchResultToMediaItem, useLoadMoreSentinel, useSearch } from '@ein/ui/hooks';
@@ -13,6 +14,9 @@ type MediaTimelineGroup = DateBucket<MediaItem>;
  * their useful day headings.
  */
 const MAX_ALBUM_DATE_GROUPS = 240;
+
+/** How many files before the end of what has loaded the lightbox asks for the next page. */
+const LIGHTBOX_PAGE_AHEAD = 5;
 
 /**
  * How wide a bucket is. A subject spans decades, so months keep its headers
@@ -145,6 +149,21 @@ export function useMediaTimeline(opts: UseMediaTimelineOptions): UseMediaTimelin
   const openAt = useCallback((index: number) => openMediaAt(index, items), [items]);
 
   const sentinelRef = useLoadMoreSentinel(hasMore && !error, loading, loadMore, scrollRoot);
+
+  // The lightbox nearing the end of this list asks for the next page, as the grid's sentinel does
+  // when scrolled to, so arrows and a slideshow go on past it rather than round to the start.
+  useEffect(() => {
+    if (!hasMore || error || loading) return;
+    // Once per page: the next steps come before `loading` does.
+    let asked = false;
+    return effect(() => {
+      const index = currentMediaIndex.value;
+      const open = albumMediaList.value;
+      if (asked || index < 0 || open[0]?.id !== items[0]?.id || index < items.length - LIGHTBOX_PAGE_AHEAD) return;
+      asked = true;
+      loadMore();
+    });
+  }, [error, hasMore, items, loadMore, loading]);
 
   return {
     items,

@@ -5,8 +5,8 @@ import { useSignals } from '@preact/signals-react/runtime';
 import { type TimelineGranularity, useMediaTimeline } from '../hooks/useMediaTimeline.ts';
 import { holdElement, SearchOutcome, useAccessIds, useHeaderHeight, useIdentities, useMediaSelection } from '@ein/ui/hooks';
 import { useSubjectFacets } from '../hooks/useSubjectFacets.ts';
-import { canWrite, canWriteEach, SearchFilters, SearchKind, subjectArg, TO_TOP_EVENT } from '@ein/ui/lib';
-import { type MediaItem, mediaRestored, offerLightboxList, openMediaAt } from '@ein/ui/signals';
+import { canWrite, canWriteEach, lightboxPathFromSearch, SearchFilters, SearchKind, subjectArg, TO_TOP_EVENT, withLightboxSearch } from '@ein/ui/lib';
+import { type MediaItem, mediaRestored, navigatePage, offerLightboxList, openMediaAt, pageLocation } from '@ein/ui/signals';
 import { TimelineScrubber } from './TimelineScrubber.tsx';
 import { AddToAlbumAction } from '../media/components/AddToAlbumAction.tsx';
 import { LabelAction } from '../media/components/LabelAction.tsx';
@@ -17,6 +17,7 @@ import { type AlbumEvent, useAlbumEvents } from '../media/hooks/useAlbumEvents.t
 import { AlbumEventNote } from '../media/components/AlbumEventNote.tsx';
 import { EventModal } from '../people/components/EventModal.tsx';
 import { albumMediaRefreshRequest, mediaMoved } from '../media/signals/album.ts';
+import { slideshowFromSearch } from '../media/lib/slideshow-search.ts';
 
 /**
  * Below this, the rail has no job: everything it could point at is within a
@@ -247,6 +248,15 @@ export function MediaTimeline(
   useEffect(() => {
     offerLightboxList(items);
     return () => offerLightboxList([]);
+  }, [items]);
+
+  // A page whose URL asks for the slideshow (`?slideshow`) with no file open over it opens the
+  // first, in place of its own entry, and the lightbox runs the slideshow over this list from there.
+  useEffect(() => {
+    const page = pageLocation();
+    const first = items[0];
+    if (!page || !first || !slideshowFromSearch(page.search) || lightboxPathFromSearch(page.search) !== undefined) return;
+    navigatePage({ pathname: page.pathname, search: withLightboxSearch(page.search, first.path), hash: page.hash }, { replace: true, state: page.state });
   }, [items]);
 
   // A new token means the album changed under the list. Not on mount: the list

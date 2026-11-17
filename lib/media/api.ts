@@ -1035,6 +1035,9 @@ export type AlbumTrip = {
   stays: TripStay[];
   /** One for each local day. */
   legs: TripLeg[];
+  /** How it travelled (`TravelKind`), and whether that is what its device's motion sensors said (`Trip`). */
+  kind?: string;
+  sensed?: true;
   /** The length of its track, in metres. */
   distanceM: number;
   /** `track-weather`: the weather over all its days. */

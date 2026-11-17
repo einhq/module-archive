@@ -6,7 +6,7 @@ import { execCommand } from '@ein/ui/signals';
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { TripStay, TripWeather } from '@archive/location/api';
-import { formatDistance, trackProfile } from '@archive/location/track-profile';
+import { formatDistance, trackProfile, tripKindLabel } from '@archive/location/track-profile';
 import { compassPoint, oneDecimal } from '../../location/lib/weather.ts';
 import { useTracks } from '../../location/hooks/useTracks.ts';
 import { deviceRoute } from '../../location/lib/device-route.ts';
@@ -158,6 +158,7 @@ export function AlbumTripTab(
             )}
           </Group>
           <Text size='sm' c='dimmed'>
+            {tripKindLabel(trip) && `${tripKindLabel(trip)} · `}
             {trip.legs.length} {trip.legs.length === 1 ? 'day' : 'days'} · {formatDistance(trip.distanceM, units)}
           </Text>
           <Text size='sm'>

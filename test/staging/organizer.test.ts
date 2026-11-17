@@ -3,7 +3,8 @@
  * in exactly one group — events, a seed, and the Everyday, clutter, period and undated lanes —
  * while one still indexing is in none. A rerun changes nothing; a pinned group, or one edited by
  * hand, keeps its members; a group already there keeps its path; a dry run writes nothing; the
- * checkpoint is the owner's and `staging status` shows its summary. The photos are invented.
+ * checkpoint is the owner's and `staging status` shows its summary; a directory of groups that is
+ * a softlink is refused, not followed. The photos are invented.
  */
 import type { StagingOrganizeReport, StagingStatus } from '@archive/staging/api';
 import { type AutoAlbumMeta, COVER_LINK_NAME } from '@archive/staging/auto-album';
@@ -225,6 +226,16 @@ Deno.test({ name: 'staging organize', sanitizeResources: false, sanitizeOps: fal
       result = await organize();
       assertEquals([result.pinned, result.groups.find((group) => group.path === `${GROUPS}/${event.slug}`)?.action], [0, 'update']);
       assertEquals((await groups(vfs)).find((group) => group.slug === event.slug)?.members.length, moved.members.length - 1);
+    });
+
+    await t.step("a category's directory of groups that is a softlink is refused, and nothing is written where it points", async () => {
+      await cmd.shouldSucceed('mkdir -p /home/admin/staging/files/trips/upload-2019-08-01 /tmp/elsewhere && staging init --user admin');
+      await cmd.shouldSucceed('rmdir /home/admin/staging/albums/trips && ln -s /tmp/elsewhere /home/admin/staging/albums/trips');
+      await stage(vfs, '/home/admin/staging/files/trips/upload-2019-08-01', [{ name: 'boat.jpg', at: '2019-08-01T12:00:00Z' }], owner);
+
+      await cmd.shouldFailWith('staging organize --user admin trips', 'not a directory of groups');
+      await cmd.shouldFailWith('staging organize --queue --user admin trips', 'not a directory of groups');
+      assertEquals(await client.execJson<unknown[]>('ls /tmp/elsewhere'), []);
     });
   } finally {
     client.close();

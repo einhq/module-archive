@@ -13,7 +13,7 @@ import type { GroupSnapshot, StagingUndoPlan } from '@archive/staging/api';
 import type { TrashRestoreResult } from '@ein/api';
 import { recordPaths } from '@archive/staging/duplicates';
 import type { Command } from '@ein/client';
-import { shq, verifyAccess } from '@ein/client';
+import { isAdmin, resolveDefaultOwnership, shq, verifyAccess } from '@ein/client';
 import { basename, dirname } from '@std/path';
 import { type AutoAlbumMeta, COVER_LINK_NAME, freeLinkName, isMemberKey, linkSpec, memberKeyOf, toggleMembers } from '@archive/staging/auto-album';
 import { withCategoryLock } from '@archive/staging/lock';
@@ -146,6 +146,14 @@ export const undoFiled = async (cmd: Command, plan: Extract<StagingUndoPlan, { k
     if (at) {
       const album = await vfs.get(cmd.access, at);
       if (!verifyAccess(cmd.access, album.props, 'w')) throw new Error(`cannot write to ${at}`);
+      // The album was given to the library's default owner when it was promoted, which its staging
+      // owner may not take back alone, so the server gives it back to the caller: that, and only for
+      // an album the default owner holds. The plan is a file in the caller's own home, so what it says
+      // the group was is set with the caller's authority, never more.
+      const reclaim = !isAdmin(cmd.access) && album.props.uid !== cmd.access.uid;
+      if (reclaim && album.props.uid !== (await resolveDefaultOwnership(cmd, cmd.access)).uid) {
+        throw new Error(`${at} is not the library's default owner's, to take back`);
+      }
       if (await vfs.exists(cmd.access, `${at}/files`) && (await vfs.childCount(cmd.access, `${at}/files`, { all: true })) === 0) {
         await vfs.unlink(cmd.access, `${at}/files`, at);
       }
@@ -154,9 +162,8 @@ export const undoFiled = async (cmd: Command, plan: Extract<StagingUndoPlan, { k
       await vfs.rename(cmd.access, dirname(at), basename(at), dirname(group.from), basename(group.from), { failIfExists: true });
       const links = group.links.filter((link) => now.get(link.id) === link.target);
       const cleared = Object.fromEntries(Object.keys(album.attrs).filter((key) => !(key in group.attrs)).map((key) => [key, null]));
-      // The album was given to the library's default owner when it was promoted, which its staging
-      // owner may not take back alone; the node is one the caller may write, and goes back to them.
-      await vfs.update({ ...cmd.access, admin: true }, group.from, {
+      if (reclaim) await vfs.update({ ...cmd.access, admin: true }, group.from, { props: { uid: cmd.access.uid } });
+      await vfs.update(cmd.access, group.from, {
         props: group.props,
         attrs: { ...cleared, ...attrsFor(group.attrs, links.map((link) => link.id)) },
       });

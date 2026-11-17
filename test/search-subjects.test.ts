@@ -376,10 +376,12 @@ Deno.test({
     await t.step('an album a picture was added to holds it, and a cover or a relation does not', async () => {
       type Albums = { total: number; groups: { path: string; count: number }[] };
 
-      // `album add` files a picture by linking it; the picture stays where it is.
+      // The cover goes on before the album holds anything: archive's media-album pipeline gives an
+      // album with members and no cover one of its own, and never replaces one that resolves.
       await vfs.create(ADMIN_ACCESS, 'album', ALBUMS_ROOT, 'picnic', { attrs: { name: 'The Picnic' } });
+      await mklink(`${ALBUMS_ROOT}/picnic`, 'coverPhoto', '/media/undated.jpg');
+      // `album add` files a picture by linking it; the picture stays where it is.
       await cmd.shouldSucceed(`album add ${ALBUMS_ROOT}/picnic /media/a1995.jpg`);
-      await mklink(`${ALBUMS_ROOT}/party`, 'coverPhoto', '/media/undated.jpg');
       // A relation below a picture in an album points at another picture without filing it there.
       await vfs.ensure(ADMIN_ACCESS, 'directory', `${ALBUMS_ROOT}/party/p1.jpg`, 'relations', { props: { mode: 0o775 } });
       await mklink(`${ALBUMS_ROOT}/party/p1.jpg/relations`, 'related-1', '/media/undated.jpg');

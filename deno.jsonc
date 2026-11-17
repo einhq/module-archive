@@ -148,6 +148,7 @@
     "@ems/api": "../ems/lib/api.ts",
     "@ems/client": "../ems/lib/client.ts",
     "@ems/instances": "../ems/lib/instances.ts",
+    "@ems/page-stream": "../ems/lib/page-stream.ts",
     "@ems/testing": "../ems/test/stub-ems.ts",
     "@ems/text-embedding": "../ems/lib/text-embedding.ts",
     "@hello-pangea/dnd": "npm:@hello-pangea/dnd@^18.0.1",

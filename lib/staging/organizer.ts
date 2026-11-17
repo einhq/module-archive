@@ -494,6 +494,16 @@ const readGroups = async (vfs: Vfs, access: Access, albumsPath: string, idOf: Re
 
 const encoder = new TextEncoder();
 
+/**
+ * Refuse a category's directory of groups that is not a directory of its own, looked at without
+ * following softlinks: the organizer runs as an administrator for the area's owner, and a softlink
+ * the owner put there would take its writes wherever it points.
+ */
+const assertGroupsDir = async (vfs: Vfs, access: Access, albumsPath: string): Promise<void> => {
+  const node = await vfs.get(access, albumsPath, { follow: false }).catch(() => undefined);
+  if (node?.type !== 'directory') throw new Error(`${albumsPath} is not a directory of groups (a softlink is not followed)`);
+};
+
 /** The checkpoint's body, or none before the first run (or for one of an older shape, or that cannot be read). */
 const readCheckpoint = async (vfs: Vfs, access: Access, albumsPath: string): Promise<Checkpoint | undefined> => {
   try {
@@ -511,6 +521,7 @@ const readCheckpoint = async (vfs: Vfs, access: Access, albumsPath: string): Pro
 
 /** Write the checkpoint: its summary as attrs, its body as JSON, owned by the home's owner, 0600. */
 const writeCheckpoint = async (vfs: Vfs, access: Access, albumsPath: string, owner: { uid: number; gid: number }, summary: OrganizerSummary, body?: Checkpoint) => {
+  await assertGroupsDir(vfs, access, albumsPath);
   const path = `${albumsPath}/${ORGANIZER_CHECKPOINT}`;
   if (!(await vfs.exists(access, path, { follow: false }))) {
     await vfs.create(access, 'file', albumsPath, ORGANIZER_CHECKPOINT, {
@@ -550,6 +561,7 @@ const readRequest = async (vfs: Vfs, access: Access, albumsPath: string): Promis
  * that starts the run, so whoever may write in the category's directory of groups may ask.
  */
 const writeRequest = async (vfs: Vfs, access: Access, albumsPath: string, owner: { uid: number; gid: number }, at: string): Promise<void> => {
+  await assertGroupsDir(vfs, access, albumsPath);
   const path = `${albumsPath}/${ORGANIZER_REQUEST}`;
   if (await vfs.exists(access, path, { follow: false })) {
     await vfs.update(access, path, { attrs: { [REQUEST_ATTR]: { at } } });
@@ -2042,6 +2054,7 @@ export const organizeCategory = async (cmd: Command, owner: OwnerContext, catego
     started: Date.now(),
   };
   let matchedSince: string | undefined;
+  await assertGroupsDir(run.vfs, run.access, albumsPath);
   const result = await withCategoryLock(albumsPath, async () => {
     const checkpoint = await readCheckpoint(run.vfs, run.access, albumsPath);
     matchedSince = checkpoint?.lastMatchAt;

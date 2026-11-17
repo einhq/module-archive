@@ -23,7 +23,7 @@ import {
   useState,
 } from 'react';
 import { flushSync } from 'react-dom';
-import { bumpDerivativeVersion, bust, canWrite, displayDims, fileUrl, forgetAspect, isGuest, mediaItemFrom, posterUrl, shq, versionOf } from '@ein/ui/lib';
+import { bumpDerivativeVersion, bust, canWrite, displayDims, fileUrl, forgetAspect, isGuest, lightboxRoute, mediaItemFrom, posterUrl, shq, versionOf } from '@ein/ui/lib';
 import { zoomFromTile, zoomToTile } from '../lib/lightbox-tile-zoom.ts';
 import { itemAtAngle, lightboxPhotoSources } from '../lib/lightbox-image.ts';
 import { lightboxSheetOpens, lightboxSwipeAction, lightboxSwipeFinish, type LightboxTouchPoint, releaseVelocityX, releaseVelocityY } from '../lib/lightbox-gesture.ts';
@@ -49,7 +49,7 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
-import { useAccessIds, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/hooks';
+import { useAccessIds, useShortcutHelp, useShowOn, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import {
   albumMediaList,
@@ -67,9 +67,12 @@ import {
   linkVisitor,
   loadStars,
   type MediaItem,
+  navigatePage,
   nextMediaIndex,
+  pageLocation,
   prevMediaIndex,
   setStarred,
+  showOnTarget,
   starredPaths,
   userConfigFlag,
   userConfigNumber,
@@ -89,6 +92,7 @@ import { VideoPlayer } from './VideoPlayer.tsx';
 import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } from '../lib/capture-time.ts';
 import { qualifiedDate } from '@archive/people/date-qualifier';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
+import { screenSlideshowRoute, slideshowFromSearch, type SlideshowMode, withoutSlideshowSearch } from '../lib/slideshow-search.ts';
 import {
   facesVisible,
   infoSidebarOpen,
@@ -558,6 +562,8 @@ export function MediaLightbox() {
   const [panning, setPanning] = useState(false);
   const [hoveredFace, setHoveredFace] = useState<string | null>(null);
   const [slideshow, setSlideshow] = useState(false);
+  // A slideshow on a screen nobody touches (`?slideshow=screen`): nothing to stop it with, no pointer.
+  const [onScreen, setOnScreen] = useState(false);
   // A presentation runs untouched, which is exactly when a phone would lock its screen.
   useWakeLock(slideshow);
   const [fullscreen, setFullscreen] = useState(false);
@@ -610,10 +616,14 @@ export function MediaLightbox() {
   const [stackPreview, setStackPreview] = useState<MediaItem | null>(null);
   const [stackBusy, setStackBusy] = useState(false);
   const [addingFace, setAddingFace] = useState(false);
-  /** A dialog of the sidebar's or the toolbar's is open over the lightbox: the keys it leaves are not the lightbox's either. */
+  /**
+   * A dialog of the sidebar's or the toolbar's, or "Show on", is open over the lightbox: the keys it
+   * leaves are not the lightbox's either.
+   */
   const [sidebarLayer, setSidebarLayer] = useState(false);
   const [toolbarLayer, setToolbarLayer] = useState(false);
-  const dialogLayer = sidebarLayer || toolbarLayer;
+  const dialogLayer = sidebarLayer || toolbarLayer || showOnTarget.value !== null;
+  const showOn = useShowOn();
   const [faceDraftReady, setFaceDraftReady] = useState(false);
   const [savingFace, setSavingFace] = useState(false);
   /** What the face editor last did, for the information bar; no colour for plain news. */
@@ -775,6 +785,7 @@ export function MediaLightbox() {
 
   const stopSlideshow = useCallback(() => {
     setSlideshow(false);
+    setOnScreen(false);
     clearSlideshowPhotoTransition();
     if (slideshowFullscreenRef.current && document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
@@ -782,17 +793,34 @@ export function MediaLightbox() {
     slideshowFullscreenRef.current = false;
   }, [clearSlideshowPhotoTransition]);
 
-  const startSlideshow = useCallback(() => {
+  const beginSlideshow = useCallback((mode: SlideshowMode) => {
     setStackPreview(null);
     setSlideshow(true);
-    if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+    setOnScreen(mode === 'screen');
+    // A screen's renderer fills its window already.
+    if (mode === 'show' && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       slideshowFullscreenRef.current = true;
       void document.documentElement.requestFullscreen().catch(() => {
-        // Fullscreen can be denied by browser policy; slideshow remains useful.
+        // Fullscreen can be denied by browser policy, and is without a click; slideshow remains useful.
         slideshowFullscreenRef.current = false;
       });
     }
   }, []);
+  const startSlideshow = useCallback(() => beginSlideshow('show'), [beginSlideshow]);
+
+  // The page's URL asks for the slideshow (`?slideshow`): it runs as the lightbox opens, and the
+  // parameter leaves the URL, so stopping it is final and Back or a reload does not start it again.
+  useEffect(() => {
+    if (!isOpen) return;
+    const location = pageLocation();
+    const mode = location && slideshowFromSearch(location.search);
+    if (!location || !mode) return;
+    navigatePage(
+      { pathname: location.pathname, search: withoutSlideshowSearch(location.search), hash: location.hash },
+      { replace: true, state: location.state },
+    );
+    beginSlideshow(mode);
+  }, [beginSlideshow, isOpen]);
 
   const toggleFullscreen = useCallback(() => {
     if (document.fullscreenElement) {
@@ -2280,7 +2308,8 @@ export function MediaLightbox() {
   const mayUseToolbar = withDetails && canEdit;
   // The bar's actions, in the order they give way to the "more" menu from the end: the favourite
   // and the slideshow, the view switches (the text, the faces, fullscreen) and the download, which
-  // saves the original file as the file name in the details does. Each keeps its place in the bar
+  // saves the original file as the file name in the details does, and "Show on" for whoever has a
+  // screen or speaker. Each keeps its place in the bar
   // as far as there is room (`barActionsShown`). A phone's bar holds the view switches only; the
   // rest are always in its menu up in the corner, with the toolbar, which a computer's cog toggles.
   const favouriteAction: BarAction | undefined = mayStar
@@ -2327,7 +2356,21 @@ export function MediaLightbox() {
     ? { key: 'toolbar', icon: 'settings', label: showToolbar ? 'Hide toolbar' : 'Show toolbar', on: showToolbar, onClick: toggleToolbarVisible }
     : undefined;
   const downloadAction: BarAction = { key: 'download', icon: 'download', label: 'Download', on: false, href: fileUrl(media.path), download: media.name };
-  const barActions = slideshow ? [] : isMobile ? viewActions : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction];
+  // A screen near the browser is handed only video, so a picture goes to one as this page, as a screen shows it.
+  const showOnAction: BarAction | undefined = showOn
+    ? {
+      key: 'show-on',
+      icon: 'cast',
+      label: 'Show on…',
+      on: false,
+      onClick: () => showOn({ path: media.path, title: media.name, page: screenSlideshowRoute(lightboxRoute(media.path), new URLSearchParams()) }),
+    }
+    : undefined;
+  const barActions = slideshow
+    ? []
+    : isMobile
+    ? viewActions
+    : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction, ...(showOnAction ? [showOnAction] : [])];
   barActionCountRef.current = barActions.length;
   const inBar = new Set(barActions.slice(0, barActionsShown).map((action) => action.key));
   const barButton = (action: BarAction | undefined) =>
@@ -2358,6 +2401,7 @@ export function MediaLightbox() {
       ...viewActions.filter((action) => !inBar.has(action.key)),
       ...(toolbarAction ? [toolbarAction] : []),
       downloadAction,
+      ...(showOnAction ? [showOnAction] : []),
     ]
     : barActions.filter((action) => !inBar.has(action.key));
   // A computer's top right corner, of the details panel while it is open, else of the picture's
@@ -2500,6 +2544,7 @@ export function MediaLightbox() {
           // The phone's details sheet lies over the bottom of this box, below it when closed.
           position: 'relative',
           overflow: 'hidden',
+          cursor: onScreen ? 'none' : undefined,
         }}
       >
         {/* Main viewer area */}
@@ -3032,7 +3077,7 @@ export function MediaLightbox() {
                 )}
             </SwipeInfo>
 
-            {slideshow && !isMobile
+            {slideshow && !isMobile && !onScreen
               ? (
                 <Tooltip label='Stop slideshow' withArrow>
                   <ActionIcon variant='subtle' color='gray' size={barButtonSize} onClick={stopSlideshow} aria-label='Stop slideshow' style={{ flexShrink: 0 }}>
