@@ -2,6 +2,7 @@ import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.t
 import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
+import type { ScreenMessage, ScreenState } from '@ein/api';
 import { ActionIcon, Box, Divider, Group, Kbd, Menu, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys, useMediaQuery } from '@mantine/hooks';
 import { effect, type Signal, signal } from '@preact/signals-react';
@@ -29,6 +30,7 @@ import { itemAtAngle, lightboxPhotoSources } from '../lib/lightbox-image.ts';
 import { lightboxSheetOpens, lightboxSwipeAction, lightboxSwipeFinish, type LightboxTouchPoint, releaseVelocityX, releaseVelocityY } from '../lib/lightbox-gesture.ts';
 import { THUMB_MENU_STYLES } from '../lib/lightbox-presentation.ts';
 import {
+  DOUBLE_TAP_MS,
   isDoubleTap,
   isTap,
   isZoomed,
@@ -49,10 +51,11 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
-import { useAccessIds, useShortcutHelp, useShowOn, useSurface, useWakeLock } from '@ein/ui/hooks';
+import { useAccessIds, useShortcutHelp, useShowNearby, useShowOn, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import {
   albumMediaList,
+  castInstead,
   currentMediaIndex,
   currentMediaItem,
   endLightbox,
@@ -68,6 +71,10 @@ import {
   loadStars,
   type MediaItem,
   navigatePage,
+  nearbyCast,
+  nearbyDialog,
+  nearbyScreen,
+  nearbyStream,
   nextMediaIndex,
   pageLocation,
   prevMediaIndex,
@@ -92,6 +99,7 @@ import { VideoPlayer } from './VideoPlayer.tsx';
 import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } from '../lib/capture-time.ts';
 import { qualifiedDate } from '@archive/people/date-qualifier';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
+import { aheadImage } from '../lib/ahead-image.ts';
 import { screenSlideshowRoute, slideshowFromSearch, type SlideshowMode, withoutSlideshowSearch } from '../lib/slideshow-search.ts';
 import {
   facesVisible,
@@ -230,6 +238,8 @@ type BarAction = {
   on: boolean;
   onColor?: string;
   disabled?: boolean;
+  /** Busy: a spinner in place of its icon. */
+  loading?: boolean;
   onClick?: () => void;
   href?: string;
   download?: string;
@@ -281,24 +291,28 @@ function LightboxPhoto({ media, reloadToken, imageRef, sizes = '100vw', onError,
 
 /**
  * Fetches `item`'s picture into the browser's cache through the source ladder the frame and the
- * swipe preview ask for, and calls `done` once it has arrived or cannot. Null when there is no
+ * swipe preview ask for, and calls `done` once it has arrived or cannot. False when there is no
  * picture to fetch: audio, or a video without a poster.
  */
-function preloadPicture(item: MediaItem, done: () => void): HTMLImageElement | null {
+function preloadPicture(item: MediaItem, done: () => void): boolean {
   const token = versionOf(item.path);
-  const image = new Image();
-  image.onload = done;
-  if (item.type !== 'photo') {
-    const poster = posterUrl(item.path, item.type, item.hasDerivatives, displayDims(item));
-    if (!poster) return null;
-    image.onerror = done;
+  const poster = item.type === 'photo' ? undefined : posterUrl(item.path, item.type, item.hasDerivatives, displayDims(item));
+  if (item.type !== 'photo' && !poster) return false;
+  const image = aheadImage();
+  const finish = () => {
+    image.remove();
+    done();
+  };
+  image.onload = finish;
+  if (poster) {
+    image.onerror = finish;
     image.src = bust(poster, token);
-    return image;
+    return true;
   }
   const sources = lightboxPhotoSources(item, token);
   let usingFallback = false;
   image.onerror = () => {
-    if (usingFallback || !sources.fallback) return done();
+    if (usingFallback || !sources.fallback) return finish();
     usingFallback = true;
     image.srcset = '';
     image.removeAttribute('sizes');
@@ -309,7 +323,7 @@ function preloadPicture(item: MediaItem, done: () => void): HTMLImageElement | n
     image.sizes = '100vw';
   }
   image.src = sources.primary.src;
-  return image;
+  return true;
 }
 
 /**
@@ -337,6 +351,15 @@ const TAKEN_PILL_STYLE: CSSProperties = {
   borderRadius: 'var(--mantine-radius-md)',
   background: 'rgba(0, 0, 0, 0.55)',
 };
+
+/** How the date and the way out of a phone's fullscreen come and go with a tap, as a video's controls do. */
+const BARE_FADE = 'opacity var(--mrx-dur-base) var(--mrx-ease)';
+
+/** How long the lightbox rests on a file before a screen near the browser held by Cast is given it: a quick run of swipes gives it only the last. */
+const CAST_FOLLOW_MS = 400;
+
+/** How far a phone's cast icon and ⋮ reach in from the right edge, with their gaps, in pixels. */
+const CORNER_BUTTONS_PX = 8 + 44 + 8 + 44 + 4;
 
 const touchPoint = (touch: { clientX: number; clientY: number }, time: number): TapPoint => ({ x: touch.clientX, y: touch.clientY, time });
 
@@ -410,6 +433,7 @@ function SwipeInfo({ step, current, short, children }: {
 const LIGHTBOX_SHORTCUTS = [
   { keys: '←', label: 'Previous' },
   { keys: '→', label: 'Next' },
+  { keys: 'Space', label: 'Pause or go on with the slideshow' },
   { keys: 'i', label: 'Show or hide the details' },
   { keys: 'f', label: 'Show or hide the faces' },
   { keys: 't', label: 'Show or hide the text in the picture' },
@@ -469,7 +493,6 @@ export function MediaLightbox() {
     : {};
 
   const mediaRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
-  const neighbourPreloadRef = useRef<HTMLImageElement[]>([]);
   const slideshowFullscreenRef = useRef(false);
   const slideshowFadeTimerRef = useRef<number | undefined>(undefined);
   const slideshowFadeFrameRef = useRef<number | undefined>(undefined);
@@ -564,9 +587,20 @@ export function MediaLightbox() {
   const [slideshow, setSlideshow] = useState(false);
   // A slideshow on a screen nobody touches (`?slideshow=screen`): nothing to stop it with, no pointer.
   const [onScreen, setOnScreen] = useState(false);
+  // A slideshow held on its slide (Space): a picture stays, and a recording waits to be played.
+  const [slideshowPaused, setSlideshowPaused] = useState(false);
   // A presentation runs untouched, which is exactly when a phone would lock its screen.
   useWakeLock(slideshow);
   const [fullscreen, setFullscreen] = useState(false);
+  // A phone's fullscreen of anything but a video: the lightbox alone in fullscreen, its bars, details
+  // and buttons gone. A tap brings the date and a way out (`bareControls`), and another puts them away.
+  const [bare, setBare] = useState(false);
+  const [bareControls, setBareControls] = useState(false);
+  const bareTapTimerRef = useRef<number | undefined>(undefined);
+  // A video's player alone in fullscreen; it has controls of its own, and takes no swipes.
+  const [playerAlone, setPlayerAlone] = useState(false);
+  /** Puts the player in its own fullscreen or out of it; `lock` turns a wide video sideways. */
+  const playerFullscreenRef = useRef<(lock: boolean) => void>(null);
   const [reviewPersonId, setReviewPersonId] = useState<string | null>(null);
   const [mapOpen, setMapOpen] = useState(false);
   const [loadedPhotoId, setLoadedPhotoId] = useState<string | null>(null);
@@ -617,12 +651,12 @@ export function MediaLightbox() {
   const [stackBusy, setStackBusy] = useState(false);
   const [addingFace, setAddingFace] = useState(false);
   /**
-   * A dialog of the sidebar's or the toolbar's, or "Show on", is open over the lightbox: the keys it
+   * A dialog of the sidebar's or the toolbar's, "Show on" or a screen near you, is open over the lightbox: the keys it
    * leaves are not the lightbox's either.
    */
   const [sidebarLayer, setSidebarLayer] = useState(false);
   const [toolbarLayer, setToolbarLayer] = useState(false);
-  const dialogLayer = sidebarLayer || toolbarLayer || showOnTarget.value !== null;
+  const dialogLayer = sidebarLayer || toolbarLayer || showOnTarget.value !== null || nearbyDialog.value !== null;
   const showOn = useShowOn();
   const [faceDraftReady, setFaceDraftReady] = useState(false);
   const [savingFace, setSavingFace] = useState(false);
@@ -631,6 +665,29 @@ export function MediaLightbox() {
   /** The face whose person is being changed, by its region path. */
   const [personFacePath, setPersonFacePath] = useState<string | null>(null);
   const media = stackPreview ?? albumMedia;
+  // A screen near the browser is handed only video, so a picture goes to one as this page, as a screen shows it.
+  const showTarget = media && {
+    path: media.path,
+    title: media.name,
+    page: screenSlideshowRoute(lightboxRoute(media.path), new URLSearchParams()),
+    kind: ({ photo: 'Picture', video: 'Video', audio: 'Recording', document: 'Document' } as Record<string, string>)[media.type],
+  };
+  const nearby = useShowNearby(slideshow ? undefined : showTarget ?? undefined);
+  // While Cast holds a screen, the recording, video or picture shown here goes to it once the
+  // lightbox has rested on it: opened on it, moved to it, or when the screen is found held again
+  // after the page was opened again. Not while the screen shows a page, nor while the cast icon's
+  // own tap is giving it one.
+  const connected = nearbyCast.value;
+  const castable = media && !slideshow && ['photo', 'video', 'audio'].includes(media.type) ? showTarget : undefined;
+  useEffect(() => {
+    if (!castable || !connected) return;
+    const timer = setTimeout(() => {
+      const screen = nearbyScreen.peek();
+      if (!nearbyCast.peek() || screen?.page || screen?.target.path === castable.path || nearbyStream.peek()) return;
+      void castInstead(castable);
+    }, CAST_FOLLOW_MS);
+    return () => clearTimeout(timer);
+  }, [castable?.path, connected]);
   // The heart is the file's own, not a stack preview's: what is starred is what the grid shows.
   // The guest has none: favourites are kept in the reader's home.
   const mayStar = isAuthenticated.value;
@@ -786,6 +843,7 @@ export function MediaLightbox() {
   const stopSlideshow = useCallback(() => {
     setSlideshow(false);
     setOnScreen(false);
+    setSlideshowPaused(false);
     clearSlideshowPhotoTransition();
     if (slideshowFullscreenRef.current && document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
@@ -797,6 +855,7 @@ export function MediaLightbox() {
     setStackPreview(null);
     setSlideshow(true);
     setOnScreen(mode === 'screen');
+    setSlideshowPaused(false);
     // A screen's renderer fills its window already.
     if (mode === 'show' && !document.fullscreenElement && document.documentElement.requestFullscreen) {
       slideshowFullscreenRef.current = true;
@@ -807,6 +866,42 @@ export function MediaLightbox() {
     }
   }, []);
   const startSlideshow = useCallback(() => beginSlideshow('show'), [beginSlideshow]);
+
+  // A slideshow says what it shows, for the controls of a screen it is on (`globalThis.einScreen`,
+  // which the media service reads in the browser that renders it): the file, where it is in the
+  // list, and a recording's or video's time; and moves that recording or video when told to `seek`.
+  useEffect(() => {
+    if (!slideshow) return;
+    const playing = (): HTMLMediaElement | null => {
+      const item = currentMediaItem.peek();
+      if (item?.type === 'video') return mediaRef.current instanceof HTMLVideoElement ? mediaRef.current : null;
+      if (item?.type === 'audio') return document.querySelector<HTMLAudioElement>('[data-lightbox-media-path] audio');
+      return null;
+    };
+    const screen = {
+      state: (): ScreenState => {
+        const item = currentMediaItem.peek();
+        const length = albumMediaList.peek().length;
+        const element = playing();
+        return {
+          ...(item ? { title: item.name, path: item.path, kind: item.type } : {}),
+          ...(item && length ? { position: `${currentMediaIndex.peek() + 1} of ${length}` } : {}),
+          ...(element && Number.isFinite(element.duration) ? { media: { time: element.currentTime, duration: element.duration, paused: element.paused } } : {}),
+        };
+      },
+      message: (message: Partial<ScreenMessage>): true | null => {
+        const element = playing();
+        if (typeof message.seek !== 'number' || !element) return null;
+        element.currentTime = message.seek;
+        return true;
+      },
+    };
+    const page = globalThis as { einScreen?: typeof screen };
+    page.einScreen = screen;
+    return () => {
+      if (page.einScreen === screen) delete page.einScreen;
+    };
+  }, [slideshow]);
 
   // The page's URL asks for the slideshow (`?slideshow`): it runs as the lightbox opens, and the
   // parameter leaves the URL, so stopping it is final and Back or a reload does not start it again.
@@ -822,13 +917,35 @@ export function MediaLightbox() {
     beginSlideshow(mode);
   }, [beginSlideshow, isOpen]);
 
+  // A computer's fullscreen is the page's, the lightbox as it is. A phone's is the media alone: a
+  // video's is its player's own, with its controls, and anything else's the lightbox's, without
+  // the page around it, even when the lightbox is the page, and with nothing of its own over the
+  // media (`bare`).
+  // The phone's turn asks for it too (below), without the lock: the phone is sideways already.
+  const enterMediaFullscreen = useCallback((lock: boolean): boolean => {
+    if (media?.type === 'video' && playerFullscreenRef.current) {
+      playerFullscreenRef.current(lock);
+      return true;
+    }
+    const root = sheetRootRef.current;
+    if (!root?.requestFullscreen) return false;
+    void root.requestFullscreen().catch(() => undefined);
+    return true;
+  }, [media?.type]);
+  const enterMediaFullscreenRef = useRef(enterMediaFullscreen);
+  enterMediaFullscreenRef.current = enterMediaFullscreen;
   const toggleFullscreen = useCallback(() => {
+    if (isMobile && media?.type === 'video' && playerFullscreenRef.current) {
+      playerFullscreenRef.current(true);
+      return;
+    }
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => undefined);
       return;
     }
-    void document.documentElement.requestFullscreen?.().catch(() => undefined);
-  }, []);
+    if (isMobile) enterMediaFullscreen(true);
+    else void document.documentElement.requestFullscreen?.().catch(() => undefined);
+  }, [enterMediaFullscreen, isMobile, media?.type]);
 
   const handleEscape = useCallback(() => {
     // This dialog is layered above the lightbox. Close only it, leaving the
@@ -869,24 +986,33 @@ export function MediaLightbox() {
   useEffect(() => {
     if (!isOpen) {
       if (slideshow) stopSlideshow();
+      if (bare && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
       if (reviewPersonId) setReviewPersonId(null);
       if (addingFace) setAddingFace(false);
       setFaceDraftReady(false);
       setPersonFacePath(null);
     }
-  }, [addingFace, isOpen, reviewPersonId, slideshow, stopSlideshow]);
+  }, [addingFace, bare, isOpen, reviewPersonId, slideshow, stopSlideshow]);
 
   useEffect(() => () => {
     if (swipeTimerRef.current !== undefined) globalThis.clearTimeout(swipeTimerRef.current);
     if (slideshowFadeFrameRef.current !== undefined) globalThis.cancelAnimationFrame(slideshowFadeFrameRef.current);
     if (slideshowFadeTimerRef.current !== undefined) globalThis.clearTimeout(slideshowFadeTimerRef.current);
+    globalThis.clearTimeout(bareTapTimerRef.current);
   }, []);
 
   // Browser Escape exits fullscreen before application key handlers see it.
   // Treat that fullscreen transition as the same request to stop slideshow.
   useEffect(() => {
     const onFullscreenChange = () => {
-      setFullscreen(Boolean(document.fullscreenElement));
+      const element = document.fullscreenElement;
+      setFullscreen(Boolean(element));
+      const nowBare = element !== null && element === sheetRootRef.current;
+      if (nowBare) infoSidebarOpen.value = false;
+      setBare(nowBare);
+      setBareControls(false);
+      globalThis.clearTimeout(bareTapTimerRef.current);
+      setPlayerAlone(element?.matches('[data-video-player]') ?? false);
       if (slideshow && slideshowFullscreenRef.current && !document.fullscreenElement) {
         slideshowFullscreenRef.current = false;
         setSlideshow(false);
@@ -896,21 +1022,19 @@ export function MediaLightbox() {
     return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
   }, [slideshow]);
 
-  // A touch screen turned sideways over the lightbox goes fullscreen, and turned upright again leaves the
-  // fullscreen the turn asked for, as does closing the lightbox. The request is made inside the
-  // orientation's change event, the one place a browser grants it without a tap; one that refuses
-  // (an iPhone has no fullscreen for a page) leaves the lightbox as it is.
+  // A touch screen turned sideways over the lightbox gives the media the screen alone, as the bar's
+  // button does, and turned upright again leaves the fullscreen the turn asked for, as does closing
+  // the lightbox. The request is made inside the orientation's change event, the one place a
+  // browser grants it without a tap; one that refuses, or has no fullscreen for an element (an
+  // iPhone), leaves the lightbox as it is.
   const rotateFullscreenRef = useRef(false);
   useEffect(() => {
     const orientation = screen.orientation;
     if (!isOpen || !isCoarse || !orientation) return;
     const onOrientationChange = () => {
       if (orientation.type.startsWith('landscape')) {
-        if (document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-        rotateFullscreenRef.current = true;
-        void document.documentElement.requestFullscreen().catch(() => {
-          rotateFullscreenRef.current = false;
-        });
+        if (document.fullscreenElement || !document.fullscreenEnabled) return;
+        rotateFullscreenRef.current = enterMediaFullscreenRef.current(false);
       } else if (rotateFullscreenRef.current) {
         rotateFullscreenRef.current = false;
         if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
@@ -934,10 +1058,10 @@ export function MediaLightbox() {
   // Still images get a fixed dwell time. Audio and video advance on their
   // ended event so a long recording is never cut off after one slide's time.
   useEffect(() => {
-    if (!slideshow || media?.type !== 'photo' || loadedPhotoId !== media.id) return;
+    if (!slideshow || slideshowPaused || media?.type !== 'photo' || loadedPhotoId !== media.id) return;
     const timer = globalThis.setTimeout(advanceSlideshow, slideDurationMs);
     return () => globalThis.clearTimeout(timer);
-  }, [advanceSlideshow, loadedPhotoId, media?.id, media?.type, slideDurationMs, slideshow]);
+  }, [advanceSlideshow, loadedPhotoId, media?.id, media?.type, slideDurationMs, slideshow, slideshowPaused]);
 
   // Warm the browser cache with the pictures a run of swipes or arrow presses reaches next, and
   // the details cache with their details,
@@ -960,18 +1084,12 @@ export function MediaLightbox() {
       }
     }
     let stopped = false;
-    const loading: HTMLImageElement[] = [];
-    neighbourPreloadRef.current = loading;
     const loadNext = () => {
       while (!stopped && queue.length > 0) {
         const item = queue.shift()!;
         // Its details too, so the place, the faces and the panel come with the picture.
         prefetchMediaDetails(item.path, item.stackAlbumPath);
-        const image = preloadPicture(item, loadNext);
-        if (image) {
-          loading.push(image);
-          return;
-        }
+        if (preloadPicture(item, loadNext)) return;
       }
     };
     for (let i = 0; i < PRELOAD_PARALLEL; i++) loadNext();
@@ -1579,6 +1697,8 @@ export function MediaLightbox() {
       touchPanRef.current = { x: touch.clientX, y: touch.clientY };
       return;
     }
+    // A video alone in fullscreen would leave it for the next file; it pinches and pans only.
+    if (playerAlone) return;
     touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: event.timeStamp };
     swipeSamplesRef.current = [touchStartRef.current];
     // A finger that lands on a moving picture, sliding in or settling back, holds it where it is.
@@ -1587,7 +1707,7 @@ export function MediaLightbox() {
     swipeWidthRef.current = swipeFrameWidth();
     if (swipeBaseRef.current !== 0) moveSwipe(swipeBaseRef.current);
     followSwipeInfo(swipeBaseRef.current);
-  }, [addingFace, endSheet, followSwipeInfo, isMobile, moveSwipe, resetSwipe, settleSwipe, slideshow, zoomFocal, zoomable]);
+  }, [addingFace, endSheet, followSwipeInfo, isMobile, moveSwipe, playerAlone, resetSwipe, settleSwipe, slideshow, zoomFocal, zoomable]);
 
   const finishPhotoSwipe = useCallback((
     action: Extract<ReturnType<typeof lightboxSwipeAction>, 'next' | 'previous'>,
@@ -2089,7 +2209,7 @@ export function MediaLightbox() {
         // A phone held upright pulls the details sheet with the finger; elsewhere the release decides.
         // Pulling down with the sheet closed is not the sheet's: that swipe closes the lightbox.
         const dismissing = dy > 0 && !infoSidebarOpen.value;
-        touchAxisRef.current = mobilePortrait && !dismissing && beginSheet(infoSidebarOpen.value ? 1 : 0) ? 'sheet' : 'y';
+        touchAxisRef.current = mobilePortrait && !dismissing && !bare && beginSheet(infoSidebarOpen.value ? 1 : 0) ? 'sheet' : 'y';
       }
     }
     if (touchAxisRef.current === 'x') {
@@ -2101,7 +2221,7 @@ export function MediaLightbox() {
     } else if (touchAxisRef.current === 'sheet' && sheetDragRef.current) {
       moveSheet(sheetDragRef.current.from - dy / sheetDragRef.current.panelPx);
     }
-  }, [beginSheet, followSwipeInfo, mobilePortrait, moveSheet, moveSwipe, setZoom, zoomFocal, zoomFrame]);
+  }, [bare, beginSheet, followSwipeInfo, mobilePortrait, moveSheet, moveSwipe, setZoom, zoomFocal, zoomFrame]);
 
   const handleTouchEnd = useCallback((event: TouchEvent<HTMLElement>) => {
     if (pinchRef.current) {
@@ -2124,6 +2244,7 @@ export function MediaLightbox() {
           // otherwise be hit-tested against the picture after the zoom has moved it under the
           // finger. React registers touchend non-passively, so this takes effect.
           event.preventDefault();
+          globalThis.clearTimeout(bareTapTimerRef.current);
           lastTapRef.current = null;
           touchStartRef.current = null;
           touchPanRef.current = null;
@@ -2133,6 +2254,12 @@ export function MediaLightbox() {
           return;
         }
         lastTapRef.current = tap;
+        // Once it is not the first of two, a tap on the bare picture shows or hides its controls;
+        // a video's player has its own.
+        if (bare && media?.type !== 'video') {
+          globalThis.clearTimeout(bareTapTimerRef.current);
+          bareTapTimerRef.current = globalThis.setTimeout(() => setBareControls((shown) => !shown), zoomable ? DOUBLE_TAP_MS : 0);
+        }
       }
     }
 
@@ -2165,10 +2292,16 @@ export function MediaLightbox() {
         finishPhotoSwipe(action, base + end.x - start.x, velocityX);
         return;
       case 'open-details':
-        toggleSheet(true);
+        // In fullscreen a swipe up from the bottom is the phone's, bringing its own buttons.
+        if (!bare) toggleSheet(true);
         settleSwipe();
         return;
       case 'close-details':
+        // Nor does a swipe down put the picture away from fullscreen: Back leaves it first.
+        if (bare) {
+          settleSwipe();
+          return;
+        }
         // Down with nothing open to put away: the swipe puts the picture away, as Back would.
         if (!infoSidebarOpen.value) {
           settleSwipe();
@@ -2182,7 +2315,7 @@ export function MediaLightbox() {
         settleSwipe();
         return;
     }
-  }, [endSheet, finishPhotoSwipe, requestClose, resetSwipe, setZoom, settleSwipe, toggleSheet, zoomFocal, zoomFrame, zoomable]);
+  }, [bare, endSheet, finishPhotoSwipe, media?.type, requestClose, resetSwipe, setZoom, settleSwipe, toggleSheet, zoomFocal, zoomFrame, zoomable]);
 
   useShortcutHelp('Lightbox', withDetails ? LIGHTBOX_SHORTCUTS : LIGHTBOX_SHORTCUTS.filter((entry) => entry.keys !== 'i'));
   useHotkeys([
@@ -2190,6 +2323,9 @@ export function MediaLightbox() {
     ['ArrowLeft', () => !addingFace && !editing && slideToMedia('previous')],
     ['ArrowRight', () => !addingFace && !editing && slideToMedia('next')],
     ['Escape', handleEscape],
+    // In a slideshow Space holds it on its slide and lets it go on; a recording's player takes the
+    // same key and plays or pauses it with the show.
+    ['space', () => slideshow && !dialogLayer && !editing && setSlideshowPaused((paused) => !paused), { preventDefault: false }],
     ['i', () => !dialogLayer && !editing && toggleSheet(!infoSidebarOpen.value)],
     ['f', () => !dialogLayer && !editing && toggleFacesVisible()],
     ['t', () => !dialogLayer && !editing && pictureText && toggleTextVisible()],
@@ -2229,10 +2365,10 @@ export function MediaLightbox() {
   const [stalledId, setStalledId] = useState<string | null>(null);
   const undecodableAv = (media?.type === 'video' || media?.type === 'audio') && Boolean(currentDetails?.undecodable);
   useEffect(() => {
-    if (!slideshow || !media || (stalledId !== media.id && !undecodableAv)) return;
+    if (!slideshow || slideshowPaused || !media || (stalledId !== media.id && !undecodableAv)) return;
     const timer = globalThis.setTimeout(advanceSlideshow, slideDurationMs);
     return () => globalThis.clearTimeout(timer);
-  }, [advanceSlideshow, media, slideDurationMs, slideshow, stalledId, undecodableAv]);
+  }, [advanceSlideshow, media, slideDurationMs, slideshow, slideshowPaused, stalledId, undecodableAv]);
 
   // A slideshow's information bar lies over the bottom of the picture; a video's subtitles clear it.
   const [infoRowHeight, setInfoRowHeight] = useState(0);
@@ -2262,7 +2398,8 @@ export function MediaLightbox() {
   }, [media === null]);
   useLayoutEffect(() => {
     const row = infoRowRef.current;
-    if (!row || slideshow) return;
+    // Hidden in a phone's fullscreen, the bar has no width to fit anything to.
+    if (!row || slideshow || bare) return;
     const style = getComputedStyle(row);
     const gap = parseFloat(style.columnGap) || 0;
     const items = [...row.children] as HTMLElement[];
@@ -2275,7 +2412,9 @@ export function MediaLightbox() {
     });
     const total = barActionCountRef.current;
     const shown = row.querySelectorAll('[data-bar-action]').length;
-    const room = shown + 1 === total ? 0 : (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2;
+    // On a computer the last action takes the place of the "more" menu it leaves; a phone's bar has
+    // no such menu, so its last costs a button like the rest, or it would be added and cut for good.
+    const room = shown + 1 === total && !isMobile ? 0 : (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2;
     if (cut && shown > 0) setBarActionsShown(shown - 1);
     else if (!cut && shown < total && free >= room) setBarActionsShown(shown + 1);
   });
@@ -2284,6 +2423,8 @@ export function MediaLightbox() {
 
   const isVideo = media.type === 'video';
   const isAudio = media.type === 'audio';
+  // The cast icon is the accent's while a screen near the browser plays or is held.
+  const casting = nearbyCast.value || nearbyScreen.value !== null;
   // A document is read in place; a slideshow shows its first page like a photo.
   const readsDocument = media.type === 'document' && !slideshow;
   // A source ffprobe could not read at all — no rendition exists and none can be made, so the
@@ -2307,11 +2448,12 @@ export function MediaLightbox() {
   // change the file, not for one who may only add it to an album.
   const mayUseToolbar = withDetails && canEdit;
   // The bar's actions, in the order they give way to the "more" menu from the end: the favourite
-  // and the slideshow, the view switches (the text, the faces, fullscreen) and the download, which
-  // saves the original file as the file name in the details does, and "Show on" for whoever has a
-  // screen or speaker. Each keeps its place in the bar
-  // as far as there is room (`barActionsShown`). A phone's bar holds the view switches only; the
-  // rest are always in its menu up in the corner, with the toolbar, which a computer's cog toggles.
+  // and the slideshow, the view switches (the text, the faces, fullscreen), the download, which
+  // saves the original file as the file name in the details does, and the cast icon for a screen
+  // near the browser. Each keeps its place in the bar as far as there is room (`barActionsShown`).
+  // A phone's bar holds the view switches only; the rest are always in its menu up in the corner,
+  // with the toolbar, which a computer's cog toggles, and the cast icon is beside that menu. "Show
+  // on", for whoever has a screen or speaker EiN reaches, is always in the menu.
   const favouriteAction: BarAction | undefined = mayStar
     ? {
       key: 'favourite',
@@ -2345,32 +2487,31 @@ export function MediaLightbox() {
       onClick: toggleFacesVisible,
     });
   }
-  viewActions.push({
-    key: 'fullscreen',
-    icon: fullscreen ? 'minimize' : 'maximize',
-    label: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
-    on: false,
-    onClick: toggleFullscreen,
-  });
+  // An iPhone has no fullscreen for a page, only its player's for a video.
+  if (document.fullscreenEnabled || (isMobile && media?.type === 'video')) {
+    viewActions.push({
+      key: 'fullscreen',
+      icon: fullscreen ? 'minimize' : 'maximize',
+      label: fullscreen ? 'Exit fullscreen' : 'Fullscreen',
+      on: false,
+      onClick: toggleFullscreen,
+    });
+  }
   const toolbarAction: BarAction | undefined = mayUseToolbar
     ? { key: 'toolbar', icon: 'settings', label: showToolbar ? 'Hide toolbar' : 'Show toolbar', on: showToolbar, onClick: toggleToolbarVisible }
     : undefined;
   const downloadAction: BarAction = { key: 'download', icon: 'download', label: 'Download', on: false, href: fileUrl(media.path), download: media.name };
-  // A screen near the browser is handed only video, so a picture goes to one as this page, as a screen shows it.
-  const showOnAction: BarAction | undefined = showOn
-    ? {
-      key: 'show-on',
-      icon: 'cast',
-      label: 'Show on…',
-      on: false,
-      onClick: () => showOn({ path: media.path, title: media.name, page: screenSlideshowRoute(lightboxRoute(media.path), new URLSearchParams()) }),
-    }
+  const nearbyAction: BarAction | undefined = nearby &&
+    { key: 'nearby', icon: nearby.icon, label: nearby.label, on: nearby.active || casting, loading: nearby.loading, onClick: nearby.onClick };
+  const showOnAction: BarAction | undefined = showOn && showTarget
+    ? { key: 'show-on', icon: 'device-tv', label: 'Show on…', on: false, onClick: () => showOn(showTarget) }
     : undefined;
+  const nearbyActions = nearbyAction && !isMobile ? [nearbyAction] : [];
   const barActions = slideshow
     ? []
     : isMobile
     ? viewActions
-    : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction, ...(showOnAction ? [showOnAction] : [])];
+    : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction, ...nearbyActions];
   barActionCountRef.current = barActions.length;
   const inBar = new Set(barActions.slice(0, barActionsShown).map((action) => action.key));
   const barButton = (action: BarAction | undefined) =>
@@ -2382,6 +2523,7 @@ export function MediaLightbox() {
           color='gray'
           size={barButtonSize}
           disabled={action.disabled}
+          loading={action.loading}
           onClick={action.onClick}
           aria-label={action.label}
           aria-pressed={action.href ? undefined : action.on}
@@ -2403,7 +2545,7 @@ export function MediaLightbox() {
       downloadAction,
       ...(showOnAction ? [showOnAction] : []),
     ]
-    : barActions.filter((action) => !inBar.has(action.key));
+    : [...barActions.filter((action) => !inBar.has(action.key)), ...(showOnAction ? [showOnAction] : [])];
   // A computer's top right corner, of the details panel while it is open, else of the picture's
   // background: the cog that shows the toolbar, and close.
   const cornerButtons = (color: string) => (
@@ -2437,7 +2579,7 @@ export function MediaLightbox() {
         key={action.key}
         leftSection={<TablerIcon name={action.icon} size={iconSize} color={action.on ? action.onColor ?? 'var(--mrx-accent)' : undefined} />}
         rightSection={isMobile || !action.shortcut ? undefined : <Kbd size='xs'>{action.shortcut}</Kbd>}
-        disabled={action.disabled}
+        disabled={action.disabled || action.loading}
         onClick={action.onClick}
         {...(action.href ? { component: 'a' as const, href: action.href, download: action.download } : {})}
       >
@@ -2570,7 +2712,7 @@ export function MediaLightbox() {
                 desktop bar has the room, and so has a slideshow's, which floats over the
                 picture and may wrap; both keep it down there beside the counter. */
           }
-          {isMobile && !slideshow && (
+          {isMobile && !slideshow && (!bare || media.type !== 'video') && (
             <SwipeInfo step={swipeInfoStep} current={barInfo} short={shortTaken}>
               {({ taken, takenTooltip }) =>
                 taken.date && (
@@ -2585,11 +2727,16 @@ export function MediaLightbox() {
                       display: 'flex',
                       justifyContent: 'center',
                       pointerEvents: 'none',
-                      padding: 'var(--mantine-spacing-xs) 56px',
+                      // Clear of the buttons in the corner: centred while ⋮ is alone there, else
+                      // centred in what they leave.
+                      padding: nearbyAction ? `var(--mantine-spacing-xs) ${CORNER_BUTTONS_PX}px var(--mantine-spacing-xs) 8px` : 'var(--mantine-spacing-xs) 56px',
                       color: 'white',
                       // Stays centred over the picture while a sideways panel moves (see `beginSheet`).
                       transform: 'translateX(calc(var(--sheet-p, 0) * var(--sheet-ix, 0px)))',
-                      transition: 'var(--sheet-transition, none)',
+                      // In fullscreen there are no corner buttons, and it is there while tapped up.
+                      ...(bare
+                        ? { padding: 'var(--mantine-spacing-xs) 8px', opacity: bareControls ? 1 : 0, transition: BARE_FADE }
+                        : { transition: 'var(--sheet-transition, none)' }),
                     }}
                   >
                     <Tooltip label={takenTooltip} withArrow disabled={!takenTooltip} multiline maw={320}>
@@ -2597,7 +2744,7 @@ export function MediaLightbox() {
                         /* The day on one line and the clock beneath it, in a size that survives a
                           glance; the icon would only crowd the narrow strip. */
                       }
-                      <Stack gap={0} align='center' style={TAKEN_PILL_STYLE}>
+                      <Stack gap={0} align='center' style={bare && !bareControls ? { ...TAKEN_PILL_STYLE, pointerEvents: 'none' } : TAKEN_PILL_STYLE}>
                         <Text size='md' fw={500} c='inherit' truncate='end'>{taken.date}</Text>
                         {taken.clock && <Text size='sm' c='inherit'>{taken.clock}</Text>}
                       </Stack>
@@ -2614,7 +2761,7 @@ export function MediaLightbox() {
                 has no swipe up to spare for the details either, so a button beside the menu
                 opens them, and is gone while they are open. */
           }
-          {!slideshow && isMobile && (
+          {!slideshow && isMobile && !bare && (
             <Group gap={8} wrap='nowrap' style={{ position: 'absolute', top: 8, right: 8, zIndex: 11 }}>
               {withDetails && !mobilePortrait && !sidebarOpen && (
                 <ActionIcon
@@ -2626,6 +2773,21 @@ export function MediaLightbox() {
                   style={{ background: TAKEN_PILL_STYLE.background }}
                 >
                   <TablerIcon name='info-circle' size={barIconSize} color='white' />
+                </ActionIcon>
+              )}
+              {nearbyAction && (
+                <ActionIcon
+                  data-lightbox-cast
+                  variant='subtle'
+                  color='gray'
+                  size={barButtonSize}
+                  loading={nearbyAction.loading}
+                  onClick={nearbyAction.onClick}
+                  aria-label={nearbyAction.label}
+                  aria-pressed={nearbyAction.on}
+                  style={{ background: TAKEN_PILL_STYLE.background }}
+                >
+                  <TablerIcon name='cast' size={barIconSize} color={nearbyAction.on ? 'var(--mrx-accent)' : 'white'} />
                 </ActionIcon>
               )}
               <Menu
@@ -2658,6 +2820,31 @@ export function MediaLightbox() {
                 </Menu.Dropdown>
               </Menu>
             </Group>
+          )}
+
+          {bare && media.type !== 'video' && (
+            <ActionIcon
+              data-lightbox-exit-fullscreen
+              variant='subtle'
+              color='gray'
+              size={barButtonSize}
+              onClick={() => void document.exitFullscreen().catch(() => undefined)}
+              aria-label='Exit fullscreen'
+              aria-hidden={!bareControls}
+              tabIndex={bareControls ? undefined : -1}
+              style={{
+                position: 'absolute',
+                right: 8,
+                bottom: 8,
+                zIndex: 11,
+                background: TAKEN_PILL_STYLE.background,
+                opacity: bareControls ? 1 : 0,
+                pointerEvents: bareControls ? 'auto' : 'none',
+                transition: BARE_FADE,
+              }}
+            >
+              <TablerIcon name='minimize' size={barIconSize} color='white' />
+            </ActionIcon>
           )}
 
           {!slideshow && !isMobile && (
@@ -2818,6 +3005,7 @@ export function MediaLightbox() {
                     onEnded={slideshow ? advanceSlideshow : undefined}
                     onStalled={() => setStalledId(media.id)}
                     onPlay={() => setStalledId(null)}
+                    held={slideshow && slideshowPaused}
                     keysEnabled={playerKeys}
                     transcript={currentDetails?.hasTranscript ? { language: currentDetails.transcriptLanguage, speakers: currentDetails.speakers } : undefined}
                     compact={isMobile}
@@ -2862,6 +3050,8 @@ export function MediaLightbox() {
                       }
                       : undefined}
                     compact={isMobile}
+                    fullscreenToggle={playerFullscreenRef}
+                    inFullscreen={bare}
                     slideshow={slideshow}
                     drawing={addingFace}
                     keysEnabled={playerKeys}
@@ -2869,6 +3059,7 @@ export function MediaLightbox() {
                     onEnded={slideshow ? advanceSlideshow : undefined}
                     onStalled={() => setStalledId(media.id)}
                     onPlay={() => setStalledId(null)}
+                    held={slideshow && slideshowPaused}
                   />
                 )
                 : (
@@ -2995,7 +3186,7 @@ export function MediaLightbox() {
               )
             )}
 
-            {showToolbar && mayUseToolbar && !slideshow && (
+            {showToolbar && mayUseToolbar && !slideshow && !bare && (
               <FileToolbar
                 media={media}
                 result={detailsResult}
@@ -3061,6 +3252,7 @@ export function MediaLightbox() {
                   paddingTop: 24,
                 }
                 : {}),
+              ...(bare ? { display: 'none' } : {}),
             }}
           >
             {barButton(favouriteAction)}
@@ -3076,6 +3268,13 @@ export function MediaLightbox() {
                   </Group>
                 )}
             </SwipeInfo>
+
+            {slideshow && slideshowPaused && (
+              <Group data-slideshow-paused gap={6} wrap='nowrap' style={{ flexShrink: 0 }}>
+                <TablerIcon name='player-pause' size={barIconSize} />
+                <Text data-bar-text size='md' c='inherit'>Paused</Text>
+              </Group>
+            )}
 
             {slideshow && !isMobile && !onScreen
               ? (
@@ -3137,6 +3336,7 @@ export function MediaLightbox() {
 
             {viewActions.map(barButton)}
             {barButton(downloadAction)}
+            {barButton(nearbyAction)}
 
             {!slideshow && !isMobile && menuActions.length > 0 && (
               <Menu position='top-end' shadow='md' withinPortal>

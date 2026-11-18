@@ -40,7 +40,7 @@ export const ZOOM_ANIMATION = 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)';
 
 const WHEEL_SENSITIVITY = 0.0025;
 const ZOOMED_EPSILON = 0.001;
-const DOUBLE_TAP_MS = 300;
+export const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_DISTANCE_PX = 40;
 const TAP_MOVE_PX = 12;
 

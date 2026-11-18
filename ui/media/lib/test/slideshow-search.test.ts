@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { screenSlideshowRoute, slideshowFromSearch, withoutSlideshowSearch } from '../slideshow-search.ts';
+import { screenSlideshow, screenSlideshowRoute, slideshowFromSearch, withoutSlideshowSearch } from '../slideshow-search.ts';
 
 Deno.test('the slideshow parameter asks for a slideshow, and screen for one on a screen', () => {
   assertEquals(slideshowFromSearch(''), undefined);
@@ -16,8 +16,14 @@ Deno.test('taking the slideshow off keeps the other parameters', () => {
   assertEquals(withoutSlideshowSearch('?q=boat'), '?q=boat');
 });
 
-Deno.test('a list is given to a screen as its route and filters with the slideshow for a screen', () => {
+Deno.test('a page is given to a screen as its route and filters with the slideshow for a screen', () => {
   assertEquals(screenSlideshowRoute('/media', new URLSearchParams('q=sailboat at sea')), '/media?q=sailboat+at+sea&slideshow=screen');
   assertEquals(screenSlideshowRoute('/albums/x', new URLSearchParams()), '/albums/x?slideshow=screen');
   assertEquals(slideshowFromSearch(screenSlideshowRoute('/albums/x', new URLSearchParams('slideshow')).split('?')[1]), 'screen');
+});
+
+Deno.test('a list is given to a screen as the slideshow page over what its filters find', () => {
+  assertEquals(screenSlideshow(new URLSearchParams('q=sailboat at sea')), '/slideshow?q=sailboat+at+sea&slideshow=screen');
+  assertEquals(screenSlideshow(new URLSearchParams('under=/albums/Summer'), { oldest: true }), '/slideshow?under=%2Falbums%2FSummer&order=oldest&slideshow=screen');
+  assertEquals(slideshowFromSearch(screenSlideshow(new URLSearchParams('slideshow')).split('?')[1]), 'screen');
 });

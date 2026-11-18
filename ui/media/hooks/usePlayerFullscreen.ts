@@ -2,7 +2,8 @@ import { type RefObject, useCallback, useEffect, useState } from 'react';
 
 /**
  * The player alone in fullscreen: the element in `ref`, with its own controls and subtitles, and
- * none of the lightbox around it — the lightbox's menu has the fullscreen of the whole page.
+ * none of the lightbox around it. On a computer the lightbox's bar has the fullscreen of the whole
+ * page beside it; on a phone the bar's button asks for this one.
  *
  * `fullscreen` is whether this element is the one in fullscreen. A player that goes while it is,
  * the lightbox stepping on, takes the fullscreen with it, as the browser ends one whose element

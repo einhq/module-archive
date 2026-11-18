@@ -44,7 +44,7 @@ import { currentUser } from '@ein/ui/signals';
 import { LOCATIONS_ROOT } from '@archive/paths';
 import { mediaKindIcon } from '../media/components/MediaFilters.tsx';
 import { lightboxCountHidden } from '../media/signals/lightbox.ts';
-import { screenSlideshowRoute } from '../media/lib/slideshow-search.ts';
+import { screenSlideshow, SLIDESHOW_KEYS } from '../media/lib/slideshow-search.ts';
 
 /** Whose media: what the reader added themselves, or everything they may see. */
 type Scope = 'my' | 'all';
@@ -249,26 +249,24 @@ export default function MediaPage() {
     />
   );
 
+  const slideshowTarget = {
+    path: screenSlideshow(paramsFromFilters(filters)),
+    title: filters.query?.trim() || 'Media',
+    keys: SLIDESHOW_KEYS,
+    kind: filters.query?.trim() ? 'Search' : 'Media',
+  };
+
   return (
     <Box>
       <EntityDetailHeader
         title='Media'
         pattern='mixed'
-        actions={uploadPath || showOn
-          ? {
-            ...(uploadPath ? { upload: { path: uploadPath, name: 'staging', keepFolders: true } } : {}),
-            // The slideshow of what is found, or of the whole feed, on a screen or speaker.
-            ...(showOn
-              ? {
-                items: [{
-                  label: 'Show on…',
-                  icon: 'cast',
-                  onClick: () => showOn({ path: screenSlideshowRoute('/media', paramsFromFilters(filters)), title: filters.query?.trim() || 'Media' }),
-                }],
-              }
-              : {}),
-          }
-          : undefined}
+        actions={{
+          ...(uploadPath ? { upload: { path: uploadPath, name: 'staging', keepFolders: true } } : {}),
+          // The slideshow of what is found, or of the whole feed, on a screen or speaker.
+          nearby: slideshowTarget,
+          ...(showOn ? { items: [{ label: 'Show on…', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] } : {}),
+        }}
         subtitle={
           <Text size='sm' c='gray.2'>
             Photos, videos, audio and documents

@@ -45,7 +45,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { albumRoute, stagingGroupRoute } from '../lib/album-path.ts';
 import { MediaFilters } from '../components/MediaFilters.tsx';
 import { mediaTypeFilter } from '../signals/album.ts';
-import { screenSlideshowRoute } from '../lib/slideshow-search.ts';
+import { screenSlideshow, SLIDESHOW_KEYS } from '../lib/slideshow-search.ts';
 import { canWrite, filtersFromParams, isGuest, type MentionChoices, type MentionKind, paramsFromFilters, shq } from '@ein/ui/lib';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useLocations } from '../../location/hooks/useLocations.ts';
@@ -221,14 +221,15 @@ export default function AlbumDetailPage() {
     return !entry || entry.value === 'all' ? undefined : [...entry.kinds];
   }, [mediaTypeFilter.value]);
 
-  // The album's slideshow on a screen or speaker, of the media as narrowed here.
-  const showOnItems = showOn
-    ? [{
-      label: 'Show on…',
-      icon: 'cast',
-      onClick: () => showOn({ path: screenSlideshowRoute(albumRoute(albumPath), paramsFromFilters({ ...filters, kinds })), title: info.title }),
-    }]
-    : [];
+  // The album's slideshow on a screen or speaker, of the media as narrowed and ordered here, with
+  // the slideshow's keys for a screen's controls.
+  const slideshowTarget = {
+    path: screenSlideshow(paramsFromFilters({ ...filters, under: albumPath, kinds }), { oldest: sort === 'oldest' }),
+    title: info.title,
+    keys: SLIDESHOW_KEYS,
+    kind: 'Album',
+  };
+  const showOnItems = showOn ? [{ label: 'Show on…', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] : [];
 
   // `keepMounted={false}`: the media tab is the expensive one, and a Leaflet map mounted in a
   // hidden panel measures itself as zero-sized.
@@ -350,12 +351,10 @@ export default function AlbumDetailPage() {
                 : []),
               ...showOnItems,
             ],
+            nearby: slideshowTarget,
             trash: suggested ? undefined : { path: albumPath, name: info.title, leaveTo: '/albums' },
           }
-          : showOnItems.length
-          ? { items: showOnItems }
-          : undefined}
-        // None when they would be empty, so a phone floats nothing over the other tabs' foot.
+          : { items: showOnItems, nearby: slideshowTarget }}
         // The search box above the tabs, where it has the width.
         controlsAbove
         controls={tab === 'media'

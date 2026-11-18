@@ -1,5 +1,5 @@
 import { TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Box, Group, Stack, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Box, Group, Loader, Stack, Text, Tooltip } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
 import { type MouseEvent as ReactMouseEvent, useRef, useState } from 'react';
 import { MediaItem } from '@ein/ui/signals';
@@ -7,6 +7,7 @@ import { useShortcutHelp } from '@ein/ui/hooks';
 import { fileUrl, formatClock, gridSrcSet, gridUrl, WAVEFORM_ASPECT } from '@ein/ui/lib';
 import { useAudioPictureInPicture } from '../hooks/useAudioPictureInPicture.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
+import { useNearbyCaptions, useNearbyPlayback } from '../hooks/useNearbyPlayback.ts';
 import { usePlayerFullscreen } from '../hooks/usePlayerFullscreen.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
 import { type PlayerTranscript, transcriptLabel, useSubtitles } from '../hooks/useSubtitles.ts';
@@ -41,6 +42,8 @@ type AudioPlayerProps = {
   onStalled?: () => void;
   /** It started, or started again. */
   onPlay?: () => void;
+  /** It waits to be played rather than starting by itself: a paused slideshow came to it. */
+  held?: boolean;
   /** Off while a dialog over the lightbox has the keys. */
   keysEnabled?: boolean;
   /** The transcript's language and voices, when the recording has one. */
@@ -66,7 +69,7 @@ type AudioPlayerProps = {
  * is paused, a play button sits on the waveform, as one does on a paused video.
  */
 export function AudioPlayer(
-  { media, bust, onEnded, onStalled, onPlay, keysEnabled = true, transcript, compact = false }: AudioPlayerProps,
+  { media, bust, onEnded, onStalled, onPlay, held = false, keysEnabled = true, transcript, compact = false }: AudioPlayerProps,
 ) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -74,11 +77,23 @@ export function AudioPlayer(
   const [failed, setFailed] = useState(false);
   // `media.duration` is the *source* length from exif and is there immediately; the element's
   // own arrives with the metadata.
-  const transport = useMediaTransport(audioRef, { fallbackDuration: media.duration, startAt: media.atSeconds, autoPlay: true, onEnded, onPlay, onRefused: onStalled });
-  const { playing, position, duration, toggle, skip } = transport;
+  const nearby = useNearbyPlayback(media, audioRef);
+  const transport = useMediaTransport(audioRef, {
+    fallbackDuration: media.duration,
+    startAt: nearby.here ? undefined : media.atSeconds,
+    autoPlay: !nearby.casting && !held,
+    onEnded,
+    onPlay,
+    onRefused: onStalled,
+  });
+  const { position, duration, skip } = transport;
+  // While the screen near the browser waits for more, the player stands with it but counts as playing.
+  const playing = transport.playing || nearby.waiting;
+  const toggle = nearby.casting && !nearby.here ? nearby.castHere : nearby.waiting ? nearby.pauseWaiting : transport.toggle;
   usePlayPauseKey(toggle, keysEnabled);
 
   const subtitles = useSubtitles(transcript, bust(`${fileUrl(media.path)}/metadata/transcript`), position);
+  useNearbyCaptions(nearby.here && transcript !== undefined, subtitles.on);
   useShortcutHelp('Audio', AUDIO_SHORTCUTS);
   const { volume, muted, canSetVolume, toggleMute, changeVolume } = useVolume(audioRef);
 
@@ -231,7 +246,7 @@ export function AudioPlayer(
       <Group gap={compact ? 4 : 2} wrap='nowrap' onMouseDown={keepFocus}>
         <Tooltip label={`${playLabel} (Space)`} withArrow>
           <ActionIcon variant='subtle' color='gray' size={buttonSize} onClick={toggle} aria-label={playLabel}>
-            <TablerIcon name={playing ? 'player-pause-filled' : 'player-play-filled'} size={iconSize} color='white' />
+            {nearby.waiting ? <Loader color='white' size='sm' /> : <TablerIcon name={playing ? 'player-pause-filled' : 'player-play-filled'} size={iconSize} color='white' />}
           </ActionIcon>
         </Tooltip>
         <Tooltip label={`Back ${SKIP_SECONDS} s (j)`} withArrow>

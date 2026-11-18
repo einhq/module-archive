@@ -8,6 +8,7 @@ import { useCommand, useShortcutHelp, useSurface, useWakeLock } from '@ein/ui/ho
 import { mediaItemFrom, posterUrl } from '@ein/ui/lib';
 import { type MediaItem, openMediaAt } from '@ein/ui/signals';
 import '../components/memories.css';
+import { aheadImage } from '../media/lib/ahead-image.ts';
 import { yearsAgo } from '../components/MemoryRings.tsx';
 
 export const handle = { fullBleed: true };
@@ -139,16 +140,16 @@ export default function MemoriesPage() {
   const nextYearFirst = years[(yearIndex ?? 0) + 1]?.items[0];
   const ahead = [items[index + 1], items[index + 2] ?? (nextYearFirst && mediaItemFrom(nextYearFirst))].filter((entry): entry is MediaItem => Boolean(entry));
   const aheadKey = ahead.map((entry) => entry.path).join('\n');
-  const fetched = useRef<HTMLImageElement[]>([]);
   useEffect(() => {
-    fetched.current = ahead.map((entry) => {
+    const images = ahead.map((entry) => {
       const { src, srcSet } = slideSource(entry);
-      const image = new Image();
+      const image = aheadImage();
       if (srcSet) image.srcset = srcSet;
       image.src = src;
       image.decode().catch(() => {});
       return image;
     });
+    return () => images.forEach((image) => image.remove());
     // `ahead` is a fresh array each render; its paths say when it changed.
   }, [aheadKey]);
   const [month, dayOfMonth] = day.split('-').map(Number);

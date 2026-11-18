@@ -6,8 +6,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type Ref,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from 'react';
@@ -16,8 +18,8 @@ import { useShortcutHelp } from '@ein/ui/hooks';
 import { bust, displayDims, fileUrl, formatClock, posterUrl, VIDEO_SOURCE_TYPE } from '@ein/ui/lib';
 import type { MediaItem } from '@ein/ui/signals';
 import { useContentRect } from '../hooks/useContentRect.ts';
-import { useCast } from '../hooks/useCast.ts';
 import { useMediaTransport } from '../hooks/useMediaTransport.ts';
+import { useNearbyCaptions, useNearbyPlayback } from '../hooks/useNearbyPlayback.ts';
 import { usePictureInPicture } from '../hooks/usePictureInPicture.ts';
 import { usePlayerFullscreen } from '../hooks/usePlayerFullscreen.ts';
 import { usePlayPauseKey } from '../hooks/usePlayPauseKey.ts';
@@ -106,8 +108,18 @@ type VideoPlayerProps = {
   storyboard?: NonNullable<MediaDetails['storyboard']> & { url: string };
   /** Where the video's chapters start, the first at 0: its cuts. */
   chapters?: number[];
-  /** A phone's layout: the transport over the middle of the picture, larger targets, no mute. */
+  /**
+   * A phone's layout: the transport over the middle of the picture, larger targets, no mute, and
+   * no fullscreen button but to leave one: the lightbox's bar has it (`fullscreenToggle`).
+   */
   compact: boolean;
+  /**
+   * Takes the toggle of the player's own fullscreen, for the lightbox's button and the phone's turn;
+   * `lock` turns the screen sideways for a wide video.
+   */
+  fullscreenToggle?: Ref<(lock: boolean) => void>;
+  /** The lightbox is in fullscreen around the player: its button is the way out of that one. */
+  inFullscreen?: boolean;
   slideshow: boolean;
   /** Boxes are being drawn on the paused picture: no play button lies over it, the bar's is enough. */
   drawing?: boolean;
@@ -120,6 +132,8 @@ type VideoPlayerProps = {
   onStalled?: () => void;
   /** It started, or started again. */
   onPlay?: () => void;
+  /** It waits to be played rather than starting by itself: a paused slideshow came to it. */
+  held?: boolean;
 };
 
 /**
@@ -149,6 +163,8 @@ export function VideoPlayer({
   storyboard,
   chapters,
   compact,
+  fullscreenToggle,
+  inFullscreen = false,
   slideshow,
   drawing = false,
   keysEnabled,
@@ -156,6 +172,7 @@ export function VideoPlayer({
   onEnded,
   onStalled,
   onPlay,
+  held = false,
 }: VideoPlayerProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
@@ -169,22 +186,27 @@ export function VideoPlayer({
   onStalledRef.current = onStalled;
 
   const [failure, setFailure] = useState<string | null>(null);
+  const nearby = useNearbyPlayback(media, videoElRef);
   // With frames to show under the finger, a drag need not seek until it ends.
   const transport = useMediaTransport(videoElRef, {
     fallbackDuration: media.duration,
-    startAt: media.atSeconds,
-    autoPlay: true,
+    startAt: nearby.here ? undefined : media.atSeconds,
+    autoPlay: !nearby.casting && !held,
     seekOnRelease: storyboard !== undefined,
     onEnded,
     onPlay,
     onRefused: onStalled,
   });
-  const { playing, position, duration, toggle, skip } = transport;
+  const { position, duration, skip } = transport;
+  // While the screen near the browser waits for more, the player stands with it but counts as playing.
+  const playing = transport.playing || nearby.waiting;
+  const toggle = nearby.casting && !nearby.here ? nearby.castHere : nearby.waiting ? nearby.pauseWaiting : transport.toggle;
   usePlayPauseKey(toggle, keysEnabled && failure === null);
 
   // --- subtitles
   const transcriptUrl = bust(`${fileUrl(media.path)}/metadata/transcript`, reloadToken);
   const { on: subtitles, toggle: toggleSubtitles, setPreference: setSubtitlePreference, cue, namedVoices } = useSubtitles(transcript, transcriptUrl, position);
+  useNearbyCaptions(nearby.here && transcript !== undefined, subtitles);
 
   // --- the frame over the timeline: where the pointer is on it, and the sheet fetched once the video can play
   const scrubberRef = useRef<HTMLDivElement | null>(null);
@@ -270,7 +292,6 @@ export function VideoPlayer({
   const { volume, muted, canSetVolume, toggleMute, changeVolume } = useVolume(videoElRef);
   const [ready, setReady] = useState(false);
   const pip = usePictureInPicture(videoElRef);
-  const cast = useCast(videoElRef);
   useEffect(() => {
     const video = videoElRef.current;
     const source = sourceRef.current;
@@ -299,15 +320,18 @@ export function VideoPlayer({
   const { fullscreen, toggle: togglePlayerFullscreen } = usePlayerFullscreen(rootRef);
   const lockAskedAtRef = useRef(0);
   const lockedRef = useRef(false);
-  const toggleFullscreen = useCallback(() => {
+  // A finger, on the player or on the lightbox's button, asks for the screen to turn with it.
+  const toggleFullscreen = useCallback((touch = pointerTypeRef.current !== 'mouse') => {
     const video = videoElRef.current as WebkitVideo | null;
     if (nativeFullscreenOnly) {
-      video?.webkitEnterFullscreen?.();
+      if (ready) video?.webkitEnterFullscreen?.();
       return;
     }
-    lockAskedAtRef.current = !fullscreen && pointerTypeRef.current !== 'mouse' ? performance.now() : 0;
+    lockAskedAtRef.current = !fullscreen && touch ? performance.now() : 0;
     togglePlayerFullscreen();
-  }, [fullscreen, nativeFullscreenOnly, togglePlayerFullscreen]);
+  }, [fullscreen, nativeFullscreenOnly, ready, togglePlayerFullscreen]);
+  useImperativeHandle(fullscreenToggle, () => (lock: boolean) => toggleFullscreen(lock), [toggleFullscreen]);
+  const exitsFullscreen = fullscreen || inFullscreen;
   // A page in fullscreen does not turn the phone: a landscape video on an upright phone would stay
   // small, so the screen is locked to landscape while it lasts, where the browser allows it — only
   // for a fullscreen this player's own button asked for, and given back when it ends or the
@@ -440,12 +464,12 @@ export function VideoPlayer({
     // the picture: the first click of a double-click pauses, and the second lands on it.
     const onBar = event.target instanceof Element && event.target.closest('.mrx-video-bar, .mrx-video-centre') !== null;
     if (slideshow || pointerTypeRef.current !== 'mouse' || onBar) return;
-    toggleFullscreen();
+    toggleFullscreen(false);
   };
 
   const iconSize = compact ? 24 : 20;
   const buttonSize = compact ? 'xl' : 'lg';
-  const waiting = transport.buffering && playing && !transport.scrubbing && failure === null;
+  const waiting = (transport.buffering && playing || nearby.waiting) && !transport.scrubbing && failure === null;
   const playIcon = playing ? 'player-pause-filled' : 'player-play-filled';
   const playLabel = playing ? 'Pause' : 'Play';
   // Controls never take the focus from a click or a tap, so the lightbox's arrow keys stay its own.
@@ -715,7 +739,7 @@ export function VideoPlayer({
             </Tooltip>
           )}
           {compact
-            ? (pip.supported || cast.available) && (
+            ? pip.supported && (
               <PlayerMenu
                 onChange={setMenuOpen}
                 target={
@@ -724,56 +748,40 @@ export function VideoPlayer({
                   </ActionIcon>
                 }
               >
-                {pip.supported && (
-                  <Menu.Item leftSection={<TablerIcon name={pip.active ? 'picture-in-picture-off' : 'picture-in-picture'} size={18} />} disabled={!ready} onClick={pip.toggle}>
-                    {pip.active ? 'Leave picture-in-picture' : 'Picture-in-picture'}
-                  </Menu.Item>
-                )}
-                {cast.available && (
-                  <Menu.Item leftSection={<TablerIcon name='cast' size={18} />} onClick={cast.prompt}>
-                    {cast.connected ? 'Casting…' : 'Cast to a screen…'}
-                  </Menu.Item>
-                )}
+                <Menu.Item leftSection={<TablerIcon name={pip.active ? 'picture-in-picture-off' : 'picture-in-picture'} size={18} />} disabled={!ready} onClick={pip.toggle}>
+                  {pip.active ? 'Leave picture-in-picture' : 'Picture-in-picture'}
+                </Menu.Item>
               </PlayerMenu>
             )
-            : (
-              <>
-                {pip.supported && (
-                  <Tooltip label={pip.active ? 'Leave picture-in-picture (p)' : 'Picture-in-picture (p)'} withArrow>
-                    <ActionIcon
-                      variant='subtle'
-                      color='gray'
-                      size={buttonSize}
-                      onClick={pip.toggle}
-                      disabled={!ready}
-                      aria-label='Picture-in-picture'
-                      aria-pressed={pip.active}
-                    >
-                      <TablerIcon name={pip.active ? 'picture-in-picture-off' : 'picture-in-picture'} size={iconSize} color='white' />
-                    </ActionIcon>
-                  </Tooltip>
-                )}
-                {cast.available && (
-                  <Tooltip label={cast.connected ? 'Casting' : 'Cast to a screen'} withArrow>
-                    <ActionIcon variant='subtle' color='gray' size={buttonSize} onClick={cast.prompt} aria-label='Cast to a screen' aria-pressed={cast.connected}>
-                      <TablerIcon name='cast' size={iconSize} color={cast.connected ? 'var(--mrx-accent)' : 'white'} />
-                    </ActionIcon>
-                  </Tooltip>
-                )}
-              </>
+            : pip.supported && (
+              <Tooltip label={pip.active ? 'Leave picture-in-picture (p)' : 'Picture-in-picture (p)'} withArrow>
+                <ActionIcon
+                  variant='subtle'
+                  color='gray'
+                  size={buttonSize}
+                  onClick={pip.toggle}
+                  disabled={!ready}
+                  aria-label='Picture-in-picture'
+                  aria-pressed={pip.active}
+                >
+                  <TablerIcon name={pip.active ? 'picture-in-picture-off' : 'picture-in-picture'} size={iconSize} color='white' />
+                </ActionIcon>
+              </Tooltip>
             )}
-          <Tooltip label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} withArrow>
-            <ActionIcon
-              variant='subtle'
-              color='gray'
-              size={buttonSize}
-              onClick={toggleFullscreen}
-              disabled={nativeFullscreenOnly && !ready}
-              aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-            >
-              <TablerIcon name={fullscreen ? 'minimize' : 'maximize'} size={iconSize} color='white' />
-            </ActionIcon>
-          </Tooltip>
+          {(!compact || exitsFullscreen) && (
+            <Tooltip label={exitsFullscreen ? 'Exit fullscreen' : 'Fullscreen'} withArrow>
+              <ActionIcon
+                variant='subtle'
+                color='gray'
+                size={buttonSize}
+                onClick={() => fullscreen || !inFullscreen ? toggleFullscreen() : void document.exitFullscreen().catch(() => undefined)}
+                disabled={nativeFullscreenOnly && !ready}
+                aria-label={exitsFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              >
+                <TablerIcon name={exitsFullscreen ? 'minimize' : 'maximize'} size={iconSize} color='white' />
+              </ActionIcon>
+            </Tooltip>
+          )}
         </Group>
       </Box>
     </Box>
