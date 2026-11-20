@@ -680,50 +680,46 @@ const albumStack = async (cmd: Command): CmdReturn => {
     const paths = args.map((path) => resolve(cmd.cwd, path));
     if (!flags.all && paths.length === 0) throw new Error('refresh: give one or more album paths, or --all');
 
+    const options = { threshold, maxGapSeconds, dryRun: !!flags['dry-run'], verbose: !!flags.verbose };
     const results: RefreshResult[] = [];
+    const failed: string[] = [];
+    // One album that cannot be refreshed, a member's softlink where a stack is written say,
+    // is reported and passed over; the others are refreshed all the same.
+    const refreshOne = async (path: string, fingerprints?: RefreshOptions['fingerprints']) => {
+      try {
+        results.push(await refreshAlbum(cmd, path, { ...options, fingerprints }));
+      } catch (error) {
+        failed.push(path);
+        await cmd.writeError(`album-stack: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+    };
     if (flags.all) {
       const fingerprints = await readPrimaryFingerprintIndex(cmd);
       for await (const path of allAlbums(cmd)) {
-        if (results.length >= limit) break;
-        results.push(
-          await refreshAlbum(cmd, path, {
-            threshold,
-            maxGapSeconds,
-            dryRun: !!flags['dry-run'],
-            verbose: !!flags.verbose,
-            fingerprints,
-          }),
-        );
+        if (results.length + failed.length >= limit) break;
+        await refreshOne(path, fingerprints);
       }
     } else {
-      for (const path of paths.slice(0, limit)) {
-        results.push(
-          await refreshAlbum(cmd, path, {
-            threshold,
-            maxGapSeconds,
-            dryRun: !!flags['dry-run'],
-            verbose: !!flags.verbose,
-          }),
-        );
-      }
+      for (const path of paths.slice(0, limit)) await refreshOne(path);
     }
 
     const summary = {
-      scanned: results.length,
+      scanned: results.length + failed.length,
       changed: results.filter((result) => result.changed).length,
       groups: results.reduce((sum, result) => sum + result.groups, 0),
       stackedPhotos: results.reduce((sum, result) => sum + result.stackedPhotos, 0),
       missingFingerprints: results.reduce((sum, result) => sum + result.missingFingerprints, 0),
-      dryRun: !!flags['dry-run'],
+      dryRun: options.dryRun,
+      failed,
       albums: results,
     };
     if (cmd.json) await cmd.writeJSON(summary);
     else {await cmd.writeLn(
         `album-stack: ${summary.scanned} scanned / ${summary.changed} ${
           summary.dryRun ? 'would change' : 'changed'
-        } / ${summary.groups} stacks / ${summary.stackedPhotos} photos`,
+        } / ${summary.groups} stacks / ${summary.stackedPhotos} photos / ${failed.length} failed`,
       );}
-    return 0;
+    return failed.length > 0 ? 1 : 0;
   } catch (error) {
     await cmd.writeError(`album-stack: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -751,7 +747,8 @@ albumStack.spec = {
     'album-stack refresh /archive/albums/Exempelalbum_2019 --dry-run -v',
     'album-stack front /archive/albums/Exempelalbum_2019 /archive/albums/Exempelalbum_2019/files/IMG_0007.jpg',
   ],
-  returns: 'refresh: how many albums were scanned and changed, stacks and stacked photos, and per album its manifest; the others: the album and member acted on.',
+  returns:
+    'refresh: how many albums were scanned and changed, stacks and stacked photos, the albums that failed, and per album its manifest; the others: the album and member acted on.',
 };
 
 export default albumStack;

@@ -1,7 +1,7 @@
 /** Album-local photo stacks: rolling adjacency, reversible fronts/exclusions and linked albums. */
 
 import { ALBUMS_ROOT } from '@archive/paths';
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import type { AlbumMediaStacks } from '@archive/media/media-stacks';
 
@@ -159,6 +159,23 @@ Deno.test({
       assert(await vfs.exists(ADMIN_ACCESS, `${ALBUMS_ROOT}/burst/a.jpg/stack/${burst.id}`, { follow: false }));
     });
 
+    await t.step("a member reached through another album's links is stacked where it lives", async () => {
+      // A member's links, as `album add` makes them; the second album links to those links.
+      await album('added');
+      await album('chained');
+      for (const [name, target] of [['one', `${ALBUMS_ROOT}/burst/a.jpg`], ['two', `${ALBUMS_ROOT}/burst/b.jpg`], ['three', `${ALBUMS_ROOT}/burst/c.jpg`]] as const) {
+        await vfs.create(ADMIN_ACCESS, 'softlink', `${ALBUMS_ROOT}/added`, name, { props: { uid: 5100, gid: 5100, mode: 0o777, softlink: target } });
+        await vfs.create(ADMIN_ACCESS, 'softlink', `${ALBUMS_ROOT}/chained`, name, { props: { uid: 5100, gid: 5100, mode: 0o777, softlink: `../added/${name}` } });
+      }
+      const chained = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/chained`);
+      await cmd.shouldSucceed(`album-stack refresh ${ALBUMS_ROOT}/chained`);
+      const link = await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/burst/a.jpg/stack/${chained.id}/b.jpg`, { follow: false });
+      assertEquals(link.props.softlink, `${ALBUMS_ROOT}/burst/b.jpg`);
+      const again = await client.execJson<{ changed: number }>(`album-stack refresh ${ALBUMS_ROOT}/chained`);
+      assertEquals(again.changed, 0);
+      await cmd.shouldSucceed(`rm -r ${ALBUMS_ROOT}/chained ${ALBUMS_ROOT}/added`);
+    });
+
     await t.step('missing fingerprints and non-photos break chains in imported albums', async () => {
       await album('imported');
       await cmd.shouldSucceed(`mkdir ${ALBUMS_ROOT}/imported/files`);
@@ -219,6 +236,33 @@ Deno.test({
       const result = await client.execJson<{ scanned: number; groups: number }>('album-stack refresh --all --dry-run');
       assertEquals(result.scanned, 4);
       assert(result.groups >= 2);
+    });
+
+    await t.step('an album that cannot be refreshed is reported, and the others are refreshed all the same', async () => {
+      await cmd.shouldSucceed('user-create anna');
+      const anna = (await vfs.get(ADMIN_ACCESS, '/home/anna')).props;
+      const dir = `${ALBUMS_ROOT}/laid`;
+      await album('laid');
+      await photo(`${dir}/l1.jpg`, '2020-03-01T12:00:00Z', A);
+      await photo(`${dir}/l2.jpg`, '2020-03-01T12:00:05Z', A);
+      // A member's softlink where the stack's directory is written, which the administrator's
+      // write does not follow.
+      await vfs.create(ADMIN_ACCESS, 'softlink', `${dir}/l1.jpg`, 'stack', {
+        props: { uid: anna.uid, gid: anna.gid, mode: 0o777, softlink: '/home/anna' },
+      });
+      await album('fresh');
+      await photo(`${ALBUMS_ROOT}/fresh/f1.jpg`, '2020-04-01T12:00:00Z', A);
+      await photo(`${ALBUMS_ROOT}/fresh/f2.jpg`, '2020-04-01T12:00:05Z', A);
+
+      const result = await client.exec('album-stack refresh --all');
+      assertEquals(result.success, false);
+      assertStringIncludes(String(result.error), `album-stack: ${dir}: `);
+      assertStringIncludes(String(result.error), 'write through a softlink owned by uid');
+      const summary = await client.execJson<{ scanned: number; failed: string[] }>('album-stack refresh --all || true');
+      assertEquals(summary.scanned, 6);
+      assertEquals(summary.failed, [dir]);
+      const manifest = (await vfs.get(ADMIN_ACCESS, `${ALBUMS_ROOT}/fresh`)).attrs.mediaStacks as AlbumMediaStacks | undefined;
+      assertEquals(manifest?.groups.length, 1);
     });
   } finally {
     client.close();

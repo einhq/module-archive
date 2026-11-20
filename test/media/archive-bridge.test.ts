@@ -7,7 +7,7 @@
  * media-scan re-derives the same facts for a file the bridge never saw.
  */
 
-import { PIPELINE_DEFINITIONS_PATH, PIPELINE_INSTANCES_PATH, POOLS_PATH, QUEUES_PATH } from '@ein/paths';
+import { PIPELINE_DEFINITIONS_PATH, PIPELINE_INSTANCES_PATH, PIPELINE_QUEUE_PATH, POOLS_PATH, QUEUES_PATH } from '@ein/paths';
 import { ALBUMS_ROOT } from '@archive/paths';
 import { MEDIA_EVENTS } from '@archive/media/event-rules';
 import { assertEquals, assertStringIncludes } from '@std/assert';
@@ -46,6 +46,12 @@ Deno.test({
   };
 
   try {
+    // The services boot started make their queues as they come up, and a mutation before them reaches
+    // no one: wait for the bridges' and the engine's, which hold what comes until they read it.
+    for (const queue of [`${QUEUES_PATH}/media-bridge`, `${QUEUES_PATH}/archive-bridge`, PIPELINE_QUEUE_PATH]) {
+      await waitFor(() => vfs.exists(ADMIN_ACCESS, queue), queue);
+    }
+
     // Replace every media step with a marker-writing stub: this test is about the
     // event wiring, not about exiftool.
     await client.exec(`mkdir -p /opt/stub && mkdir -p /tmp/markers && mkdir -p ${ALBUMS_ROOT}/t`);

@@ -11,7 +11,7 @@
  * It does NOT decide who anyone is. Speakers are written undecided; `assign-speakers` decides,
  * exactly as `detect-faces` leaves that to `assign-faces`. What a person decided before is kept:
  * a re-run carries each held assignment (named by hand, or locked) to the new voice it shares
- * the most speech with. That is what `-f` does when EMS's voice models change: the file is marked
+ * the most speech with, and keeps one no new voice is free to take as a voice of its own. That is what `-f` does when EMS's voice models change: the file is marked
  * with the models its voices were found with (`voicesBy`), and `media.speakers.stale` runs it
  * again for one marked otherwise.
  *
@@ -33,7 +33,7 @@
 
 import { resolve } from '@std/path';
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, STEP_EXIT_TEMPORARY, stepPhase } from '@ein/client';
-import { stepExitCode, voiceprint, type VoiceSpeaker } from '@ems/client';
+import { stepExitCode, voiceprint } from '@ems/client';
 import { carryOver, type HeldAssignment, isHeld, type SpeakerAttrs, speakerNodeName, SPEAKERS_DIR, VOICE_EMBEDDING_TYPE, VOICES_BY_ATTR } from '@archive/media/speakers';
 import { type SeenFace, seeSpeakers, tiedToRegions } from '@archive/media/speaker-faces';
 import { reportUnwritable } from '@media/writable';
@@ -57,6 +57,9 @@ const heldAssignments = async (cmd: Command, transcriptPath: string): Promise<He
     if (!isHeld(a)) continue;
     held.push({
       turns: Array.isArray(a.turns) ? (a.turns as [number, number][]) : [],
+      detectedBy: typeof a.detectedBy === 'string' ? a.detectedBy : null,
+      detectedAt: typeof a.detectedAt === 'string' ? a.detectedAt : null,
+      capacity: typeof a.capacity === 'number' ? a.capacity : null,
       personId: typeof a.personId === 'string' ? a.personId : null,
       personSource: typeof a.personSource === 'string' ? a.personSource : null,
       personConfidence: typeof a.personConfidence === 'number' ? a.personConfidence : null,
@@ -71,14 +74,14 @@ const heldAssignments = async (cmd: Command, transcriptPath: string): Promise<He
  * Replace the recording's voices: the old `speakers/` goes, and the new speakers
  * are written in one transaction with the turns nobody could be told for on the directory. The
  * vectors follow one write each, which is what the embedding store takes; a speaker whose vector
- * fails to land is kept without it, still part of the timeline but unable to be matched.
+ * fails to land is kept without it, still part of the timeline but unable to be matched. So is a
+ * held voice no new voice took: written after the new ones, with no vector.
  */
 const writeSpeakers = async (
   cmd: Command,
   transcriptPath: string,
-  speakers: VoiceSpeaker[],
+  speakers: { attrs: SpeakerAttrs; vector?: number[] }[],
   unattributed: [number, number][],
-  attrsOf: (speaker: VoiceSpeaker) => SpeakerAttrs,
 ): Promise<number> => {
   if (await cmd.sys.vfs.exists(cmd.access, `${transcriptPath}/${SPEAKERS_DIR}`)) {
     await cmd.sys.vfs.unlink(cmd.access, `${transcriptPath}/${SPEAKERS_DIR}`, transcriptPath, { recursive: true });
@@ -87,11 +90,12 @@ const writeSpeakers = async (
     type: 'directory',
     name: SPEAKERS_DIR,
     attrs: { unattributed },
-    children: speakers.map((speaker, index) => ({ type: 'embedding', name: speakerNodeName(index), attrs: attrsOf(speaker) })),
+    children: speakers.map((speaker, index) => ({ type: 'embedding', name: speakerNodeName(index), attrs: speaker.attrs })),
   }]);
 
   let written = 0;
   for (const [index, speaker] of speakers.entries()) {
+    if (!speaker.vector) continue;
     const path = `${transcriptPath}/${SPEAKERS_DIR}/${speakerNodeName(index)}`;
     try {
       await writeNode(cmd, path, JSON.stringify(speaker.vector));
@@ -192,17 +196,17 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
     }
   }
 
-  const held = carryOver(await heldAssignments(cmd, transcriptPath), result.speakers);
+  const { onto: held, kept } = carryOver(await heldAssignments(cmd, transcriptPath), result.speakers);
   const detectedAt = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
   const unattributed = result.turns.filter((t) => t.speaker === null).map((t) => [t.start, t.end] as [number, number]);
 
-  await phase('writing speakers');
-  const written = await writeSpeakers(cmd, transcriptPath, result.speakers, unattributed, (speaker): SpeakerAttrs => {
-    const kept = held.get(speaker.id);
-    return {
+  const fileId = String(nodeInfo.id ?? '');
+  const found = result.speakers.map((speaker) => {
+    const carried = held.get(speaker.id);
+    const attrs: SpeakerAttrs = {
       embeddingType: VOICE_EMBEDDING_TYPE,
       capacity: speaker.vector.length,
-      fileId: String(nodeInfo.id ?? ''),
+      fileId,
       detectedAt,
       detectedBy: result.model,
       speaker: speaker.id,
@@ -212,26 +216,55 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
       asdRegionId: seen.get(speaker.id)?.regionId ?? null,
       asdPersonId: seen.get(speaker.id)?.personId ?? null,
       asdScore: seen.get(speaker.id)?.score ?? null,
-      personId: kept?.personId ?? null,
-      personSource: kept?.personSource ?? null,
-      personConfidence: kept?.personConfidence ?? null,
-      personAssignedAt: kept?.personAssignedAt ?? null,
-      assignLocked: kept?.assignLocked ?? false,
+      personId: carried?.personId ?? null,
+      personSource: carried?.personSource ?? null,
+      personConfidence: carried?.personConfidence ?? null,
+      personAssignedAt: carried?.personAssignedAt ?? null,
+      assignLocked: carried?.assignLocked ?? false,
     };
+    return { attrs, vector: speaker.vector };
   });
+  // A held voice no new voice took keeps its turns and its models, numbered after the new voices
+  // so it is told apart from them on screen; it has no voiceprint of the new models to match by.
+  const keptApart = kept.map((assignment, index) => {
+    const turns = [...assignment.turns].sort((a, b) => a[0] - b[0]);
+    const attrs: SpeakerAttrs = {
+      embeddingType: VOICE_EMBEDDING_TYPE,
+      capacity: assignment.capacity ?? result.speakers[0]?.vector.length ?? 0,
+      fileId,
+      detectedAt: assignment.detectedAt ?? detectedAt,
+      detectedBy: assignment.detectedBy ?? result.model,
+      speaker: `speaker_${result.speakers.length + index}`,
+      turns,
+      talkSeconds: turns.reduce((sum, [start, end]) => sum + end - start, 0),
+      turnCount: turns.length,
+      asdRegionId: null,
+      asdPersonId: null,
+      asdScore: null,
+      personId: assignment.personId,
+      personSource: assignment.personSource,
+      personConfidence: assignment.personConfidence,
+      personAssignedAt: assignment.personAssignedAt,
+      assignLocked: assignment.assignLocked,
+    };
+    return { attrs };
+  });
+
+  await phase('writing speakers');
+  const written = await writeSpeakers(cmd, transcriptPath, [...found, ...keptApart], unattributed);
   await phase(`wrote ${written} speakers`);
 
   // `speakersAt` last: it is what announces the voices (media.speakers.detected), so they are
   // all written by then. `voicesBy` beside it names the models, which `media-scan` compares with
   // what EMS runs now.
   await cmd.sys.vfs.update(cmd.access, inputPath, {
-    attrs: { speakersAt: detectedAt, speakerCount: result.speakers.length, [VOICES_BY_ATTR]: result.model },
+    attrs: { speakersAt: detectedAt, speakerCount: found.length + keptApart.length, [VOICES_BY_ATTR]: result.model },
   });
 
   if (verbose) {
     await cmd.writeLn(
       `${inputPath}: ${result.speakers.length} voices over ${result.turns.length} turns, ${seen.size} with a known face (${tiedToRegions(seen)} the video's own), ` +
-        `${held.size} kept from before, model ${result.model}`,
+        `${held.size} carried from before, ${kept.length} held voices kept as they were, model ${result.model}`,
     );
   }
   if (cmd.json) {
@@ -241,7 +274,8 @@ const voiceprintFile = async (cmd: Command): CmdReturn => {
       speakers: result.speakers.length,
       seen: seen.size,
       regions: tiedToRegions(seen),
-      kept: held.size,
+      carried: held.size,
+      kept: kept.length,
       model: result.model,
     });
   }

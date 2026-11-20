@@ -106,6 +106,7 @@ const albumSpan = async (cmd: Command): CmdReturn => {
   let scanned = 0;
   let updated = 0;
   let skipped = 0;
+  const failed: string[] = [];
   const dryRun = Boolean(flags['dry-run']);
   const albums: AlbumSpanRow[] = [];
 
@@ -117,7 +118,15 @@ const albumSpan = async (cmd: Command): CmdReturn => {
       return;
     }
     scanned++;
-    const span = await writeAlbumSpan(cmd, path, dryRun);
+    let span;
+    try {
+      span = await writeAlbumSpan(cmd, path, dryRun);
+    } catch (error) {
+      // One album that cannot be written is reported and passed over; the others are written all the same.
+      failed.push(path);
+      await cmd.writeError(`album-span: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return;
+    }
     if (!span) {
       skipped++;
       return;
@@ -147,13 +156,9 @@ const albumSpan = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  if (cmd.json) {
-    await cmd.writeJSON({ scanned, updated, skipped, albums } satisfies AlbumSpanAnswer);
-    return 0;
-  }
-
-  await cmd.writeLn(`album-span: ${scanned} scanned / ${updated} updated / ${skipped} skipped`);
-  return 0;
+  if (cmd.json) await cmd.writeJSON({ scanned, updated, skipped, failed, albums } satisfies AlbumSpanAnswer);
+  else await cmd.writeLn(`album-span: ${scanned} scanned / ${updated} updated / ${skipped} skipped / ${failed.length} failed`);
+  return failed.length > 0 ? 1 : 0;
 };
 
 albumSpan.spec = {
@@ -177,7 +182,7 @@ albumSpan.spec = {
     'album-span --dry-run /archive/albums/Exempelalbum_2019',
   ],
   returns:
-    'how many albums were scanned and updated, and each written album (each scanned one with --dry-run): its span, media count, first and last capture, and the hand-set ends still in force.',
+    'how many albums were scanned and updated, the albums that failed, and each written album (each scanned one with --dry-run): its span, media count, first and last capture, and the hand-set ends still in force.',
 };
 
 export default albumSpan;

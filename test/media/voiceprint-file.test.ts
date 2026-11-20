@@ -110,6 +110,27 @@ Deno.test({
       assertEquals((await attrsOf(`${dir}/s1`)).personId === 'p-edvin', false);
     });
 
+    await t.step('a held voice the re-run hears nobody in is kept as it was, and carried on by the next', async () => {
+      const before = speakers;
+      try {
+        speakers = [];
+        assertEquals((await run(`-f ${audio}`)).success, true);
+        assertEquals(await names(dir), ['s0']);
+        const s0 = await attrsOf(`${dir}/s0`);
+        assertEquals([s0.personId, s0.personSource, s0.assignLocked, s0.turns, s0.speaker], ['p-edvin', 'manual', true, [[6, 10]], 'speaker_0']);
+        assertEquals((await attrsOf(audio)).speakerCount, 1);
+
+        // The next run hears Edvin again: the kept name is a held voice like any other.
+        speakers = [{ id: 'speaker_0', turns: [[0, 6]], talkSeconds: 6, vector: ANNA }, { id: 'speaker_1', turns: [[6, 9]], talkSeconds: 3, vector: EDVIN }];
+        assertEquals((await run(`-f ${audio}`)).success, true);
+        assertEquals(await names(dir), ['s0', 's1']);
+        const s1 = await attrsOf(`${dir}/s1`);
+        assertEquals([s1.personId, s1.assignLocked, s1.turns], ['p-edvin', true, [[6, 9]]]);
+      } finally {
+        speakers = before;
+      }
+    });
+
     await t.step("a face seen speaking, and known, becomes the voice's hint", async () => {
       // A known face: a region of a photo carrying the person, its vector beneath it.
       const photo = `${ALBUMS_ROOT}/fest/files/bild.jpg`;

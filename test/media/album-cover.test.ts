@@ -6,7 +6,7 @@
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -15,6 +15,7 @@ type CoverResult = {
   scanned: number;
   updated: number;
   skipped: number;
+  failed: string[];
   albums: { path: string; cover: string }[];
 };
 
@@ -83,7 +84,7 @@ Deno.test({
     await t.step('an album that has a cover is left alone', async () => {
       const before = await coverOf(`${ALBUMS_ROOT}/flat`);
       const result = await client.execJson<CoverResult>(`album-cover ${ALBUMS_ROOT}/flat`);
-      assertEquals(result, { scanned: 1, updated: 0, skipped: 1, albums: [] });
+      assertEquals(result, { scanned: 1, updated: 0, skipped: 1, failed: [], albums: [] });
       assertEquals(await coverOf(`${ALBUMS_ROOT}/flat`), before);
     });
 
@@ -157,7 +158,7 @@ Deno.test({
     await t.step('an empty album gets nothing', async () => {
       await mkalbum('empty');
       const result = await client.execJson<CoverResult>(`album-cover ${ALBUMS_ROOT}/empty`);
-      assertEquals(result, { scanned: 1, updated: 0, skipped: 1, albums: [] });
+      assertEquals(result, { scanned: 1, updated: 0, skipped: 1, failed: [], albums: [] });
       assertEquals(await coverOf(`${ALBUMS_ROOT}/empty`), undefined);
     });
 
@@ -173,6 +174,14 @@ Deno.test({
       assert(await coverOf(`${ALBUMS_ROOT}/flat`));
       assert(await coverOf(`${ALBUMS_ROOT}/imported`));
       assertEquals(await coverOf(`${ALBUMS_ROOT}/suggested`), undefined);
+    });
+
+    await t.step('an album that cannot be covered is reported, and the others are covered all the same', async () => {
+      await cmd.shouldSucceed(`rm ${ALBUMS_ROOT}/flat/coverPhoto`);
+      const result = await client.exec(`album-cover ${ALBUMS_ROOT}/nowhere ${ALBUMS_ROOT}/flat`);
+      assertEquals(result.success, false);
+      assertStringIncludes(String(result.error), `album-cover: ${ALBUMS_ROOT}/nowhere: `);
+      assert(await coverOf(`${ALBUMS_ROOT}/flat`));
     });
 
     await t.step('refuses to run with neither a path nor --all', async () => {

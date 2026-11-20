@@ -1,6 +1,6 @@
 /**
  * The camera-faces service against a stub EMS and a stub camera driver: a camera's smallest stream
- * given to EMS as a watch at the address its driver names, a face nobody's told on the camera's
+ * node given to EMS as a watch by a name granted for as long as it runs, a face nobody's told on the camera's
  * `faces` log as unknown, a known face by its person's name and an unnamed person's as unknown, a
  * face gone filed as a picture under a camera node made for the device and linked to it, a clip of
  * the largest stream filed beside it and dropped from EMS, a clip asked for, the camera's clip
@@ -10,7 +10,7 @@
 
 import { assert, assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
-import { startStubEms } from '@ems/testing';
+import { granted, startStubEms } from '@ems/testing';
 import { CLIPS_DIR, FACES_ENDPOINT, UNKNOWN_FACE, watchId } from '@archive/media/camera-faces';
 
 /** A JPEG's start and end, which is all the service reads of a crop: it files the bytes it is given. */
@@ -37,21 +37,22 @@ Deno.test({ name: 'camera-faces', sanitizeResources: false, sanitizeOps: false }
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   const devices = testCtx.harness.instance!.devices;
-  const unregister = devices.registerDriver('stub-camera', {
-    description: 'a camera for the test',
-    source: (stream) => Promise.resolve(`rtsp://ein:secret@192.0.2.1:8554/${stream.device}-${stream.endpoint}`),
-  });
-  const id = watchId('front-door', 'sub');
+  const unregister = devices.registerDriver('stub-camera', { description: 'a camera for the test' });
+  const id = watchId('front-door', 'sub.ts');
   try {
     await devices.ensureDevice(ADMIN_ACCESS, 'front-door', { label: 'Front door', driver: 'stub-camera', class: 'camera' });
-    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'main', 'stream', { width: 1920, height: 1080 });
-    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'sub', 'stream', { width: 640, height: 360 });
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'main.ts', 'stream', { mimetype: 'video/mp2t', width: 1920, height: 1080 });
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'sub.ts', 'stream', { mimetype: 'video/mp2t', width: 640, height: 360 });
     await admin.execString('service restart camera-faces');
 
-    await t.step('the smallest stream is watched, at the address its driver names', async () => {
+    await t.step('the smallest stream node is watched by a name granted to EMS, the largest recorded', async () => {
+      assertEquals(id, 'ein-front-door-sub');
       const spec = await until('the watch', () => Promise.resolve(ems.watches.get(id)), Boolean);
-      assertEquals(spec?.source, 'rtsp://ein:secret@192.0.2.1:8554/front-door-sub');
-      assertEquals(spec?.clips, { on: ['face'], pre: 5, post: 10, source: 'rtsp://ein:secret@192.0.2.1:8554/front-door-main' });
+      const named = (path: unknown) => granted((path as { path: string }).path);
+      assertEquals(named(spec?.source), { mode: 'read', node: '/dev/front-door/sub.ts', stream: true });
+      const clips = spec?.clips as { source?: unknown };
+      assertEquals({ ...clips, source: undefined }, { on: ['face'], pre: 5, post: 10, source: undefined });
+      assertEquals(named(clips.source), { mode: 'read', node: '/dev/front-door/main.ts', stream: true });
       assertEquals([...ems.watches.keys()], [id]);
     });
 

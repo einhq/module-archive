@@ -136,13 +136,22 @@ const albumCover = async (cmd: Command): CmdReturn => {
   let scanned = 0;
   let updated = 0;
   let skipped = 0;
+  const failed: string[] = [];
   const albums: AlbumCoverResult[] = [];
 
   // `--stale` is accepted for symmetry with `album-span`: an album with a cover
   // is skipped either way, and the test costs one link read rather than a listing.
   const handle = async (path: string): Promise<void> => {
     scanned++;
-    const result = await writeAlbumCover(cmd, path);
+    let result;
+    try {
+      result = await writeAlbumCover(cmd, path);
+    } catch (error) {
+      // One album that cannot be written is reported and passed over; the others are written all the same.
+      failed.push(path);
+      await cmd.writeError(`album-cover: ${path}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return;
+    }
     if (!result) {
       skipped++;
       return;
@@ -170,13 +179,9 @@ const albumCover = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  if (cmd.json) {
-    await cmd.writeJSON({ scanned, updated, skipped, albums });
-    return 0;
-  }
-
-  await cmd.writeLn(`album-cover: ${scanned} scanned / ${updated} updated / ${skipped} skipped`);
-  return 0;
+  if (cmd.json) await cmd.writeJSON({ scanned, updated, skipped, failed, albums });
+  else await cmd.writeLn(`album-cover: ${scanned} scanned / ${updated} updated / ${skipped} skipped / ${failed.length} failed`);
+  return failed.length > 0 ? 1 : 0;
 };
 
 albumCover.spec = {
@@ -196,7 +201,7 @@ albumCover.spec = {
     'album-cover /archive/albums/Exempelalbum_2019',
     'album-cover --all --stale --limit 50',
   ],
-  returns: 'nothing; a coverPhoto softlink is written for each album that had none.',
+  returns: 'how many albums were scanned, covered and passed over, the albums that failed, and each album covered with its new cover.',
 };
 
 export default albumCover;

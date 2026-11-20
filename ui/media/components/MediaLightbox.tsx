@@ -100,7 +100,7 @@ import { formatTakenParts, type TakenParts, timeSourceLabel, viewerLocalTime } f
 import { qualifiedDate } from '@archive/people/date-qualifier';
 import { requestAlbumMediaRefresh } from '../signals/album.ts';
 import { aheadImage } from '../lib/ahead-image.ts';
-import { screenSlideshowRoute, slideshowFromSearch, type SlideshowMode, withoutSlideshowSearch } from '../lib/slideshow-search.ts';
+import { screenSlideshowRoute, slideshowFromSearch, slideshowKeys, type SlideshowMode, withoutSlideshowSearch } from '../lib/slideshow-search.ts';
 import {
   facesVisible,
   infoSidebarOpen,
@@ -558,23 +558,28 @@ export function MediaLightbox() {
   // the index changes, while the picture is still laid out, and the lightbox renders
   // nothing at all once it is closed. Only a close that returns to a grid shrinks back —
   // not a deletion or a jump elsewhere, which clear the return path.
-  useEffect(() => {
-    let shown: MediaItem | null = null;
-    return effect(() => {
-      const item = currentMediaItem.value;
-      if (item) {
-        shown = item;
-        return;
-      }
-      const closed = shown;
-      shown = null;
-      const box = zoomBoxRef.current;
-      if (!closed || !box || (closed.type !== 'photo' && closed.type !== 'video')) return;
-      if (lightboxReturnPath.peek() !== closed.path) return;
-      const dims = displayDims(closed);
-      zoomToTile(closed.path, sheetRootRef.current, box, dims && dims.width / dims.height, mediaRef.current);
-    });
+  const shownRef = useRef<MediaItem | null>(null);
+  const shrinkBack = useCallback(() => {
+    const closed = shownRef.current;
+    shownRef.current = null;
+    const box = zoomBoxRef.current;
+    if (!closed || !box || (closed.type !== 'photo' && closed.type !== 'video')) return;
+    if (lightboxReturnPath.peek() !== closed.path) return;
+    const dims = displayDims(closed);
+    zoomToTile(closed.path, sheetRootRef.current, box, dims && dims.width / dims.height, mediaRef.current);
   }, []);
+  useEffect(() =>
+    effect(() => {
+      const item = currentMediaItem.value;
+      if (item) shownRef.current = item;
+      else shrinkBack();
+    }), [shrinkBack]);
+  // Back closes from inside a render (the route goes, and the page's cleanup ends the lightbox),
+  // where a signal batch is open: the effect above runs only once the batch ends, after the
+  // lightbox is gone. Its own unmount still has it laid out, so the close is caught there.
+  useLayoutEffect(() => () => {
+    if (currentMediaItem.peek() === null) shrinkBack();
+  }, [shrinkBack]);
   const pinchRef = useRef<{ state: ZoomState; centre: ZoomPoint; distance: number } | null>(null);
   const pointerPanRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const touchPanRef = useRef<ZoomPoint | null>(null);
@@ -589,6 +594,8 @@ export function MediaLightbox() {
   const [onScreen, setOnScreen] = useState(false);
   // A slideshow held on its slide (Space): a picture stays, and a recording waits to be played.
   const [slideshowPaused, setSlideshowPaused] = useState(false);
+  const slideshowPausedRef = useRef(slideshowPaused);
+  slideshowPausedRef.current = slideshowPaused;
   // A presentation runs untouched, which is exactly when a phone would lock its screen.
   useWakeLock(slideshow);
   const [fullscreen, setFullscreen] = useState(false);
@@ -869,7 +876,8 @@ export function MediaLightbox() {
 
   // A slideshow says what it shows, for the controls of a screen it is on (`globalThis.einScreen`,
   // which the media service reads in the browser that renders it): the file, where it is in the
-  // list, and a recording's or video's time; and moves that recording or video when told to `seek`.
+  // list, a recording's or video's time, and its keys, Space as Play while it is held; and moves
+  // that recording or video when told to `seek`.
   useEffect(() => {
     if (!slideshow) return;
     const playing = (): HTMLMediaElement | null => {
@@ -887,6 +895,7 @@ export function MediaLightbox() {
           ...(item ? { title: item.name, path: item.path, kind: item.type } : {}),
           ...(item && length ? { position: `${currentMediaIndex.peek() + 1} of ${length}` } : {}),
           ...(element && Number.isFinite(element.duration) ? { media: { time: element.currentTime, duration: element.duration, paused: element.paused } } : {}),
+          keys: slideshowKeys(slideshowPausedRef.current),
         };
       },
       message: (message: Partial<ScreenMessage>): true | null => {

@@ -6,7 +6,7 @@
  */
 
 import { ALBUMS_ROOT } from '@archive/paths';
-import { assertEquals } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, captureTime, createTestContext, testCommands } from '@ein/testing';
 
 const testCtx = createTestContext({ modules: ['archive'] });
@@ -15,6 +15,7 @@ type SpanResult = {
   scanned: number;
   updated: number;
   skipped: number;
+  failed: string[];
   albums: { path: string; timeStart?: string; timeEnd?: string; mediaCount: number }[];
 };
 
@@ -239,6 +240,14 @@ Deno.test({
       // Cleared, the end is the media's again.
       await cmd.shouldSucceed(`album set ${trip} spanEnd ''`);
       assertEquals(await handSet(), { timeStart: '2024-06-07T09:00:00', timeEnd: '2024-06-12T18:00:00', spanStart: undefined, spanEnd: undefined });
+    });
+
+    await t.step('an album that cannot be spanned is reported, and the others are spanned all the same', async () => {
+      await vfs.update(ADMIN_ACCESS, `${ALBUMS_ROOT}/flat`, { attrs: { timeStart: null, timeEnd: null } });
+      const result = await client.exec(`album-span ${ALBUMS_ROOT}/nowhere ${ALBUMS_ROOT}/flat`);
+      assertEquals(result.success, false);
+      assertStringIncludes(String(result.error), `album-span: ${ALBUMS_ROOT}/nowhere: `);
+      assert((await spanOf(`${ALBUMS_ROOT}/flat`)).timeStart);
     });
 
     await t.step('needs a path or --all', async () => {

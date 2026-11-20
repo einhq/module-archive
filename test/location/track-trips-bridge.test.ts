@@ -7,6 +7,7 @@
 import { LOCATION_EVENTS } from '@archive/location/event-rules';
 import { assertEquals } from '@std/assert';
 import { EVENTS_ROUTING_KEY } from '@ein/client';
+import { QUEUES_PATH } from '@ein/paths';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { deviceAt, mkTracker, positionOf } from './tracker.ts';
 
@@ -22,6 +23,13 @@ Deno.test({
   const track = positionOf('the-tracker');
 
   try {
+    // The bridge makes its queue as it comes up, and a point appended before reaches no one: wait for
+    // it, which holds what comes until the bridge reads it.
+    const queue = `${QUEUES_PATH}/archive-bridge`;
+    for (const start = Date.now(); !await vfs.exists(ADMIN_ACCESS, queue);) {
+      if (Date.now() - start > 20000) throw new Error(`timed out waiting for ${queue}`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     await client.exec(mkTracker('the-tracker'));
 
     await vfs.create(ADMIN_ACCESS, 'router', '/tmp', 'events-tail', { attrs: { routingKey: EVENTS_ROUTING_KEY } });

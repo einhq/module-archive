@@ -661,7 +661,9 @@ waits for rather than by a shared DAG:
    service is the reconciler — `album-stack refresh --all`, `album-span --all --stale`,
    `album-cover --all --stale` and `album-profile --all --stale` hourly — filling what the bridge
    cannot see (a hard link into `files/`, a fact lost while the bridge was down, and for a profile
-   a face named or a position arriving, which reach it once a week).
+   a face named or a position arriving, which reach it once a week). An album one of them cannot
+   refresh, a member's softlink where a stack's `stack/` is written say, is reported on stderr and
+   in the answer's `failed`, and the sweep goes on to the next.
 
    An album's **devices**, whose tracks its Map tab draws over its span, are not kept by the
    pipeline: `album-device-list` reads the cameras of its members' `cameraPath` each time it is
@@ -1356,7 +1358,11 @@ EMS runs it in windows sized for its card and undoes them itself (`ems/ops/_voic
 merge two labels of the same window, the diarizer's own statement that they differ); EiN never
 sees a window. `personId` is left null for `assign-speakers`, exactly as `detect-faces` leaves it
 for `assign-faces` — except what a person decided: a re-run carries each assignment named by hand
-or locked to the new voice it shares the most speech with. `speakersAt` on the file is written
+or locked to the new voice it shares the most speech with (`carryOver`, longest overlap first;
+one whose voice is taken goes to the next it shares speech with, and two of one person heard as
+one voice are carried by it). One no new voice is free to take — the new run heard nobody there,
+or fused it with a voice somebody else holds — is kept as a speaker of its own after the new
+ones, with its old turns and models and no voiceprint, so no re-run loses a name. `speakersAt` on the file is written
 last, and announces the voices (`media.speakers.detected`); `media.speakers.missing` is the
 reconciler's gap for a recording with speech and no voices. Beside it `voicesBy` names the models
 and the stitching that found them, `voices/<n>+<diarizer>+<embedder>` as EMS names them: `media-scan` announces

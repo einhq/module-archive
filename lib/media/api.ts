@@ -449,7 +449,7 @@ export type AlbumSpanRow = {
  * `album-span`: how many albums were looked at and written, and a row for each written one — or,
  * with `--dry-run`, for each looked at, nothing written.
  */
-export type AlbumSpanAnswer = { scanned: number; updated: number; skipped: number; albums: AlbumSpanRow[] };
+export type AlbumSpanAnswer = { scanned: number; updated: number; skipped: number; failed: string[]; albums: AlbumSpanRow[] };
 
 /** One album or directory in an `album list` page: what its card shows without another read. */
 export type AlbumListItem = {

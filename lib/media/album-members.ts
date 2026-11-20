@@ -30,7 +30,7 @@ const FILES_DIR_NAME = 'files';
 const ALBUM_SCAN_LIMIT = 20000;
 
 type AlbumMember = {
-  /** The file. */
+  /** The file, by its own path: a link's target with every link on the way followed. */
   path: string;
   /** The link inside the album, when the album links the file rather than holding it. */
   memberPath?: string;
@@ -75,10 +75,13 @@ export const albumMembers = async (cmd: Command, path: string): Promise<AlbumMem
     if (isOriginalMedia(entry.node)) members.push({ path: `${containerPath}/${entry.name}`, node: entry.node });
   }
 
-  // In parallel: each is a path walk, and an auto album is all links.
+  // In parallel: each is a path walk, and an auto album is all links. A member is named by the
+  // path its link leads to, never through another link on the way, so what is written beside it
+  // (its stack) is written where it is.
   const resolved = await Promise.all(links.map(async (link) => {
     try {
-      return { ...link, node: await vfs.get(cmd.access, link.target) };
+      const entry = await vfs.resolveEntry(cmd.access, link.target);
+      return { ...link, target: entry.absPath, node: await vfs.get(cmd.access, entry) };
     } catch {
       // A dangling or unreadable member is skipped, not an error.
       return undefined;

@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { screenSlideshow, screenSlideshowRoute, slideshowFromSearch, withoutSlideshowSearch } from '../slideshow-search.ts';
+import { screenSlideshow, screenSlideshowRoute, slideshowFromSearch, slideshowKeys, withoutSlideshowSearch } from '../slideshow-search.ts';
 
 Deno.test('the slideshow parameter asks for a slideshow, and screen for one on a screen', () => {
   assertEquals(slideshowFromSearch(''), undefined);
@@ -26,4 +26,11 @@ Deno.test('a list is given to a screen as the slideshow page over what its filte
   assertEquals(screenSlideshow(new URLSearchParams('q=sailboat at sea')), '/slideshow?q=sailboat+at+sea&slideshow=screen');
   assertEquals(screenSlideshow(new URLSearchParams('under=/albums/Summer'), { oldest: true }), '/slideshow?under=%2Falbums%2FSummer&order=oldest&slideshow=screen');
   assertEquals(slideshowFromSearch(screenSlideshow(new URLSearchParams('slideshow')).split('?')[1]), 'screen');
+});
+
+Deno.test('a held slideshow says Space as Play, and one that plays as Pause', () => {
+  const space = (held: boolean) => slideshowKeys(held).find((each) => each.key === 'Space');
+  assertEquals(space(false), { key: 'Space', label: 'Pause', icon: 'player-pause' });
+  assertEquals(space(true), { key: 'Space', label: 'Play', icon: 'player-play' });
+  assertEquals(slideshowKeys(true).map((each) => each.key), ['ArrowLeft', 'Space', 'ArrowRight']);
 });

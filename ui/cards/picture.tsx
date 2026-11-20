@@ -2,7 +2,7 @@ import { Box, Skeleton, Text } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import type { ContainerListing } from '@ein/api';
 import { useCommand, useLocalDay } from '@ein/ui/hooks';
-import { displayUrl, gridUrl, lightboxRoute, shq } from '@ein/ui/lib';
+import { displayUrl, formatDate, gridUrl, lightboxRoute, shq } from '@ein/ui/lib';
 import { isAuthenticated, openFullscreen } from '@ein/ui/signals';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -75,7 +75,7 @@ export default function PictureCard() {
   }
   const picked = candidates[seedOf(`${day}|${hourly ? hour : ''}|${from}|${album}`) % candidates.length];
   const yearsAgo = picked.year !== undefined ? Number(day.slice(0, 4)) - picked.year : undefined;
-  const when = picked.takenAt ? new Date(picked.takenAt).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }) : undefined;
+  const when = picked.takenAt ? formatDate(picked.takenAt, { day: 'numeric', month: 'long', year: 'numeric' }) : undefined;
   const open = isAuthenticated.value ? () => openFullscreen(lightboxRoute(picked.path)) : undefined;
 
   return (

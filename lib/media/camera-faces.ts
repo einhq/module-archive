@@ -3,9 +3,10 @@
  * to the archive's people, and the video around it.
  *
  * A camera is a device with a `stream` endpoint. Its smallest stream is given to EMS as a watch,
- * `ein-<device>-<endpoint>`, at the address its driver names (`streamSource`), its largest to be
- * recorded for clips; every minute the watches are stated again, as after EMS started anew, and
- * those of cameras gone are stopped. What a watch tells:
+ * `ein-<device>-<endpoint>` (the endpoint's name without its extension), its largest to be recorded
+ * for clips: stream nodes, which EMS reads through names granted for as long as the watch runs
+ * (`putWatch`). Every minute the watches are stated again, as after EMS started anew, and those of
+ * cameras gone are stopped. What a watch tells:
  *
  * - **a face**, within a second or so of its coming: voted on by every stored face that belongs to
  *   someone, as a photo's face is (`matchFace`), and appended to the camera's `faces` log as that
@@ -61,8 +62,8 @@ type Camera = { device: string; endpoint: string; largest: string };
 
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-/** The watch id of a camera's stream. */
-export const watchId = (device: string, endpoint: string): string => `${WATCH_PREFIX}${device}-${endpoint}`;
+/** The watch id of a camera's stream: its endpoint's name without the extension (`main.ts`). */
+export const watchId = (device: string, endpoint: string): string => `${WATCH_PREFIX}${device}-${endpoint.replace(/\.[^.]*$/, '')}`;
 
 /**
  * Each device with a stream, its smallest one (the fewest pixels, which costs EMS the least to
@@ -256,16 +257,21 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
     const wanted: Wanted[] = [];
     for (const { device, endpoint, largest } of await cameras(cmd)) {
       try {
-        const source = await devices.streamSource(ADMIN_ACCESS, device, endpoint);
         const camera = await linkedCamera(cmd, device);
         const { trigger } = clipSettings(camera ? (await cmd.sys.vfs.get<CameraAttrs>(ADMIN_ACCESS, camera)).attrs : undefined);
         const clips: WatchSpec['clips'] = trigger === 'off' ? undefined : {
           on: trigger === 'motion' ? ['face', 'motion'] : ['face'],
           pre: CLIP_PRE,
           post: CLIP_POST,
-          source: largest === endpoint ? source : await devices.streamSource(ADMIN_ACCESS, device, largest),
+          ...(largest === endpoint ? {} : { source: { path: `${devicePath(device)}/${largest}` } }),
         };
-        const spec: WatchSpec = { source, faces: { fps: FACES_FPS }, motion: true, crops: true, ...(clips ? { clips } : {}) };
+        const spec: WatchSpec = {
+          source: { path: `${devicePath(device)}/${endpoint}` },
+          faces: { fps: FACES_FPS },
+          motion: true,
+          crops: true,
+          ...(clips ? { clips } : {}),
+        };
         wanted.push({ device, endpoint, id: watchId(device, endpoint), spec });
         said.delete(`source ${device}`);
       } catch (error) {

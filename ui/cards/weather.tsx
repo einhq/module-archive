@@ -2,7 +2,7 @@ import { Skeleton, Stack, Text } from '@mantine/core';
 import { useElementSize } from '@mantine/hooks';
 import { TablerIcon } from '@ein/ui/components';
 import { usePolledCommand } from '@ein/ui/hooks';
-import { shq } from '@ein/ui/lib';
+import { dateTimeFormat, shq } from '@ein/ui/lib';
 import type { CSSProperties } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ForecastDay, WeatherForecast } from '../../lib/weather/api.ts';
@@ -77,7 +77,7 @@ function DayRows({ days, zone, rain }: { days: ForecastDay[]; zone: string; rain
   const low = Math.min(...days.map((day) => day.temperatureMin));
   const high = Math.max(...days.map((day) => day.temperatureMax));
   const span = high - low || 1;
-  const weekday = new Intl.DateTimeFormat(undefined, { weekday: 'short', timeZone: 'UTC' });
+  const weekday = dateTimeFormat({ weekday: 'short', timeZone: 'UTC' });
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date());
   return (
     <>
@@ -129,8 +129,8 @@ export default function WeatherCard() {
 function Forecast({ forecast, label, width, height, size }: { forecast: WeatherForecast; label: string; width: number; height: number; size: number }) {
   const { now, timezone } = forecast;
   const fit = layoutFor(width, height, size);
-  const hourOf = new Intl.DateTimeFormat(undefined, { hour: '2-digit', timeZone: timezone });
-  const clockOf = new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', timeZone: timezone });
+  const hourOf = dateTimeFormat({ hour: '2-digit', timeZone: timezone });
+  const clockOf = dateTimeFormat({ hour: '2-digit', minute: '2-digit', timeZone: timezone });
   const today = forecast.days[0];
 
   return (

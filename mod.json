@@ -1,9 +1,9 @@
 {
   "name": "archive",
-  "version": "0.20.45",
+  "version": "0.20.46",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.15.31",
+  "coreApi": "^0.15.32",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -28,7 +28,7 @@
     "./weather/api": "./lib/weather/api.ts"
   },
   "dependencies": {
-    "ems": "^0.14.7",
+    "ems": "^0.14.10",
     "media": "^0.4.7"
   },
   "imports": {

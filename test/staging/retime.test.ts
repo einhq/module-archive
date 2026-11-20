@@ -14,6 +14,7 @@ import type { StagingRetimeAnswer } from '@archive/staging/api';
 import { STAGING_EVENTS } from '@archive/staging/facts';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
+import { SYSTEM_TIME_ZONE, toUtc } from '@ein/client';
 
 const testCtx = createTestContext({ modules: ['archive'] });
 
@@ -169,9 +170,11 @@ Deno.test({ name: 'staging retime', sanitizeResources: false, sanitizeOps: false
     await t.step("a scan's approximate sidecar date stays through a retime into scans, its scanner clock not believed", async () => {
       const prints = `${FILES}/phone/prints`;
       await cmd.shouldSucceed(`mkdir -p ${prints}`);
-      // Dated by its sidecar, as `exif-extract` leaves it; its scanner's clock is in the exif.
+      // Dated by its sidecar, as `exif-extract` leaves it, in the system's zone; its scanner's clock
+      // is in the exif.
       const scan = photo('SCAN_0001.jpg', '2024-03-02T10:11:12');
-      Object.assign(scan.attrs, { takenAt: '1985', takenAtUtc: '1984-12-31T23:00:00Z', takenAtSource: 'sidecar', takenAtQualifier: 'about' });
+      const takenAtUtc = toUtc('1985', SYSTEM_TIME_ZONE);
+      Object.assign(scan.attrs, { takenAt: '1985', takenAtUtc, takenAtSource: 'sidecar', takenAtQualifier: 'about' });
       const scanned = await vfs.createTree<Record<string, unknown>>(ADMIN_ACCESS, prints, [scan]);
       const sidecar = { kind: 'xmp', wallClock: '1985', approximate: true, pairedAt: '2026-10-18T00:00:00Z' };
       await vfs.createTree<Record<string, unknown>>(ADMIN_ACCESS, `${prints}/SCAN_0001.jpg`, [

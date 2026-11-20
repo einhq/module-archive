@@ -81,6 +81,10 @@ export const longestTurn = (turns: Span[]): Span | undefined =>
 /** What a person decided about a voice, which a new voiceprint run must not lose. */
 export type HeldAssignment = {
   turns: Span[];
+  /** What the voice was found with and its vector's size, which a held voice no new voice takes keeps. */
+  detectedBy: string | null;
+  detectedAt: string | null;
+  capacity: number | null;
   personId: string | null;
   personSource: string | null;
   personConfidence: number | null;
@@ -91,24 +95,32 @@ export type HeldAssignment = {
 /** Whether an earlier node's assignment was a person's, and so outlives a re-run. */
 export const isHeld = (attrs: { personSource?: unknown; assignLocked?: unknown }): boolean => attrs.personSource === 'manual' || attrs.assignLocked === true;
 
+/** Where the held assignments go in a re-run: onto new voices by id, and the ones kept apart. */
+type CarriedOver = { onto: Map<string, HeldAssignment>; kept: HeldAssignment[] };
+
 /**
  * The person fields each new speaker inherits from what a person decided before.
  *
  * Re-running the voiceprint moves the turns and renumbers the voices, so a held assignment
- * follows its voice by time: each goes to the new speaker it shares the most speech with.
- * Where two held assignments land on one speaker, the one with more overlap wins.
+ * follows its voice by time: the pairs of a held assignment and a new speaker sharing speech are
+ * taken longest overlap first, each held assignment going to the first speaker still free. One
+ * whose speaker went to the same decision before it (two voices of one person the new run hears
+ * as one) is carried by it. One that shares speech with no speaker still free, or with none at
+ * all (the new run heard nobody there), is kept as it was, turns and all, so no re-run loses a
+ * name somebody gave.
  */
-export const carryOver = (held: HeldAssignment[], next: VoiceSpeaker[]): Map<string, HeldAssignment> => {
-  const out = new Map<string, { held: HeldAssignment; overlap: number }>();
-  for (const assignment of held) {
-    let best: { id: string; overlap: number } | undefined;
-    for (const speaker of next) {
-      const overlap = overlapSeconds(assignment.turns, speaker.turns);
-      if (overlap > 0 && (!best || overlap > best.overlap)) best = { id: speaker.id, overlap };
-    }
-    if (!best) continue;
-    const taken = out.get(best.id);
-    if (!taken || taken.overlap < best.overlap) out.set(best.id, { held: assignment, overlap: best.overlap });
+export const carryOver = (held: HeldAssignment[], next: VoiceSpeaker[]): CarriedOver => {
+  const pairs = held.flatMap((assignment) =>
+    next.map((speaker) => ({ assignment, id: speaker.id, overlap: overlapSeconds(assignment.turns, speaker.turns) })).filter((p) => p.overlap > 0)
+  ).sort((a, b) => b.overlap - a.overlap);
+  const onto = new Map<string, HeldAssignment>();
+  const placed = new Set<HeldAssignment>();
+  for (const { assignment, id } of pairs) {
+    if (placed.has(assignment)) continue;
+    const taken = onto.get(id);
+    if (!taken) onto.set(id, assignment);
+    else if (taken.personId !== assignment.personId || taken.assignLocked !== assignment.assignLocked) continue;
+    placed.add(assignment);
   }
-  return new Map([...out].map(([id, { held }]) => [id, held]));
+  return { onto, kept: held.filter((assignment) => !placed.has(assignment)) };
 };

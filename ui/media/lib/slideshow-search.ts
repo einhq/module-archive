@@ -21,6 +21,10 @@ export const SLIDESHOW_KEYS: ScreenKey[] = [
   { key: 'ArrowRight', label: 'Next', icon: 'player-skip-forward' },
 ];
 
+/** The slideshow's keys as they are now, which the screen's controls show: Space pauses it while it plays, and plays it while it is `held`. */
+export const slideshowKeys = (held: boolean): ScreenKey[] =>
+  SLIDESHOW_KEYS.map((each) => each.key === 'Space' ? { ...each, ...(held ? { label: 'Play', icon: 'player-play' } : { label: 'Pause' }) } : each);
+
 /** How the slideshow is shown: to someone at the browser, or on a screen. */
 export type SlideshowMode = 'show' | 'screen';
 
