@@ -2,7 +2,8 @@
   display: flex;
   height: 100%;
   gap: 1.2em;
-  padding: 0.8em 1em;
+  /* On a dashboard of hat pieces, as far in as the piece's edge allows. */
+  padding: var(--dash-inset-top, 0.8em) var(--dash-inset-right, 1em) var(--dash-inset-bottom, 0.8em) var(--dash-inset-left, 1em);
   overflow: hidden;
   line-height: 1.25;
 }

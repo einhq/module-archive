@@ -5,7 +5,7 @@ import { useLocation } from 'react-router-dom';
 import { MediaLightbox } from '../components/MediaLightbox.tsx';
 import { useMediaTimeline } from '../../hooks/useMediaTimeline.ts';
 import { SLIDESHOW_ORDER_PARAM } from '../lib/slideshow-search.ts';
-import { hasAnyFilter } from '@ein/ui/hooks';
+import { FILE_KINDS, hasAnyFilter } from '@ein/ui/hooks';
 import { filtersFromParams } from '@ein/ui/lib';
 import { endLightbox, isLightboxOpen, offerLightboxList, showLightboxPath } from '@ein/ui/signals';
 
@@ -16,7 +16,8 @@ export const handle = { fullBleed: true };
  * (`screenSlideshow`), so it shows the first slide and no list page before it. Its parameters say
  * what it shows, as a search's do (`under` an album, the words, the pills, `kind`), and `order`
  * whether oldest first; `?slideshow=screen` runs it as for a screen nobody touches. Black until the
- * first file is there.
+ * first file is there. A search asks for files alone, as the media page's does: left to fan out,
+ * it also finds albums, people and places, which are no slide.
  */
 export default function SlideshowPage() {
   useSignals();
@@ -28,7 +29,7 @@ export default function SlideshowPage() {
   const searched = hasAnyFilter(narrowing);
   const { items } = useMediaTimeline({
     under,
-    kinds,
+    kinds: kinds ?? (searched ? [...FILE_KINDS] : undefined),
     filters: searched ? narrowing : undefined,
     rankByRelevance: Boolean(filters.query?.trim()),
     browseAll: under === undefined && kinds === undefined && !searched,

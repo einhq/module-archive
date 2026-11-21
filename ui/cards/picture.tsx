@@ -98,7 +98,13 @@ export default function PictureCard() {
           bottom={0}
           left={0}
           right={0}
-          style={{ padding: '2.5em 1em 0.8em', background: 'linear-gradient(transparent, rgba(0, 0, 0, 0.72))', color: 'white', fontSize: 'clamp(0.8rem, 4cqmin, 1.4rem)' }}
+          style={{
+            // On a dashboard of hat pieces the picture fills the piece and its words keep clear of the edge.
+            padding: '2.5em var(--dash-inset-right, 1em) var(--dash-inset-bottom, 0.8em) var(--dash-inset-left, 1em)',
+            background: 'linear-gradient(transparent, rgba(0, 0, 0, 0.72))',
+            color: 'white',
+            fontSize: 'clamp(0.8rem, 4cqmin, 1.4rem)',
+          }}
         >
           {yearsAgo !== undefined && <Text inherit fw={650}>{yearsAgo === 0 ? 'Today' : yearsAgo === 1 ? 'A year ago' : `${yearsAgo} years ago`}</Text>}
           {when && <Text inherit size='0.85em' c='rgba(255, 255, 255, 0.8)'>{when}</Text>}
