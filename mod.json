@@ -1,9 +1,9 @@
 {
   "name": "archive",
-  "version": "0.20.47",
+  "version": "0.20.48",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.15.32",
+  "coreApi": "^0.15.51",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -690,6 +690,7 @@
       "/looks-like": "ui/pages/looks-like.tsx",
       "/slideshow": "ui/media/pages/slideshow.tsx",
       "/staging": "ui/staging/pages/staging.tsx",
+      "/staging/app-backup": "ui/staging/pages/app-backup.tsx",
       "/staging/categories/new": "ui/staging/pages/category-new.tsx",
       "/staging/categories/:slug": "ui/staging/pages/category.tsx",
       "/staging/genealogy": "ui/staging/pages/genealogy.tsx",

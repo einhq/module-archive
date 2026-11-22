@@ -164,6 +164,14 @@
       }
     },
     {
+      "id": "archive.app-backup",
+      "slot": "app.backup",
+      "label": "Back up into",
+      "icon": "inbox",
+      "route": "/staging/app-backup",
+      "signedIn": true
+    },
+    {
       "id": "archive.duplicates",
       "slot": "nodes.tools",
       "label": "Duplicates",

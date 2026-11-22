@@ -387,7 +387,9 @@ into it is done, and every 30 s while files are uploading into it or being prepa
 visible, or ten times as long as the last read took when that is longer; between reads it measures how fast they are prepared, for the "about 2 h" a card and the
 progress strip say. The category's dialogs are routes: `/staging/import` (files or a folder into a
 category, or a new one made first, queued with `keepFolders` into its upload folder of today; and
-the folder to copy into over SFTP), `/staging/categories/new` (a `CommandForm` over `staging category
+the folder to copy into over SFTP, or for a category a phone fills, `PHONE_KINDS`, the WebDAV address
+and folder a phone's backup app sends into, `PhoneBackup`, which the category's empty Files tab
+shows too), `/staging/categories/new` (a `CommandForm` over `staging category
 --create`) and `/staging/categories/:slug` (label, kind, destination, remove). A category's page
 switches category from its title, has the same bar and stages as a progress strip above its tabs: Sort;
 Duplicates (`DuplicatesTab`), the category's exact copies read from their stored findings a page of

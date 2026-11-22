@@ -13,7 +13,7 @@ import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { DIRECTORY_GRID_COLS, DirectoryCard } from '../../media/components/DirectoryCard.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
 import { cleanDir, crumbs, dirOf, folderPath, parentDir } from '../lib/folders.ts';
-import { heldFiles, KIND_LABELS } from '../lib/overview.ts';
+import { heldFiles, KIND_LABELS, PHONE_KINDS } from '../lib/overview.ts';
 import type { DetectHint } from '../lib/detect-hint.ts';
 import { useDetectHints } from '../hooks/useDetectHints.ts';
 import { useFileDuplicates } from '../hooks/useFileDuplicates.ts';
@@ -24,6 +24,7 @@ import { DetectHints } from './DetectHints.tsx';
 import { DiscardDialog } from './DiscardDialog.tsx';
 import { duplicateBadge } from './DuplicateBadge.tsx';
 import { MoveDialog } from './MoveDialog.tsx';
+import { PhoneBackup } from './PhoneBackup.tsx';
 import { SftpPath } from './SftpPath.tsx';
 
 /**
@@ -185,8 +186,12 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
               <Text size='sm'>
                 Upload pictures, videos and recordings, or drop them anywhere on this page. They wait here, seen only by you, until you put them in an album.
               </Text>
-              <Text size='sm' c='dimmed'>Or copy them over SFTP into</Text>
-              <SftpPath path={`${category.path}/`} />
+              {PHONE_KINDS.includes(category.kind) ? <PhoneBackup path={category.path} label={category.label} /> : (
+                <>
+                  <Text size='sm' c='dimmed'>Or copy them over SFTP into</Text>
+                  <SftpPath path={`${category.path}/`} />
+                </>
+              )}
             </Stack>
           </EmptyState>
         )

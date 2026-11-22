@@ -7,9 +7,10 @@ import { Alert, Button, Container, FileButton, Group, Radio, Select, Stack, Text
 import { useSignals } from '@preact/signals-react/runtime';
 import { type ComponentProps, type ReactNode, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { PhoneBackup } from '../components/PhoneBackup.tsx';
 import { SftpPath } from '../components/SftpPath.tsx';
 import { refreshStagingStatus, stagingUploadFolder, useStagingStatus } from '../hooks/useStagingStatus.ts';
-import { categorySlug, freeSlug, heldFiles, KIND_LABELS, NEW_KINDS } from '../lib/overview.ts';
+import { categorySlug, freeSlug, heldFiles, KIND_LABELS, NEW_KINDS, PHONE_KINDS } from '../lib/overview.ts';
 
 /** The shell's dialog takes its frame from here; as a page, this is its heading. */
 export const handle = { title: 'Import media', icon: 'cloud-upload', pattern: 'staging', dialogSize: 'md', signedIn: true };
@@ -68,7 +69,8 @@ function Import({ user }: { user: string }) {
   const making = chosen === NEW;
   const newLabel = label.trim() || KIND_LABELS[kind];
   const newName = freeSlug(categorySlug(newLabel), categories.map((category) => category.name));
-  const target = making ? undefined : categories.find((category) => category.name === chosen)?.path;
+  const targetCategory = making ? undefined : categories.find((category) => category.name === chosen);
+  const target = targetCategory?.path;
   const bytes = files.reduce((sum, file) => sum + file.size, 0);
   const folders = foldersOf(files);
 
@@ -154,12 +156,12 @@ function Import({ user }: { user: string }) {
               Copying a large export over SFTP instead? Make the category first, under New category on the Staging page, then copy into its folder.
             </Text>
           )
-          : target && (
+          : target && (PHONE_KINDS.includes(targetCategory!.kind) ? <PhoneBackup path={target} label={targetCategory!.label} /> : (
             <Stack gap={4}>
               <Text size='sm' c='dimmed'>Over about 10,000 files? Copy them over SFTP instead, folders and all, into</Text>
               <SftpPath path={`${target}/`} />
             </Stack>
-          )}
+          ))}
       </Stack>
       <DialogActions>
         <Button variant='default' onClick={surface.close} disabled={busy}>Cancel</Button>

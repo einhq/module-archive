@@ -19,6 +19,9 @@ export const KIND_LABELS: Record<StagingCategoryKind, string> = {
   generic: 'Other',
 };
 
+/** The kinds whose files a phone makes, so whose categories show how a phone's backup app sends into them. */
+export const PHONE_KINDS: StagingCategoryKind[] = ['phone', 'screenshots', 'messaging'];
+
 /** The kinds a new category can be, in the order they are offered: every kind but the inbox's. */
 export const NEW_KINDS: StagingCategoryKind[] = ['google-photos', 'scans', 'phone', 'camera', 'messaging', 'screenshots', 'generic'];
 

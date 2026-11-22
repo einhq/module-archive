@@ -1,6 +1,6 @@
-import { TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Anchor, Code, CopyButton, Group, Tooltip } from '@mantine/core';
+import { Anchor } from '@mantine/core';
 import { Link } from 'react-router-dom';
+import { CopyValue } from './CopyValue.tsx';
 
 /** The guide's section on copying files in over SFTP. */
 const SFTP_GUIDE = '/docs/shell/ssh-sftp#copy-files-with-sftp';
@@ -11,18 +11,8 @@ const SFTP_GUIDE = '/docs/shell/ssh-sftp#copy-files-with-sftp';
  */
 export function SftpPath({ path }: { path: string }) {
   return (
-    <Group gap='xs' wrap='nowrap'>
-      <Code style={{ overflowWrap: 'anywhere' }}>{path}</Code>
-      <CopyButton value={path}>
-        {({ copied, copy }) => (
-          <Tooltip label={copied ? 'Copied' : 'Copy the path'}>
-            <ActionIcon variant='subtle' color={copied ? 'teal' : 'gray'} onClick={copy} aria-label='Copy the path'>
-              <TablerIcon name={copied ? 'check' : 'copy'} size={16} />
-            </ActionIcon>
-          </Tooltip>
-        )}
-      </CopyButton>
+    <CopyValue value={path} label='Copy the path'>
       <Anchor component={Link} to={SFTP_GUIDE} size='sm' style={{ whiteSpace: 'nowrap' }}>How</Anchor>
-    </Group>
+    </CopyValue>
   );
 }
