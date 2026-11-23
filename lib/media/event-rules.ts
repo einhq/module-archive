@@ -183,6 +183,12 @@ export type RuleContext = FileRuleContext & {
    */
   unpairedSidecarsIn?(path: string): Promise<boolean>;
   /**
+   * Whether a file within the folder at `path` waits for a file named `name` to file as its version
+   * (`pendingVersions`, `@archive/media/sidecars`). Bridge only: such a file landing after its
+   * picture's sidecar was paired is what files it.
+   */
+  pendingSourceIn?(path: string, name: string): Promise<boolean>;
+  /**
    * The face models EMS runs now (`generations()` in `@ems/client`). A detected file whose
    * `facesBy` names others, or none, has its faces detected again: their vectors are in another
    * space. Only when EMS runs the models recognition is tuned for (`FACE_MODEL`), since a

@@ -13,6 +13,11 @@
  * a person said: a caption becomes the file's description where it has none, and a Google Photos
  * favourite a star for the owner of the inbox it is staged in. A file already indexed is dated
  * again and given the sidecar's place where it has none.
+ *
+ * The files an XMP sidecar names as what its file was made from (`sources`: a scan's master, a
+ * picture's RAW) become the file's versions (`@archive/media/versions`) when they lie beside it.
+ * Those not there yet are named on the file (`pendingVersions`), and each run within their folder
+ * files the ones that have landed since, so the order of an upload does not matter.
  */
 
 import type { Command, Node, NodeChild } from '@ein/client';
@@ -23,6 +28,7 @@ import { SIDECAR_CHILD, SIDECAR_MIMETYPES, sidecarPoint, writePosition } from '@
 import { matchTakeout, parseTakeoutJson } from '@archive/media/takeout';
 import { matchXmp, parseXmp } from '@archive/media/xmp';
 import { applyFileTime } from '@archive/media/resolve-time';
+import { fileVersion, PENDING_VERSIONS_ATTR, VERSIONS_DIR } from '@archive/media/versions';
 import { POSITION_CHILD } from '@archive/location/location-link';
 import { parseStagedPath } from '@archive/staging/paths';
 
@@ -101,6 +107,65 @@ const findUnpaired = async (vfs: Vfs, access: Access, root: string): Promise<Fou
   }
 };
 
+/** A file and the sources its paired sidecar names that are not yet filed under it, and whether the file names them already. */
+type Pending = { file: string; fileId: string; names: string[]; stored: boolean };
+
+/** Every file within `root` with sources still to file, a page at a time. */
+const findPending = async (vfs: Vfs, access: Access, root: string): Promise<Pending[]> => {
+  const found: Pending[] = [];
+  let after: { value: string | null; id: string } | undefined;
+  while (true) {
+    const page = await vfs.query(access, {
+      within: root,
+      types: ['file'],
+      where: [{ ref: PENDING_VERSIONS_ATTR, op: 'exists' }],
+      ...(after ? { after } : {}),
+      limit: PAGE,
+    });
+    for (const row of page) {
+      const names = row.node.attrs[PENDING_VERSIONS_ATTR];
+      if (Array.isArray(names) && names.length > 0) found.push({ file: row.absPath, fileId: row.id, names: names.map(String), stored: true });
+    }
+    if (page.length < PAGE) return found;
+    after = { value: null, id: page[page.length - 1].id };
+  }
+};
+
+/** Of a sidecar's sources, those that are not the file it is paired with. */
+const pendingOf = (read: TakeoutSidecar | TakeoutAlbumSidecar | XmpSidecar, file: string): string[] =>
+  read.kind === 'xmp' ? (read.sources ?? []).filter((name) => name !== file) : [];
+
+/**
+ * File the pending sources of `waiting` that lie beside their files, or with `dryRun` count them.
+ * A source already under its file's `versions/` is done; one not there, or not a loose file of its
+ * own, stays pending.
+ */
+const fileSources = async (vfs: Vfs, access: Access, waiting: Pending[], dryRun: boolean, answer: MediaSidecarsAnswer): Promise<void> => {
+  for (const each of waiting) {
+    const folder = each.file.slice(0, each.file.lastIndexOf('/'));
+    const left: string[] = [];
+    for (const name of each.names) {
+      if (await vfs.exists(access, `${each.file}/${VERSIONS_DIR}/${name}`)) continue;
+      const source = `${folder}/${name}`;
+      const node = await vfs.get(access, source, { follow: false }).catch(() => undefined);
+      if (node?.type !== 'file' || node.attrs.sourceId) {
+        left.push(name);
+        continue;
+      }
+      answer.versions++;
+      if (dryRun) continue;
+      try {
+        await fileVersion(vfs, access, source, each.file, each.fileId);
+      } catch (error) {
+        answer.failed.push({ path: source, error: error instanceof Error ? error.message : String(error) });
+        left.push(name);
+      }
+    }
+    const changed = each.stored ? left.length !== each.names.length : left.length > 0;
+    if (!dryRun && changed) await vfs.update(access, each.file, { attrs: { [PENDING_VERSIONS_ATTR]: left.length > 0 ? left : null } });
+  }
+};
+
 /** The media files directly in `folder`, each with its own child edges. */
 const readMedia = async (vfs: Vfs, access: Access, folder: string): Promise<Medium[]> => {
   const media: Medium[] = [];
@@ -164,6 +229,7 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
     starred: 0,
     retimed: 0,
     positioned: 0,
+    versions: 0,
     failed: [],
   };
   const unpaired = await findUnpaired(vfs, access, root);
@@ -176,6 +242,8 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
   const stars = new Map<string, string[]>();
   /** Files whose sidecar was paired or shared, with it. */
   const touched: { medium: Medium; sidecar: TakeoutSidecar | XmpSidecar; shared?: true }[] = [];
+  /** The sources the sidecars paired now name, or with `dryRun` would. */
+  const waiting: Pending[] = [];
 
   for (const [folder, sidecars] of [...byFolder].sort(([a], [b]) => a < b ? -1 : 1)) {
     for (const sidecar of sidecars) {
@@ -242,6 +310,10 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
     answer.paired += moved.size;
 
     const pairedMedia = moves.filter(({ sidecar }) => moved.has(sidecar.path));
+    for (const { sidecar, medium } of pairedMedia) {
+      const names = pendingOf(sidecar.read!, medium.name);
+      if (names.length > 0) waiting.push({ file: medium.path, fileId: medium.id, names, stored: false });
+    }
     for (const { sidecar, medium } of pairedMedia) touched.push({ medium, sidecar: sidecar.read as TakeoutSidecar | XmpSidecar });
 
     // An edited copy and a Live Photo's video share their original's sidecar, by a softlink to it.
@@ -280,6 +352,9 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
 
   answer.unmatched = unmatched.length;
   answer.unmatchedPaths = unmatched.sort().slice(0, UNMATCHED_SHOWN);
+
+  // The sources of the sidecars paired now, and those still pending from earlier runs.
+  await fileSources(vfs, access, [...await findPending(vfs, access, root), ...waiting], dryRun, answer);
 
   for (const { medium, sidecar, shared } of touched) {
     // A caption becomes the description where the file has none: a person wrote both.

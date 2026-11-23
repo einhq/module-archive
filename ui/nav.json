@@ -172,6 +172,14 @@
       "signedIn": true
     },
     {
+      "id": "archive.share",
+      "slot": "share.receive",
+      "label": "Import media",
+      "icon": "cloud-upload",
+      "route": "/staging/import",
+      "signedIn": true
+    },
+    {
       "id": "archive.duplicates",
       "slot": "nodes.tools",
       "label": "Duplicates",

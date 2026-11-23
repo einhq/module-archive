@@ -1,7 +1,8 @@
 /**
  * XMP sidecars (`@archive/media/xmp`): a packet read in both RDF spellings, the capture time at the
  * precision written and never the file's creation date, the GPS position, title, caption, rating,
- * label and keywords; and a folder's `.xmp` files paired by name, a shared stem going to the RAW.
+ * label and keywords, and the files beside it the picture was made from; and a folder's `.xmp`
+ * files paired by name, a shared stem going to the RAW.
  *
  * Every packet here is invented.
  */
@@ -108,4 +109,37 @@ Deno.test('an XMP file pairs by the whole name, then by the stem, a stem shared 
   });
   // A file takes one: the whole name first, the stem's only when the file is still free.
   assertEquals(Object.fromEntries(matchXmp(['IMG_0001.xmp', 'IMG_0001.jpg.xmp'], media)), { 'IMG_0001.jpg.xmp': 'IMG_0001.jpg' });
+});
+
+/** A scan's picture as the scan application exports it: derived from its master, made with the master and the infrared. */
+const DERIVED = `<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'>
+ <rdf:Description rdf:about='' xmlns:stRef='http://ns.adobe.com/xap/1.0/sType/ResourceRef#' xmlns:xmpMM='http://ns.adobe.com/xap/1.0/mm/'>
+  <xmpMM:DerivedFrom rdf:parseType='Resource'>
+   <stRef:documentID>urn:uuid:00000000-0000-4000-8000-000000000001</stRef:documentID>
+   <stRef:filePath>07.jxl</stRef:filePath>
+  </xmpMM:DerivedFrom>
+  <xmpMM:DocumentID>urn:uuid:00000000-0000-4000-8000-000000000001</xmpMM:DocumentID>
+  <xmpMM:Ingredients>
+   <rdf:Bag>
+    <rdf:li rdf:parseType='Resource'><stRef:documentID>urn:uuid:00000000-0000-4000-8000-000000000001</stRef:documentID><stRef:filePath>07.jxl</stRef:filePath></rdf:li>
+    <rdf:li rdf:parseType='Resource'><stRef:documentID>urn:uuid:00000000-0000-4000-8000-000000000002</stRef:documentID><stRef:filePath>07-ir.jxl</stRef:filePath></rdf:li>
+   </rdf:Bag>
+  </xmpMM:Ingredients>
+  <xmpMM:ManagedFrom rdf:parseType='Resource'><stRef:filePath>elsewhere.tif</stRef:filePath></xmpMM:ManagedFrom>
+ </rdf:Description>
+</rdf:RDF></x:xmpmeta>`;
+
+Deno.test('the files a picture was made from are its DerivedFrom and Ingredients, each once, by a name with no folder', () => {
+  assertEquals(parseXmp(DERIVED)?.sources, ['07.jxl', '07-ir.jxl']);
+  // darktable's plain name, an attribute-only reference, and paths that leave the folder.
+  const darktable = `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/" xmpMM:DerivedFrom="DSC_0002.NEF"/></rdf:RDF></x:xmpmeta>`;
+  assertEquals(parseXmp(darktable)?.sources, ['DSC_0002.NEF']);
+  assertEquals(parseXmp(DERIVED.replace('<stRef:filePath>07.jxl</stRef:filePath>\n', '').replace("rdf:parseType='Resource'>", "stRef:filePath='07.tif'>"))?.sources, [
+    '07.tif',
+    '07.jxl',
+    '07-ir.jxl',
+  ]);
+  assertEquals(parseXmp(DERIVED.replaceAll('07.jxl', 'work/master.tif').replace('07-ir.jxl', '../07-ir.jxl'))?.sources, undefined);
+  assertEquals(parseXmp(SCAN)?.sources, undefined);
 });

@@ -37,9 +37,8 @@ import { COVER_LINK_NAME, isRawExtension, isRawMimetype, parseArgs, RAW_IMAGE_MI
 import { basename, dirname, extname, join } from '@std/path';
 import type { MediaHashes, RawFileReport, RawFileSort, RawPartner, RawScanReport, RawSortOutcome, RawSortReport, RawUnmatchedReport } from '@archive/media/api';
 import { albumMembers } from '@archive/media/album-members';
-import { REGION_TYPE, type RegionAttrs, regionsPathOf } from '@archive/media/regions';
 import { NODE_TYPE_ALBUM } from '@archive/media/types';
-import { releasePerson } from '@archive/people/person';
+import { dropRegions, VERSIONS_DIR } from '@archive/media/versions';
 
 type FileAttrsView = { mimetype?: string; takenAt?: string; cameraPath?: string; sourceId?: string } & MediaHashes;
 
@@ -186,23 +185,6 @@ async function findPartners(source: PartnerSource, target: FileMeta): Promise<Ca
   return partners;
 }
 
-/** Delete the regions on `filePath` and tidy the people they named; returns how many went. */
-async function dropRegions(cmd: Command, filePath: string): Promise<number> {
-  const vfs = cmd.sys.vfs;
-  const regionsPath = regionsPathOf(filePath);
-  if (!await vfs.exists(cmd.access, regionsPath)) return 0;
-  const entries = await vfs.children<RegionAttrs>(cmd.access, regionsPath, { follow: false });
-  const regions = entries.filter((entry) => entry.node.type === REGION_TYPE);
-  const gone = new Map<string, Set<string>>();
-  for (const { node } of regions) {
-    const personId = node.attrs.personId;
-    if (personId) gone.set(personId, (gone.get(personId) ?? new Set()).add(node.id));
-  }
-  await vfs.unlink(cmd.access, regionsPath, filePath, { recursive: true });
-  for (const [personId, ids] of gone) await releasePerson(vfs, cmd.access, personId, ids);
-  return regions.length;
-}
-
 /**
  * Move a RAW under its best partner's `versions/` dir as a frozen version and drop its regions.
  * Only a partner of the same base name counts: one matched by time and folder alone is reported,
@@ -225,7 +207,7 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
   }
 
   const name = basename(target.path);
-  const versionsDir = `${best.path}/versions`;
+  const versionsDir = `${best.path}/${VERSIONS_DIR}`;
   const dest = `${versionsDir}/${name}`;
   // A version already there with the same bytes is this RAW filed before, and the RAW a copy of
   // it: the version goes, children and all (an imported file carries its camera, place and people
@@ -243,9 +225,9 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
     // Match the importer layout: versions/ dir, then the RAW moved in and marked
     // frozen + sourceId. frozen keeps it on the durable disk tier despite sourceId,
     // and both attrs are set in one update so it is never transiently 'volatile'.
-    await cmd.sys.vfs.ensure(cmd.access, 'directory', best.path, 'versions', { props: { mode: 0o770 } });
+    await cmd.sys.vfs.ensure(cmd.access, 'directory', best.path, VERSIONS_DIR, { props: { mode: 0o770 } });
     if (replace) {
-      await dropRegions(cmd, dest);
+      await dropRegions(cmd.sys.vfs, cmd.access, dest);
       await cmd.sys.vfs.unlink(cmd.access, dest, versionsDir, { recursive: true });
     }
     const [moved] = await cmd.sys.vfs.renameMany(cmd.access, [{ from: target.path, to: dest }], { failIfExists: true, relink: true });
@@ -255,7 +237,7 @@ async function sortRaw(cmd: Command, source: PartnerSource, target: FileMeta): P
     for (const link of await cmd.sys.vfs.findLinks(cmd.access, dest)) {
       if (basename(link.absPath) === COVER_LINK_NAME) await setCover(cmd.sys.vfs, cmd.access, dirname(link.absPath), best.path, { attrs: link.node.attrs });
     }
-    const regions = await dropRegions(cmd, dest);
+    const regions = await dropRegions(cmd.sys.vfs, cmd.access, dest);
     return { action: 'sorted', partner: best.path, dest, regions };
   } catch (e) {
     return { action: 'error', partner: best.path, error: e instanceof Error ? e.message : String(e) };

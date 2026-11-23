@@ -27,9 +27,11 @@
  * **Sidecars**, announced as `staging.sidecars.arrived` for `media-sidecars`, by folder, in a
  * category that pairs them (`sidecars: 'pair'`): a sidecar not yet paired (a Takeout JSON or an
  * XMP file) whose bytes landed (its `sha256` written) or that was moved in; a media file whose
- * bytes landed in a folder holding one still unpaired, as its photo may come after it; and a
- * directory moved in from outside the category. Whether a folder holds an unpaired sidecar is
- * asked once per ten seconds, and known at once when one lands there.
+ * bytes landed in a folder holding one still unpaired, as its photo may come after it; any other
+ * file of its own (no `sourceId`) whose bytes landed where a paired XMP sidecar waits for its name
+ * as a source to file as a version, such as a scan's master; and a directory moved in from outside
+ * the category. Whether a folder holds an unpaired sidecar is asked once per ten seconds, and
+ * known at once when one lands there.
  *
  * **The organizer**, announced as `staging.category.changed` for `staging organize`, by the
  * category's directory: a staged file in it created, deleted, moved (in, out or within), or
@@ -71,8 +73,8 @@ export const STAGING_EVENTS = {
   /**
    * A folder may hold sidecars to pair with its files: the subject, a folder of a category that
    * pairs them. `data.cause` is `sidecar` (one landed or moved in), `media` (a file landed beside
-   * one unpaired) or `moved` (the subject, a directory, moved in); `data.category` is the
-   * category, as `<user>/<name>`.
+   * one unpaired), `source` (a file landed that a paired one waits for) or `moved` (the subject, a
+   * directory, moved in); `data.category` is the category, as `<user>/<name>`.
    */
   sidecarsArrived: 'staging.sidecars.arrived',
   /**
@@ -272,8 +274,14 @@ async function arrivedSidecars(event: VfsEventInput, ctx: RuleContext, now: numb
     // A rendition or anything else under a file is no arrival, and costs no query.
     if (!ctx.unpairedSidecarsIn) return [];
     const node = await file();
-    if (!node || !isIndexableMedia(node) || !await holdsUnpaired(ctx, folder, now)) return [];
-    cause = 'media';
+    if (!node || node.attrs.sourceId) return [];
+    if (isIndexableMedia(node)) {
+      if (!await holdsUnpaired(ctx, folder, now)) return [];
+      cause = 'media';
+    } else {
+      if (!await ctx.pendingSourceIn?.(folder, event.path.slice(slash + 1))) return [];
+      cause = 'source';
+    }
   }
   const parent = await ctx.getNode(folder);
   return parent ? [fact(folder, parent.id, cause)] : [];

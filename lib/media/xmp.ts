@@ -10,7 +10,9 @@
  * not read. `scan:DateApproximate` (`True`), which the scan application writes for a date given as
  * "ca. 1985", marks a `photoshop:DateCreated` as only about then. The position is `exif:GPSLatitude` / `exif:GPSLongitude` (`59,19.83N`, or with
  * seconds); then `dc:title`, `dc:description`, `xmp:Rating`, `xmp:Label` and the keywords of
- * `dc:subject`.
+ * `dc:subject`. The files the picture was made from are `xmpMM:DerivedFrom` and the items of
+ * `xmpMM:Ingredients`, by their `stRef:filePath`, or darktable's plain name in `DerivedFrom`; only
+ * a name with no folder in it counts, as a file beside the picture.
  *
  * **Pairing** (`matchXmp`). `IMG_0001.jpg.xmp` belongs to `IMG_0001.jpg`, and `IMG_0001.xmp` to
  * the one file named `IMG_0001` with any extension; beside both a camera RAW and the JPEG made
@@ -74,6 +76,22 @@ const coordinate = (value: string | undefined, negative: string): number | undef
   return Number.isFinite(plain) ? plain : undefined;
 };
 
+/** The plain file names `xmpMM:DerivedFrom` and `xmpMM:Ingredients` give, each once. */
+const sourcesOf = (packet: string): string[] => {
+  const found: string[] = [];
+  for (const name of ['xmpMM:DerivedFrom', 'xmpMM:Ingredients']) {
+    const prop = escape(name);
+    for (const match of packet.matchAll(new RegExp(`<${prop}(\\s[^>]*?)?(?:/>|>([\\s\\S]*?)</${prop}>)`, 'g'))) {
+      const [, attributes = '', body = ''] = match;
+      const named = values(` ${attributes} ${body}`, 'stRef:filePath');
+      found.push(...(named.length > 0 || body.includes('<') ? named : [decode(body)]));
+    }
+    for (const match of packet.matchAll(new RegExp(`\\s${prop}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'g'))) found.push(decode(match[1] ?? match[2]));
+  }
+  const plain = found.map((value) => value.trim()).filter((value) => value !== '' && value !== '.' && value !== '..' && !/[/\\]/.test(value));
+  return [...new Set(plain)];
+};
+
 /** What an XMP packet says, or undefined when the text is no XMP. */
 export const parseXmp = (packet: string): XmpSidecar | undefined => {
   if (!/<x:xmpmeta\b|<rdf:RDF\b/.test(packet)) return undefined;
@@ -97,6 +115,8 @@ export const parseXmp = (packet: string): XmpSidecar | undefined => {
   if (Number.isInteger(rating) && rating >= -1 && rating <= 5) sidecar.rating = rating;
   if (label) sidecar.label = label;
   if (keywords.length > 0) sidecar.keywords = keywords;
+  const sources = sourcesOf(packet);
+  if (sources.length > 0) sidecar.sources = sources;
   return sidecar;
 };
 

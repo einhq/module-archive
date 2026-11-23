@@ -1,9 +1,9 @@
 {
   "name": "archive",
-  "version": "0.20.48",
+  "version": "0.20.49",
   "description": "The archive: people and their family tree, locations and the trips devices make, cameras, photos, videos and documents, and finding things among them",
   "license": "MIT",
-  "coreApi": "^0.15.51",
+  "coreApi": "^0.15.53",
   "exports": {
     "./labels/api": "./lib/labels/api.ts",
     "./location/api": "./lib/location/api.ts",
@@ -82,6 +82,7 @@
     "@archive/media/resolve-time": "./lib/media/resolve-time.ts",
     "@archive/media/scan": "./lib/media/scan.ts",
     "@archive/media/sidecars": "./lib/media/sidecars.ts",
+    "@archive/media/versions": "./lib/media/versions.ts",
     "@archive/media/takeout": "./lib/media/takeout.ts",
     "@archive/media/speaker-assign": "./lib/media/speaker-assign.ts",
     "@archive/media/speaker-faces": "./lib/media/speaker-faces.ts",

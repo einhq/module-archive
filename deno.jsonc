@@ -67,6 +67,7 @@
     "@archive/media/takeout": "./lib/media/takeout.ts",
     "@archive/media/trip-album": "./lib/media/trip-album.ts",
     "@archive/media/types": "./types/media/mod.ts",
+    "@archive/media/versions": "./lib/media/versions.ts",
     "@archive/media/xmp": "./lib/media/xmp.ts",
     "@archive/news-albums": "./lib/news-albums.ts",
     "@archive/paths": "./lib/paths.ts",

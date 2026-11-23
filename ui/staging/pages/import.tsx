@@ -2,7 +2,7 @@ import type { StagingCategoryAnswer, StagingCategoryKind } from '@archive/stagin
 import { DialogActions, TablerIcon } from '@ein/ui/components';
 import { useSurface } from '@ein/ui/hooks';
 import { countOf, formatBytes, shq } from '@ein/ui/lib';
-import { addToQueue, currentUser, execCommand } from '@ein/ui/signals';
+import { addToQueue, currentUser, execCommand, takeSharedFiles } from '@ein/ui/signals';
 import { Alert, Button, Container, FileButton, Group, Radio, Select, Stack, Text, TextInput, Title } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { type ComponentProps, type ReactNode, useState } from 'react';
@@ -27,8 +27,9 @@ const foldersOf = (files: File[]): number => new Set(files.map((file) => file.we
 /**
  * `/staging/import`: files into one of the reader's staging categories (`?c=` chooses it; the
  * default one otherwise), or into a new one made first (`staging category --create`). Files or a
- * folder are chosen; they are queued into the category's upload folder of today, a folder keeping
- * its structure there, and the category's Files tab opens while they upload. For more files than a
+ * folder are chosen, or come chosen when another app shared them to EiN (the `share.receive`
+ * panel); they are queued into the category's upload folder of today, a folder keeping its
+ * structure there, and the category's Files tab opens while they upload. For more files than a
  * browser should carry, the category's folder to copy them into over SFTP.
  */
 export default function ImportPage() {
@@ -61,7 +62,7 @@ function Import({ user }: { user: string }) {
   const [choice, setChoice] = useState<string | null>(params.get('c'));
   const [kind, setKind] = useState<StagingCategoryKind>('google-photos');
   const [label, setLabel] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<File[]>(takeSharedFiles);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

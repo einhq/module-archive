@@ -10,7 +10,9 @@
  * Photo's video share their original's. A Takeout album's `metadata.json` gives its folder a
  * `title`. A caption becomes the file's description where it has none, a Google Photos favourite a
  * star for the inbox's owner, and a file already indexed is dated again (`@archive/media/sidecars`).
- * A sidecar already paired is not looked at again, so a second run does nothing.
+ * The files an XMP names as what its file was made from (`xmpMM:DerivedFrom`, `xmpMM:Ingredients`)
+ * are moved under the file's `versions/` once they lie beside it. A sidecar already paired is not
+ * looked at again, so a second run does nothing more than file such sources that have landed since.
  */
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
@@ -41,7 +43,8 @@ const mediaSidecars = async (cmd: Command): CmdReturn => {
     await cmd.writeLn(
       `${answer.dryRun ? 'Would pair' : 'Paired'} ${answer.paired} of ${answer.found} sidecar(s), ${answer.shared} shared, ${answer.albums} album(s), ` +
         `${answer.duplicates} duplicate(s) removed, ${answer.unmatched} unmatched, ${answer.other} not sidecars; ` +
-        `${answer.described} described, ${answer.starred} starred, ${answer.retimed} dated again, ${answer.positioned} placed`,
+        `${answer.described} described, ${answer.starred} starred, ${answer.retimed} dated again, ${answer.positioned} placed, ` +
+        `${answer.versions} filed as versions`,
     );
     for (const path of answer.unmatchedPaths) await cmd.writeLn(`unmatched: ${path}`);
   }
@@ -53,7 +56,7 @@ mediaSidecars.spec = {
   name: 'media-sidecars',
   effect: 'write' as const,
   description:
-    'Pair the Google Photos Takeout JSON and XMP sidecars in a folder with their files, as <file>/sidecar, and carry over their dates, places, captions and favourites',
+    'Pair the Google Photos Takeout JSON and XMP sidecars in a folder with their files, as <file>/sidecar, carry over their dates, places, captions and favourites, and file the files an XMP names as made from under <file>/versions',
   args: [
     { name: 'folder', type: 'path' as const, description: 'the folder whose sidecars are paired, at any depth; the working directory when none is given' },
   ],
@@ -64,7 +67,7 @@ mediaSidecars.spec = {
     'media-sidecars /home/anna/staging/files/google-photos/upload-2026-10-18',
     "media-sidecars '/home/anna/staging/files/google-photos/Takeout/Google Photos/Sommar i Exempelstad' --dry-run",
   ],
-  returns: 'MediaSidecarsAnswer: the sidecars found, paired, shared and unmatched, and what the files were given.',
+  returns: 'MediaSidecarsAnswer: the sidecars found, paired, shared and unmatched, what the files were given, and how many files were filed as versions.',
 };
 
 export default mediaSidecars;

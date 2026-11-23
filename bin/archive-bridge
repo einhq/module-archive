@@ -30,6 +30,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { nodeExists, readNode, runBridge } from '@media/bridge';
 import { ARCHIVE_BRIDGE_ROUTING_KEYS, type ArchiveRuleContext, deriveArchiveEvents } from '@archive/event-rules';
 import { SIDECAR_MIMETYPES } from '@archive/media/paired-sidecar';
+import { PENDING_VERSIONS_ATTR } from '@archive/media/versions';
 
 const archiveBridge = async (cmd: Command): CmdReturn => {
   const ctx: ArchiveRuleContext = {
@@ -68,6 +69,20 @@ const archiveBridge = async (cmd: Command): CmdReturn => {
         return rows.length > 0;
       } catch (error) {
         await cmd.writeError(`archive-bridge: ${path}: unpaired sidecar lookup failed: ${error}\n`);
+        return true;
+      }
+    },
+    pendingSourceIn: async (path, name) => {
+      try {
+        const rows = await cmd.sys.vfs.query(cmd.access, {
+          within: path,
+          types: ['file'],
+          where: [{ ref: PENDING_VERSIONS_ATTR, op: 'has', value: name }],
+          limit: 1,
+        });
+        return rows.length > 0;
+      } catch (error) {
+        await cmd.writeError(`archive-bridge: ${path}: pending source lookup failed: ${error}\n`);
         return true;
       }
     },

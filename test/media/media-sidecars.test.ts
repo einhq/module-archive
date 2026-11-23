@@ -4,7 +4,9 @@
  * name, an edited copy sharing its original's) and moved under them as `<file>/sidecar`; an album's
  * `metadata.json` titles its folder; what a person said carries over (a caption, a favourite as a
  * star for the inbox's owner) and an indexed file is dated and placed again. A dry run writes
- * nothing, a second run finds nothing to do, and a second copy of a paired sidecar is removed.
+ * nothing, a second run finds nothing to do, and a second copy of a paired sidecar is removed. The
+ * files an XMP names as what its picture was made from become the picture's versions, also when
+ * they land after it was paired.
  *
  * The photos are invented nodes with no picture in them, indexed by hand as `exif-extract` leaves
  * a file whose tags hold no date; every JSON and XMP packet is invented.
@@ -33,6 +35,16 @@ const takeout = (title: string, taken: number, more: Record<string, unknown> = {
     url: 'https://photos.google.com/photo/AF1Qip-example',
     ...more,
   });
+
+/** A scan's picture, derived from its master and made with the master and its infrared. */
+const DERIVED_XMP = `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:stRef="http://ns.adobe.com/xap/1.0/sType/ResourceRef#" xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/">
+<xmpMM:DerivedFrom rdf:parseType="Resource"><stRef:filePath>07.jxl</stRef:filePath></xmpMM:DerivedFrom>
+<xmpMM:Ingredients><rdf:Bag>
+<rdf:li rdf:parseType="Resource"><stRef:filePath>07.jxl</stRef:filePath></rdf:li>
+<rdf:li rdf:parseType="Resource"><stRef:filePath>07-ir.jxl</stRef:filePath></rdf:li>
+</rdf:Bag></xmpMM:Ingredients>
+</rdf:Description></rdf:RDF></x:xmpmeta>`;
 
 const XMP = `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/" photoshop:DateCreated="1968-07"/>
@@ -201,6 +213,45 @@ Deno.test({ name: 'media-sidecars', sanitizeResources: false, sanitizeOps: false
       answer = await sidecars(`'${ALBUM}'`);
       assertEquals([answer.found, answer.duplicates, answer.paired, answer.unmatched], [1, 0, 0, 1]);
       assert(await vfs.exists(ADMIN_ACCESS, `${ALBUM}/IMG_0003.jpg.supplemental-metadata.json`));
+    });
+
+    await t.step("the files a scan's XMP names as made from become its versions, the late one when it lands", async () => {
+      const film = `${CATEGORY}/upload-2026-11-22/film`;
+      await cmd.shouldSucceed(`mkdir -p '${film}'`);
+      await photo(`${film}/07.avif`, 'image/avif');
+      await put(`${film}/07.avif.xmp`, DERIVED_XMP, 'application/rdf+xml');
+      await put(`${film}/07.jxl`, 'the master', 'application/octet-stream');
+      await put(`${film}/notes.txt`, 'not named', 'text/plain');
+
+      let answer = await sidecars(`'${film}' --dry-run`);
+      assertEquals([answer.paired, answer.versions], [1, 1]);
+      assert(await vfs.exists(ADMIN_ACCESS, `${film}/07.jxl`));
+
+      answer = await sidecars(`'${film}'`);
+      assertEquals([answer.paired, answer.versions, answer.failed], [1, 1, []]);
+      const picture = await vfs.get(ADMIN_ACCESS, `${film}/07.avif`);
+      const master = await attrsOf(`${film}/07.avif/versions/07.jxl`);
+      assertEquals([master.sourceId, master.frozen], [picture.id, true]);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${film}/07.jxl`), false);
+      assertEquals((await attrsOf(`${film}/07.avif`)).pendingVersions, ['07-ir.jxl']);
+
+      await put(`${film}/07-ir.jxl`, 'the infrared', 'application/octet-stream');
+      answer = await sidecars(`'${film}'`);
+      assertEquals([answer.found, answer.paired, answer.versions], [0, 0, 1]);
+      assertEquals((await attrsOf(`${film}/07.avif/versions/07-ir.jxl`)).sourceId, picture.id);
+      assertEquals((await attrsOf(`${film}/07.avif`)).pendingVersions, undefined);
+      assert(await vfs.exists(ADMIN_ACCESS, `${film}/notes.txt`));
+      assertEquals((await sidecars(`'${film}'`)).versions, 0);
+
+      // A picture whose sources all come later waits for every one of them.
+      await photo(`${film}/08.avif`, 'image/avif');
+      await put(`${film}/08.avif.xmp`, DERIVED_XMP.replaceAll('07', '08'), 'application/rdf+xml');
+      answer = await sidecars(`'${film}'`);
+      assertEquals([answer.paired, answer.versions], [1, 0]);
+      assertEquals((await attrsOf(`${film}/08.avif`)).pendingVersions, ['08.jxl', '08-ir.jxl']);
+      await put(`${film}/08.jxl`, 'the master', 'application/octet-stream');
+      assertEquals((await sidecars(`'${film}'`)).versions, 1);
+      assertEquals((await attrsOf(`${film}/08.avif`)).pendingVersions, ['08-ir.jxl']);
     });
   } finally {
     client.close();

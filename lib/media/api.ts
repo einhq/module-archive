@@ -661,7 +661,8 @@ export type TakeoutAlbumSidecar = { kind: 'takeout-album'; title: string; descri
  * What an XMP sidecar says about its file: when it was taken as a wall clock at its own precision
  * (`wallClock`, from `photoshop:DateCreated` or `exif:DateTimeOriginal`) and whether that date is
  * only about then (`approximate`, scan's `scan:DateApproximate`), where, its title and caption,
- * its rating and colour label, and its keywords (`dc:subject`).
+ * its rating and colour label, its keywords (`dc:subject`), and the files beside it that it was
+ * made from (`sources`, by name: `xmpMM:DerivedFrom` and `xmpMM:Ingredients`).
  */
 export type XmpSidecar = {
   kind: 'xmp';
@@ -673,6 +674,7 @@ export type XmpSidecar = {
   rating?: number;
   label?: string;
   keywords?: string[];
+  sources?: string[];
 };
 
 /**
@@ -689,8 +691,9 @@ export type MediaSidecar = (TakeoutSidecar | TakeoutAlbumSidecar | XmpSidecar) &
  * second copy of a sidecar already paired (`duplicates`), not matched to any file (`unmatched`,
  * the first of them by path in `unmatchedPaths`), or not a sidecar at all (`other`). Then what the
  * pairing gave the files: a caption (`described`), a star for the inbox's owner (`starred`), a
- * capture time resolved again (`retimed`) and a position (`positioned`). `failed` names the
- * sidecars whose move was refused. With `dryRun`, what it would do.
+ * capture time resolved again (`retimed`) and a position (`positioned`), and the files an XMP
+ * names as made from moved under its file's `versions/` (`versions`). `failed` names the
+ * sidecars and files whose move was refused. With `dryRun`, what it would do.
  */
 export type MediaSidecarsAnswer = {
   ok: boolean;
@@ -708,6 +711,7 @@ export type MediaSidecarsAnswer = {
   starred: number;
   retimed: number;
   positioned: number;
+  versions: number;
   failed: { path: string; error: string }[];
 };
 

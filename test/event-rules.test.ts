@@ -302,3 +302,31 @@ Deno.test('staging rules: a directory moved into a category that pairs sidecars 
   assertEquals((await moved(`${ANNA}/takeout/part-2`, `${ANNA}/takeout/part-1`)).facts, []);
   assertEquals((await moved(`${ANNA}/whatsapp/part-2`, '/home/anna/part-2')).facts, []);
 });
+
+Deno.test('staging rules: a file landing that a paired sidecar waits for as a source announces its folder; another does not', async () => {
+  const master = `${TAKEOUT_DIR}/07.jxl`;
+  const loose = (extra: Record<string, unknown> = {}): NodeSnapshot => ({
+    id: 'f7',
+    type: 'file',
+    attrs: { mimetype: 'application/octet-stream', size: 900, sha256: SHA, ...extra },
+  });
+  const asked: [string, string][] = [];
+  const context = (waiting: string[]): ArchiveRuleContext => ({
+    ...ctx,
+    getNode: (path) => Promise.resolve({ ...sidecarTree, [master]: loose(), [`${TAKEOUT_DIR}/07.avif/versions/07.jxl`]: loose({ sourceId: 'f1' }) }[path]),
+    unpairedSidecarsIn: () => Promise.resolve(false),
+    pendingSourceIn: (path, name) => {
+      asked.push([path, name]);
+      return Promise.resolve(waiting.includes(name));
+    },
+  });
+  assertEquals((await arrivals({ path: master }, {}, [], context(['07.jxl']))).facts, [[TAKEOUT_DIR, 'source', 'bulk']]);
+  assertEquals((await arrivals({ path: master }, {}, [], context([]))).facts, []);
+  assertEquals(asked, [[TAKEOUT_DIR, '07.jxl'], [TAKEOUT_DIR, '07.jxl']]);
+  // Filed as a version, it carries its picture's id and asks nothing.
+  assertEquals(
+    (await arrivals({ path: `${TAKEOUT_DIR}/07.avif/versions/07.jxl`, type: 'moved', fromPath: master, changedAttrs: undefined }, {}, [], context(['07.jxl']))).facts,
+    [],
+  );
+  assertEquals(asked.length, 2);
+});
