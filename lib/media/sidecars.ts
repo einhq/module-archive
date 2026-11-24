@@ -5,8 +5,10 @@
  * A paired sidecar is a file node carrying `sourceId` (the file's id) and `sidecar`
  * (`MediaSidecar`), or a softlink to one: an edited copy and a Live Photo's video share their
  * original's. `sourceId` makes it a derived file, which no pipeline indexes and no subtree query
- * of originals lists. A Takeout album folder's `metadata.json` stays where it is, its `sourceId`
- * the folder's id, and gives the folder its `title` and `description`.
+ * of originals lists; `frozen`, set in the same update, keeps its bytes on the durable tier it was
+ * uploaded to, where a rendition's `sourceId` alone would send its reads to the volatile one. A
+ * Takeout album folder's `metadata.json` stays where it is, its `sourceId` the folder's id and
+ * frozen the same way, and gives the folder its `title` and `description`.
  *
  * `pairSidecars` finds the unpaired sidecars within a folder, pairs each by its rules
  * (`@archive/media/takeout`, `@archive/media/xmp`) with a file beside it, and carries over what
@@ -293,7 +295,10 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
       const pairedAt = nowIso();
       await vfs.updateEach(
         access,
-        moves.map(({ sidecar, medium }) => ({ ref: sidecar.path, attrs: { sidecar: { ...sidecar.read!, pairedAt } satisfies MediaSidecar, sourceId: medium.id } })),
+        moves.map(({ sidecar, medium }) => ({
+          ref: sidecar.path,
+          attrs: { sidecar: { ...sidecar.read!, pairedAt } satisfies MediaSidecar, sourceId: medium.id, frozen: true },
+        })),
       );
       const outcomes = await vfs.renameMany(access, moves.map(({ sidecar, medium }) => ({ from: sidecar.path, to: `${medium.path}/${SIDECAR_CHILD}` })), {
         failIfExists: true,
@@ -304,7 +309,7 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
         if (outcome.status === 'fulfilled') moved.add(moves[i].sidecar.path);
         else answer.failed.push({ path: moves[i].sidecar.path, error: outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason) });
       });
-      if (refused.length > 0) await vfs.updateEach(access, refused.map(({ sidecar }) => ({ ref: sidecar.path, attrs: { sidecar: null, sourceId: null } })));
+      if (refused.length > 0) await vfs.updateEach(access, refused.map(({ sidecar }) => ({ ref: sidecar.path, attrs: { sidecar: null, sourceId: null, frozen: null } })));
     }
     if (!dryRun && duplicates.length > 0) await vfs.unlinkMany(access, duplicates);
     answer.paired += moved.size;
@@ -344,7 +349,10 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
           await vfs.update(access, folder, { attrs: { title: read.title, description: read.description ?? null } });
         }
         const pairedAt = nowIso();
-        await vfs.updateEach(access, albums.map((each) => ({ ref: each.path, attrs: { sidecar: { ...each.read!, pairedAt } satisfies MediaSidecar, sourceId: node.id } })));
+        await vfs.updateEach(
+          access,
+          albums.map((each) => ({ ref: each.path, attrs: { sidecar: { ...each.read!, pairedAt } satisfies MediaSidecar, sourceId: node.id, frozen: true } })),
+        );
       }
       answer.albums += 1;
     }

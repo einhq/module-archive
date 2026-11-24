@@ -1,9 +1,10 @@
 /**
- * The camera-faces service against a stub EMS and a stub camera driver: a camera's smallest stream
- * node given to EMS as a watch by a name granted for as long as it runs, a face nobody's told on the camera's
+ * The camera-faces service against a stub EMS and a stub camera driver: a camera's smallest MPEG-TS
+ * node given to EMS as a watch by a name granted for as long as it runs, the MP4 beside its largest
+ * recorded for clips (it carries the sound), a face nobody's told on the camera's
  * `faces` log as unknown, a known face by its person's name and an unnamed person's as unknown, a
  * face gone filed as a picture under a camera node made for the device and linked to it, a clip of
- * the largest stream filed beside it and dropped from EMS, a clip asked for, the camera's clip
+ * the stream filed beside it and dropped from EMS, a clip asked for, the camera's clip
  * settings in the watch, its clip days past its `clipDays` removed, and the watch stopped once the
  * camera is forgotten.
  */
@@ -43,16 +44,21 @@ Deno.test({ name: 'camera-faces', sanitizeResources: false, sanitizeOps: false }
     await devices.ensureDevice(ADMIN_ACCESS, 'front-door', { label: 'Front door', driver: 'stub-camera', class: 'camera' });
     await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'main.ts', 'stream', { mimetype: 'video/mp2t', width: 1920, height: 1080 });
     await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'sub.ts', 'stream', { mimetype: 'video/mp2t', width: 640, height: 360 });
+    // Beside each MPEG-TS, as the camera driver makes them: the MP4 a page watches, and the pictures, sized or not yet.
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'main.mp4', 'stream', { mimetype: 'video/mp4', width: 1920, height: 1080 });
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'sub.mp4', 'stream', { mimetype: 'video/mp4', width: 640, height: 360 });
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'main.jpg', 'stream', { mimetype: 'image/jpeg' });
+    await devices.ensureEndpoint(ADMIN_ACCESS, 'front-door', 'sub.jpg', 'stream', { mimetype: 'image/jpeg', width: 640, height: 360 });
     await admin.execString('service restart camera-faces');
 
-    await t.step('the smallest stream node is watched by a name granted to EMS, the largest recorded', async () => {
+    await t.step('the smallest MPEG-TS is watched by a name granted to EMS, the MP4 beside the largest recorded', async () => {
       assertEquals(id, 'ein-front-door-sub');
       const spec = await until('the watch', () => Promise.resolve(ems.watches.get(id)), Boolean);
       const named = (path: unknown) => granted((path as { path: string }).path);
       assertEquals(named(spec?.source), { mode: 'read', node: '/dev/front-door/sub.ts', stream: true });
       const clips = spec?.clips as { source?: unknown };
       assertEquals({ ...clips, source: undefined }, { on: ['face'], pre: 5, post: 10, source: undefined });
-      assertEquals(named(clips.source), { mode: 'read', node: '/dev/front-door/main.ts', stream: true });
+      assertEquals(named(clips.source), { mode: 'read', node: '/dev/front-door/main.mp4', stream: true });
       assertEquals([...ems.watches.keys()], [id]);
     });
 

@@ -158,7 +158,12 @@ Deno.test({ name: 'media-sidecars', sanitizeResources: false, sanitizeOps: false
         ]
       ) {
         const node = await vfs.get(ADMIN_ACCESS, `${PHOTOS}/${file}/sidecar`);
-        assertEquals([node.attrs.sourceId, (node.attrs.sidecar as { kind: string }).kind], [(await vfs.get(ADMIN_ACCESS, `${PHOTOS}/${file}`)).id, 'takeout'], file);
+        // Frozen with its sourceId: an original's bytes stay on the tier they were written to.
+        assertEquals([node.attrs.sourceId, node.attrs.frozen, (node.attrs.sidecar as { kind: string }).kind], [
+          (await vfs.get(ADMIN_ACCESS, `${PHOTOS}/${file}`)).id,
+          true,
+          'takeout',
+        ], file);
         assertEquals(await vfs.exists(ADMIN_ACCESS, `${PHOTOS}/${sidecar}`), false, sidecar);
       }
       // What is no sidecar's, and what no photo is for, stay where they are.
@@ -191,7 +196,7 @@ Deno.test({ name: 'media-sidecars', sanitizeResources: false, sanitizeOps: false
       const folder = await vfs.get(ADMIN_ACCESS, ALBUM);
       assertEquals([folder.attrs.title, folder.attrs.description], ['Sommar i Exempelstad', 'Veckan vid sjön']);
       const metadata = await attrsOf(`${ALBUM}/metadata.json`);
-      assertEquals([metadata.sourceId, (metadata.sidecar as { kind: string }).kind], [folder.id, 'takeout-album']);
+      assertEquals([metadata.sourceId, metadata.frozen, (metadata.sidecar as { kind: string }).kind], [folder.id, true, 'takeout-album']);
     });
 
     await t.step('a second run finds nothing more to pair', async () => {

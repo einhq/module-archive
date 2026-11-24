@@ -2,10 +2,12 @@
  * Every camera's faces and clips: what the media service sees on each camera under /dev, matched
  * to the archive's people, and the video around it.
  *
- * A camera is a device with a `stream` endpoint. Its smallest stream is given to EMS as a watch,
- * `ein-<device>-<endpoint>` (the endpoint's name without its extension), its largest to be recorded
- * for clips: stream nodes, which EMS reads through names granted for as long as the watch runs
- * (`putWatch`). Every minute the watches are stated again, as after EMS started anew, and those of
+ * A camera is a device with an MPEG-TS `stream` endpoint. Its smallest is given to EMS as a watch,
+ * `ein-<device>-<endpoint>` (the endpoint's name without its extension), and its largest profile is
+ * recorded for clips from the fragmented MP4 beside it (`main.mp4`), which carries the camera's
+ * sound whatever its codec, where the MPEG-TS carries AAC sound alone; without one, from the
+ * MPEG-TS. These are stream nodes, which EMS reads through names granted for as long as the watch
+ * runs (`putWatch`). Every minute the watches are stated again, as after EMS started anew, and those of
  * cameras gone are stopped. What a watch tells:
  *
  * - **a face**, within a second or so of its coming: voted on by every stored face that belongs to
@@ -54,11 +56,14 @@ const FACES_FPS = 3;
 const CLIP_PRE = 5;
 const CLIP_POST = 10;
 const SWEEP_EVERY_MS = 3_600_000;
+/** A camera's stream nodes: MPEG-TS, which EMS watches, and fragmented MP4, which carries its sound whatever the codec. */
+const TS_MIMETYPE = 'video/mp2t';
+const MP4_MIMETYPE = 'video/mp4';
 
 /** One stream to watch: the camera's device, its endpoint, and the watch's id. */
 type Wanted = { device: string; endpoint: string; id: string; spec: WatchSpec };
-/** A device with streams: the smallest, watched, and the largest, recorded. */
-type Camera = { device: string; endpoint: string; largest: string };
+/** A camera: its smallest MPEG-TS, watched, and the stream node its clips are recorded from. */
+type Camera = { device: string; endpoint: string; recorded: string };
 
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -66,8 +71,8 @@ const message = (error: unknown): string => error instanceof Error ? error.messa
 export const watchId = (device: string, endpoint: string): string => `${WATCH_PREFIX}${device}-${endpoint.replace(/\.[^.]*$/, '')}`;
 
 /**
- * Each device with a stream, its smallest one (the fewest pixels, which costs EMS the least to
- * read) and its largest.
+ * Each device with an MPEG-TS stream: its smallest (the fewest pixels, which costs EMS the least to
+ * read), and the MP4 beside its largest, or that MPEG-TS itself when it has none.
  */
 const cameras = async (cmd: Command): Promise<Camera[]> => {
   const out = [];
@@ -76,8 +81,11 @@ const cameras = async (cmd: Command): Promise<Camera[]> => {
     const streams = (await cmd.sys.vfs.children<EndpointAttrs>(ADMIN_ACCESS, devicePath(child.name)).catch(() => []))
       .filter((endpoint) => endpoint.node.type === 'stream' && !endpoint.node.attrs.retired);
     const pixels = (attrs: EndpointAttrs) => (attrs.width ?? Infinity) * (attrs.height ?? 1);
-    streams.sort((a, b) => pixels(a.node.attrs) - pixels(b.node.attrs));
-    if (streams.length > 0) out.push({ device: child.name, endpoint: streams[0].name, largest: streams.at(-1)!.name });
+    const ts = streams.filter((endpoint) => endpoint.node.attrs.mimetype === TS_MIMETYPE).sort((a, b) => pixels(a.node.attrs) - pixels(b.node.attrs));
+    if (ts.length === 0) continue;
+    const largest = ts.at(-1)!.name;
+    const mp4 = streams.find((endpoint) => endpoint.node.attrs.mimetype === MP4_MIMETYPE && endpoint.name === largest.replace(/\.[^.]*$/, '.mp4'));
+    out.push({ device: child.name, endpoint: ts[0].name, recorded: mp4?.name ?? largest });
   }
   return out;
 };
@@ -255,7 +263,7 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
 
   const restate = async () => {
     const wanted: Wanted[] = [];
-    for (const { device, endpoint, largest } of await cameras(cmd)) {
+    for (const { device, endpoint, recorded } of await cameras(cmd)) {
       try {
         const camera = await linkedCamera(cmd, device);
         const { trigger } = clipSettings(camera ? (await cmd.sys.vfs.get<CameraAttrs>(ADMIN_ACCESS, camera)).attrs : undefined);
@@ -263,7 +271,7 @@ export const watchCameras = async (cmd: Command, stopped: Promise<void>, log: (l
           on: trigger === 'motion' ? ['face', 'motion'] : ['face'],
           pre: CLIP_PRE,
           post: CLIP_POST,
-          ...(largest === endpoint ? {} : { source: { path: `${devicePath(device)}/${largest}` } }),
+          ...(recorded === endpoint ? {} : { source: { path: `${devicePath(device)}/${recorded}` } }),
         };
         const spec: WatchSpec = {
           source: { path: `${devicePath(device)}/${endpoint}` },
