@@ -1,6 +1,6 @@
 import { TablerIcon } from '@ein/ui/components';
 import { formatDuration } from '@ein/ui/lib';
-import { Anchor, Group, Text, Tooltip } from '@mantine/core';
+import { Group, Text, Tooltip } from '@mantine/core';
 import { Fragment } from 'react';
 import { type CategoryStages, stagesUnderWay } from '../lib/overview.ts';
 
@@ -8,16 +8,14 @@ type Props = {
   stages: CategoryStages;
   /** How long the files still being prepared take, in ms, when there is a rate to tell. */
   eta?: number;
-  /** Ask for the files being grouped to be grouped now: offered beside them when given. */
-  onGroupNow?: () => void;
 };
 
 /**
  * Where a category's newest files are on their way in, in the order they go: arriving (uploading
  * from this browser), being prepared, being grouped. Each stage shows while it holds files;
- * nothing when none does. Files waiting to be grouped can be grouped now (`onGroupNow`).
+ * nothing when none does.
  */
-export function ArrivalStages({ stages, eta, onGroupNow }: Props) {
+export function ArrivalStages({ stages, eta }: Props) {
   if (!stagesUnderWay(stages)) return null;
   const parts = [
     ...(stages.arriving
@@ -51,11 +49,6 @@ export function ArrivalStages({ stages, eta, onGroupNow }: Props) {
           </Tooltip>
         </Fragment>
       ))}
-      {onGroupNow && stages.grouping > 0 && (
-        <Tooltip label='The organizer groups new files within minutes of their arrival; this asks it now'>
-          <Anchor component='button' type='button' size='xs' onClick={onGroupNow}>Group now</Anchor>
-        </Tooltip>
-      )}
     </Group>
   );
 }

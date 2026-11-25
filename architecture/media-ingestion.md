@@ -51,7 +51,6 @@ waits for rather than by a shared DAG:
    | `media-speaker-assign`   | `speakers.detected` (one per recording), `speakers.face-changed`                                       | pool `speaker-assign` (1 cpu, exclusive `person-mint`)                                                                               |
    | `media-speaker-faces`    | `faces.completed` (video with `speakersAt`)                                                            | pool `diarize` (1 model slot; priority 30), then `speaker-assign` (1 cpu, exclusive `person-mint`)                                   |
    | `media-duplicates`       | `duplicates.stale`                                                                                     | pool `dedupe` (1 cpu, priority 20)                                                                                                   |
-   | `staging-retime`         | `staging.retime.requested` (a move into a category with other time rules)                              | pool `retime` (1 cpu, priority 20)                                                                                                   |
    | `staging-sidecars`       | `staging.sidecars.arrived` (a sidecar, or media beside an unpaired one, landed)                        | pool `sidecars` (1 cpu, priority 30, exclusive)                                                                                      |
    | `staging-organize`       | `staging.category.changed` (a category's files changed, or a run was asked for)                        | pool `organize` (1 cpu, priority 15, reserved)                                                                                       |
 
@@ -72,14 +71,13 @@ waits for rather than by a shared DAG:
    `media-sidecars` ([sidecars.ts](../lib/media/sidecars.ts)): moved under it
    as `<file>/sidecar`, a file carrying `sourceId` (the picture's id, so it is a derived file no
    pipeline takes) and `sidecar` (what it says), or a softlink to one an edited copy or a Live
-   Photo's video shares. `exif-extract`, `@archive/media/resolve-time` and `staging retime` read it
+   Photo's video shares. `exif-extract` and `@archive/media/resolve-time` read it
    as a capture-time source (`takenAtSource: 'sidecar'`), and for a position where the bytes have
    none. An XMP date the scan application marks approximate (`scan:DateApproximate`) is stored with
    `takenAtQualifier: 'about'`. In staging the
    bridge announces `staging.sidecars.arrived` for the folder when an unpaired sidecar's bytes land
    or it is moved in, when a media file lands where one waits (asked with a one-row query, kept ten
-   seconds), and when a directory is moved into a category, wherever the category pairs sidecars
-   (`stagingCategory.sidecars`). The pipeline coalesces a folder's facts behind a 30-second hold.
+   seconds), and when a directory is moved into a category, in every category. The pipeline coalesces a folder's facts behind a 30-second hold.
 
    **The organizer.** The bridge announces `staging.category.changed` for a category's directory
    whenever a staged file in it is created, deleted, moved or updated in what grouping reads (its
@@ -91,7 +89,7 @@ waits for rather than by a shared DAG:
    (`audit --after`) and plans only those parts again ([auto-albums.md](auto-albums.md#the-organizer)).
    Person assignments, geocodes and tags make no fact: the `staging-organizer` service finds them
    in the trail every 15 minutes and asks for a run. The fact names the category, which is in no
-   lane, so a bulk category's grouping does not wait behind its own indexing.
+   lane, so its grouping never waits behind indexing in the bulk lane.
 
    `media.file.removed` has no pipeline yet. The bridge derives it when an indexed media file's
    last name is unlinked, from the attrs the `system.vfs.file.deleted` event carries — the node
@@ -1009,19 +1007,21 @@ stale. Because `vfs.update` merges, a re-extract writes **every derived attr, nu
 carry no fix; skipping an absent key would keep the previous bytes' answer. The manual overrides
 are the exception: with `angleManual` the file's `angle` is not written at all, and with
 `positionManual` the `location` child is neither rewritten from a GPS fix nor removed
-(`file-set-position` owns it). **Capture time.** A file carries one capture time, resolved from four sources and promoted onto
+(`file-set-position` owns it). **Capture time.** A file carries one capture time, resolved from its sources and promoted onto
 the node; the sources stay sources and nothing queries them. `whenManual` is what somebody typed
 (the precedent is `angleManual`), `metadata/exif.when.{device,gps}` is what the camera and the
-receiver said, `whenName` is the date the file's name spells, and a camera's clock comes from its IANA `timezone` or, failing that, the
+receiver said, and a camera's clock comes from its IANA `timezone` or, failing that, the
 `configuration` log the legacy importer backdates to the epoch — so an offset is time-varying by
 construction, which a single attr cannot be (`@archive/camera/camera-zone`). Media's `resolveTime`
-(`@archive/media/capture-resolve`) weighs them, `manual > gps > camera > name`, and writes four attrs:
+(`@archive/media/capture-resolve`) weighs them, `manual > gps > camera`, and writes four attrs. A
+file's name never dates it: a file with none of these is undated, and its place among the undated
+is by its name.
 
 | attr               | meaning                                                                                                                                                                                                                    |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `takenAt`          | the **wall clock**. Its length is its precision — `1975`, `2004-03`, `2003-04-30`, `…T14:03`, `…T14:03:11`, the last two optionally carrying `±HH:MM`. Never padded: 1,023 files in this archive are known only to a year. |
 | `takenAtUtc`       | the **instant**, always a complete `YYYY-MM-DDTHH:MM:SSZ`.                                                                                                                                                                 |
-| `takenAtSource`    | `manual`, `gps`, `camera` or `name`.                                                                                                                                                                                       |
+| `takenAtSource`    | `manual`, `gps` or `camera`.                                                                                                                                                                                               |
 | `takenAtQualifier` | `about` when the date is only about then (an approximate sidecar date), shown `~1985`; null otherwise.                                                                                                                     |
 
 The split between the two is what makes both questions answerable. `--from`/`--to`, the year facet
@@ -1076,15 +1076,10 @@ reverse lookup and the normalized `metadata/exif.when` to clear or restore `take
 exiftool. `whenManual` is a source and is never touched by any of this. Keeping the exception at
 link time preserves the file-local capture-time query and its PostgreSQL indexes — there is no
 camera join on the media read path.
-A staged file's trust in its clocks is its staging category's (`time: {digitized, filenameDates}`
-on the category, `@archive/staging/category`), stamped onto the file by `exif-extract` in the
-same write as its time: `digitized: true` drops every clock recorded while digitizing (camera,
-GPS and name; a person's date stands), and `whenName` is the date `@archive/media/filename-date`
-reads off the name where the category's names are dates. The stamps are inputs like `whenManual`:
-every resolver reads them off the node, so they keep a scan undated after it is filed into the
-library. A move into a category with other rules is announced by the bridge
-(`staging.retime.requested`, `@archive/staging/facts`) and `staging retime` restamps and
-re-resolves what changed, a page of 500 files in a fixed number of store calls.
+Wherever a file's time is resolved with its camera's clock (`exif-interpret`,
+`@archive/media/resolve-time`, `media-resolve-time`), it is marked a scan, `digitized: true`, when
+that camera is a digitizer, and the mark is taken off when it is not; the damage pipeline reads
+it. Neither a staging category nor a file's name has any say in a file's time.
 Consumers: `camera-link` re-resolves through `@archive/media/resolve-time`; `camera-relink` links and
 then runs `media-resolve-time --camera` over the camera's files (a command rather than an import,
 from when camera and media were separate modules and media depended on camera), and

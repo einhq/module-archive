@@ -234,5 +234,56 @@
       "label": "Looks like",
       "route": "/looks-like?path={path}"
     }
+  ],
+  "layers": [
+    {
+      "id": "archive.media",
+      "label": "Photos and videos",
+      "icon": "photo",
+      "description": "Where they were taken; a pile opens the pictures in it.",
+      "route": "/map-layers/archive/media",
+      "order": 10,
+      "on": true,
+      "params": {
+        "type": "object",
+        "properties": {
+          "q": {
+            "type": "string",
+            "title": "Search",
+            "description": "Only what matches this text."
+          },
+          "from": {
+            "type": "integer",
+            "title": "From year",
+            "minimum": 1000,
+            "maximum": 9999
+          },
+          "to": {
+            "type": "integer",
+            "title": "To year",
+            "minimum": 1000,
+            "maximum": 9999
+          }
+        }
+      }
+    },
+    {
+      "id": "archive.locations",
+      "label": "Locations",
+      "icon": "map-pin",
+      "description": "The archive's places, each opening its page.",
+      "route": "/map-layers/archive/locations",
+      "order": 20,
+      "on": true
+    },
+    {
+      "id": "archive.tracks",
+      "label": "Tracks",
+      "icon": "route",
+      "description": "Where you went, and where the tracks recording now are.",
+      "route": "/map-layers/archive/tracks",
+      "order": 30,
+      "on": true
+    }
   ]
 }

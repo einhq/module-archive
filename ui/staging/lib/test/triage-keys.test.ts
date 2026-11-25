@@ -45,11 +45,11 @@ Deno.test("nothing clashes with the shell's keys: mod+K, ?, and Alt with anythin
   assert(TRIAGE_KEYS.every((entry) => !/^(mod|alt|ctrl)\+/i.test(entry.keys)));
 });
 
-Deno.test('Shift, not the letter case, tells M from shift+M; the tile scope falls through to the group', () => {
-  assertEquals(matchTriageKey(press('m'), 'group')?.action, 'merge-up');
-  assertEquals(matchTriageKey(press('M', { shiftKey: true }), 'group')?.action, 'merge-down');
+Deno.test('Shift, not the letter case, tells J from shift+J; the tile scope falls through to the group', () => {
+  assertEquals(matchTriageKey(press('j'), 'group')?.action, 'next');
+  assertEquals(matchTriageKey(press('J', { shiftKey: true }), 'group')?.action, 'extend-next');
   // Caps Lock types a capital without Shift.
-  assertEquals(matchTriageKey(press('M'), 'group')?.action, 'merge-up');
+  assertEquals(matchTriageKey(press('J'), 'group')?.action, 'next');
   assertEquals(matchTriageKey(press('j'), 'tile')?.action, 'next');
   assertEquals(matchTriageKey(press('ArrowLeft'), 'tile')?.action, 'tile-left');
   assertEquals(matchTriageKey(press('Escape'), 'tile')?.action, 'leave');
@@ -60,7 +60,6 @@ Deno.test('Shift, not the letter case, tells M from shift+M; the tile scope fall
   assertEquals(matchTriageKey(press('Escape'), 'selection')?.action, 'clear-selection');
   assertEquals(matchTriageKey(press(' '), 'selection')?.action, 'select');
   assertEquals(matchTriageKey(press('j'), 'selection')?.action, 'next');
-  assertEquals(matchTriageKey(press('B', { shiftKey: true }), 'group')?.action, 'set-target');
 });
 
 Deno.test('a part takes the filing keys, S and the moves for its pictures; the rest falls through', () => {
@@ -77,6 +76,15 @@ Deno.test('a part takes the filing keys, S and the moves for its pictures; the r
   assertEquals(matchTriageKey(press('g'), 'tile')?.action, 'move-to');
   assertEquals(matchTriageKey(press('s'), 'selection')?.action, 'split');
   assertEquals(matchTriageKey(press('t'), 'selection')?.action, 'date');
+});
+
+Deno.test('P, B, L and M are no keys of the Sort tab', () => {
+  for (const scope of ['group', 'part', 'tile', 'selection', 'groups'] as TriageScope[]) {
+    for (const key of ['p', 'b', 'l', 'm']) {
+      assertEquals(matchTriageKey(press(key), scope), undefined);
+      assertEquals(matchTriageKey(press(key.toUpperCase(), { shiftKey: true }), scope), undefined);
+    }
+  }
 });
 
 Deno.test('a sign is matched as typed, whatever Shift, AltGr or Option it took', () => {
@@ -141,7 +149,6 @@ Deno.test('the overlay lists every bound key once, under its scope', () => {
 
 Deno.test('across groups, the filing keys act on the selection, and Shift with J, K or an arrow selects on to the next group', () => {
   assertEquals(matchTriageKey(press('Enter'), 'groups')?.action, 'apply');
-  assertEquals(matchTriageKey(press('l'), 'groups')?.action, 'later');
   assertEquals(matchTriageKey(press('j'), 'groups')?.action, 'next');
   assertEquals(matchTriageKey(press('J', { shiftKey: true }), 'group')?.action, 'extend-next');
   assertEquals(matchTriageKey(press('ArrowUp', { shiftKey: true }), 'group')?.action, 'extend-previous');
@@ -150,7 +157,7 @@ Deno.test('across groups, the filing keys act on the selection, and Shift with J
   assertEquals(matchTriageKey(press('ArrowDown'), 'tile')?.action, 'tile-down');
 });
 
-Deno.test('1, 2 and 3 file into the candidates, R rejects the highlighted one, comma and full stop move it, C compares', () => {
+Deno.test('1, 2 and 3 file into the candidates, R rejects the selected one, comma and full stop select another, C compares', () => {
   assertEquals(['1', '2', '3'].map((key) => matchTriageKey(press(key), 'group')?.action), ['candidate-1', 'candidate-2', 'candidate-3']);
   assertEquals(matchTriageKey(press('r'), 'group')?.action, 'reject');
   assertEquals(matchTriageKey(press(','), 'group')?.action, 'candidate-previous');

@@ -5,15 +5,15 @@ import { EmptyState, NodeBrowser, TablerIcon } from '@ein/ui/components';
 import { useCommand } from '@ein/ui/hooks';
 import { baseName, countOf, parentPath, type SearchFilters, shq } from '@ein/ui/lib';
 import { invalidateListing, type MediaItem, openDialog } from '@ein/ui/signals';
-import { ActionIcon, Anchor, Box, Breadcrumbs, Button, Group, Menu, SegmentedControl, SimpleGrid, Stack, Text } from '@mantine/core';
+import { ActionIcon, Box, Button, Group, Menu, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import { DIRECTORY_GRID_COLS, DirectoryCard } from '../../media/components/DirectoryCard.tsx';
 import { SetTimeAction } from '../../media/components/SetTimeAction.tsx';
-import { cleanDir, crumbs, dirOf, folderPath, parentDir } from '../lib/folders.ts';
-import { heldFiles, KIND_LABELS, PHONE_KINDS } from '../lib/overview.ts';
+import { cleanDir, dirOf, folderPath, NODES_VIEW, parentDir } from '../lib/folders.ts';
+import { heldFiles } from '../lib/overview.ts';
 import type { DetectHint } from '../lib/detect-hint.ts';
 import { useDetectHints } from '../hooks/useDetectHints.ts';
 import { useFileDuplicates } from '../hooks/useFileDuplicates.ts';
@@ -24,8 +24,6 @@ import { DetectHints } from './DetectHints.tsx';
 import { DiscardDialog } from './DiscardDialog.tsx';
 import { duplicateBadge } from './DuplicateBadge.tsx';
 import { MoveDialog } from './MoveDialog.tsx';
-import { PhoneBackup } from './PhoneBackup.tsx';
-import { SftpPath } from './SftpPath.tsx';
 
 /**
  * What the media view leaves out: the exact copies of an original their owner can read, which are
@@ -33,38 +31,41 @@ import { SftpPath } from './SftpPath.tsx';
  */
 const INDEXED_ONLY: SearchFilters = { missing: ['duplicate.deferred'] };
 
-/** What a folder action asks for, and of which entries; a move to a category may name the one to offer first. */
-type Pending = { action: 'folder' | 'category' | 'discard'; paths: string[]; what: string; category?: string };
+/** What a folder action asks for, and of which entries. */
+type Pending = { action: 'folder' | 'category' | 'discard'; paths: string[]; what: string };
 
 type Props = {
   category: StagingCategoryStatus;
   /** Every category, for Move to category. */
   categories: StagingCategoryStatus[];
-  /** Changed after an upload, so the lists read again. */
+  /** The default category's name: only there do folders arrive to be sorted, so only its tab gives hints. */
+  defaultCategory: string;
+  /** Changed after an upload, or a move or discard of the folder on screen, so the lists read again. */
   reloadToken: number;
   /** Files were moved, discarded or given a time. */
   onChanged: () => void;
 };
 
 /**
- * One category's files, a folder at a time (`?dir=` below the category): its subfolders as cards,
- * then either its pictures, videos and recordings however deep, by day (`search --within`, the
- * exact copies that are not indexed left out), or with **Folder** the Nodes page's pane over the
- * folder (`?view=folder`), every entry whatever its type, held to the category and filling the page
- * below its header, with a side panel that moves the selection to another folder or category or
- * discards it (as Delete does there). A folder can be moved or discarded from its card too. A picture that copies or looks like another,
+ * One category's files, a folder at a time (`?dir=` below the category, which the page's header
+ * names in its trail): its subfolders as cards, then either its pictures, videos and recordings
+ * however deep, by day (`search --within`, the exact copies that are not indexed left out), or with
+ * **Nodes** in the header the Nodes page's pane over the folder (`?view=nodes`), every entry
+ * whatever its type, held to the category and filling the page below its header, with a side panel
+ * that moves the selection to another folder or category or discards it (as Delete does there). A
+ * subfolder can be moved or discarded from its card; the folder on screen from the header's ⋮. A picture that copies or looks like another,
  * in the library or here, or is kept over copies left out of the list, carries the Sort stream's
  * badge, which compares it with its set. In the default category, a newly arrived folder that
- * looks like it came from one source (`staging detect`) says so on its card and above the folders,
- * with the way to that source's category.
+ * looks like it came from one source (`staging detect`) says so above the folders, with a move to a
+ * category and a new category for it.
  */
-export function FilesTab({ category, categories, reloadToken, onChanged }: Props) {
+export function FilesTab({ category, categories, defaultCategory, reloadToken, onChanged }: Props) {
   const [searchParams, setSearchParams] = useSearchParams();
   // A touch screen picks rows by a long press (NodeBrowser), so the hint says that instead of the keys.
   const touch = useMediaQuery('(pointer: coarse)', false, { getInitialValueInEffect: false });
   const location = useLocation();
   const dir = cleanDir(searchParams.get('dir'));
-  const folderView = searchParams.get('view') === 'folder';
+  const folderView = searchParams.get('view') === NODES_VIEW;
   const current = folderPath(category.path, dir);
   const [changes, setChanges] = useState(0);
   const reload = reloadToken + changes;
@@ -78,7 +79,6 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
     }, { replace: true, state: location.state });
   }, [setSearchParams, location.state]);
   const openDir = useCallback((next: string) => setParams((params) => next ? params.set('dir', next) : params.delete('dir')), [setParams]);
-  const setView = (view: string) => setParams((params) => view === 'folder' ? params.set('view', 'folder') : params.delete('view'));
 
   const folders = useCommand<FindEntry[]>(`find ${shq(current)} -mindepth 1 -maxdepth 1 -type d`);
   // The folders are read again when what they hold changed; a new folder reads its own.
@@ -91,12 +91,9 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
   }, [reload, refetchFolders]);
   const subfolders = useMemo(() => (folders.data ?? []).toSorted((a, b) => a.name.localeCompare(b.name)), [folders.data]);
 
-  // Only the default category is of the inbox kind, and only there do folders arrive to be sorted.
-  const { hints, dismiss } = useDetectHints(category.kind === 'inbox', categories, category.name, reload);
+  const { hints, dismiss } = useDetectHints(category.name === defaultCategory, defaultCategory, reload);
   const shownHints = useMemo(() => hints.filter((hint) => hint.path === current || hint.path.slice(0, hint.path.lastIndexOf('/')) === current), [hints, current]);
-  const hintAt = useMemo(() => new Map(shownHints.map((hint) => [hint.path, hint])), [shownHints]);
-  const moveByHint = (hint: DetectHint) =>
-    hint.action.type === 'move' && setPending({ action: 'category', paths: [hint.path], what: `“${hint.name}”`, category: hint.action.category });
+  const moveByHint = (hint: DetectHint) => setPending({ action: 'category', paths: [hint.path], what: `“${hint.name}”` });
 
   // What moved or went may be the folder on screen, or above it: then the page goes up to the
   // nearest folder that is still here.
@@ -104,7 +101,7 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
     const gone = paths.map((path) => dirOf(category.path, path)).filter((each): each is string => each !== undefined);
     const leaving = gone.find((each) => dir === each || dir.startsWith(`${each}/`));
     if (leaving !== undefined) openDir(parentDir(leaving));
-    // The Folder view's listing is read again now, not when the folder's watch next reports.
+    // The Nodes view's listing is read again now, not when the folder's watch next reports.
     invalidateListing(...new Set(paths.map(parentPath)));
     setChanges((value) => value + 1);
     onChanged();
@@ -136,16 +133,12 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
       <Menu.Item leftSection={<TablerIcon name='trash' size={16} />} color='red' onClick={() => setPending({ action: 'discard', paths, what })}>Discard…</Menu.Item>
     </>
   );
-  const actionsMenu = (paths: string[], what: string, target: 'icon' | 'button') => (
+  const actionsMenu = (paths: string[], what: string) => (
     <Menu position='bottom-end' shadow='md' withinPortal>
       <Menu.Target>
-        {target === 'icon'
-          ? (
-            <ActionIcon variant='subtle' color='gray' size='sm' aria-label={`Actions for ${what}`}>
-              <TablerIcon name='dots' size={16} />
-            </ActionIcon>
-          )
-          : <Button size='xs' variant='default' rightSection={<TablerIcon name='chevron-down' size={14} />}>Actions</Button>}
+        <ActionIcon variant='subtle' color='gray' size='sm' aria-label={`Actions for ${what}`}>
+          <TablerIcon name='dots' size={16} />
+        </ActionIcon>
       </Menu.Target>
       <Menu.Dropdown>{actionItems(paths, what)}</Menu.Dropdown>
     </Menu>
@@ -157,23 +150,6 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
 
   return (
     <Stack gap='md' px='md' style={folderView ? { flex: 1, minHeight: 0 } : undefined}>
-      <Group justify='space-between' gap='sm' wrap='wrap'>
-        <Breadcrumbs separator='›'>
-          <Anchor component='button' type='button' size='sm' onClick={() => openDir('')}>{category.label}</Anchor>
-          {crumbs(dir).map((crumb) => <Anchor key={crumb.dir} component='button' type='button' size='sm' onClick={() => openDir(crumb.dir)}>{crumb.name}</Anchor>)}
-        </Breadcrumbs>
-        <Group gap='xs'>
-          {dir !== '' && actionsMenu([current], `“${crumbs(dir).at(-1)?.name}”`, 'button')}
-          <SegmentedControl
-            size='xs'
-            value={folderView ? 'folder' : 'media'}
-            onChange={setView}
-            data={[{ value: 'media', label: 'Media' }, { value: 'folder', label: 'Folder' }]}
-            aria-label='Show the media below this folder, or every entry in it'
-          />
-        </Group>
-      </Group>
-
       {empty
         ? (
           <EmptyState
@@ -186,26 +162,20 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
               <Text size='sm'>
                 Upload pictures, videos and recordings, or drop them anywhere on this page. They wait here, seen only by you, until you put them in an album.
               </Text>
-              {PHONE_KINDS.includes(category.kind) ? <PhoneBackup path={category.path} label={category.label} /> : (
-                <>
-                  <Text size='sm' c='dimmed'>Or copy them over SFTP into</Text>
-                  <SftpPath path={`${category.path}/`} />
-                </>
-              )}
+              <Text size='sm' c='dimmed'>See Info for SFTP and phone backup.</Text>
             </Stack>
           </EmptyState>
         )
         : (
           <>
-            <DetectHints hints={shownHints} onMove={moveByHint} onDismiss={dismiss} />
+            <DetectHints hints={shownHints} onMove={canChangeCategory ? moveByHint : undefined} onDismiss={dismiss} />
             {!folderView && subfolders.length > 0 && (
               <SimpleGrid cols={DIRECTORY_GRID_COLS} spacing='sm'>
                 {subfolders.map((folder) => (
                   <DirectoryCard
                     key={folder.path}
                     directory={{ name: folder.name, title: folder.name, path: folder.path, childCount: folder.childCount }}
-                    menu={actionsMenu([folder.path], `“${folder.name}”`, 'icon')}
-                    note={hintAt.has(folder.path) ? KIND_LABELS[hintAt.get(folder.path)!.kind] : undefined}
+                    menu={actionsMenu([folder.path], `“${folder.name}”`)}
                     onClick={() => openDir(dir ? `${dir}/${folder.name}` : folder.name)}
                   />
                 ))}
@@ -279,7 +249,7 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
                   granularity='day'
                   reloadToken={reload}
                   emptyMessage={category.counts.other > 0 || subfolders.length > 0
-                    ? 'No pictures, videos or recordings here. Folder shows every file, whatever its type.'
+                    ? 'No pictures, videos or recordings here. Nodes shows every file, whatever its type.'
                     : 'No pictures, videos or recordings here.'}
                   renderOverlay={renderOverlay}
                   selectionActions={({ selection, items, reload: reloadList }) => <SetTimeAction selection={selection} items={items} onApplied={reloadList} />}
@@ -295,7 +265,6 @@ export function FilesTab({ category, categories, reloadToken, onChanged }: Props
           categories={categories}
           from={category}
           toCategory={pending.action === 'category'}
-          initialCategory={pending.category}
           onClose={() => setPending(null)}
           onMoved={() => changed(pending.paths)}
         />

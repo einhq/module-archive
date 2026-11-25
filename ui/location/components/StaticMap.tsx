@@ -1,7 +1,7 @@
 import { Box } from '@mantine/core';
 import { useElementSize } from '@mantine/hooks';
-import { MARKER_COLOR } from '@ein/ui/components';
-import { mapLayers } from '@ein/ui/signals';
+import { defaultMapStyle, MARKER_COLOR } from '@ein/ui/components';
+import { mapStyles } from '@ein/ui/signals';
 
 const TILE_SIZE = 256;
 /** Street level: a building's block and the streets around it, which is what tells two addresses apart. */
@@ -47,8 +47,8 @@ function tileUrl(template: string, z: number, x: number, y: number): string {
  */
 export function StaticMap({ lat, lng, zoom = DEFAULT_ZOOM }: StaticMapProps) {
   const { ref, width, height } = useElementSize();
-  /** The map page's default base layer. */
-  const layer = mapLayers()[0];
+  /** The style the reader's maps open in. */
+  const layer = mapStyles().find((style) => style.id === defaultMapStyle());
 
   const tiles: { key: string; src: string; left: number; top: number }[] = [];
   if (layer && width > 0 && height > 0) {

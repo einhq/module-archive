@@ -12,6 +12,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { GedcomChoicePanel } from '../../people/components/GedcomChoicePanel.tsx';
 import { GedcomMergeCard, MERGE_KINDS } from '../../people/components/GedcomMergeCard.tsx';
 import { buildMerge, choiceWords, type MergeKind, withChoice } from '../../people/lib/gedcom-merge.ts';
+import { BackLink } from '../components/BackLink.tsx';
 import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
 
 export const handle = { fullBleed: true, signedIn: true };
@@ -78,7 +79,13 @@ function Genealogy({ user }: { user: string }) {
   if (!name) {
     return (
       <>
-        <EntityDetailHeader eyebrow='Staging' title='Family trees' pattern='mixed' subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>} flowContent />
+        <EntityDetailHeader
+          eyebrow={<BackLink to='/staging' label='Staging' />}
+          title='Family trees'
+          pattern='mixed'
+          subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
+          flowContent
+        />
         <Box p='lg'>
           <EmptyState title='No family tree waits'>A GEDCOM (.ged) file uploaded to staging waits here to be looked over and imported.</EmptyState>
         </Box>
@@ -229,7 +236,7 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
 
   const header = (
     <EntityDetailHeader
-      eyebrow='Staging · Family tree'
+      eyebrow={<BackLink to='/staging' label='Staging' />}
       title={name}
       pattern='mixed'
       subtitle={
@@ -252,7 +259,6 @@ function Review({ path, name, waiting, onFile }: ReviewProps) {
             onClick: () => void importNow(),
           },
           ...(Object.keys(choices).length > 0 ? [{ label: 'Forget my choices', icon: 'eraser', onClick: forget }] : []),
-          { label: 'Back to staging', icon: 'arrow-left', onClick: () => navigate('/staging') },
         ],
         trash: { path, name, leaveTo: '/staging' },
       }}

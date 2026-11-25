@@ -59,7 +59,7 @@ export type AutoAlbumMeta = {
   timeEnd?: string;
   /** A lane of media dated only to a year or a month. */
   precision?: 'year' | 'month';
-  /** The folder a seed, a scan run or a folder's lane is of, by node id. */
+  /** The folder a seed or a folder's lane is of, by node id. */
   folderId?: string;
   /** /locations/<id> when the cluster has a dominant location, else absent. */
   locationPath?: string;

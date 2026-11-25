@@ -1,7 +1,7 @@
 /**
  * The bridge's staging rules: which VFS mutations make a staged file's duplicate finding
- * (`@archive/staging/duplicates`) or its dating possibly wrong, and which lane the work on a staged
- * file runs in.
+ * (`@archive/staging/duplicates`) possibly wrong, bring sidecars to pair, or change what a
+ * category's groups are planned from.
  *
  * **Duplicate findings**, announced as `media.duplicates.stale` for `duplicates --record`. A
  * finding is computed for one inbox, so only a move across an inbox's edge can make it stale: a
@@ -13,25 +13,15 @@
  * reading of its metadata (`interpretedAt`): a near check compares prints, and tells two shots from
  * one by their capture times. A staged file whose prints came first is announced on its reading.
  *
- * **Dating**, announced as `staging.retime.requested` for `staging retime`. A staged file is dated
- * by its category's time rules (`StagingTimeRules`), stamped on it as `digitized` and `whenName`,
- * so a move into a category that dates by other clocks makes them wrong: a file or a directory
- * moved there from a category with other rules, a directory moved in from outside every category,
- * and a media file moved in from anywhere whose stamps disagree with its new category, announced
- * for its folder. A move within a category, or between two with the same rules, announces nothing;
- * a move out of staging neither, as the stamps go with the file.
+ * Decided on the event's paths first; a file is read for a move that crossed an edge.
  *
- * Decided on the event's paths first; a category is read for a move between categories (and kept
- * for a minute), and a file for one that crossed an edge (its folder too, to announce it).
- *
- * **Sidecars**, announced as `staging.sidecars.arrived` for `media-sidecars`, by folder, in a
- * category that pairs them (`sidecars: 'pair'`): a sidecar not yet paired (a Takeout JSON or an
- * XMP file) whose bytes landed (its `sha256` written) or that was moved in; a media file whose
- * bytes landed in a folder holding one still unpaired, as its photo may come after it; any other
- * file of its own (no `sourceId`) whose bytes landed where a paired XMP sidecar waits for its name
- * as a source to file as a version, such as a scan's master; and a directory moved in from outside
- * the category. Whether a folder holds an unpaired sidecar is asked once per ten seconds, and
- * known at once when one lands there.
+ * **Sidecars**, announced as `staging.sidecars.arrived` for `media-sidecars`, by folder, in any
+ * category: a sidecar not yet paired (a Takeout JSON or an XMP file) whose bytes landed (its
+ * `sha256` written) or that was moved in; a media file whose bytes landed in a folder holding one
+ * still unpaired, as its photo may come after it; any other file of its own (no `sourceId`) whose
+ * bytes landed where a paired XMP sidecar waits for its name as a source to file as a version, such
+ * as a scan's master; and a directory moved in from outside the category. Whether a folder holds
+ * an unpaired sidecar is asked once per ten seconds, and known at once when one lands there.
  *
  * **The organizer**, announced as `staging.category.changed` for `staging organize`, by the
  * category's directory: a staged file in it created, deleted, moved (in, out or within), or
@@ -42,21 +32,12 @@
  * its groups and its checkpoint, never are, so its runs do not start one another. The organizer
  * reads what changed from the audit trail itself; the fact only says which category. A category's
  * id is read once a minute.
- *
- * **Lanes.** A category whose `lane` is `bulk` says so on its folder too (`LANE_ATTR`), and every
- * fact the bridges announce about something in it carries `lane: 'bulk'` (`withLanes`,
- * `@media/file-rules`), so the work it starts runs below everything of the normal lane. The lane is
- * decided per fact by the folders above its subject, so a file moved out of a bulk category has its
- * later facts in the lane of the one it is in now. The organizer's fact names the category itself,
- * which lies in no lane: its runs never wait behind a bulk category's work.
  */
 
 import type { DomainEvent } from '@ein/client';
 import { isLibraryPath } from '@archive/paths';
 import { INTERPRETED_AT_ATTR, isIndexableMedia, MEDIA_EVENTS, type NodeSnapshot, type RuleContext, type VfsEventInput } from '@archive/media/event-rules';
 import { FINGERPRINTED_AT_ATTR } from '@media/fingerprints';
-import type { StagingCategorySettings } from '@archive/staging/api';
-import { CATEGORY_ATTR, parseCategorySettings, sameTimeRules, stampsHold, timeStamps } from '@archive/staging/category';
 import { SIDECAR_MIMETYPES } from '@archive/media/paired-sidecar';
 import { categoryPath, ORGANIZER_REQUEST, parseStagedPath, stagedPlace } from '@archive/staging/paths';
 
@@ -65,14 +46,8 @@ const SOURCE = 'archive-bridge';
 /** Facts the staging rules announce, beside `MEDIA_EVENTS.duplicatesStale`. */
 export const STAGING_EVENTS = {
   /**
-   * Staged files may be dated by another category's time rules than their own: the subject, a
-   * directory, moved into a category that dates by other clocks, or a file did (`data.file`) and
-   * the subject is its folder. `data.category` is the category, as `<user>/<name>`.
-   */
-  retimeRequested: 'staging.retime.requested',
-  /**
-   * A folder may hold sidecars to pair with its files: the subject, a folder of a category that
-   * pairs them. `data.cause` is `sidecar` (one landed or moved in), `media` (a file landed beside
+   * A folder may hold sidecars to pair with its files: the subject, a folder of a category.
+   * `data.cause` is `sidecar` (one landed or moved in), `media` (a file landed beside
    * one unpaired), `source` (a file landed that a paired one waits for) or `moved` (the subject, a
    * directory, moved in); `data.category` is the category, as `<user>/<name>`.
    */
@@ -98,13 +73,10 @@ export const STAGING_BRIDGE_ROUTING_KEYS = [
 /** The attrs of a staged file grouping reads: an update of any of them may change its group. */
 const GROUPING_ATTRS = new Set(['takenAt', 'takenAtUtc', 'takenAtSource', 'indexedAt', 'facesAt', 'faceCount', 'cameraPath', 'mimetype', 'width', 'height', 'sourceId']);
 
-/** How long a category's settings are believed once read, in ms. */
-const SETTINGS_TTL_MS = 60_000;
+/** How long a category directory's node id is believed once read, in ms. */
+const CATEGORY_TTL_MS = 60_000;
 
-/** The settings read per category path, for each rule context (the bridge keeps one). */
-const settingsCache = new WeakMap<RuleContext, Map<string, { at: number; settings: StagingCategorySettings | undefined }>>();
-
-/** A category directory's node id read per path, for each rule context. */
+/** A category directory's node id read per path, for each rule context (the bridge keeps one). */
 const categoryIds = new WeakMap<RuleContext, Map<string, { at: number; id: string | undefined }>>();
 
 /** How long a folder's answer to "an unpaired sidecar within?" is believed, in ms. */
@@ -140,19 +112,6 @@ const findingHolds = (file: NodeSnapshot, user: string): boolean => {
 
 /** A media file with a checksum, which is what a finding is computed from. */
 const checkable = (file: NodeSnapshot | undefined): file is NodeSnapshot => file !== undefined && isIndexableMedia(file) && typeof file.attrs.sha256 === 'string';
-
-/** The settings of category `name` of `user`, read through `ctx` and kept a minute; undefined when it is no directory. */
-const settingsOf = async (ctx: RuleContext, user: string, name: string, now: number): Promise<StagingCategorySettings | undefined> => {
-  const path = categoryPath(user, name);
-  const cache = settingsCache.get(ctx) ?? new Map();
-  settingsCache.set(ctx, cache);
-  const cached = cache.get(path);
-  if (cached && now - cached.at < SETTINGS_TTL_MS) return cached.settings;
-  const node = await ctx.getNode(path);
-  const settings = node?.type === 'directory' ? parseCategorySettings(node.attrs[CATEGORY_ATTR], name) : undefined;
-  cache.set(path, { at: now, settings });
-  return settings;
-};
 
 /** The duplicate-finding facts of a file or directory move; `file` reads the moved file once. */
 async function movedDuplicates(event: VfsEventInput, now: number, file: () => Promise<NodeSnapshot | undefined>): Promise<Omit<DomainEvent, 'id'>[]> {
@@ -196,29 +155,6 @@ async function printedDuplicates(event: VfsEventInput, ctx: RuleContext, now: nu
   return [stale(event, now, printed ? 'fingerprinted' : 'interpreted', { sha256: String(file.attrs.sha256) })];
 }
 
-/** The dating fact of a file or directory move into a category; `file` reads the moved file once. */
-async function movedRetime(event: VfsEventInput, ctx: RuleContext, now: number, file: () => Promise<NodeSnapshot | undefined>): Promise<Omit<DomainEvent, 'id'>[]> {
-  const to = stagedPlace(event.path);
-  if (!to) return [];
-  const from = event.fromPath === undefined ? undefined : stagedPlace(event.fromPath);
-  if (from && from.user === to.user && from.category === to.category) return [];
-  const rules = (await settingsOf(ctx, to.user, to.category, now))?.time;
-  if (!rules) return [];
-  if (from) {
-    const before = (await settingsOf(ctx, from.user, from.category, now))?.time;
-    if (before && sameTimeRules(before, rules)) return [];
-  }
-  const data = { cause: 'moved', category: `${to.user}/${to.category}` };
-  if (event.nodeType === 'directory') return [{ type: STAGING_EVENTS.retimeRequested, subject: event.path, nodeId: event.nodeId, time: now, source: SOURCE, data }];
-  const moved = await file();
-  const slash = event.path.lastIndexOf('/');
-  if (!moved || !isIndexableMedia(moved) || stampsHold(moved.attrs, timeStamps(rules, event.path.slice(slash + 1)))) return [];
-  // Named by its folder, so the files of one move into it make one retime between them.
-  const folder = event.path.slice(0, slash);
-  const parent = await ctx.getNode(folder);
-  return parent ? [{ type: STAGING_EVENTS.retimeRequested, subject: folder, nodeId: parent.id, time: now, source: SOURCE, data: { ...data, file: event.path } }] : [];
-}
-
 /** The unpaired-sidecar answers of `ctx`, by folder. */
 const unpairedOf = (ctx: RuleContext): Map<string, { at: number; has: boolean }> => {
   const cache = unpairedCache.get(ctx) ?? new Map();
@@ -241,7 +177,7 @@ const holdsUnpaired = async (ctx: RuleContext, folder: string, now: number): Pro
 const unpairedSidecar = (node: NodeSnapshot | undefined): node is NodeSnapshot =>
   node?.type === 'file' && SIDECAR_MIMETYPES.includes(String(node.attrs.mimetype ?? '')) && !node.attrs.sourceId && !node.attrs.sidecar;
 
-/** The sidecar fact of an arrival in a category that pairs sidecars; `file` reads the node once. */
+/** The sidecar fact of an arrival in a category; `file` reads the node once. */
 async function arrivedSidecars(event: VfsEventInput, ctx: RuleContext, now: number, file: () => Promise<NodeSnapshot | undefined>): Promise<Omit<DomainEvent, 'id'>[]> {
   const to = stagedPlace(event.path);
   if (!to) return [];
@@ -254,15 +190,14 @@ async function arrivedSidecars(event: VfsEventInput, ctx: RuleContext, now: numb
     source: SOURCE,
     data: { cause, category: `${to.user}/${to.category}` },
   });
-  const pairs = async () => (await settingsOf(ctx, to.user, to.category, now))?.sidecars === 'pair';
 
   if (event.nodeType === 'directory') {
     if (from && from.user === to.user && from.category === to.category) return [];
-    return await pairs() ? [fact(event.path, event.nodeId, 'moved')] : [];
+    return [fact(event.path, event.nodeId, 'moved')];
   }
 
   const landed = event.type === 'moved' || (event.type === 'updated' && (event.changedAttrs ?? []).includes('sha256'));
-  if (!landed || !await pairs()) return [];
+  if (!landed) return [];
   const slash = event.path.lastIndexOf('/');
   const folder = event.path.slice(0, slash);
   let cause: string;
@@ -293,7 +228,7 @@ const categoryIdOf = async (ctx: RuleContext, user: string, name: string, now: n
   const cache = categoryIds.get(ctx) ?? new Map();
   categoryIds.set(ctx, cache);
   const cached = cache.get(path);
-  if (cached && now - cached.at < SETTINGS_TTL_MS) return cached.id;
+  if (cached && now - cached.at < CATEGORY_TTL_MS) return cached.id;
   const node = await ctx.getNode(path);
   const id = node?.type === 'directory' ? node.id : undefined;
   cache.set(path, { at: now, id });
@@ -346,7 +281,7 @@ async function otherFacts(event: VfsEventInput, ctx: RuleContext, now: number): 
   if (event.type === 'moved' && (event.nodeType === 'file' || event.nodeType === 'directory')) {
     let read: Promise<NodeSnapshot | undefined> | undefined;
     const file = () => read ??= ctx.getNode(event.path);
-    return [...await movedDuplicates(event, now, file), ...await movedRetime(event, ctx, now, file), ...await arrivedSidecars(event, ctx, now, file)];
+    return [...await movedDuplicates(event, now, file), ...await arrivedSidecars(event, ctx, now, file)];
   }
 
   if (event.type === 'updated' && event.nodeType === 'file') {

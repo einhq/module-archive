@@ -26,12 +26,12 @@ export const promoteInto = (groups: GroupRef | readonly GroupRef[], album: strin
 };
 
 /**
- * Make the groups one new album titled `title`, private when asked. With `except`, those members
- * stay in their group: the selected pictures go, the rest stay.
+ * Make the groups one new album titled `title`. With `except`, those members stay in their group:
+ * the selected pictures go, the rest stay.
  */
-export const promoteNew = (groups: GroupRef | readonly GroupRef[], title: string, options: { private?: boolean; except?: readonly string[] } = {}): string => {
+export const promoteNew = (groups: GroupRef | readonly GroupRef[], title: string, except?: readonly string[]): string => {
   const list = listOf(groups);
-  return `staging promote ${paths(list)} --name ${shq(title)}${options.private ? ' --share private' : ''}${excepting(options.except)} ${expect(list)}`;
+  return `staging promote ${paths(list)} --name ${shq(title)}${excepting(except)} ${expect(list)}`;
 };
 
 /** Discard the groups whole, or one group but for the members in `except`. */
@@ -49,9 +49,6 @@ export const discardFiles = (paths: readonly string[]): string => `staging disca
 
 /** File staged files into the album at `album`. */
 export const addFiles = (album: string, paths: readonly string[]): string => `album add ${shq(album)} ${paths.map(shq).join(' ')}`;
-
-/** Put the groups aside, or bring them back. */
-export const later = (groups: GroupRef | readonly GroupRef[], off: boolean): string => `staging later ${paths(listOf(groups))}${off ? ' --off' : ''}`;
 
 /** Undo journal entries. */
 export const undoEntries = (ids: readonly string[]): string => `staging undo ${ids.map(shq).join(' ')}`;

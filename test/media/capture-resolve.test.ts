@@ -8,7 +8,7 @@
 
 import { assertEquals } from '@std/assert';
 import type { CaptureDateParts } from '@archive/media/capture-resolve';
-import { isValidGpsDate, recoverOffsetSeconds, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { isValidGpsDate, recoverOffsetSeconds, resolveTime, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 
 const STOCKHOLM = 'Europe/Stockholm';
 
@@ -43,7 +43,7 @@ Deno.test('the ranking is manual, then gps, then camera', async (t) => {
 
   await t.step('nothing usable resolves to nothing, and clears rather than keeps', () => {
     assertEquals(resolveTime({ archiveZone: STOCKHOLM }), null);
-    assertEquals(timeAttrs(null), { takenAt: null, takenAtUtc: null, takenAtSource: null, takenAtQualifier: null });
+    assertEquals(timeAttrs(null, undefined), { takenAt: null, takenAtUtc: null, takenAtSource: null, takenAtQualifier: null, digitized: null });
   });
 
   await t.step('a manual value that is not a capture time falls through to the sources', () => {
@@ -267,54 +267,19 @@ Deno.test('reading the sources back off an exif node', async (t) => {
   });
 });
 
-Deno.test('a name dates a file only when nothing else does', async (t) => {
-  await t.step('a wall clock in a name is read in the archive zone, or the camera registry offset', () => {
-    assertEquals(resolveTime({ name: '2019-06-01T12:34:56', archiveZone: STOCKHOLM }), {
-      takenAt: '2019-06-01T12:34:56',
-      takenAtUtc: '2019-06-01T10:34:56Z',
-      takenAtSource: 'name',
-    });
-    const registered = resolveTime({ name: '2019-06-01T12:34:56', cameraOffsetAt: () => 3 * 3600, archiveZone: STOCKHOLM })!;
-    assertEquals([registered.takenAt, registered.takenAtUtc], ['2019-06-01T12:34:56+03:00', '2019-06-01T09:34:56Z']);
-  });
-
-  await t.step('a UTC name keeps its instant and reads as the wall clock where it was taken', () => {
-    assertEquals(resolveTime({ name: '2019-06-01T10:34:56Z', archiveZone: STOCKHOLM }), {
-      takenAt: '2019-06-01T12:34:56+02:00',
-      takenAtUtc: '2019-06-01T10:34:56Z',
-      takenAtSource: 'name',
-    });
-  });
-
-  await t.step('a day stays a day', () => {
-    assertEquals(resolveTime({ name: '2019-06-01', archiveZone: STOCKHOLM }), { takenAt: '2019-06-01', takenAtUtc: '2019-05-31T22:00:00Z', takenAtSource: 'name' });
-  });
-
-  await t.step('every other source outranks it', () => {
-    const name = '2001-01-01T00:00:00';
-    assertEquals(resolveTime({ name, camera: parts('2015-07-25T14:03:11'), archiveZone: STOCKHOLM })!.takenAtSource, 'camera');
-    assertEquals(resolveTime({ name, gps: parts('2015-07-25T12:03:11'), archiveZone: STOCKHOLM })!.takenAtSource, 'gps');
-    assertEquals(resolveTime({ name, manual: '1975', archiveZone: STOCKHOLM })!.takenAtSource, 'manual');
-  });
-});
-
-Deno.test("a digitized copy is dated by a person only, never by the digitizing's clocks", () => {
-  const sources = { gps: parts('2021-03-04T09:00:00'), camera: parts('2021-03-04T10:00:00'), name: '2021-03-04T10:00:00', archiveZone: STOCKHOLM };
-  assertEquals(resolveTime({ ...sources, digitized: true }), null);
-  assertEquals(resolveTime({ ...sources, digitized: true, manual: '1968-07' })!.takenAt, '1968-07');
-  assertEquals(resolveTime({ ...sources })!.takenAtSource, 'gps');
-});
-
-Deno.test("a digitizer's file name is when it made the file, as its clock is", () => {
-  const sources = { name: '2021-03-04T10:00:00', archiveZone: STOCKHOLM };
+Deno.test("a digitizer's camera clock is when it made the copy, and a GPS date or a person's still stands", () => {
+  const sources = { camera: parts('2021-03-04T10:00:00'), archiveZone: STOCKHOLM };
   assertEquals(resolveTime({ ...sources, digitizer: true }), null);
-  assertEquals(resolveTime(sources)!.takenAtSource, 'name');
+  assertEquals(resolveTime({ ...sources, digitizer: true, manual: '1968-07' })!.takenAt, '1968-07');
+  assertEquals(resolveTime({ ...sources, digitizer: true, gps: parts('2021-03-04T09:00:00') })!.takenAtSource, 'gps');
+  assertEquals(resolveTime(sources)!.takenAtSource, 'camera');
 });
 
-Deno.test('the stamps on a file are read as sources, and nothing else there is', () => {
-  assertEquals(stampedSources({ digitized: true, whenName: '2019-06-01' }), { digitized: true, name: '2019-06-01' });
-  assertEquals(stampedSources({ digitized: 'yes', whenName: 'June' }), {});
-  assertEquals(stampedSources({ digitized: null, whenName: null }), {});
+Deno.test('a resolution marks a scan exactly when its camera is a digitizer', () => {
+  const resolved = resolveTime({ camera: parts('2021-03-04T10:00:00'), archiveZone: STOCKHOLM });
+  assertEquals(timeAttrs(resolved, true).digitized, true);
+  assertEquals(timeAttrs(resolved, false).digitized, null);
+  assertEquals(timeAttrs(null, undefined).digitized, null);
 });
 
 Deno.test("a sidecar's date ranks after a manual one and, for a Takeout instant, by how far it is from the camera", async (t) => {
@@ -333,9 +298,11 @@ Deno.test("a sidecar's date ranks after a manual one and, for a Takeout instant,
     // An offset it carries is kept; a wall clock without one is read in the archive's zone.
     assertEquals(resolveTime({ sidecar: { wallClock: '2019-06-01T12:34:56+02:00' }, archiveZone: STOCKHOLM })!.takenAtUtc, '2019-06-01T10:34:56Z');
     assertEquals(resolveTime({ sidecar: { wallClock: '2019-06-01T12:34:56' }, archiveZone: STOCKHOLM })!.takenAtUtc, '2019-06-01T10:34:56Z');
+    const registered = resolveTime({ sidecar: { wallClock: '2019-06-01T12:34:56' }, cameraOffsetAt: () => 3 * 3600, archiveZone: STOCKHOLM })!;
+    assertEquals([registered.takenAt, registered.takenAtUtc], ['2019-06-01T12:34:56+03:00', '2019-06-01T09:34:56Z']);
     // One given as approximate is only about then; a manual time over it is not.
     assertEquals(resolveTime({ sidecar: { wallClock: '1985', approximate: true }, archiveZone: STOCKHOLM })!.takenAtQualifier, 'about');
-    assertEquals(timeAttrs(resolveTime({ manual: '1986', sidecar: { wallClock: '1985', approximate: true }, archiveZone: STOCKHOLM })).takenAtQualifier, null);
+    assertEquals(timeAttrs(resolveTime({ manual: '1986', sidecar: { wallClock: '1985', approximate: true }, archiveZone: STOCKHOLM }), undefined).takenAtQualifier, null);
   });
 
   await t.step('a Takeout instant near the camera clock gives the camera clock its offset, after a GPS fix', () => {
@@ -364,10 +331,9 @@ Deno.test("a sidecar's date ranks after a manual one and, for a Takeout instant,
     assertEquals(resolveTime({ sidecar: { instant: '2019-07-01T09:00:00Z', uploaded: '2019-07-01T10:00:00Z' }, gps, archiveZone: STOCKHOLM })!.takenAtSource, 'gps');
   });
 
-  await t.step('a digitized copy keeps an XMP date and one set in Google Photos, and drops an instant that only reads its clocks', () => {
-    assertEquals(resolveTime({ digitized: true, sidecar: { wallClock: '1968' }, camera, archiveZone: STOCKHOLM })!.takenAt, '1968');
-    assertEquals(resolveTime({ digitized: true, sidecar: { instant: '1999-12-24T15:00:00Z' }, camera, archiveZone: STOCKHOLM })!.takenAtSource, 'sidecar');
-    assertEquals(resolveTime({ digitized: true, sidecar: read, camera, archiveZone: STOCKHOLM }), null);
+  await t.step("a digitizer's copy keeps an XMP date and one set in Google Photos, and drops an instant that only reads its clock", () => {
+    assertEquals(resolveTime({ digitizer: true, sidecar: { wallClock: '1968' }, camera, archiveZone: STOCKHOLM })!.takenAt, '1968');
+    assertEquals(resolveTime({ digitizer: true, sidecar: { instant: '1999-12-24T15:00:00Z' }, camera, archiveZone: STOCKHOLM })!.takenAtSource, 'sidecar');
     // A digitizer's clock is still a clock to measure the instant against.
     assertEquals(resolveTime({ digitizer: true, sidecar: read, camera, archiveZone: STOCKHOLM }), null);
   });

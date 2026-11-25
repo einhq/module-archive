@@ -77,7 +77,7 @@ Deno.test({ name: 'media-sidecars', sanitizeResources: false, sanitizeOps: false
   };
 
   try {
-    await cmd.shouldSucceed('staging init && staging category google-photos --create --kind google-photos');
+    await cmd.shouldSucceed('staging init && staging category google-photos --create');
     await cmd.shouldSucceed(`mkdir -p '${PHOTOS}' && mkdir -p '${ALBUM}'`);
 
     // Both JSON forms, the number Google moves to the end, a cut name, an edited copy, a photo

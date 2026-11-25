@@ -4,7 +4,7 @@
  * folder moved into, out of or within; none for an update grouping does not read, nor for any
  * write under `albums/` (the groups, their links, the organizer's checkpoint) but a category's
  * request, which names its own category and home. The fact names the category's directory and is
- * in no lane, a bulk category's either. The paths and names are invented.
+ * in no lane. The paths and names are invented.
  */
 import { type ArchiveRuleContext, deriveArchiveEvents, type VfsEventInput } from '@archive/event-rules';
 import type { NodeSnapshot } from '@archive/media/event-rules';
@@ -18,15 +18,11 @@ const BO = '/home/bo/staging';
 const BO_INBOX = `${BO}/files/inbox`;
 
 /** A category directory as the bridge reads it. */
-const category = (id: string, lane?: string): NodeSnapshot => ({
-  id,
-  type: 'directory',
-  attrs: { stagingCategory: { kind: 'generic', label: id, ...(lane ? { lane } : {}) } },
-});
+const category = (id: string): NodeSnapshot => ({ id, type: 'directory', attrs: { stagingCategory: { label: id } } });
 
 const tree: Record<string, NodeSnapshot> = {
   [INBOX]: category('c-inbox'),
-  [SCANS]: category('c-scans', 'bulk'),
+  [SCANS]: category('c-scans'),
   [BO_INBOX]: category('c-bo'),
 };
 

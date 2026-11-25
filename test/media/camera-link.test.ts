@@ -5,7 +5,7 @@ import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from 
 const testCtx = createTestContext({ modules: ['archive'] });
 
 Deno.test({
-  name: 'camera-link applies digitizer capture-date policy while linking new media',
+  name: "camera-link applies digitizer capture-date policy while linking new media, and marks a digitizer's files scans",
   sanitizeResources: false,
   sanitizeOps: false,
 }, async () => {
@@ -31,10 +31,23 @@ Deno.test({
       },
     });
 
+    type Attrs = { cameraPath?: string; takenAt?: string; takenAtSource?: string; digitized?: boolean };
     await cmd.shouldSucceed('camera-link /shots/scan.jpg');
-    const attrs = await client.execJson<{ cameraPath?: string; takenAt?: string }>('attrs /shots/scan.jpg');
+    let attrs = await client.execJson<Attrs>('attrs /shots/scan.jpg');
     assertEquals(attrs.cameraPath, `${CAMERAS_ROOT}/ENVY_Inspire_7200`);
     assertEquals(attrs.takenAt, undefined);
+    // A digitizer's file is a scan, and stays one when a person dates it.
+    assertEquals(attrs.digitized, true);
+    await cmd.shouldSucceed('file-set-time /shots/scan.jpg 1968');
+    attrs = await client.execJson<Attrs>('attrs /shots/scan.jpg');
+    assertEquals([attrs.takenAt, attrs.takenAtSource, attrs.digitized], ['1968', 'manual', true]);
+
+    // Linked to a camera that is no digitizer, it is no scan, and its camera clock stands.
+    await cmd.shouldSucceed('camera-create --name "Canon EOS 5D" --make Canon --model "EOS 5D"');
+    await cmd.shouldSucceed('file-set-time --clear /shots/scan.jpg');
+    await cmd.shouldSucceed(`camera-link --camera ${CAMERAS_ROOT}/Canon_EOS_5D /shots/scan.jpg`);
+    attrs = await client.execJson<Attrs>('attrs /shots/scan.jpg');
+    assertEquals([attrs.takenAt, attrs.takenAtSource, attrs.digitized], ['2024-05-01T11:37:34', 'camera', undefined]);
   } finally {
     client.close();
     await testCtx.teardown();

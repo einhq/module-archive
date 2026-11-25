@@ -1,7 +1,6 @@
 /**
  * The archive bridge's rules: each rule set sees only the routing keys it binds; and the staging
- * rules, which announce `media.duplicates.stale` for files crossing an inbox's edge,
- * `staging.retime.requested` for files moved into a category that dates by other clocks, and
+ * rules, which announce `media.duplicates.stale` for files crossing an inbox's edge, and
  * `staging.sidecars.arrived` for a folder where a sidecar may now pair with its file.
  */
 
@@ -71,10 +70,7 @@ const photo = (duplicate?: Record<string, unknown>, extra: Record<string, unknow
   attrs: { mimetype: 'image/jpeg', size: 10, sha256: SHA, ...(duplicate ? { duplicate } : {}), ...extra },
 });
 
-/**
- * A category directory, what the staging rules read a category's time rules off, or a folder above
- * one, which the lanes are read off with it.
- */
+/** A category directory, or a folder above one, which the lanes are read off. */
 const CATEGORY_DIR = /^\/(home(\/[^/]+(\/staging(\/files(\/[^/]+)?)?)?)?)?$/;
 
 /**
@@ -158,81 +154,14 @@ Deno.test('staging rules: a file in an inbox or the library is announced when it
   assertEquals((await stale({ ...printed, path: elsewhere }, { [elsewhere]: both })).subjects, []);
 });
 
-/** A category directory of `kind`'s time rules, as the bridge reads it. */
-const category = (id: string, time?: { digitized: boolean; filenameDates: boolean }): NodeSnapshot => ({
-  id,
-  type: 'directory',
-  attrs: { stagingCategory: { kind: 'generic', label: id, group: { strategy: 'events', significance: 'normal' }, ...(time ? { time } : {}) } },
-});
-const CLOCKS = { digitized: false, filenameDates: false };
-const DIGITIZED = { digitized: true, filenameDates: false };
 const ANNA = '/home/anna/staging/files';
-const BATCH = `${INBOX}/upload-2026-10-01`;
-/** Anna's categories: the inbox (names are dates), `camera` and `cards` (own clocks), `scans` (digitized), and the batch folder. */
-const categories: Record<string, NodeSnapshot> = {
-  [INBOX]: category('c-inbox', { digitized: false, filenameDates: true }),
-  [`${ANNA}/camera`]: category('c-camera', CLOCKS),
-  [`${ANNA}/cards`]: category('c-cards'),
-  [`${ANNA}/scans`]: category('c-scans', DIGITIZED),
-  [BATCH]: { id: 'd-batch', type: 'directory', attrs: {} },
-};
-const retime = (input: Partial<VfsEventInput>, nodes: Record<string, NodeSnapshot> = {}) => announced(STAGING_EVENTS.retimeRequested, input, { ...categories, ...nodes });
-/** A staged photo named `IMG_20190601_123456.jpg`, with the stamps given. */
-const named = `${BATCH}/IMG_20190601_123456.jpg`;
-const stamped = (attrs: Record<string, unknown> = {}): NodeSnapshot => ({ id: 'f9', type: 'file', attrs: { mimetype: 'image/jpeg', size: 10, ...attrs } });
 
-Deno.test('staging rules: a move between categories with the same time rules announces no retime and reads no file', async () => {
-  // `cards` stores no time rules, and reads as its generic kind's: the camera's.
-  for (const [from, to] of [[`${ANNA}/camera/a`, `${ANNA}/cards/a`], [`${ANNA}/cards/a`, `${ANNA}/camera/a`]]) {
-    assertEquals(await retime({ path: to, nodeType: 'directory', fromPath: from }), { subjects: [], reads: 0 });
-    assertEquals(await retime({ path: `${to}/IMG_0001.jpg`, fromPath: `${from}/IMG_0001.jpg` }), { subjects: [], reads: 0 });
-  }
-  // Nor does a move within one category, or out of staging.
-  assertEquals(await retime({ path: `${BATCH}/a`, nodeType: 'directory', fromPath: `${INBOX}/b` }), { subjects: [], reads: 0 });
-  assertEquals((await retime({ path: `${ALBUMS_ROOT}/lake/files/a.jpg`, fromPath: `${ANNA}/scans/a.jpg` }, { [`${ALBUMS_ROOT}/lake/files/a.jpg`]: stamped() })).subjects, []);
-});
-
-Deno.test('staging rules: a directory moved into a category with other time rules, or from outside every category, is announced whole', async () => {
-  const box = `${ANNA}/scans/box-3`;
-  assertEquals(await retime({ path: box, nodeType: 'directory', fromPath: `${INBOX}/box-3` }), { subjects: [box], reads: 0 });
-  assertEquals(await retime({ path: `${INBOX}/box-3`, nodeType: 'directory', fromPath: box }), { subjects: [`${INBOX}/box-3`], reads: 0 });
-  assertEquals(await retime({ path: box, nodeType: 'directory', fromPath: '/home/anna/box-3' }), { subjects: [box], reads: 0 });
-  // A category that cannot be read is no reason to retime anything.
-  assertEquals(await retime({ path: `${ANNA}/gone/box-3`, nodeType: 'directory', fromPath: box }), { subjects: [], reads: 0 });
-});
-
-Deno.test("staging rules: a file moved in is announced, by its folder, when its stamps disagree with the category's rules", async () => {
-  const from = { fromPath: `${ANNA}/camera/IMG_20190601_123456.jpg` };
-  // Into the inbox, whose names are dates: unstamped, it is retimed; stamped with its name's date, not.
-  assertEquals((await retime({ path: named, ...from }, { [named]: stamped() })).subjects, [BATCH]);
-  assertEquals((await retime({ path: named, ...from }, { [named]: stamped({ whenName: '2019-06-01T12:34:56' }) })).subjects, []);
-  // From the library too, which has no rules of its own: the stamps alone decide.
-  const filed = { fromPath: `${ALBUMS_ROOT}/lake/files/IMG_20190601_123456.jpg` };
-  assertEquals((await retime({ path: named, ...filed }, { [named]: stamped({ digitized: true }) })).subjects, [BATCH]);
-  assertEquals((await retime({ path: named, ...filed }, { [named]: stamped({ whenName: '2019-06-01T12:34:56' }) })).subjects, []);
-  // Into scans: a file not stamped as digitized is retimed.
-  const scan = `${ANNA}/scans/IMG_0001.jpg`;
-  assertEquals((await retime({ path: scan, fromPath: `${INBOX}/IMG_0001.jpg` }, { [scan]: stamped(), [`${ANNA}/scans`]: categories[`${ANNA}/scans`] })).subjects, [
-    `${ANNA}/scans`,
-  ]);
-  // What is no media original is never dated.
-  assertEquals((await retime({ path: named, ...from }, { [named]: stamped({ sourceId: 'f0' }) })).subjects, []);
-  assertEquals((await retime({ path: named, ...from }, { [named]: stamped({ mimetype: 'text/plain' }) })).subjects, []);
-});
-
-Deno.test('staging rules: a retime fact names the category, and the file a folder stands for', async () => {
-  const staging: ArchiveRuleContext = { ...ctx, getNode: (path) => Promise.resolve({ ...categories, [named]: stamped() }[path]) };
-  const facts = await deriveArchiveEvents({ type: 'moved', path: named, nodeId: 'f9', nodeType: 'file', timestamp: 1, fromPath: `${ANNA}/camera/x.jpg` }, staging, 1);
-  const fact = facts.find((each) => each.type === STAGING_EVENTS.retimeRequested)!;
-  assertEquals([fact.subject, fact.nodeId, fact.data], [BATCH, 'd-batch', { cause: 'moved', category: 'anna/inbox', file: named }]);
-});
-
-/** Anna's `takeout` (pairs sidecars) and `whatsapp` (a messaging category: does not), and a folder of each. */
+/** Anna's `takeout` (its folder in the bulk lane) and `whatsapp`, and a folder of each. */
 const TAKEOUT_DIR = `${ANNA}/takeout/upload-2026-10-18`;
 const CHAT_DIR = `${ANNA}/whatsapp/upload-2026-10-18`;
 const sidecarTree: Record<string, NodeSnapshot> = {
-  [`${ANNA}/takeout`]: { id: 'c-takeout', type: 'directory', attrs: { stagingCategory: { kind: 'google-photos' }, lane: 'bulk' } },
-  [`${ANNA}/whatsapp`]: { id: 'c-chat', type: 'directory', attrs: { stagingCategory: { kind: 'messaging' } } },
+  [`${ANNA}/takeout`]: { id: 'c-takeout', type: 'directory', attrs: { stagingCategory: { label: 'Google Photos' }, lane: 'bulk' } },
+  [`${ANNA}/whatsapp`]: { id: 'c-chat', type: 'directory', attrs: { stagingCategory: { label: 'WhatsApp' } } },
   [TAKEOUT_DIR]: { id: 'd-takeout', type: 'directory', attrs: {} },
   [CHAT_DIR]: { id: 'd-chat', type: 'directory', attrs: {} },
 };
@@ -254,7 +183,7 @@ const arrivals = async (input: Partial<VfsEventInput>, nodes: Record<string, Nod
   return { facts: facts.map((fact) => [fact.subject, fact.data?.cause, fact.lane ?? 'normal']), asked };
 };
 
-Deno.test('staging rules: a sidecar landing unpaired in a category that pairs them announces its folder, in its lane', async () => {
+Deno.test('staging rules: a sidecar landing unpaired in a category announces its folder, in its lane', async () => {
   const sidecar = `${TAKEOUT_DIR}/IMG_0001.jpg.supplemental-metadata.json`;
   assertEquals((await arrivals({ path: sidecar }, { [sidecar]: json() })).facts, [[TAKEOUT_DIR, 'sidecar', 'bulk']]);
   assertEquals((await arrivals({ path: sidecar, type: 'moved', fromPath: '/home/anna/IMG_0001.jpg.json', changedAttrs: undefined }, { [sidecar]: json() })).facts, [[
@@ -262,11 +191,12 @@ Deno.test('staging rules: a sidecar landing unpaired in a category that pairs th
     'sidecar',
     'bulk',
   ]]);
-  // Not until its bytes have landed, not once paired, and not where sidecars are not paired.
+  // Every category pairs them.
+  const chat = `${CHAT_DIR}/IMG-20190601-WA0001.jpg.json`;
+  assertEquals((await arrivals({ path: chat }, { [chat]: json() })).facts, [[CHAT_DIR, 'sidecar', 'normal']]);
+  // Not until its bytes have landed, and not once paired.
   assertEquals((await arrivals({ path: sidecar, changedAttrs: ['mimetype'] }, { [sidecar]: json() })).facts, []);
   assertEquals((await arrivals({ path: sidecar }, { [sidecar]: json({ sourceId: 'f1', sidecar: { kind: 'takeout' } }) })).facts, []);
-  const chat = `${CHAT_DIR}/IMG-20190601-WA0001.jpg.json`;
-  assertEquals((await arrivals({ path: chat }, { [chat]: json() })).facts, []);
 });
 
 Deno.test('staging rules: a photo landing beside an unpaired sidecar announces its folder; elsewhere it asks once in ten seconds', async () => {
@@ -295,12 +225,12 @@ Deno.test('staging rules: a photo landing beside an unpaired sidecar announces i
   assertEquals(asked, [TAKEOUT_DIR]);
 });
 
-Deno.test('staging rules: a directory moved into a category that pairs sidecars is announced whole', async () => {
+Deno.test('staging rules: a directory moved into a category from outside it is announced whole', async () => {
   const moved = (path: string, fromPath: string) => arrivals({ type: 'moved', nodeType: 'directory', path, fromPath, changedAttrs: undefined }, {});
   assertEquals((await moved(`${ANNA}/takeout/part-2`, '/home/anna/part-2')).facts, [[`${ANNA}/takeout/part-2`, 'moved', 'bulk']]);
   assertEquals((await moved(`${ANNA}/takeout/part-2`, `${ANNA}/whatsapp/part-2`)).facts, [[`${ANNA}/takeout/part-2`, 'moved', 'bulk']]);
   assertEquals((await moved(`${ANNA}/takeout/part-2`, `${ANNA}/takeout/part-1`)).facts, []);
-  assertEquals((await moved(`${ANNA}/whatsapp/part-2`, '/home/anna/part-2')).facts, []);
+  assertEquals((await moved(`${ANNA}/whatsapp/part-2`, '/home/anna/part-2')).facts, [[`${ANNA}/whatsapp/part-2`, 'moved', 'normal']]);
 });
 
 Deno.test('staging rules: a file landing that a paired sidecar waits for as a source announces its folder; another does not', async () => {

@@ -3,9 +3,9 @@ import { EntityDetailHeader, NodeBrowser } from '@ein/ui/components';
 import { currentUser } from '@ein/ui/signals';
 import { Alert, Box, Text } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
-import { useNavigate } from 'react-router-dom';
 import { GpxDetails } from '../../location/components/GpxDetails.tsx';
 import { isGpx, RouteImport } from '../../location/components/RouteImport.tsx';
+import { BackLink } from '../components/BackLink.tsx';
 import { refreshStagingStatus } from '../hooks/useStagingStatus.ts';
 
 export const handle = { fullBleed: true, signedIn: true };
@@ -22,18 +22,16 @@ const SUBTITLE =
  */
 export default function RoutesPage() {
   useSignals();
-  const navigate = useNavigate();
   const user = currentUser.value?.username;
   if (!user) return <Alert color='yellow' m='lg'>Sign in to give routes their device.</Alert>;
   return (
     <Box style={{ height: 'calc(100dvh - var(--app-shell-header-height))', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <EntityDetailHeader
-        eyebrow='Staging'
+        eyebrow={<BackLink to='/staging' label='Staging' />}
         title='Routes waiting for a device'
         pattern='mixed'
         subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
         flowContent
-        actions={{ items: [{ label: 'Back to staging', icon: 'arrow-left', onClick: () => navigate('/staging') }] }}
       />
       <Box style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         <NodeBrowser

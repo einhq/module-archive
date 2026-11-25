@@ -25,17 +25,11 @@ export type AutoAlbumHome = {
 /**
  * The kinds of grouping a suggested group is (`autoAlbum.kind`), which a page sorts it into a lane
  * by: an `event`; a `trip`, a run of days away rolled up from its day-parts; a `seed`, a folder a
- * person named; a `folder` run of scans; a `loose` lane of everyday pictures (or, with
- * `precision`, of pictures dated only to a year or month); `clutter`, screenshots and saved
- * images; and `undated`, pictures with no capture time. A group with no kind is an event.
+ * person named; a `loose` lane of everyday pictures (or, with `precision`, of pictures dated only
+ * to a year or month); `clutter`, screenshots and saved images; and `undated`, pictures with no
+ * capture time. A group with no kind is an event.
  */
-export type GroupKind = 'event' | 'trip' | 'seed' | 'folder' | 'loose' | 'clutter' | 'undated';
-
-/** How a category's files are grouped: by time and place, by folder and file-name run, or into monthly lanes only. */
-export type GroupStrategy = 'events' | 'folders' | 'none';
-
-/** How readily a happening becomes a group of its own rather than part of an Everyday lane. */
-export type SignificancePreset = 'fewer' | 'normal' | 'more';
+export type GroupKind = 'event' | 'trip' | 'seed' | 'loose' | 'clutter' | 'undated';
 
 /**
  * Why a planned event or trip is a group of its own rather than part of its year's Everyday lane:
@@ -112,11 +106,11 @@ export type AutoAlbumClusterReport = {
 
 /**
  * Why an organizer run planned a whole category: its first run (or one whose checkpoint is of an
- * older shape), its grouping settings changed, a person asked (`--full`), a week since the last,
- * more than a fifth of it changed, its groups not as the last run left them, or the caller may not
- * read the audit trail an incremental run follows.
+ * older shape), a person asked (`--full`), a week since the last, more than a fifth of it changed,
+ * its groups not as the last run left them, or the caller may not read the audit trail an
+ * incremental run follows.
  */
-export type OrganizeFullReason = 'first' | 'settings' | 'asked' | 'week' | 'many' | 'drift' | 'trail';
+export type OrganizeFullReason = 'first' | 'asked' | 'week' | 'many' | 'drift' | 'trail';
 
 /**
  * One organizer run over one user's category (`staging organize`): planned whole (`full`, and
@@ -313,8 +307,6 @@ export type StagingRowInfo = {
   shots?: number;
   /** Why an event or trip is a group of its own. */
   significance?: SignificanceReason;
-  /** When the owner put it aside for later (`staging later`), ISO. */
-  later?: string;
   /** Its name is a person's: they gave it (`rename`, an edit's `--name`), so the organizer keeps it. */
   named?: true;
   /** A seed's label: the folder's name, or the imported album's title. */
@@ -342,48 +334,13 @@ export type StagingPartInfo = { timeStart?: string; timeEnd?: string; day?: stri
 /** What deciding one group needs beside its row (`album info`): its parts, and its candidates best first. */
 export type StagingGroupDetail = { parts: StagingPartInfo[]; candidates: StagingCandidate[]; visual: boolean };
 
-/** What a category holds, which sets the defaults of its settings (`staging category --kind`). */
-export type StagingCategoryKind = 'inbox' | 'google-photos' | 'scans' | 'phone' | 'camera' | 'messaging' | 'screenshots' | 'generic';
-
-/**
- * Which clocks a category's files are dated by. `digitized`: its files are copies made long after
- * the picture (scans), so every clock recorded while digitizing them (the camera's, the GPS
- * receiver's, the file name's) is not a capture time. `filenameDates`: a date its files' names
- * spell is a capture time when nothing better is known.
- */
-export type StagingTimeRules = { digitized: boolean; filenameDates: boolean };
-
-/**
- * Which lane the work on a category's files runs in. `bulk`: below everything of the `normal`
- * lane, so a large import goes on in the background while what is uploaded to another category is
- * processed first.
- */
-export type StagingLane = 'normal' | 'bulk';
-
-/**
- * Whether the sidecars that arrive in a category (Google Photos Takeout JSON, XMP) are paired with
- * their files as they land (`pair`, by `media-sidecars`), or left as they are (`ignore`).
- */
-export type StagingSidecars = 'pair' | 'ignore';
-
 /** A category's settings, `attrs.stagingCategory` on its directory under `files/`. */
 export type StagingCategorySettings = {
-  kind: StagingCategoryKind;
   /** What a page calls it; the directory's name is its key and never changes. */
   label: string;
-  /** The library album (or directory of albums) its files are filed into by default, by node id. */
-  destinationId?: string;
-  /** How its files are grouped, and how readily a happening becomes a group of its own. */
-  group: { strategy: GroupStrategy; significance: SignificancePreset };
-  /** Which clocks its files are dated by. */
-  time: StagingTimeRules;
-  /** The lane the work on its files runs in. */
-  lane: StagingLane;
-  /** Whether sidecars arriving there are paired with their files. */
-  sidecars: StagingSidecars;
 };
 
-/** A library album as staging names it: a category's destination. */
+/** A library album as staging names it. */
 export type StagingAlbumRef = {
   id: string;
   path: string;
@@ -428,9 +385,7 @@ export type StagingCategoryStatus = {
   /** Where a browser upload lands today, in the archive's time zone. */
   uploadPath: string;
   label: string;
-  kind: StagingCategoryKind;
   settings: StagingCategorySettings;
-  destination: StagingAlbumRef | null;
   counts: StagingFileCounts;
   /** The organizer's summary of the category's groups; null until the organizer first runs. */
   organizer: OrganizerSummary | null;
@@ -485,7 +440,7 @@ export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingIn
  * wrong `mode` or `owner`; `staging/` `not-unlisted`, so the library's views list what it holds, or
  * with another `processing` than staging's, so a staged file's text is read before it is filed; a
  * `loose-entry` in `files/` or `albums/`, which hold categories only;
- * `no-inbox`, the default category missing or of another kind; `orphan-albums`, a directory of
+ * `no-inbox`, the default category missing; `orphan-albums`, a directory of
  * groups with no category; `cross-category`, a group's link to a file outside its category;
  * `dangling-link`, one to nothing; `waiting-route`, a GPX file waiting for a device outside
  * `routes/`.
@@ -515,36 +470,14 @@ export type StagingCheckProblem = {
 export type StagingCheckAnswer = { user: string; ok: boolean; checkedLinks: number; truncated: boolean; problems: StagingCheckProblem[] };
 
 /**
- * `staging retime [<path>]`: the staged media originals under `path` (a category, a folder or a
- * file; every category without one) dated again by their category's time rules. `scanned` counts
- * the media originals read; `policyChanged` those whose `digitized` or `whenName` changed;
- * `retimed` those whose capture time changed, `bySource` by the source that now dates them and
- * `cleared` those left with none; `failed` the files that could not be written.
- */
-export type StagingRetimeAnswer = {
-  ok: boolean;
-  dryRun: boolean;
-  user: string;
-  path: string;
-  scanned: number;
-  policyChanged: number;
-  retimed: number;
-  cleared: number;
-  bySource: Record<string, number>;
-  failed: { path: string; error: string }[];
-};
-
-/**
- * `staging category <name> [--create | --remove | --kind | --label | --destination | --no-destination | --digitized | --filename-dates | --lane]`:
- * the category as it now is (null once removed), and what the call changed: the settings' fields
- * by name. `retime` is how its files were dated again when the change touched its time rules.
+ * `staging category <name> [--create | --remove | --label <text>]`: the category as it now is
+ * (null once removed), and what the call changed: the settings' fields by name.
  */
 export type StagingCategoryAnswer = {
   ok: true;
   created: boolean;
   removed: boolean;
   changed: string[];
-  retime: StagingRetimeAnswer | null;
   category: StagingCategoryStatus | null;
 };
 
@@ -704,9 +637,6 @@ export type StagingAcceptResult = {
   skipped: { group: string; reason: StagingAcceptSkip }[];
 };
 
-/** `staging later <group>… [--off]`: the groups now put aside (or, with `--off`, back in their lane). */
-export type StagingLaterResult = { ok: true; groups: string[]; later: boolean };
-
 /**
  * `staging undo <entry>…`: the entries undone, how many files came back and which groups were
  * given back their members, and the entries that could not be undone, with why and the files that
@@ -734,22 +664,24 @@ export type StagingMoveResult = { ok: true; moved: number; relinked: number; lef
 export type StagingDetectionConfidence = 'high' | 'medium' | 'low';
 
 /**
- * What a folder of staged (or any) files looks like it came from, by `staging detect`: the
- * category `kind` it fits (`generic` when no source's marks were found; never `inbox`), how sure,
- * and the `evidence`, strongest first. `category` is the user's category of that kind (the one the
- * folder lies in when it is of that kind, otherwise the first by name), null when they have none
- * or the kind is `generic`. `seen` is what was read: the files within (`files`, counted), the file
- * names sampled, and the folders listed or seen in the sample. `dismissed` is true when the folder
- * carries `detectDismissed: true` (set with `attrs -J detectDismissed=true <folder>`): its owner
- * keeps it where it is and wants no hint for it.
+ * Where a folder's files came from, as `staging detect` tells it by the marks they carry:
+ * `generic` when no source's marks were found.
+ */
+export type StagingSource = 'google-photos' | 'scans' | 'phone' | 'camera' | 'messaging' | 'screenshots' | 'generic';
+
+/**
+ * What a folder of staged (or any) files looks like it came from, by `staging detect`: its
+ * `source`, how sure, and the `evidence`, strongest first. `seen` is what was read: the files
+ * within (`files`, counted), the file names sampled, and the folders listed or seen in the sample.
+ * `dismissed` is true when the folder carries `detectDismissed: true` (set with
+ * `attrs -J detectDismissed=true <folder>`): its owner keeps it where it is and wants no hint for it.
  */
 export type StagingDetection = {
   path: string;
   dismissed: boolean;
-  kind: StagingCategoryKind;
+  source: StagingSource;
   confidence: StagingDetectionConfidence;
   evidence: string[];
-  category: { name: string; label: string; path: string } | null;
   seen: { files: number; sampled: number; folders: number };
 };
 

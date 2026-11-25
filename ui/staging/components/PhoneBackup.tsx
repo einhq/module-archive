@@ -23,7 +23,7 @@ export function PhoneBackup({ path, label }: { path: string; label: string }) {
   const secure = location.protocol === 'https:';
   return (
     <Stack gap={4}>
-      <Text size='sm' c='dimmed'>Or let an app on your phone send its new photos here by itself, over WebDAV, to this address and folder:</Text>
+      <Text size='sm'>Let an app on your phone send its new photos here by itself, over WebDAV, to this address and folder:</Text>
       <CopyValue value={`${location.origin}${davUrl()}`} label='Copy the address' />
       <CopyValue value={`${path}/`} label='Copy the folder'>
         <Anchor component={Link} to={PHONE_GUIDE} size='sm' style={{ whiteSpace: 'nowrap' }}>How</Anchor>
@@ -59,7 +59,7 @@ function AppBackupHere({ path, label }: { path: string; label: string }) {
 
   if (into === undefined) return null;
   return (
-    <Stack gap={4} align='center'>
+    <Stack gap={4} align='flex-start'>
       {into === path
         ? <Text size='sm' c='dimmed'>This phone backs up its photos here.</Text>
         : <Button variant='default' loading={busy} onClick={() => void choose()}>Back up this phone here</Button>}

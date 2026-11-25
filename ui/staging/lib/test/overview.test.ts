@@ -1,7 +1,7 @@
 import { assertEquals } from '@std/assert';
 import { CATEGORY_SLUG } from '@archive/staging/paths';
 import { NO_UPLOADS } from '@ein/ui/lib';
-import { categorySegments, categorySlug, categoryStages, freeSlug, heldFiles, KIND_LABELS, NEW_KINDS, preparingBaseline, preparingEta, stagesUnderWay } from '../overview.ts';
+import { categorySegments, categorySlug, categoryStages, freeSlug, heldFiles, preparingBaseline, preparingEta, stagesUnderWay } from '../overview.ts';
 
 const counts = { files: 120, other: 7, indexing: 30, indexed: 90, undated: 10, bytes: 9_000, copies: { library: 0, inbox: 0 }, near: { library: 0, inbox: 0 } };
 
@@ -30,11 +30,6 @@ Deno.test('ready never goes below nothing when the counts disagree', () => {
     (segment) => segment.key === 'ready',
   );
   assertEquals(ready?.value, 0);
-});
-
-Deno.test('a new category is offered every kind but the inbox, each with a label', () => {
-  assertEquals(NEW_KINDS.includes('inbox'), false);
-  assertEquals(NEW_KINDS.length, Object.keys(KIND_LABELS).length - 1);
 });
 
 Deno.test('the time left is the files still being prepared at the rate they went since the baseline', () => {

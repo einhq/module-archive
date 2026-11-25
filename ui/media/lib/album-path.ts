@@ -23,13 +23,13 @@ export function albumPathOf(filePath: string): string | undefined {
 
 /**
  * The Sort stream's route to one of `user`'s own suggested groups
- * (`/home/<user>/staging/albums/<category>/<slug>`): its category's page with the group under the
- * cursor. Undefined for any other album, another user's groups included.
+ * (`/home/<user>/staging/albums/<category>/<slug>`): its category's Sort tab with the group under
+ * the cursor. Undefined for any other album, another user's groups included.
  */
 export function stagingGroupRoute(albumPath: string, user: string): string | undefined {
   const parsed = parseStagedPath(albumPath);
   if (!user || parsed?.user !== user || parsed.category === undefined || stagingGroupOf(albumPath) !== albumPath) return undefined;
-  return `/staging?c=${encodeURIComponent(parsed.category)}&g=${encodeURIComponent(parsed.rest)}`;
+  return `/staging?c=${encodeURIComponent(parsed.category)}&tab=sort&g=${encodeURIComponent(parsed.rest)}`;
 }
 
 /** The route that shows an album, with the path encoded the way the route expects. */

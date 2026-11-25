@@ -86,7 +86,6 @@ Deno.test('lanes have names of their own', () => {
   assertEquals(laneName({ kind: 'clutter' }), 'Screenshots and saved images · Undated');
   assertEquals(laneName({ kind: 'undated', folder: 'box-3' }), 'Undated · box-3');
   assertEquals(laneName({ kind: 'period', period: '1987', folder: 'box-3' }), '1987 · box-3');
-  assertEquals(laneName({ kind: 'month', period: '2019-03', folder: 'chats' }), 'chats · Mar 2019');
 });
 
 Deno.test('a day whose times all fall in one part of it is named by its weekday and that part', () => {

@@ -79,8 +79,6 @@ type Props = {
   /** How much of the group is selected, and how its header selects it (desktop). */
   selected?: GroupSelected;
   onSelect?: GroupSelect;
-  /** What its header's grip carries when dragged. */
-  grip?: () => MediaDragPayload;
   /** Pictures or groups dropped on its header. */
   drop?: GroupDrop;
   /** What dragging a selected picture of the open group carries. */
@@ -90,6 +88,10 @@ type Props = {
    * another staged one), which opens its set side by side, and keeping the library's copies.
    */
   duplicates?: { badges: ReadonlyMap<string, TileBadge>; compare: (id: string) => void; keepLibrary?: () => void };
+  /** The stream's own pane, when it scrolls in one rather than the window. */
+  scrollRoot?: HTMLElement;
+  /** The destination column stands beside the stream. */
+  column?: boolean;
 };
 
 /** The album a part (by its key) is matched to: how likely, whether the reader may file into it, and filing the part there. */
@@ -98,7 +100,7 @@ export type PartMatch = (key: string) => { title: string; p: number; writable: b
 /**
  * One suggested album in the Sort stream. Closed, it is its header and a two-row strip of its
  * pictures, always the same height. Open — it is the cursor's — it is the header, kept in sight
- * under the page's headers, and every picture in a grid per part (a day, or a month in a long
+ * under the page's headers (at the top of the stream's pane, in one), and every picture in a grid per part (a day, or a month in a long
  * group), with a zone that makes the pictures the keys act on a new group. Its pictures are asked for once
  * it has settled in view (or is open), and no picture without renditions yet is fetched: such a
  * tile is drawn as a placeholder. An open group's copies and look-alikes carry a badge each, and its
@@ -130,10 +132,11 @@ export function GroupSection(
     arriveFrom,
     selected = 'none',
     onSelect,
-    grip,
     drop,
     dragPayload,
     duplicates,
+    scrollRoot,
+    column,
   }: Props,
 ) {
   const metrics = phone ? SECTION_METRICS.phone : SECTION_METRICS.desktop;
@@ -187,9 +190,9 @@ export function GroupSection(
       actions={actions}
       selected={selected}
       onSelect={onSelect}
-      grip={grip}
       drop={drop}
       duplicates={chip}
+      column={column}
     />
   );
 
@@ -218,7 +221,7 @@ export function GroupSection(
         {phone && (
           <Group mt={8} gap='xs' wrap='nowrap'>
             <Button size='compact-sm' variant='light' onClick={actions.proposal?.run ?? actions.newAlbum} style={{ maxWidth: '100%' }}>
-              <Text span inherit truncate>{actions.proposal?.label ?? 'New album…'}</Text>
+              <Text span inherit truncate>{actions.proposal?.label ?? 'Create album…'}</Text>
             </Button>
           </Group>
         )}
@@ -238,7 +241,7 @@ export function GroupSection(
       <Box
         style={{
           position: 'sticky',
-          top: 'calc(var(--app-shell-header-height) + var(--mrx-stuck-header-height, 0px))',
+          top: scrollRoot ? 0 : 'calc(var(--app-shell-header-height) + var(--mrx-stuck-header-height, 0px))',
           zIndex: 3,
           background: 'var(--mrx-surface-raised)',
         }}
@@ -248,7 +251,7 @@ export function GroupSection(
       {mediaError ? mediaError : !media.set ? <MediaGrid items={[]} loading /> : media.set.truncated
         ? (
           // Too many to lay out at once: the album's own timeline, which pages.
-          <MediaTimeline album={row.path} granularity='day' ascending />
+          <MediaTimeline album={row.path} granularity='day' ascending scrollRoot={scrollRoot} />
         )
         : (
           <OpenGrids

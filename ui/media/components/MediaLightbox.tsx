@@ -1,5 +1,5 @@
 import { UnknownPersonModal } from '../../people/components/UnknownPersonModal.tsx';
-import { Dialog, DrawerButtons, DrawerMenuItems, MapMarkers, MapShape, MapView, TablerIcon } from '@ein/ui/components';
+import { DrawerButtons, DrawerMenuItems, TablerIcon } from '@ein/ui/components';
 import { PEOPLE_ROOT } from '@archive/paths';
 import type { FaceAddResult } from '@archive/media/api';
 import type { ScreenMessage, ScreenState } from '@ein/api';
@@ -609,7 +609,6 @@ export function MediaLightbox() {
   /** Puts the player in its own fullscreen or out of it; `lock` turns a wide video sideways. */
   const playerFullscreenRef = useRef<(lock: boolean) => void>(null);
   const [reviewPersonId, setReviewPersonId] = useState<string | null>(null);
-  const [mapOpen, setMapOpen] = useState(false);
   const [loadedPhotoId, setLoadedPhotoId] = useState<string | null>(null);
   const [slideshowPhotoTransition, setSlideshowPhotoTransition] = useState<SlideshowPhotoTransition | null>(null);
   // The media a released swipe is sliding in; once it is the current media it stays centred
@@ -664,6 +663,15 @@ export function MediaLightbox() {
   const [sidebarLayer, setSidebarLayer] = useState(false);
   const [toolbarLayer, setToolbarLayer] = useState(false);
   const dialogLayer = sidebarLayer || toolbarLayer || showOnTarget.value !== null || nearbyDialog.value !== null;
+  /**
+   * The phone's menu up in the corner is open. It keeps its items mounted, which leaves the focus on
+   * its button rather than in the menu, so Escape comes to the lightbox, which closes the menu alone.
+   */
+  const [cornerMenuOpen, setCornerMenuOpen] = useState(false);
+  const cornerMenuShown = isOpen && !slideshow && isMobile && !bare;
+  useEffect(() => {
+    if (!cornerMenuShown) setCornerMenuOpen(false);
+  }, [cornerMenuShown]);
   const showOn = useShowOn();
   const [faceDraftReady, setFaceDraftReady] = useState(false);
   const [savingFace, setSavingFace] = useState(false);
@@ -786,7 +794,6 @@ export function MediaLightbox() {
 
   useEffect(() => {
     setStackPreview(null);
-    setMapOpen(false);
     setAddingFace(false);
     setFaceDraftReady(false);
     setSavingFace(false);
@@ -957,10 +964,8 @@ export function MediaLightbox() {
   }, [enterMediaFullscreen, isMobile, media?.type]);
 
   const handleEscape = useCallback(() => {
-    // This dialog is layered above the lightbox. Close only it, leaving the
-    // media and its single history entry untouched.
-    if (mapOpen) {
-      setMapOpen(false);
+    if (cornerMenuOpen) {
+      setCornerMenuOpen(false);
       return;
     }
     if (editingText) {
@@ -982,7 +987,7 @@ export function MediaLightbox() {
     }
     if (slideshow) stopSlideshow();
     else requestClose();
-  }, [addingFace, editingSubtitles, editingText, mapOpen, requestClose, reviewPersonId, dialogLayer, slideshow, stopSlideshow]);
+  }, [addingFace, cornerMenuOpen, editingSubtitles, editingText, requestClose, reviewPersonId, dialogLayer, slideshow, stopSlideshow]);
 
   // Mounted with the lightbox's route, already open: that is an opening too.
   const infoPreviousOpenRef = useRef(false);
@@ -2349,7 +2354,7 @@ export function MediaLightbox() {
   ]);
 
   // The players' keys rest while a layer over the lightbox has the keyboard, as the lightbox's own do.
-  const playerKeys = !dialogLayer && !editing && !addingFace && !mapOpen && reviewPersonId === null && personFacePath === null;
+  const playerKeys = !dialogLayer && !editing && !addingFace && reviewPersonId === null && personFacePath === null;
   const attachMediaElement = useCallback((el: HTMLVideoElement | null) => {
     mediaRef.current = el;
   }, []);
@@ -2393,10 +2398,12 @@ export function MediaLightbox() {
    * How many of the bar's actions (`barActions`) it has room for. Measured after each render and on
    * every resize of the bar: one fewer while the bar cuts a text of its short, one more while the
    * space left over takes another button and its gap. The last one takes no more than the room of
-   * the "more" button, which goes with it.
+   * the "more" button, when that goes with it.
    */
   const [barActionsShown, setBarActionsShown] = useState(Infinity);
   const barActionCountRef = useRef(0);
+  /** The "more" menu has rows of its own (the toolbar's switch, "Show on"), so it stays when every action is in the bar. */
+  const menuStaysRef = useRef(false);
   const [, setBarResized] = useState(0);
   useEffect(() => {
     const row = infoRowRef.current;
@@ -2421,9 +2428,10 @@ export function MediaLightbox() {
     });
     const total = barActionCountRef.current;
     const shown = row.querySelectorAll('[data-bar-action]').length;
-    // On a computer the last action takes the place of the "more" menu it leaves; a phone's bar has
-    // no such menu, so its last costs a button like the rest, or it would be added and cut for good.
-    const room = shown + 1 === total && !isMobile ? 0 : (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2;
+    // On a computer the last action takes the place of the "more" menu it leaves. A phone's bar has
+    // no such menu, and one with rows of its own stays, so there the last costs a button like the
+    // rest, or it would be added and cut for good.
+    const room = shown + 1 === total && !isMobile && !menuStaysRef.current ? 0 : (BAR_BUTTON_PX[barButtonSize] ?? 34) + gap + 2;
     if (cut && shown > 0) setBarActionsShown(shown - 1);
     else if (!cut && shown < total && free >= room) setBarActionsShown(shown + 1);
   });
@@ -2445,12 +2453,6 @@ export function MediaLightbox() {
   const shortTaken = slideshow && mobilePortrait;
   // Only this file's details: straight after a step `details` may still be the last file's.
   const barInfo = barInfoOf(media, currentDetails, currentMediaIndex.value, shortTaken);
-  // Match the sidebar preview: embedded GPS is more specific than the linked
-  // location, but either is enough to locate the media on the enlarged map.
-  const mapPoint = currentDetails?.position ??
-    (currentDetails?.location?.lat !== undefined && currentDetails.location.lng !== undefined
-      ? { lat: currentDetails.location.lat, lng: currentDetails.location.lng, radius: currentDetails.location.radius }
-      : null);
   // The picture the sidebar's add-to-album row acts on; that is not the guest's to do.
   const actionPath = albumMedia && !isGuest(access) ? albumMedia.path : undefined;
   // The details panel's file actions, floating over the picture when asked for: for whoever may
@@ -2461,8 +2463,8 @@ export function MediaLightbox() {
   // saves the original file as the file name in the details does, and the cast icon for a screen
   // near the browser. Each keeps its place in the bar as far as there is room (`barActionsShown`).
   // A phone's bar holds the view switches only; the rest are always in its menu up in the corner,
-  // with the toolbar, which a computer's cog toggles, and the cast icon is beside that menu. "Show
-  // on", for whoever has a screen or speaker EiN reaches, is always in the menu.
+  // and the cast icon is beside that menu. The toolbar's switch, and "Show on" for whoever has a
+  // screen or speaker EiN reaches, are always in the menu.
   const favouriteAction: BarAction | undefined = mayStar
     ? {
       key: 'favourite',
@@ -2513,7 +2515,7 @@ export function MediaLightbox() {
   const nearbyAction: BarAction | undefined = nearby &&
     { key: 'nearby', icon: nearby.icon, label: nearby.label, on: nearby.active || casting, loading: nearby.loading, onClick: nearby.onClick };
   const showOnAction: BarAction | undefined = showOn && showTarget
-    ? { key: 'show-on', icon: 'device-tv', label: 'Show on…', on: false, onClick: () => showOn(showTarget) }
+    ? { key: 'show-on', icon: 'device-tv', label: 'Show on', on: false, onClick: () => showOn(showTarget) }
     : undefined;
   const nearbyActions = nearbyAction && !isMobile ? [nearbyAction] : [];
   const barActions = slideshow
@@ -2522,6 +2524,7 @@ export function MediaLightbox() {
     ? viewActions
     : [...(favouriteAction ? [favouriteAction] : []), slideshowAction, ...viewActions, downloadAction, ...nearbyActions];
   barActionCountRef.current = barActions.length;
+  menuStaysRef.current = toolbarAction !== undefined || showOnAction !== undefined;
   const inBar = new Set(barActions.slice(0, barActionsShown).map((action) => action.key));
   const barButton = (action: BarAction | undefined) =>
     action && inBar.has(action.key) && (
@@ -2544,7 +2547,8 @@ export function MediaLightbox() {
       </Tooltip>
     );
   // The rows of the "more" menu, on a phone and a desktop alike, in the bar's order, with icons the
-  // size of the rows around them: what the bar has no room for, and on a phone what it never holds.
+  // size of the rows around them: what the bar has no room for, on a phone what it never holds, and
+  // the toolbar's switch.
   const menuActions = isMobile
     ? [
       ...(favouriteAction ? [favouriteAction] : []),
@@ -2554,33 +2558,19 @@ export function MediaLightbox() {
       downloadAction,
       ...(showOnAction ? [showOnAction] : []),
     ]
-    : [...barActions.filter((action) => !inBar.has(action.key)), ...(showOnAction ? [showOnAction] : [])];
+    : [
+      ...barActions.filter((action) => !inBar.has(action.key)),
+      ...(toolbarAction ? [toolbarAction] : []),
+      ...(showOnAction ? [showOnAction] : []),
+    ];
   // A computer's top right corner, of the details panel while it is open, else of the picture's
-  // background: the cog that shows the toolbar, and close.
-  const cornerButtons = (color: string) => (
-    <>
-      {toolbarAction && (
-        <Tooltip label={toolbarAction.label} withArrow>
-          <ActionIcon
-            variant='subtle'
-            color='gray'
-            size='lg'
-            loading={orienting}
-            onClick={toolbarAction.onClick}
-            aria-label={toolbarAction.label}
-            aria-pressed={showToolbar}
-            style={{ pointerEvents: 'auto' }}
-          >
-            <TablerIcon name='settings' size={20} color={showToolbar ? 'var(--mrx-accent)' : color} />
-          </ActionIcon>
-        </Tooltip>
-      )}
-      <Tooltip label='Close' withArrow>
-        <ActionIcon variant='subtle' color='gray' size='lg' onClick={requestClose} aria-label='Close lightbox' style={{ pointerEvents: 'auto' }}>
-          <TablerIcon name='x' size={22} color={color} />
-        </ActionIcon>
-      </Tooltip>
-    </>
+  // background: close.
+  const closeButton = (color: string) => (
+    <Tooltip label='Close' withArrow>
+      <ActionIcon variant='subtle' color='gray' size='lg' onClick={requestClose} aria-label='Close lightbox' style={{ pointerEvents: 'auto' }}>
+        <TablerIcon name='x' size={22} color={color} />
+      </ActionIcon>
+    </Tooltip>
   );
   const actionMenuItems = (iconSize: number) =>
     menuActions.map((action) => (
@@ -2652,13 +2642,12 @@ export function MediaLightbox() {
       onReviewUnknown={setReviewPersonId}
       onShowFace={media.type === 'video' ? followFace : undefined}
       followedFace={followedFacePath}
-      onOpenMap={mapPoint ? () => setMapOpen(true) : undefined}
       canEdit={canEdit}
       stackBusy={stackBusy}
       onStackPreview={previewStackMember}
       onStackAction={mutateStack}
       onLayer={setSidebarLayer}
-      headerActions={mobile ? undefined : cornerButtons(SIDE_ICON_COLOR)}
+      headerActions={mobile ? undefined : closeButton(SIDE_ICON_COLOR)}
       // The foot that hides the details, as the app's navbar collapses, mirrored; the chat at its
       // other end while it is closed.
       foot={mobile ? undefined : (
@@ -2808,6 +2797,8 @@ export function MediaLightbox() {
                 floatingStrategy='fixed'
                 keepMounted
                 keepMountedMode='display-none'
+                opened={cornerMenuOpen}
+                onChange={setCornerMenuOpen}
                 // Sized for a thumb, like the bar's buttons.
                 styles={THUMB_MENU_STYLES}
               >
@@ -2867,8 +2858,8 @@ export function MediaLightbox() {
             >
               {/* The drawer (the chat), where there are no details to keep it: the top bar's button is covered. */}
               {!withDetails && <DrawerButtons />}
-              {/* The toolbar's cog and close, here while the details panel does not hold them. */}
-              {(!withDetails || !sidebarOpen) && cornerButtons('white')}
+              {/* Close, here while the details panel does not hold it. */}
+              {(!withDetails || !sidebarOpen) && closeButton('white')}
             </Group>
           )}
 
@@ -3210,6 +3201,7 @@ export function MediaLightbox() {
                 onEditText={mayWriteText ? () => setEditingText(true) : undefined}
                 onEditSubtitles={mayWriteSubtitles ? () => setEditingSubtitles(true) : undefined}
                 onLayer={setToolbarLayer}
+                onHide={toggleToolbarVisible}
                 // Below the phone's date and menu button at the top, between the desktop's close and chat buttons.
                 top={isMobile ? MOBILE_TOOLBAR_TOP_PX : 8}
                 // A phone's icons larger than the bar's, in buttons that keep eight in a narrow phone's width.
@@ -3441,39 +3433,6 @@ export function MediaLightbox() {
             </Box>
           )}
       </Box>
-      <Dialog
-        opened={mapOpen && !!mapPoint}
-        onClose={() => setMapOpen(false)}
-        closeOnEscape={false}
-        fullScreen={isMobile}
-        size='min(1000px, calc(100vw - 32px))'
-        zIndex={300}
-        title={barInfo.where || 'Where it was taken'}
-        subtitle={media.name}
-        icon='map-pin'
-        pattern='location'
-        bleed
-      >
-        {mapPoint && (
-          <Box
-            data-lightbox-location-map
-            style={{ flex: isMobile ? 1 : undefined, height: isMobile ? undefined : 'min(70dvh, 700px)', minHeight: 320 }}
-          >
-            <MapView center={mapPoint} zoom={14} style={{ height: '100%' }}>
-              <MapShape shape={mapPoint} />
-              <MapMarkers
-                markers={[{
-                  id: `lightbox-${media.id}`,
-                  lat: mapPoint.lat,
-                  lng: mapPoint.lng,
-                  label: media.name,
-                  thumbnailUrl: media.thumbnailUrl,
-                }]}
-              />
-            </MapView>
-          </Box>
-        )}
-      </Dialog>
       {mayWriteText && (
         <TextEditDialog
           opened={editingText}

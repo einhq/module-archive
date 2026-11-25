@@ -74,7 +74,7 @@ Deno.test({ name: 'a Takeout zip is expanded, paired and dated by its sidecars',
     await cmd.shouldSucceed('pipeline define /tmp/defs/staging-sidecars.yaml');
     // The engine reloads a definition a moment after it changes.
     await new Promise((r) => setTimeout(r, 1000));
-    await cmd.shouldSucceed('staging init && staging category google-photos --create --kind google-photos');
+    await cmd.shouldSucceed('staging init && staging category google-photos --create');
     await cmd.shouldSucceed(`mkdir -p ${BATCH}`);
 
     await t.step('the uploaded zip is expanded beside it and removed', async () => {

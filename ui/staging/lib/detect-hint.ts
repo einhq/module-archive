@@ -1,16 +1,14 @@
-import type { StagingCategoryKind, StagingCategoryStatus, StagingDetection } from '@archive/staging/api';
+import type { StagingDetection, StagingSource } from '@archive/staging/api';
 import { stagedPlace } from '@archive/staging/paths';
-import { KIND_LABELS } from './overview.ts';
 
 /**
  * The hints `staging detect` gives a newly arrived folder of the default category: "Looks like
- * Google Photos", with a way to its category. Pure, so which folders get one, and which way, is
- * tested without a page.
+ * Google Photos", with two ways on: move it into a category the reader picks, or make a new
+ * category for it. Pure, so which folders get one is tested without a page.
  */
 
-/** What a hint says a folder of each kind looks like. */
-const SOURCE_NAMES: Record<StagingCategoryKind, string> = {
-  inbox: '',
+/** What a hint says a folder from each source looks like. */
+const SOURCE_NAMES: Record<StagingSource, string> = {
   generic: '',
   'google-photos': 'Google Photos',
   scans: 'scans',
@@ -20,53 +18,53 @@ const SOURCE_NAMES: Record<StagingCategoryKind, string> = {
   screenshots: 'screenshots',
 };
 
+/** What a category made for a folder from each source is called to begin with. */
+const SOURCE_LABELS: Record<StagingSource, string> = {
+  generic: '',
+  'google-photos': 'Google Photos',
+  scans: 'Scans',
+  phone: 'Phone',
+  camera: 'Camera',
+  messaging: 'Messaging',
+  screenshots: 'Screenshots',
+};
+
 /**
- * One folder's hint: what it looks like (`source`, `text`), the evidence, and what to do about it:
- * move it to the reader's category of that kind (by `staging move`, in the Move dialog), or make
- * one and move it there (`route`, the New category dialog).
+ * One folder's hint: what it looks like (`source`, `text`), the evidence, and the route of the New
+ * category dialog that makes a category for it and moves it there (`route`).
  */
 export type DetectHint = {
   path: string;
   /** The folder's name. */
   name: string;
-  kind: StagingCategoryKind;
   source: string;
   /** "Looks like Google Photos". */
   text: string;
   evidence: string[];
-  action:
-    | { type: 'move'; category: string; label: string }
-    | { type: 'create'; kind: StagingCategoryKind; label: string; route: string };
+  route: string;
 };
 
-/** The route of the New category dialog for `kind`, which moves the folder at `path` into the category once it is made. */
-export const newCategoryRoute = (kind: StagingCategoryKind, path: string): string =>
-  `/staging/categories/new?kind=${encodeURIComponent(kind)}&move=${encodeURIComponent(path)}`;
+/** The route of the New category dialog, called `label` to begin with, which moves the folder at `path` into the category once it is made. */
+export const newCategoryRoute = (label: string, path: string): string => `/staging/categories/new?move=${encodeURIComponent(path)}&label=${encodeURIComponent(label)}`;
 
 /**
  * The hint `detection` gives, or undefined for none: a folder in the default category, not
- * dismissed, that looks like one source, surely (`high`) or likely (`medium`). Its way is to the category the detection
- * names when that is among `categories`, or else a new one of the kind.
+ * dismissed, that looks like one source, surely (`high`) or likely (`medium`).
  */
-export const detectHint = (detection: StagingDetection, categories: StagingCategoryStatus[], defaultCategory: string): DetectHint | undefined => {
-  const { kind, path } = detection;
-  if (kind === 'generic' || kind === 'inbox' || detection.confidence === 'low' || detection.dismissed) return undefined;
+export const detectHint = (detection: StagingDetection, defaultCategory: string): DetectHint | undefined => {
+  const { source, path } = detection;
+  if (source === 'generic' || detection.confidence === 'low' || detection.dismissed) return undefined;
   if (stagedPlace(path)?.category !== defaultCategory) return undefined;
-  const target = detection.category ? categories.find((each) => each.name === detection.category?.name && each.kind === kind) : undefined;
-  const source = SOURCE_NAMES[kind];
   return {
     path,
     name: path.split('/').pop() ?? path,
-    kind,
-    source,
-    text: `Looks like ${source}`,
+    source: SOURCE_NAMES[source],
+    text: `Looks like ${SOURCE_NAMES[source]}`,
     evidence: detection.evidence,
-    action: target
-      ? { type: 'move', category: target.name, label: `Move to ${target.label}…` }
-      : { type: 'create', kind, label: `Make a ${KIND_LABELS[kind]} category…`, route: newCategoryRoute(kind, path) },
+    route: newCategoryRoute(SOURCE_LABELS[source], path),
   };
 };
 
 /** The hints of `detections`, in their order, leaving out those that give none. */
-export const detectHints = (detections: StagingDetection[], categories: StagingCategoryStatus[], defaultCategory: string): DetectHint[] =>
-  detections.flatMap((detection) => detectHint(detection, categories, defaultCategory) ?? []);
+export const detectHints = (detections: StagingDetection[], defaultCategory: string): DetectHint[] =>
+  detections.flatMap((detection) => detectHint(detection, defaultCategory) ?? []);

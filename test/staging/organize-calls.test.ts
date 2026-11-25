@@ -50,7 +50,7 @@ pgTest('staging organize reads as many statements for 400 photos as for 50', asy
 
   /** Ten quiet days of one photo and five busy days of `perDay` photos each in the category `category`, indexed. */
   const seed = async (category: string, perDay: number) => {
-    await cmd.shouldSucceed(`staging category ${category} --create --kind generic && mkdir -p ${FILES}/${category}/upload`);
+    await cmd.shouldSucceed(`staging category ${category} --create && mkdir -p ${FILES}/${category}/upload`);
     const home = await vfs.get(ADMIN_ACCESS, '/home/admin');
     const photo = (name: string, at: string) => ({
       type: 'file',
@@ -120,7 +120,7 @@ pgTest('staging organize reads as many statements for 400 photos as for 50', asy
     });
 
     await t.step('an empty category reads nothing of the library', async () => {
-      await cmd.shouldSucceed('staging category none --create --kind generic');
+      await cmd.shouldSucceed('staging category none --create');
       const aggregate = vfs.aggregate.bind(vfs);
       const read: string[][] = [];
       vfs.aggregate = (access, query) => {

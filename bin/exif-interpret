@@ -8,26 +8,23 @@
  *
  * - its capture time, `takenAt`, `takenAtUtc` and `takenAtSource` — a *resolution*
  *   (`@archive/media/capture-resolve`) of everything the archive knows: the file's own manual time
- *   first, then a paired sidecar's, the GPS fix, the camera clock and the name, each turned into a
- *   wall clock and an instant, with the camera's clock settings from the registry;
- * - a staged file's stamps from its category's time rules (`digitized`, `whenName`): a scan's
- *   clocks are the scan's, and a name may spell the date;
- * - its `position` child, from the GPS fix or else the sidecar's place where that is believed,
- *   unless a person set it (`positionManual`).
+ *   first, then a paired sidecar's, the GPS fix and the camera clock, each turned into a wall
+ *   clock and an instant, with the camera's clock settings from the registry;
+ * - whether it is a scan, `digitized`: its camera is one the registry marks a digitizer;
+ * - its `position` child, from the GPS fix or else the sidecar's place, unless a person set it
+ *   (`positionManual`).
  *
  * `interpretedAt` is written last, and the archive's bridge announces that write as
  * `media.metadata.interpreted`, which starts the archive's analysis: faces and the camera link.
  */
 
-import { basename, resolve } from '@std/path';
+import { resolve } from '@std/path';
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
-import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { resolveTime, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 import { clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { reportUnwritable } from '@media/writable';
 import type { ExifInterpretAnswer } from '@archive/media/api';
-import { inboxOf } from '@archive/staging/duplicates';
-import { categoryTimeRules, timeStamps } from '@archive/staging/category';
 import { readSidecar, sidecarPoint, sidecarTime, writePosition } from '@archive/media/paired-sidecar';
 import { INTERPRETED_AT_ATTR } from '@archive/media/event-rules';
 import { isPlace } from '@archive/location/location-link';
@@ -73,12 +70,6 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
   // offset is unknown, and `camera-link` resolves again the moment there is one.
   const cameraPath = typeof attrs.cameraPath === 'string' ? attrs.cameraPath : undefined;
   const cameraClock = await clockForFile(cmd, cameraPath);
-  // A staged file is dated by its category's time rules, stamped on it in this same write. Anywhere
-  // else the stamps it already carries stand, so a file filed from staging keeps them.
-  const staged = inboxOf(inputPath) !== undefined;
-  const rules = staged ? await categoryTimeRules(cmd.sys.vfs, cmd.access, inputPath) : undefined;
-  const stamps = rules ? timeStamps(rules, basename(inputPath)) : undefined;
-  if (stamps) Object.assign(fileAttrs, stamps);
   const sidecar = await readSidecar(cmd.sys.vfs, cmd.access, inputPath);
   const sidecarTimes = sidecarTime(sidecar);
   const resolved = resolveTime({
@@ -86,24 +77,20 @@ const exifInterpret = async (cmd: Command): CmdReturn => {
     gps: when?.gps,
     camera: when?.device,
     ...clockSources(cameraClock, SYSTEM_TIME_ZONE),
-    ...stampedSources(stamps ?? attrs),
     ...(sidecarTimes ? { sidecar: sidecarTimes } : {}),
   });
   // Written even when nothing resolves: nulls clear the attrs, so interpreting again a file whose
   // date was once believed wrongly is what repairs it.
-  Object.assign(fileAttrs, timeAttrs(resolved));
+  Object.assign(fileAttrs, timeAttrs(resolved, cameraClock.digitizer));
   if (verbose) await cmd.writeLn(resolved ? `Capture time ${resolved.takenAt} (${resolved.takenAtSource}) = ${resolved.takenAtUtc}` : 'No capture time');
 
-  // The `position` child follows the GPS fix, else the paired sidecar's place where it is believed
-  // (`sidecarPoint`: not a digitized copy's Google location, unless a person set it), and is removed
-  // when neither gives one — the map and proximity search read the child, so it must not outlive the
-  // fix. A fix at 0,0 is a camera's "no fix" (`isPlace`), as good as none. A digitized copy's GPS
-  // fix is where it was scanned. A person's position (`positionManual`) outranks anything in the
-  // bytes, and is left as it is.
+  // The `position` child follows the GPS fix, else the paired sidecar's place (`sidecarPoint`), and
+  // is removed when neither gives one — the map and proximity search read the child, so it must not
+  // outlive the fix. A fix at 0,0 is a camera's "no fix" (`isPlace`), as good as none. A person's
+  // position (`positionManual`) outranks anything in the bytes, and is left as it is.
   const positionPath = `${inputPath}/position`;
-  const digitized = (stamps ? stamps.digitized : attrs.digitized) === true;
   const fix = gps?.latitude !== undefined && gps.longitude !== undefined && isPlace(gps.latitude, gps.longitude) ? { lat: gps.latitude, lng: gps.longitude } : undefined;
-  const point = fix && !digitized ? fix : sidecarPoint(sidecar, digitized);
+  const point = fix ?? sidecarPoint(sidecar);
   if (attrs.positionManual !== undefined) {
     if (verbose) await cmd.writeLn('Location is a manual override, leaving it');
   } else if (point) {
@@ -133,7 +120,7 @@ exifInterpret.spec = {
   name: 'exif-interpret',
   effect: 'write' as const,
   description:
-    "Read what a file's metadata means in the archive: its capture time, resolved from its clocks, its camera, a paired sidecar and its name (a staged file by its category's time rules), and its position node from the GPS fix or the sidecar",
+    "Read what a file's metadata means in the archive: its capture time, resolved from its clocks, its camera and a paired sidecar, whether it is a scan (its camera is a digitizer), and its position node from the GPS fix or the sidecar",
   args: [
     { name: 'input', type: 'path' as const, description: 'VFS path to a file whose metadata is read (exif-extract)' },
   ],

@@ -9,15 +9,15 @@ const SHOWN = 3;
 
 type Props = {
   hints: DetectHint[];
-  /** Open the Move dialog for a hint whose way is a category the reader has. */
-  onMove: (hint: DetectHint) => void;
+  /** Open the Move dialog for a hint's folder, to a category the reader picks; none when there is no other category. */
+  onMove?: (hint: DetectHint) => void;
   /** Stop offering a hint for the folder at `path`. */
   onDismiss: (path: string) => void;
 };
 
 /**
  * What newly arrived folders of the default category look like, a row each: "“Takeout” looks like
- * Google Photos", its strongest evidence, the way to its category (Move to it, or Make one, which
+ * Google Photos", its strongest evidence, two ways on (Move it to a category, or New category, which
  * moves the folder there once made), and a dismiss for a folder that stays. The first `SHOWN`,
  * then "N more" for the rest. Nothing when there are no hints.
  */
@@ -35,9 +35,8 @@ export function DetectHints({ hints, onMove, onDismiss }: Props) {
               <Text size='xs' c='dimmed' truncate>{hint.evidence.slice(0, 2).join(' · ')}</Text>
             </Stack>
             <Group gap={4} wrap='nowrap' style={{ flexShrink: 0 }}>
-              <Button size='xs' variant='light' onClick={() => hint.action.type === 'move' ? onMove(hint) : openDialog(hint.action.route)}>
-                {hint.action.label}
-              </Button>
+              {onMove && <Button size='xs' variant='default' onClick={() => onMove(hint)}>Move to category…</Button>}
+              <Button size='xs' variant='light' onClick={() => openDialog(hint.route)}>New category…</Button>
               <Tooltip label='Keep it here, stop asking'>
                 <ActionIcon variant='subtle' color='gray' aria-label={`Dismiss the hint for “${hint.name}”`} onClick={() => onDismiss(hint.path)}>
                   <TablerIcon name='x' size={14} />

@@ -13,7 +13,6 @@ export type GroupRowAttrs = {
   name?: string;
   autoAlbum?: AutoAlbumMeta;
   stagingMatches?: StagingMatches;
-  stagingLaterAt?: string;
 };
 
 /** The group's matches, when they are for its members as they are now. */
@@ -47,7 +46,6 @@ export const stagingRowOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, Sta
     ...(typeof auto.shots === 'number' ? { shots: auto.shots } : {}),
     ...(auto.significance?.reason ? { significance: auto.significance.reason } : {}),
     ...(auto.seed?.label ? { seed: auto.seed.label } : {}),
-    ...(typeof attrs.stagingLaterAt === 'string' ? { later: attrs.stagingLaterAt } : {}),
     ...(isNameLocked(attrs) ? { named: true as const } : {}),
     ...(matches
       ? {

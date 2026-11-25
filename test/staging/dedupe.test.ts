@@ -81,7 +81,7 @@ Deno.test({ name: 'staging duplicates and dedupe', sanitizeResources: false, san
 
   try {
     await cmd.shouldSucceed('staging init');
-    await cmd.shouldSucceed('staging category scans --create --kind scans');
+    await cmd.shouldSucceed('staging category scans --create');
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT} && mknode -t album ${LAKE} --as name='Lake trip' && mkdir -p ${LAKE}/files ${BATCH}`);
 
     // Library photos first, so their ids are the smallest; then the staged files, each set's

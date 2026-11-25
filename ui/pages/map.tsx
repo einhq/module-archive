@@ -1,20 +1,27 @@
-import { GeoBounds, InterpretedFilter, MapMarkers, type MapMarkerSpec, MapTracks, MapView, SearchInput, TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Box, Group, Loader, Stack, Tooltip } from '@mantine/core';
-import { MAP_CONTROL_Z, MapBaseLayerPicker, MapTypeMenu, MapYears } from '../components/MapControls.tsx';
+import {
+  chosenMapLayers,
+  defaultMapStyle,
+  GeoBounds,
+  InterpretedFilter,
+  keepMapChoice,
+  MAP_CONTROL_Z,
+  type MapLayerSettings,
+  MapView,
+  offeredMapLayers,
+  SearchInput,
+  TablerIcon,
+} from '@ein/ui/components';
+import { Box, Group, Loader } from '@mantine/core';
+import { useSignals } from '@preact/signals-react/runtime';
+import { MapYears } from '../components/MapControls.tsx';
 import { MapClusterMedia } from '../components/MapClusterMedia.tsx';
-import { hitToMediaItem, type MediaHit } from '../lib/map-hits.ts';
-import { cellFor, clusterMarkers } from '../lib/map-clusters.ts';
-import { type MapCluster, useMapMedia } from '../hooks/useMapMedia.ts';
-import { useMapTracks } from '../location/hooks/useTracks.ts';
-import { useLiveTracks } from '../location/hooks/useLiveTracks.ts';
-import { LiveTrackLayers, LiveTrackList } from '../location/components/LiveTracks.tsx';
 import { useSearchFacets } from '../hooks/useSearchFacets.ts';
-import { kindFill, type Mention, type MentionKind, naturalSearchDetails, subjectRefs, textFromFilters } from '@ein/ui/lib';
+import { type Mention, type MentionKind, naturalSearchDetails, subjectRefs, textFromFilters } from '@ein/ui/lib';
 import { subjectsOf } from '../lib/subjects.ts';
-import { mapLayers, openMediaAt } from '@ein/ui/signals';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { type MapFilters, type MapLayers, mapStateFromParams, paramsFromMapState } from '../lib/map-params.ts';
+import { type MapFilters, mapStateFromParams, paramsFromMapState } from '../lib/map-params.ts';
+import { LOCATIONS_LAYER, MEDIA_LAYER, type MediaLayerHost, MediaLayerHostContext, mediaLayerSettings, type OpenCluster } from '../lib/map-layer.ts';
 
 /**
  * What an `@` may resolve to here.
@@ -25,30 +32,7 @@ import { type MapFilters, type MapLayers, mapStateFromParams, paramsFromMapState
  */
 const MENTION_KINDS: readonly MentionKind[] = ['person', 'location', 'label'];
 
-/**
- * What the map draws, as one exclusive choice like the Search page's type: all
- * of it, or one layer on its own.
- */
-const MAP_LAYER_FILTERS: readonly { value: string; label: string; icon: ReactNode; layers: MapLayers }[] = [
-  { value: 'all', label: 'All', icon: <TablerIcon name='filter' size={20} />, layers: { media: true, locations: true, tracks: true } },
-  { value: 'media', label: 'Media', icon: <TablerIcon name='photo' size={20} />, layers: { media: true, locations: false, tracks: false } },
-  { value: 'locations', label: 'Locations', icon: <TablerIcon name='map-pin' size={20} />, layers: { media: false, locations: true, tracks: false } },
-  { value: 'tracks', label: 'Tracks', icon: <TablerIcon name='route' size={20} />, layers: { media: false, locations: false, tracks: true } },
-];
-
-/** The choice a set of layers is. A link with two layers on reads as All — more than one layer is not one layer. */
-function layerFilterOf(layers: MapLayers): string {
-  const on = MAP_LAYER_FILTERS.slice(1).filter((entry) => layers[entry.value as keyof MapLayers]);
-  return on.length === 1 ? on[0].value : 'all';
-}
-
 const FALLBACK_YEARS: [number, number] = [1900, new Date().getFullYear()];
-
-/** The location hue, so a pin reads as a location the same way a card's corner flag does. */
-const LOCATION_COLOR = kindFill('location');
-
-/** An open cluster and the cell it stands for. */
-type OpenCluster = { cluster: MapCluster; bounds: GeoBounds; view?: boolean };
 
 /** The open cluster rides in the history entry's state, which the page does not otherwise use. */
 function openClusterFromState(state: unknown): OpenCluster | null {
@@ -58,14 +42,22 @@ function openClusterFromState(state: unknown): OpenCluster | null {
 
 export const handle = { fullBleed: true };
 
+/**
+ * `/map`: every layer core and the modules offer over the style the reader picks, each switched on
+ * or off in the map's picker; what was picked last is the reader's own (`keepMapChoice`) and opens
+ * a plain `/map` again. The search and the years at its foot narrow the archive's media and
+ * locations layers, and a pile of pictures opens in a grid that Back closes.
+ */
 export default function MapPage() {
-  /** The base layer a plain /map opens on, which the URL then leaves out. */
-  const defaultBase = mapLayers()[0]?.id;
+  useSignals();
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const state = useMemo(() => mapStateFromParams(searchParams), [searchParams]);
-  const { layers, fromYear, toYear, filters } = state;
+  const { fromYear, toYear, filters } = state;
+  const style = state.style ?? defaultMapStyle();
+  // Read at each drawing: the reader's settings and the layers on offer may arrive after the page.
+  const layers = state.layers ? offeredMapLayers(state.layers) : chosenMapLayers();
 
   // Where a shared link points. Read once: after mount the map owns the camera,
   // and feeding its own position back in would fight every pan.
@@ -115,17 +107,11 @@ export default function MapPage() {
       (kind, value) => mentions.find((mention) => mention.kind === kind && mention.value === value)?.label,
     ), [filters.query, filters.person, filters.location, filters.tag, mentions]);
 
-  const { clusters, locations, loading, query, total } = useMapMedia({ fromYear, toYear }, filters);
-  // What the map shows now, for listing every picture in it.
-  const [viewBounds, setViewBounds] = useState<GeoBounds | null>(null);
-  const { tracks, refetchTracks, segments, loading: tracksLoading, query: queryTracks } = useMapTracks(layers.tracks);
-  // The tracks recording now, drawn with the others. Following one keeps it in view until the map is dragged.
-  const { live: liveTracks, now } = useLiveTracks(tracks, refetchTracks);
-  const live = layers.tracks ? liveTracks : [];
-  const [following, setFollowing] = useState<string | null>(null);
-  const stopFollowing = useCallback(() => setFollowing(null), []);
-
-  const [zoom, setZoom] = useState(opening.current.zoom ?? 12);
+  // The archive's layers take the search and the years as their settings.
+  const layerSettings = useMemo((): Record<string, MapLayerSettings> => {
+    const settings = mediaLayerSettings(filters, { fromYear, toYear });
+    return { [MEDIA_LAYER]: settings, [LOCATIONS_LAYER]: settings };
+  }, [filters.query, filters.person, filters.location, filters.tag, fromYear, toYear]);
 
   // What a cluster the user opened holds is fetched for that cell alone, at the
   // moment it is going to be shown — the map itself only ever knew the count.
@@ -139,10 +125,16 @@ export default function MapPage() {
   // lightbox's opening leaves on its own entry, without which closing it would not step Back.
   const entryStateRef = useRef(location.state);
   entryStateRef.current = location.state;
-  const showCluster = useCallback((open: OpenCluster) => {
-    navigate({ search: location.search }, { state: { mapCluster: open } });
-  }, [location.search, navigate]);
+  const searchRef = useRef(location.search);
+  searchRef.current = location.search;
   const closeCluster = useCallback(() => navigate(-1), [navigate]);
+
+  // The media layer asks for its piles to open here, and says when it reads for a changed search.
+  const [searching, setSearching] = useState(false);
+  const host = useMemo((): MediaLayerHost => ({
+    openCluster: (open) => navigate({ search: searchRef.current }, { state: { mapCluster: open } }),
+    searching: setSearching,
+  }), [navigate]);
 
   /**
    * Replace the URL with a view. `replace` so panning does not fill history.
@@ -156,11 +148,6 @@ export default function MapPage() {
   }, [location.state, searchParams, setSearchParams, state]);
 
   const onMoveEnd = useCallback((bounds: GeoBounds, z: number) => {
-    setZoom(z);
-    setViewBounds(bounds);
-    query(bounds, cellFor(z));
-    queryTracks(bounds, z);
-
     // Functional form: a pan fires this often and must not race the render's
     // view of the other parameters.
     const center = { lat: (bounds.north + bounds.south) / 2, lng: (bounds.east + bounds.west) / 2 };
@@ -168,7 +155,7 @@ export default function MapPage() {
       replace: true,
       state: entryStateRef.current,
     });
-  }, [query, queryTracks, setSearchParams]);
+  }, [setSearchParams]);
 
   // The slider is uncontrolled between drags: committing on every tick would
   // re-query the viewport per pixel.
@@ -181,38 +168,6 @@ export default function MapPage() {
     commit({ fromYear: atFullRange ? undefined : value[0], toYear: atFullRange ? undefined : value[1] });
   }, [commit, yearBounds]);
 
-  const visibleClusters = layers.media ? clusters : [];
-
-  // The lightbox walks every picture drawn as a picture, not just the one that
-  // was clicked, so the arrow keys keep working after opening a marker. What is
-  // behind a count is not here — it is behind the count.
-  const singles = useMemo(() => visibleClusters.flatMap((cluster) => cluster.hit ? [cluster.hit] : []), [
-    visibleClusters,
-  ]);
-  const lightboxItems = useMemo(() => singles.map(hitToMediaItem), [singles]);
-
-  const openHit = useCallback((hit: MediaHit) => {
-    const index = singles.findIndex((candidate) => candidate.id === hit.id);
-    openMediaAt(Math.max(index, 0), lightboxItems);
-  }, [singles, lightboxItems]);
-
-  const markers = useMemo((): MapMarkerSpec[] => {
-    const mediaMarkers = clusterMarkers(visibleClusters, zoom, openHit, (cluster, bounds) => showCluster({ cluster, bounds }));
-
-    const locationMarkers = layers.locations
-      ? locations.map((location): MapMarkerSpec => ({
-        id: `p-${location.id}`,
-        lat: location.lat,
-        lng: location.lng,
-        label: location.locationId.replaceAll('_', ' '),
-        color: LOCATION_COLOR,
-        onClick: () => navigate(`/locations/${location.locationId}`),
-      }))
-      : [];
-
-    return [...locationMarkers, ...mediaMarkers];
-  }, [visibleClusters, locations, layers.locations, zoom, openHit, showCluster, navigate]);
-
   return (
     <Box
       style={{
@@ -224,66 +179,26 @@ export default function MapPage() {
       }}
     >
       <Box style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-        <MapView
-          center={opening.current.center}
-          zoom={opening.current.zoom}
-          onMoveEnd={onMoveEnd}
-          baseLayer={state.baseLayer ?? defaultBase}
-          layerSwitcher={false}
-          style={{ height: '100%' }}
-        >
-          <MapMarkers markers={markers} />
-          <MapTracks tracks={segments} />
-          <LiveTrackLayers live={live} now={now} following={following} onStopFollowing={stopFollowing} onPick={setFollowing} />
-        </MapView>
-
-        {/* Zoom is by wheel and pinch, so the top-left corner is free for the live tracks. */}
-        {live.length > 0 && (
-          <Box className='mrx-map-live' w={240} maw='calc(100% - 84px)' style={{ position: 'absolute', top: 10, left: 10, zIndex: MAP_CONTROL_Z }}>
-            <LiveTrackList live={live} now={now} following={following} onFollow={setFollowing} />
-          </Box>
-        )}
-
-        {/* The map's own layer switcher is off, so Leaflet leaves the top-right corner free. */}
-        <Stack className='mrx-map-corner' gap='xs' style={{ zIndex: MAP_CONTROL_Z }}>
-          <MapTypeMenu
-            value={layerFilterOf(layers)}
-            onChange={(value) => commit({ layers: (MAP_LAYER_FILTERS.find((entry) => entry.value === value) ?? MAP_LAYER_FILTERS[0]).layers })}
-            options={MAP_LAYER_FILTERS}
+        <MediaLayerHostContext.Provider value={host}>
+          <MapView
+            center={opening.current.center}
+            zoom={opening.current.zoom}
+            onMoveEnd={onMoveEnd}
+            mapStyle={style}
+            onMapStyleChange={(id) => {
+              commit({ style: id });
+              keepMapChoice({ style: id });
+            }}
+            layers={layers}
+            onLayersChange={(ids) => {
+              commit({ layers: ids });
+              keepMapChoice({ layers: ids });
+            }}
+            layerSettings={layerSettings}
+            controls={{ style: true, layers: true }}
+            style={{ height: '100%' }}
           />
-          <MapBaseLayerPicker
-            value={state.baseLayer ?? defaultBase}
-            onChange={(id) => commit({ baseLayer: id === defaultBase ? undefined : id })}
-            center={state.center}
-            zoom={state.zoom}
-          />
-          {layers.media && viewBounds && total > 0 && (
-            <Tooltip label={`List the ${total} photos in this view`} position='left'>
-              <ActionIcon
-                className='mrx-map-button'
-                aria-label={`List the ${total} photos in this view`}
-                onClick={() =>
-                  showCluster({
-                    cluster: { key: 'view', lat: (viewBounds.north + viewBounds.south) / 2, lng: (viewBounds.east + viewBounds.west) / 2, count: total },
-                    bounds: viewBounds,
-                    view: true,
-                  })}
-              >
-                <TablerIcon name='layout-grid' size={22} />
-              </ActionIcon>
-            </Tooltip>
-          )}
-          {
-            /* What the map is reading for where it was moved to, under the buttons, where it moves
-              nothing; a search shows its own in the box. Following a track moves the map at every
-              fix, which is not worth a spinner. */
-          }
-          {(loading === 'view' || tracksLoading) && !following && (
-            <Box className='mrx-map-loading' role='status' aria-label='Loading the map' style={{ position: 'static' }}>
-              <Loader size={18} />
-            </Box>
-          )}
-        </Stack>
+        </MediaLayerHostContext.Provider>
 
         {
           /* The search floats over the foot of the map: the box, a hairline, then the
@@ -318,7 +233,7 @@ export default function MapPage() {
                 placeholder='Search this view — type @ for a person, location or label'
                 shortPlaceholder='Search this view…'
                 leftSection={<TablerIcon name='search' size={18} />}
-                rightSection={loading === 'search' ? <Loader size={16} aria-label='Searching' /> : undefined}
+                rightSection={searching ? <Loader size={16} aria-label='Searching' /> : undefined}
               />
             </Box>
             {filtered && <InterpretedFilter details={details} size='sm' color='gray' />}

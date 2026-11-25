@@ -1,27 +1,32 @@
 import type { StagingCategoryStatus, StagingStatus } from '@archive/staging/api';
 import { stagingRoots } from '@archive/staging/paths';
-import { EntityDetailHeader, type PageActions, PageLoader, TablerIcon, UploadDropzone } from '@ein/ui/components';
-import { useCommand } from '@ein/ui/hooks';
-import { formatCount, type NodeChildEntry, shq } from '@ein/ui/lib';
-import { currentUser, openDialog } from '@ein/ui/signals';
-import { Alert, Badge, Box, Button, Group, Menu, Stack, Tabs, Text, UnstyledButton } from '@mantine/core';
+import { EntityDetailHeader, HeaderChoice, type PageAction, type PageActions, PageLoader, TablerIcon } from '@ein/ui/components';
+import { useCommand, usePhone } from '@ein/ui/hooks';
+import { type NodeChildEntry, parentPath, shq } from '@ein/ui/lib';
+import { currentUser, invalidateListing, openDialog, openShortcutHelp } from '@ein/ui/signals';
+import { Alert, Badge, Box, Button, Group, Stack, Tabs, Text } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { type CSSProperties, useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { BackLink } from '../components/BackLink.tsx';
 import { CategoryOverview } from '../components/CategoryOverview.tsx';
 import { DoneTab } from '../components/DoneTab.tsx';
 import { importRoute, settingsRoute } from '../components/CategoryCard.tsx';
+import { DiscardDialog } from '../components/DiscardDialog.tsx';
 import { FilesTab } from '../components/FilesTab.tsx';
 import { GenealogyWaiting } from '../components/GenealogyWaiting.tsx';
 import { GroupStream } from '../components/GroupStream.tsx';
+import { InfoTab } from '../components/InfoTab.tsx';
 import { DuplicatesTab } from '../components/DuplicatesTab.tsx';
-import { ProgressStrip } from '../components/ProgressStrip.tsx';
+import { MoveDialog } from '../components/MoveDialog.tsx';
 import { RoutesWaiting } from '../components/RoutesWaiting.tsx';
 import { useStagingStatus } from '../hooks/useStagingStatus.ts';
+import { cleanDir, crumbs, folderPath, NODES_VIEW, parentDir } from '../lib/folders.ts';
 import { heldFiles } from '../lib/overview.ts';
 import { mediaMoved } from '../../media/signals/album.ts';
 
-const TABS = ['sort', 'duplicates', 'files', 'done'] as const;
+/** The tabs in the order they stand; the first is the one a category's page opens on. */
+const TABS = ['files', 'sort', 'duplicates', 'done', 'info'] as const;
 type StagingTab = typeof TABS[number];
 const isTab = (value: string | null): value is StagingTab => TABS.includes(value as StagingTab);
 
@@ -30,21 +35,25 @@ const Count = ({ value }: { value: number | undefined }) => value ? <Badge size=
 
 const SUBTITLE = 'New media to sort before it joins the shared library. Only you can see it.';
 
-/** The page of `category`. */
-const categoryRoute = (category: string): string => `/staging?c=${encodeURIComponent(category)}`;
+/** The page of `category`: its Files tab, at the folder `dir` below it (none: the category itself), in the Nodes view when asked. */
+const categoryRoute = (category: string, dir = '', nodes = false): string => {
+  const params = new URLSearchParams({ c: category });
+  if (dir) params.set('dir', dir);
+  if (nodes) params.set('view', NODES_VIEW);
+  return `/staging?${params}`;
+};
 
 export const handle = { fullBleed: true, signedIn: true };
 
 /**
  * `/staging`: the reader's private staging area. Without `?c=` it is the overview of its
  * categories, or with only one category that category's page. A category's page (`?c=<name>`) has
- * Sort, the stream of its suggested groups to decide one by one (`?g=` is the group under the
- * cursor); Duplicates, its exact copies to resolve; Files, its folders and files
- * (`?dir=`); and Done, what was decided in it, with Undo. Its header's Upload adds to today's
- * folder of the category, folders and all, and its title — the category's label, which names the
- * page — switches category. On the overview, files
- * dragged over the window raise a tile per category, and go into the folder of today of the one
- * they are dropped on.
+ * Files, its folders and files (`?dir=`), the tab it opens on; Sort, the stream of its suggested
+ * groups to decide one by one (`?tab=sort`, `?g=` the group under the cursor); Duplicates, its
+ * exact copies to resolve; Done, what was decided in it, with Undo; and Info, how files get into
+ * it. Its header's back link leads to Staging, and on Files inside a folder to the folder above
+ * the one on screen, which then names the page; its Upload adds to today's folder of the category,
+ * folders and all. The overview uploads nothing: its one action is New category.
  */
 export default function StagingPage() {
   useSignals();
@@ -95,9 +104,7 @@ function Staging({ user }: { user: string }) {
       user={user}
       status={data}
       category={category}
-      eta={status.eta[category.name]}
       refetchStatus={refetch}
-      onOpen={open}
     />
   );
 }
@@ -111,21 +118,13 @@ type OverviewProps = {
 function Overview({ status, eta, onOpen }: OverviewProps) {
   return (
     <>
-      <UploadDropzone
-        keepFolders
-        disabled={status.categories.length === 0}
-        targets={status.categories.map((category) => ({ path: category.uploadPath, label: category.label, description: `files/${category.name}` }))}
-      />
       <EntityDetailHeader
         title='Staging'
         pattern='mixed'
         subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
         flowContent
         actions={{
-          items: [
-            { label: 'Import media', icon: 'cloud-upload', button: true, onClick: () => openDialog(importRoute()) },
-            { label: 'New category', icon: 'folder-plus', onClick: () => openDialog('/staging/categories/new') },
-          ],
+          items: [{ label: 'New category', icon: 'folder-plus', button: true, onClick: () => openDialog('/staging/categories/new') }],
         }}
       />
       <Box py='lg'>
@@ -135,55 +134,32 @@ function Overview({ status, eta, onOpen }: OverviewProps) {
   );
 }
 
-/** The header's title: the category's label, which opens a menu of the others, the overview and a new one. */
-function CategorySwitcher({ status, category, onOpen }: { status: StagingStatus; category: StagingCategoryStatus; onOpen: (name: string | null) => void }) {
-  return (
-    <Menu position='bottom-start' shadow='md' withinPortal>
-      <Menu.Target>
-        <UnstyledButton aria-label={`${category.label}: switch category`} style={{ font: 'inherit', color: 'inherit' }}>
-          <Group gap={6} wrap='nowrap'>
-            {category.label}
-            <TablerIcon name='chevron-down' size={22} />
-          </Group>
-        </UnstyledButton>
-      </Menu.Target>
-      <Menu.Dropdown>
-        {status.categories.map((each) => (
-          <Menu.Item
-            key={each.name}
-            leftSection={<TablerIcon name={each.name === category.name ? 'check' : 'folder'} size={16} />}
-            rightSection={<Text size='xs' c='dimmed'>{formatCount(heldFiles(each.counts))}</Text>}
-            onClick={() => each.name !== category.name && onOpen(each.name)}
-          >
-            {each.label}
-          </Menu.Item>
-        ))}
-        <Menu.Divider />
-        {status.categories.length > 1 && <Menu.Item leftSection={<TablerIcon name='layout-grid' size={16} />} onClick={() => onOpen(null)}>All categories</Menu.Item>}
-        <Menu.Item leftSection={<TablerIcon name='folder-plus' size={16} />} onClick={() => openDialog('/staging/categories/new')}>New category…</Menu.Item>
-      </Menu.Dropdown>
-    </Menu>
-  );
-}
-
 type CategoryPageProps = {
   user: string;
   status: StagingStatus;
   category: StagingCategoryStatus;
-  eta?: number;
   refetchStatus: () => void;
-  onOpen: (name: string | null) => void;
 };
 
-function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: CategoryPageProps) {
+/** What a header action on the folder on screen asks for: a move to a folder or a category, or the discard. */
+type FolderAction = 'folder' | 'category' | 'discard';
+
+function CategoryPage({ user, status, category, refetchStatus }: CategoryPageProps) {
   useSignals();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const requested = searchParams.get('tab');
-  const tab: StagingTab = isTab(requested) ? requested : 'sort';
-  // The Files tab's Folder view is a file manager's pane: the page is the window's height, and it
-  // takes what the header leaves rather than the page scrolling.
-  const fill = tab === 'files' && searchParams.get('view') === 'folder';
+  const tab: StagingTab = isTab(requested) ? requested : TABS[0];
+  const nodes = searchParams.get('view') === NODES_VIEW;
+  // The folder the Files tab is on, which names the page and its ⋮ acts on.
+  const dir = tab === 'files' ? cleanDir(searchParams.get('dir')) : '';
+  const folders = crumbs(dir);
+  const folder = folders.at(-1);
+  // The Files tab's Nodes view is a file manager's pane, and the Sort tab on a wider screen is two
+  // panes side by side, the stream and its destination column, each scrolled by itself: the page is
+  // the window's height, and the tab takes what the header leaves rather than the page scrolling.
+  const phone = usePhone();
+  const fill = (tab === 'files' && nodes) || (tab === 'sort' && !phone);
   const filling: CSSProperties = { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' };
   const roots = stagingRoots(user);
   // How many groups the category holds, for the Sort tab's badge: the child count of its directory
@@ -191,6 +167,7 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
   const groupDirs = useCommand<NodeChildEntry[]>(`ls -l ${shq(roots.albumsPath)}`);
   const refetchGroups = groupDirs.refetch;
   const [reloadToken, setReloadToken] = useState(0);
+  const [folderAction, setFolderAction] = useState<FolderAction | null>(null);
 
   // A staged file put in an album from a list on this page has left the inbox.
   const moved = mediaMoved.value;
@@ -206,18 +183,46 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
     refetchGroups();
   }, [refetchStatus, refetchGroups]);
 
-  // Every change of tab replaces the entry and keeps its state, so Back leaves the page.
-  const showTab = useCallback((value: string | null) => {
+  // Every change of tab, view or folder here replaces the entry and keeps its state, so Back leaves the page.
+  const setParams = useCallback((change: (next: URLSearchParams) => void) => {
     setSearchParams((previous) => {
       const next = new URLSearchParams(previous);
-      if (!value || value === 'sort') next.delete('tab');
-      else next.set('tab', value);
+      change(next);
       return next;
     }, { replace: true, state: location.state });
   }, [setSearchParams, location.state]);
+  const showTab = useCallback((value: string | null) => {
+    setParams((next) => {
+      if (!value || value === TABS[0]) next.delete('tab');
+      else next.set('tab', value);
+    });
+  }, [setParams]);
+  const setView = (view: string) => setParams((next) => view === NODES_VIEW ? next.set('view', NODES_VIEW) : next.delete('view'));
+
+  // The folder `gone` moved or went (or came back, undone): a page still on it, or below it, goes up
+  // to the folder that held it, and the lists are read again.
+  const folderGone = (gone: string) => () => {
+    setParams((next) => {
+      const now = cleanDir(next.get('dir'));
+      if (now !== gone && !now.startsWith(`${gone}/`)) return;
+      const up = parentDir(gone);
+      if (up) next.set('dir', up);
+      else next.delete('dir');
+    });
+    invalidateListing(parentPath(folderPath(category.path, gone)));
+    setReloadToken((value) => value + 1);
+    changed();
+  };
 
   const groupCount = groupDirs.data?.find((entry) => entry.name === category.name)?.childCount;
   const counts = category.counts;
+  const folderItems: PageAction[] = folder
+    ? [
+      { label: 'Move to folder…', icon: 'folder-symlink', onClick: () => setFolderAction('folder') },
+      ...(status.categories.length > 1 ? [{ label: 'Move to category…', icon: 'category', onClick: () => setFolderAction('category') }] : []),
+      { label: 'Discard…', icon: 'trash', color: 'red', onClick: () => setFolderAction('discard') },
+    ]
+    : [];
   const actions: PageActions = {
     // In the header rather than one tab, so its drop target covers the window on every tab:
     // whatever is being sorted, new files land in the category on screen.
@@ -231,11 +236,19 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
       },
     },
     items: [
+      ...folderItems,
       { label: 'Import media…', icon: 'cloud-upload', onClick: () => openDialog(importRoute(category.name)) },
       { label: 'Category settings', icon: 'settings', onClick: () => openDialog(settingsRoute(category.name)) },
-      ...(status.categories.length > 1 ? [{ label: 'All categories', icon: 'layout-grid', onClick: () => onOpen(null) }] : []),
+      { label: 'Keyboard shortcuts', icon: 'keyboard', onClick: openShortcutHelp },
     ],
   };
+  // Back to Staging; inside a folder, to the folder above it, the category itself at the first level.
+  const up = folders.at(-2);
+  const back = !folder
+    ? { label: 'Staging', to: '/staging' }
+    : up
+    ? { label: up.name, to: categoryRoute(category.name, up.dir, nodes) }
+    : { label: category.label, to: categoryRoute(category.name, '', nodes) };
 
   return (
     <Tabs
@@ -247,6 +260,11 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
       <EntityDetailHeader
         tabs={
           <Tabs.List>
+            <Tabs.Tab value='files' leftSection={<TablerIcon name='files' size={16} />}>
+              <Group gap={6}>
+                Files <Count value={heldFiles(counts)} />
+              </Group>
+            </Tabs.Tab>
             <Tabs.Tab value='sort' leftSection={<TablerIcon name='arrows-sort' size={16} />}>
               <Group gap={6}>
                 Sort <Count value={groupCount} />
@@ -257,21 +275,31 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
                 Duplicates <Count value={counts.copies.library + counts.copies.inbox} />
               </Group>
             </Tabs.Tab>
-            <Tabs.Tab value='files' leftSection={<TablerIcon name='files' size={16} />}>
-              <Group gap={6}>
-                Files <Count value={heldFiles(counts)} />
-              </Group>
-            </Tabs.Tab>
             <Tabs.Tab value='done' leftSection={<TablerIcon name='checks' size={16} />}>
               <Group gap={6}>
                 Done <Count value={category.decided.filed + category.decided.discarded} />
               </Group>
             </Tabs.Tab>
+            <Tabs.Tab value='info' leftSection={<TablerIcon name='info-circle' size={16} />}>Info</Tabs.Tab>
           </Tabs.List>
         }
-        eyebrow='Staging'
-        title={<CategorySwitcher status={status} category={category} onOpen={onOpen} />}
-        name={category.label}
+        controls={tab === 'files'
+          ? (
+            <HeaderChoice
+              label='Show'
+              variant='segmented'
+              value={nodes ? NODES_VIEW : 'media'}
+              onChange={setView}
+              options={[
+                { value: 'media', label: 'Media', icon: <TablerIcon name='photo' size={18} /> },
+                { value: NODES_VIEW, label: 'Nodes', icon: <TablerIcon name='list-tree' size={18} /> },
+              ]}
+            />
+          )
+          : undefined}
+        eyebrow={<BackLink to={back.to} label={back.label} />}
+        title={folder ? folder.name : category.label}
+        name={folder ? `${category.label}/${dir}` : category.label}
         pattern='mixed'
         subtitle={<Text size='sm' c='gray.2'>{SUBTITLE}</Text>}
         flowContent
@@ -279,16 +307,24 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
       />
 
       <Box pt='lg' pb={fill ? 'md' : 'lg'} style={{ '--mrx-body-padding': 'var(--mantine-spacing-md)', ...(fill ? filling : {}) } as CSSProperties}>
-        <ProgressStrip category={category} eta={eta} />
-        {/* GPX and GEDCOM files wait outside every category, which the overview says; a category's page says it only when it is the only one, and stands in for the overview. */}
-        {status.categories.length === 1 && (status.routesWaiting > 0 || status.genealogyWaiting > 0) && (
+        {/* GPX and GEDCOM files wait outside every category, to be sorted like what arrives in the default category: its page says so, as does a category that is the only one. */}
+        {(category.name === status.defaultCategory || status.categories.length === 1) && (status.routesWaiting > 0 || status.genealogyWaiting > 0) && (
           <Stack gap='sm' px='md' pb='md'>
             <RoutesWaiting count={status.routesWaiting} />
             <GenealogyWaiting count={status.genealogyWaiting} />
           </Stack>
         )}
 
-        <Tabs.Panel value='sort'>
+        <Tabs.Panel value='files' style={fill ? filling : undefined}>
+          <FilesTab
+            category={category}
+            categories={status.categories}
+            defaultCategory={status.defaultCategory}
+            reloadToken={reloadToken}
+            onChanged={changed}
+          />
+        </Tabs.Panel>
+        <Tabs.Panel value='sort' style={fill ? filling : undefined}>
           <GroupStream
             category={category}
             onChanged={changed}
@@ -302,15 +338,30 @@ function CategoryPage({ user, status, category, eta, refetchStatus, onOpen }: Ca
         <Tabs.Panel value='done'>
           <DoneTab category={category.name} onChanged={changed} />
         </Tabs.Panel>
-        <Tabs.Panel value='files' style={fill ? filling : undefined}>
-          <FilesTab
-            category={category}
-            categories={status.categories}
-            reloadToken={reloadToken}
-            onChanged={changed}
-          />
+        <Tabs.Panel value='info'>
+          <InfoTab category={category} />
         </Tabs.Panel>
       </Box>
+
+      {folder && folderAction && folderAction !== 'discard' && (
+        <MoveDialog
+          paths={[folderPath(category.path, dir)]}
+          what={`“${folder.name}”`}
+          categories={status.categories}
+          from={category}
+          toCategory={folderAction === 'category'}
+          onClose={() => setFolderAction(null)}
+          onMoved={folderGone(dir)}
+        />
+      )}
+      {folder && folderAction === 'discard' && (
+        <DiscardDialog
+          paths={[folderPath(category.path, dir)]}
+          what={`“${folder.name}”`}
+          onClose={() => setFolderAction(null)}
+          onChanged={folderGone(dir)}
+        />
+      )}
     </Tabs>
   );
 }

@@ -5,11 +5,11 @@
  * are made one at a time, each followed by an incremental run, and after each a full build, as a
  * dry run, finds nothing to create, rewrite or remove. The changes: photos arriving, deleted, retimed, moved to
  * another folder, read at last, given a GPS fix or a person; a folder renamed; and a person's
- * edits (split, merge, not a group, regroup, pin, undo). Then the same with the category grouped by
- * folder, and in monthly lanes.
+ * edits (split, merge, not a group, regroup, pin, undo).
  *
  * Also: a record of the trail whose write commits after a later one is read is still applied, as
- * the watermark lags; a category whose settings change, or that a person asks for, is planned whole.
+ * the watermark lags; a category whose checkpoint is of an older shape, or that a person asks for,
+ * is planned whole.
  */
 import type { OrganizeResult, StagingEditResult, StagingJournalPage, StagingOrganizeReport, StagingQueueReport } from '@archive/staging/api';
 import { type AutoAlbumMeta, COVER_LINK_NAME } from '@archive/staging/auto-album';
@@ -339,19 +339,6 @@ Deno.test({ name: 'the incremental organizer gives the groups a full build would
       await randomChanges(steps, steps / 3);
     });
 
-    await t.step('in a category grouped by folder, and in one of monthly lanes, too', async () => {
-      for (const strategy of ['folders', 'none']) {
-        await cmd.shouldSucceed(`staging category inbox --strategy ${strategy}`);
-        const result = await run();
-        assertEquals([result.mode, result.why], ['full', 'settings']);
-        await assertSettled(`grouping by ${strategy}`);
-        log.push(`grouping by ${strategy}`);
-        await randomChanges(Math.ceil(steps / 3), 1);
-      }
-      await cmd.shouldSucceed('staging category inbox --strategy events');
-      await run();
-    });
-
     await t.step('a write whose record commits after a later one was read is still applied', async () => {
       // The store holding the data, whose trail the test holds records back from, as a transaction
       // still open would.
@@ -373,11 +360,15 @@ Deno.test({ name: 'the incremental organizer gives the groups a full build would
       await assertSettled('a late commit');
     });
 
-    await t.step('a change of the category’s grouping settings plans it whole', async () => {
-      await cmd.shouldSucceed('staging category inbox --significance more');
+    await t.step('a checkpoint of an older shape plans the category whole', async () => {
+      const path = `${GROUPS}/.organizer`;
+      const body = JSON.parse(await new Response((await vfs.open(ADMIN_ACCESS, path, { mode: 'r' })).readable).text());
+      const handle = await vfs.open(ADMIN_ACCESS, path, { mode: 'w' });
+      await handle.write(new TextEncoder().encode(JSON.stringify({ ...body, version: 2 })));
+      await handle.close();
       const result = await run();
-      assertEquals([result.mode, result.why], ['full', 'settings']);
-      await assertSettled('the settings change');
+      assertEquals([result.mode, result.why], ['full', 'first']);
+      await assertSettled('an older checkpoint');
     });
 
     await t.step('a run asked for is written as a request; with nothing waiting, --if-pending asks for none', async () => {

@@ -1,19 +1,5 @@
 import { assertEquals } from '@std/assert';
-import {
-  addFiles,
-  discardFiles,
-  discardGroup,
-  later,
-  merge,
-  notAGroup,
-  promoteInto,
-  promoteNew,
-  regroupInto,
-  regroupNew,
-  reject,
-  split,
-  undoEntries,
-} from '../decision-commands.ts';
+import { addFiles, discardFiles, discardGroup, merge, notAGroup, promoteInto, promoteNew, regroupInto, regroupNew, reject, split, undoEntries } from '../decision-commands.ts';
 
 const group = { path: "/home/anna/staging/albums/inbox/anna's day", staging: { memberKey: '0f3a9c2b4d5e6f70' } };
 const quotedGroup = `'/home/anna/staging/albums/inbox/anna'\\''s day'`;
@@ -22,11 +8,10 @@ Deno.test('each decision is one command naming the group with its member key', (
   assertEquals(promoteInto(group, '/archive/albums/Lake trip'), `staging promote ${quotedGroup} --into '/archive/albums/Lake trip' --expect '0f3a9c2b4d5e6f70'`);
   assertEquals(promoteNew(group, 'Lake weekend'), `staging promote ${quotedGroup} --name 'Lake weekend' --expect '0f3a9c2b4d5e6f70'`);
   assertEquals(
-    promoteNew(group, 'Lake weekend', { private: true, except: ['/s/a.jpg', '/s/b.jpg'] }),
-    `staging promote ${quotedGroup} --name 'Lake weekend' --share private --except '/s/a.jpg' --except '/s/b.jpg' --expect '0f3a9c2b4d5e6f70'`,
+    promoteNew(group, 'Lake weekend', ['/s/a.jpg', '/s/b.jpg']),
+    `staging promote ${quotedGroup} --name 'Lake weekend' --except '/s/a.jpg' --except '/s/b.jpg' --expect '0f3a9c2b4d5e6f70'`,
   );
   assertEquals(discardGroup(group), `staging discard ${quotedGroup} --expect '0f3a9c2b4d5e6f70'`);
-  assertEquals(later(group, true), `staging later ${quotedGroup} --off`);
 });
 
 Deno.test('files and journal entries are named one by one', () => {

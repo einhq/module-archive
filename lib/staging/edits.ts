@@ -209,9 +209,9 @@ const addMembers = async (vfs: Vfs, access: Access, group: Group, adding: { targ
 };
 
 /**
- * `staging split <group> --at <file>`: `file` and the members after it, in time order (a scan run:
- * in file-name order), become a new group, named `name` or by their dates. The organizer keeps the
- * cut from then on, and both pieces count as a person's; a seed splits into two pinned groups.
+ * `staging split <group> --at <file>`: `file` and the members after it, in time order, become a
+ * new group, named `name` or by their dates. The organizer keeps the cut from then on, and both
+ * pieces count as a person's; a seed splits into two pinned groups.
  */
 export const splitGroup = async (cmd: Command, path: string, at: string, options: { name?: string; expect?: string[] } = {}): Promise<StagingEditResult> => {
   const place = await placeOf(cmd, path);
@@ -221,11 +221,7 @@ export const splitGroup = async (cmd: Command, path: string, at: string, options
     const group = await readGroup(vfs, cmd.access, path, place);
     if (options.expect?.length && group.meta.memberKey !== options.expect[0]) return refused([path]);
     if (isLane(group.meta)) throw new Error('a lane is not split; move pictures out of it with staging regroup');
-    const ordered = group.meta.kind === 'folder'
-      ? (await readOrdered(vfs, cmd.access, group.links.map((link) => ({ id: link.id, target: link.target })))).sort((a, b) =>
-        naturalCompare(basename(a.path), basename(b.path))
-      )
-      : await readOrdered(vfs, cmd.access, group.links.map((link) => ({ id: link.id, target: link.target })));
+    const ordered = await readOrdered(vfs, cmd.access, group.links.map((link) => ({ id: link.id, target: link.target })));
     const index = ordered.findIndex((member) => member.path === at);
     if (index < 0) throw new Error(`not a member of ${path}: ${at}`);
     if (index === 0) throw new Error('split needs a member after the first: the group would be left empty');
@@ -414,14 +410,12 @@ export const mergeGroups = async (cmd: Command, keep: string, others: string[], 
 
 /**
  * `staging delete <group>` ("not a group"): its members go to their lanes now, and from then on no
- * group of mostly them is one. Not for lanes, nor in a category grouped by folder, where there is
- * no lane to go to.
+ * group of mostly them is one. Not for lanes.
  */
 export const deleteGroup = async (cmd: Command, path: string, options: { expect?: string[] } = {}): Promise<StagingEditResult> => {
   const place = await placeOf(cmd, path);
   const { vfs } = cmd.sys;
   expectOne(options.expect, 1);
-  if (place.category.settings.group.strategy === 'folders') throw new Error('a category grouped by folder has no lanes: split or merge its runs instead');
   return await withCategoryLock(place.albumsPath, async () => {
     const group = await readGroup(vfs, cmd.access, path, place);
     if (options.expect?.length && group.meta.memberKey !== options.expect[0]) return refused([path]);

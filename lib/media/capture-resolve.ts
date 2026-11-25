@@ -1,7 +1,7 @@
 /**
  * Choosing a file's capture time from the sources that claim to know it.
  *
- * A file can be told when it was taken by five different things, and they disagree in
+ * A file can be told when it was taken by four different things, and they disagree in
  * characteristic ways:
  *
  * - **manual** — somebody typed it. Often all that exists for a scanned print, often no more
@@ -19,15 +19,10 @@
  *   only source that knows what instant it actually was. It wins over the camera.
  * - **camera** — the camera's own clock. A wall clock with no zone attached, frequently wrong
  *   by minutes and occasionally by years, but for most files it is all there is. Where the camera
- *   registry says how far it was off, the reading is put right first.
- * - **name** — a date the file's name spells (`whenName`), read only where its staging category
- *   says names are dates (`@archive/media/filename-date`). The last resort: a phone writes the
- *   same clock into the name as into the tags, so the name decides only when the tags are gone.
+ *   registry says how far it was off, the reading is put right first. A camera the registry
+ *   marks a digitizer (a scanner) records when the copy was made, and is not believed.
  *
- * A **digitized** file (`digitized`, stamped where a category holds scans) is a copy made long
- * after the picture: the camera's clock, the GPS receiver's, the name, and a Takeout instant that
- * agrees with them all say when the copy was made, so none of them is believed, and only a
- * person's date is left: a manual one, an XMP one, or one changed in Google Photos.
+ * A file's name never dates it.
  *
  * Two attrs come out, and the split is the point. `takenAt` is the **wall clock** — what the
  * clock on the wall said, at whatever precision is honest, stamped with an offset when one can
@@ -78,7 +73,7 @@ const partsToWallClock = (parts: CaptureDateParts): string =>
   `${parts.year}-${parts.month}-${parts.day}` +
   `T${parts.hour}:${parts.minute}:${parts.second ?? '00'}`;
 
-type TimeSource = 'manual' | 'sidecar' | 'gps' | 'camera' | 'name';
+type TimeSource = 'manual' | 'sidecar' | 'gps' | 'camera';
 
 /**
  * The times a paired sidecar gives (`@archive/media/sidecars`): a wall clock an XMP packet states
@@ -113,8 +108,8 @@ type TimeSources = {
   /**
    * How many seconds the camera's clock ran ahead at a reading of it, behind when negative, when
    * the camera registry says it was wrong; built by `@archive/camera/camera-zone` too. The camera
-   * reading, a name and a Takeout instant, all read off that clock, are put right by it before
-   * anything else is asked of them, `cameraOffsetAt` included.
+   * reading and a Takeout instant, both read off that clock, are put right by it before anything
+   * else is asked of them, `cameraOffsetAt` included.
    */
   cameraErrorAt?: (wallClock: string) => number;
   /**
@@ -122,8 +117,7 @@ type TimeSources = {
    *
    * Some scanners write the scan time into `DateTimeOriginal` itself, which no
    * EXIF rule can catch — the registry's `digitizer` flag is the only thing that knows. The
-   * camera source is dropped entirely, and so is the name, which it gave the file when it made
-   * it; a GPS date, if there is one, still stands.
+   * camera source is dropped entirely; a GPS date, if there is one, still stands.
    */
   digitizer?: boolean;
   /**
@@ -131,16 +125,6 @@ type TimeSources = {
    * where the file does not say so: a `quicktime` reading with no timezone is then read as UTC.
    */
   quicktimeUtc?: boolean;
-  /**
-   * The file is a digitized copy, a scan: every clock recorded while digitizing (camera, GPS and
-   * name) is when the copy was made, and is dropped. A manual time still stands.
-   */
-  digitized?: boolean;
-  /**
-   * The capture time the file's name spells (`whenName`): a day, a wall clock, or a UTC reading
-   * (`…Z`). Used only when nothing above it resolves.
-   */
-  name?: string;
   /** What the file's paired sidecar says of when it was taken. */
   sidecar?: SidecarTime;
   /** The archive's own zone, for a wall clock nothing else can place. */
@@ -182,24 +166,6 @@ const shiftParts = (parts: CaptureDateParts, seconds: number): CaptureDateParts 
     };
   } catch {
     return parts;
-  }
-};
-
-/**
- * A name's capture time put right by the camera's clock error, when it is a minute or a second
- * the camera's clock gave; a coarser one, or one nothing says was wrong, is returned as it is.
- */
-const correctName = (name: string, cameraErrorAt: TimeSources['cameraErrorAt']): string => {
-  const parts = parseCaptureTime(name);
-  if (!cameraErrorAt || !parts || (parts.precision !== 'second' && parts.precision !== 'minute')) return name;
-  const wall = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second ?? '00'}`;
-  const error = cameraErrorAt(wall);
-  if (error === 0) return name;
-  try {
-    const moved = Temporal.PlainDateTime.from(wall).subtract({ seconds: error }).toString({ smallestUnit: parts.precision });
-    return `${moved}${/(Z|[-+]\d{2}:\d{2})$/.exec(name.trim())?.[1] ?? ''}`;
-  } catch {
-    return name;
   }
 };
 
@@ -303,7 +269,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
   const put = sources.camera && shiftParts(sources.camera, -error);
   const given = put?.quicktime && put.timezone === undefined && sources.quicktimeUtc ? { ...put, timezone: 'Z' } : put;
   const reading = given && placeUtcReading(given, sources.cameraOffsetAt, archiveZone);
-  const camera = sources.digitizer || sources.digitized ? undefined : reading;
+  const camera = sources.digitizer ? undefined : reading;
 
   // manual wins outright: a person looked at the photograph.
   if (manual !== undefined && isCaptureTime(manual)) {
@@ -330,7 +296,7 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
 
   // Cross-checked against the *unsuppressed* camera date: a digitizer's clock is the wrong
   // time but it is still a clock, and a fix two days off one is two days off either way.
-  const gps = !sources.digitized && sources.gps && isValidGpsDate(sources.gps, reading).ok ? sources.gps : undefined;
+  const gps = sources.gps && isValidGpsDate(sources.gps, reading).ok ? sources.gps : undefined;
 
   if (gps) {
     const takenAtUtc = toUtc(`${partsToWallClock(gps)}Z`, archiveZone);
@@ -361,46 +327,22 @@ export const resolveTime = (sources: TimeSources): ResolvedTime | null => {
     if (takenAtUtc) return { takenAt, takenAtUtc, takenAtSource: 'camera' };
   }
 
-  // A digitizer named the file when it made it, as its clock dated it.
-  if (sources.name !== undefined && !sources.digitizer && !sources.digitized) {
-    const named = resolveName(correctName(sources.name, sources.cameraErrorAt), sources.cameraOffsetAt, archiveZone);
-    if (named) return { ...named, takenAtSource: 'name' };
-  }
-
   return null;
 };
 
 /**
- * A wall clock a person stated (an XMP date) as the pair of attrs: with its own offset as it is;
- * otherwise as a name's is read, a minute or second taking the camera registry's offset, else the
- * archive's zone, and a coarser one staying as precise as it is.
+ * A wall clock a person stated (an XMP date) as the pair of attrs: with its own offset as it is; a
+ * minute or second without one taking the camera registry's offset, else read in the archive's
+ * zone, as the camera clock is; and a coarser one staying as precise as it is.
  */
 const resolveWallClock = (value: string, cameraOffsetAt: TimeSources['cameraOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
-  if (parseCaptureTime(value)?.offset === undefined) return resolveName(value, cameraOffsetAt, archiveZone);
-  const takenAtUtc = toUtc(value, archiveZone);
-  return takenAtUtc ? { takenAt: value, takenAtUtc } : undefined;
-};
-
-/**
- * A name's capture time as the pair of attrs. A UTC reading is placed on the wall clock where the
- * camera stood, as a UTC camera reading is; a wall clock takes the camera registry's offset when
- * it knows one, and is otherwise read in the archive's zone, as the camera clock is; a day stays
- * a day.
- */
-const resolveName = (name: string, cameraOffsetAt: TimeSources['cameraOffsetAt'], archiveZone: string): Omit<ResolvedTime, 'takenAtSource'> | undefined => {
-  const parts = parseCaptureTime(name);
+  const parts = parseCaptureTime(value);
   if (!parts) return undefined;
-  if (parts.precision !== 'second' && parts.precision !== 'minute') {
-    const takenAtUtc = toUtc(name, archiveZone);
-    return takenAtUtc ? { takenAt: name, takenAtUtc } : undefined;
+  if (parts.offset !== undefined || (parts.precision !== 'second' && parts.precision !== 'minute')) {
+    const takenAtUtc = toUtc(value, archiveZone);
+    return takenAtUtc ? { takenAt: value, takenAtUtc } : undefined;
   }
-  const wall = { year: parts.year, month: parts.month, day: parts.day, hour: parts.hour, minute: parts.minute, second: parts.second };
-  if (name.endsWith('Z')) {
-    const placed = placeUtcReading({ ...wall, timezone: 'Z' }, cameraOffsetAt, archiveZone);
-    const takenAtUtc = toUtc(name, archiveZone);
-    return placed && takenAtUtc ? { takenAt: `${partsToWallClock(placed)}${placed.timezone ?? ''}`, takenAtUtc } : undefined;
-  }
-  const wallClock = partsToWallClock(wall);
+  const wallClock = partsToWallClock(parts);
   const registry = cameraOffsetAt?.(wallClock);
   const takenAt = registry !== undefined ? withOffset(wallClock, registry) : wallClock;
   const takenAtUtc = toUtc(takenAt, archiveZone);
@@ -408,23 +350,16 @@ const resolveName = (name: string, cameraOffsetAt: TimeSources['cameraOffsetAt']
 };
 
 /**
- * The time-trust inputs a file carries, as `resolveTime` takes them: `digitized: true` and a
- * `whenName` that is a capture time. Anything else there is no input.
+ * The attrs a resolution writes on its file, nulls where there is nothing — the shape `vfs.update`
+ * wants either way, and why a qualifier goes whenever another source wins. `digitized` marks a scan:
+ * a file whose camera the registry calls a digitizer (`digitizer`, the clock it was resolved with).
  */
-export const stampedSources = (attrs: Record<string, unknown>): { digitized?: boolean; name?: string } => ({
-  ...(attrs.digitized === true ? { digitized: true } : {}),
-  ...(typeof attrs.whenName === 'string' && isCaptureTime(attrs.whenName) ? { name: attrs.whenName } : {}),
-});
-
-/**
- * The four attrs, nulls where there is nothing — the shape `vfs.update` wants either way, and why a
- * qualifier goes whenever another source wins.
- */
-export const timeAttrs = (resolved: ResolvedTime | null): Record<string, unknown> => ({
+export const timeAttrs = (resolved: ResolvedTime | null, digitizer: boolean | undefined): Record<string, unknown> => ({
   takenAt: resolved?.takenAt ?? null,
   takenAtUtc: resolved?.takenAtUtc ?? null,
   takenAtSource: resolved?.takenAtSource ?? null,
   takenAtQualifier: resolved?.takenAtQualifier ?? null,
+  digitized: digitizer === true ? true : null,
 });
 
 /** The `when` block `exif-extract` normalizes onto a file's `metadata/exif` child. */

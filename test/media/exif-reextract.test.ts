@@ -8,7 +8,7 @@
  * EMS is a stub answering `media.probe` from a table; the parsing is the command's own.
  */
 
-import { ALBUMS_ROOT } from '@archive/paths';
+import { ALBUMS_ROOT, CAMERAS_ROOT } from '@archive/paths';
 import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, testCommands } from '@ein/testing';
 import { startStubEms } from '@ems/testing';
@@ -50,6 +50,7 @@ type FileAttrs = {
   positionManual?: { lat: number; lng: number };
   takenAt?: string;
   indexedAt?: string;
+  digitized?: boolean;
 };
 
 type ExifAttrs = {
@@ -203,6 +204,26 @@ Deno.test({
       await cmd.shouldSucceed(`${env} exif-extract -f ${file} && exif-interpret ${file}`);
       assertEquals(await hasLocation(file), true, 'no fix in the new bytes must not remove the manual position');
       assertEquals(await readPosition(), { lat: 47.6, lng: -122.3 });
+    });
+
+    await t.step('a file whose camera is a digitizer is a scan, dated without its clock and placed by its fix', async () => {
+      const file = `${dir}/scan.jpg`;
+      await client.exec(`mkdir -p ${CAMERAS_ROOT}`);
+      await cmd.shouldSucceed('camera-create --name "HP ScanJet 3500" --make HP --model "ScanJet 3500" --digitizer');
+      await cmd.shouldSucceed(`mkfile ${file}`);
+      dump = FULL_DUMP;
+      await cmd.shouldSucceed(`${env} exif-extract ${file}`);
+      await vfs.update(ADMIN_ACCESS, file, { attrs: { cameraPath: `${CAMERAS_ROOT}/HP_ScanJet_3500` } });
+      await cmd.shouldSucceed(`exif-interpret ${file}`);
+      const scan = await attrsOf(file);
+      assertEquals([scan.digitized, scan.takenAt], [true, undefined]);
+      assertEquals(await hasLocation(file), true);
+
+      // With no digitizer for its camera it is no scan, and its camera clock dates it.
+      await vfs.update(ADMIN_ACCESS, file, { attrs: { cameraPath: null } });
+      await cmd.shouldSucceed(`exif-interpret ${file}`);
+      const photo = await attrsOf(file);
+      assertEquals([photo.digitized, photo.takenAt], [undefined, '2020-05-01T12:00:00']);
     });
   } finally {
     await stub.close();

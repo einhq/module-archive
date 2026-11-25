@@ -422,8 +422,8 @@ export async function deriveGaps(
   }
 
   // A scan whose damage was never read, or read by another method than EMS's now: the first is a
-  // scan that arrived while nothing listened or was marked a scan after it was interpreted, which
-  // stamps `digitized` without interpreting it again.
+  // scan that arrived while nothing listened, or one whose camera was marked a digitizer after it
+  // was interpreted, which marks it `digitized` without interpreting it again.
   if (!undecodable && interpreted && file.attrs.digitized === true && RESTORABLE.has(mimetype)) {
     const damageBy = str(file.attrs.damageBy);
     if (!str(file.attrs.damageAt) || (ctx.damageGeneration !== undefined && damageBy !== ctx.damageGeneration)) {

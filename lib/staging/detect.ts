@@ -1,7 +1,7 @@
 /**
  * `staging detect`: what a folder of new files looks like it came from (a Google Photos Takeout,
- * scans, a phone, a camera, a messenger, screenshots) and so which kind of category it belongs in,
- * with the evidence and how sure (`StagingDetection`).
+ * scans, a phone, a camera, a messenger, screenshots), with the evidence and how sure
+ * (`StagingDetection`).
  *
  * A folder costs a bounded number of reads however large its tree is (`gather`): one page of
  * folders from each of at most `FOLDERS_PER_LEVEL` folders on each of three levels, one aggregate
@@ -9,11 +9,10 @@
  * `BODY_READS` JSON files (or as many paired sidecars), and the EXIF of at most `EXIF_READS`
  * indexed media. The rules (`classify`) are pure, over what was read (`Seen`).
  */
-import type { StagingCategoryKind, StagingDetectAnswer, StagingDetection, StagingDetectionConfidence } from '@archive/staging/api';
+import type { StagingDetectAnswer, StagingDetection, StagingDetectionConfidence, StagingSource } from '@archive/staging/api';
 import type { Command } from '@ein/client';
 import { readSidecar } from '@archive/media/paired-sidecar';
-import { type CategoryEntry, readCategories } from '@archive/staging/category';
-import { categoryPath, DEFAULT_CATEGORY, isUploadFolder, parseStagedPath, stagedPlace } from '@archive/staging/paths';
+import { categoryPath, DEFAULT_CATEGORY, isUploadFolder } from '@archive/staging/paths';
 import { basename } from '@std/path';
 
 type Vfs = Command['sys']['vfs'];
@@ -49,8 +48,8 @@ const UPLOAD_FOLDERS_READ = 14;
 /** Folders directly in the default category read at most. */
 const ARRIVAL_LISTING = 2_000;
 
-/** A kind a folder can be detected as: every kind but the default category's and `generic`. */
-type SourceKind = Exclude<StagingCategoryKind, 'inbox' | 'generic'>;
+/** A source whose marks a folder can carry: every source but `generic`. */
+type Source = Exclude<StagingSource, 'generic'>;
 
 /** The camera a medium's EXIF names, or null for an EXIF that names none. */
 type Camera = { make?: string; model?: string } | null;
@@ -80,29 +79,29 @@ const MEDIA_MIME = /^(?:image|video|audio)\//;
 const MEDIA_EXT = /\.(?:jpe?g|heic|heif|png|gif|webp|tiff?|bmp|dng|nef|cr2|cr3|arw|raf|orf|rw2|pef|srw|mp4|mov|m4v|3gp|avi|mts|mkv|webm|mp3|m4a|wav|opus|ogg|aac)$/i;
 const RAW_EXT = /\.(?:nef|cr2|cr3|arw|raf|orf|rw2|pef|srw)$/i;
 
-/** How strongly a sign points at its kind: a mark only that source leaves is 3. */
+/** How strongly a sign points at its source: a mark only that source leaves is 3. */
 type Weight = 1 | 2 | 3;
-type Sign = { kind: SourceKind; weight: Weight; text: string };
+type Sign = { source: Source; weight: Weight; text: string };
 
-/** The kinds in the order a tie goes. */
-const KINDS: SourceKind[] = ['google-photos', 'scans', 'messaging', 'screenshots', 'phone', 'camera'];
+/** The sources in the order a tie goes. */
+const SOURCES: Source[] = ['google-photos', 'scans', 'messaging', 'screenshots', 'phone', 'camera'];
 
 /** File names each source writes, anchored at the start. */
-const NAME_MARKS: { kind: SourceKind; pattern: RegExp }[] = [
-  { kind: 'scans', pattern: /^scan(?:ned)?[ _-]?\d/i },
-  { kind: 'scans', pattern: /^FastFoto_\d/i },
+const NAME_MARKS: { source: Source; pattern: RegExp }[] = [
+  { source: 'scans', pattern: /^scan(?:ned)?[ _-]?\d/i },
+  { source: 'scans', pattern: /^FastFoto_\d/i },
   // A scanner's day and running number; a phone's IMG_ name has a six-digit time instead.
-  { kind: 'scans', pattern: /^IMG_\d{8}_\d{4}(?!\d)/ },
-  { kind: 'phone', pattern: /^PXL_\d{8}_\d{9}/ },
-  { kind: 'phone', pattern: /^(?:IMG|VID|PANO|MVIMG)_\d{8}_\d{6}(?!\d)/ },
-  { kind: 'phone', pattern: /^\d{8}_\d{6}(?!\d)/ },
-  { kind: 'messaging', pattern: /^(?:IMG|VID|AUD|PTT|STK)-\d{8}-WA\d{4}/ },
-  { kind: 'messaging', pattern: /^signal-\d{4}-\d{2}-\d{2}-\d{6}/ },
-  { kind: 'messaging', pattern: /^photo_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}/ },
-  { kind: 'screenshots', pattern: /^(?:Screenshot|Screen Shot|Skärmavbild|Skärmbild|Bildschirmfoto)[ _-]/i },
-  { kind: 'camera', pattern: /^_?DSC[NF_]?\d{4,5}(?!\d)/ },
-  { kind: 'camera', pattern: /^P\d{7}(?!\d)/ },
-  { kind: 'camera', pattern: /^(?:GOPR\d{4}|G[HX]\d{6}|DJI_\d{4})(?!\d)/ },
+  { source: 'scans', pattern: /^IMG_\d{8}_\d{4}(?!\d)/ },
+  { source: 'phone', pattern: /^PXL_\d{8}_\d{9}/ },
+  { source: 'phone', pattern: /^(?:IMG|VID|PANO|MVIMG)_\d{8}_\d{6}(?!\d)/ },
+  { source: 'phone', pattern: /^\d{8}_\d{6}(?!\d)/ },
+  { source: 'messaging', pattern: /^(?:IMG|VID|AUD|PTT|STK)-\d{8}-WA\d{4}/ },
+  { source: 'messaging', pattern: /^signal-\d{4}-\d{2}-\d{2}-\d{6}/ },
+  { source: 'messaging', pattern: /^photo_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}/ },
+  { source: 'screenshots', pattern: /^(?:Screenshot|Screen Shot|Skärmavbild|Skärmbild|Bildschirmfoto)[ _-]/i },
+  { source: 'camera', pattern: /^_?DSC[NF_]?\d{4,5}(?!\d)/ },
+  { source: 'camera', pattern: /^P\d{7}(?!\d)/ },
+  { source: 'camera', pattern: /^(?:GOPR\d{4}|G[HX]\d{6}|DJI_\d{4})(?!\d)/ },
 ];
 
 /** A camera's or an iPhone's running number: which, the EXIF or the HEIC beside it says. */
@@ -112,24 +111,24 @@ const RUNNING_NUMBER = /^(?:IMG|MVI)_\d{4}(?!\d)/;
  * Folder paths (relative, the folder's own name first) each source makes, with how strongly; `what`
  * says it of the last folder of the first path that matched, and how many did.
  */
-const FOLDER_MARKS: { kind: SourceKind; weight: Weight; pattern: RegExp; what: (name: string, count: number) => string }[] = [
-  { kind: 'google-photos', weight: 3, pattern: /(?:^|\/)Takeout\/Google (?:Photos|Foto)$/i, what: () => 'a Takeout/Google Photos folder' },
-  { kind: 'google-photos', weight: 2, pattern: /(?:^|\/)Google (?:Photos|Foto)$/i, what: (name) => `a ${name} folder` },
-  { kind: 'google-photos', weight: 2, pattern: /(?:^|\/)(?:Photos from|Foton från|Bilder från) \d{4}$/i, what: (name, count) => `${count} folder(s) like ${name}` },
-  { kind: 'phone', weight: 3, pattern: /(?:^|\/)DCIM\/Camera$/i, what: () => 'a DCIM/Camera folder' },
-  { kind: 'phone', weight: 3, pattern: /(?:^|\/)DCIM\/\d{3}APPLE$/i, what: (name) => `an iPhone's DCIM/${name} folder` },
-  { kind: 'camera', weight: 3, pattern: /(?:^|\/)DCIM\/\d{3}(?!APPLE)[A-Z_]{5}$/i, what: (name) => `a camera's DCIM/${name} folder` },
-  { kind: 'phone', weight: 1, pattern: /(?:^|\/)DCIM$/i, what: () => 'a DCIM folder' },
-  { kind: 'camera', weight: 1, pattern: /(?:^|\/)DCIM$/i, what: () => 'a DCIM folder' },
+const FOLDER_MARKS: { source: Source; weight: Weight; pattern: RegExp; what: (name: string, count: number) => string }[] = [
+  { source: 'google-photos', weight: 3, pattern: /(?:^|\/)Takeout\/Google (?:Photos|Foto)$/i, what: () => 'a Takeout/Google Photos folder' },
+  { source: 'google-photos', weight: 2, pattern: /(?:^|\/)Google (?:Photos|Foto)$/i, what: (name) => `a ${name} folder` },
+  { source: 'google-photos', weight: 2, pattern: /(?:^|\/)(?:Photos from|Foton från|Bilder från) \d{4}$/i, what: (name, count) => `${count} folder(s) like ${name}` },
+  { source: 'phone', weight: 3, pattern: /(?:^|\/)DCIM\/Camera$/i, what: () => 'a DCIM/Camera folder' },
+  { source: 'phone', weight: 3, pattern: /(?:^|\/)DCIM\/\d{3}APPLE$/i, what: (name) => `an iPhone's DCIM/${name} folder` },
+  { source: 'camera', weight: 3, pattern: /(?:^|\/)DCIM\/\d{3}(?!APPLE)[A-Z_]{5}$/i, what: (name) => `a camera's DCIM/${name} folder` },
+  { source: 'phone', weight: 1, pattern: /(?:^|\/)DCIM$/i, what: () => 'a DCIM folder' },
+  { source: 'camera', weight: 1, pattern: /(?:^|\/)DCIM$/i, what: () => 'a DCIM folder' },
   {
-    kind: 'messaging',
+    source: 'messaging',
     weight: 3,
     pattern: /(?:^|\/)WhatsApp (?:Images|Video|Animated Gifs|Stickers|Documents|Audio|Voice Notes)$/i,
     what: (name) => `a ${name} folder`,
   },
-  { kind: 'messaging', weight: 2, pattern: /(?:^|\/)(?:WhatsApp|Telegram(?: Images| Video)?|Signal|Messenger)$/i, what: (name) => `a ${name} folder` },
-  { kind: 'screenshots', weight: 2, pattern: /(?:^|\/)(?:Screenshots?|Screen ?shots|Skärmbilder|Skärmavbilder|Bildschirmfotos)$/i, what: (name) => `a ${name} folder` },
-  { kind: 'scans', weight: 2, pattern: /(?:^|\/)[^/]*\b(?:scan(?:s|ned|ning)?|skann\w*)\b[^/]*$/i, what: (name) => `a folder named ${name}` },
+  { source: 'messaging', weight: 2, pattern: /(?:^|\/)(?:WhatsApp|Telegram(?: Images| Video)?|Signal|Messenger)$/i, what: (name) => `a ${name} folder` },
+  { source: 'screenshots', weight: 2, pattern: /(?:^|\/)(?:Screenshots?|Screen ?shots|Skärmbilder|Skärmavbilder|Bildschirmfotos)$/i, what: (name) => `a ${name} folder` },
+  { source: 'scans', weight: 2, pattern: /(?:^|\/)[^/]*\b(?:scan(?:s|ned|ning)?|skann\w*)\b[^/]*$/i, what: (name) => `a folder named ${name}` },
 ];
 
 /** Folder names listed first: those a source names its folders. */
@@ -147,7 +146,7 @@ const CAMERA_MAKE =
   /^(?:nikon|canon|sony|fujifilm|olympus|om digital|panasonic|pentax|ricoh|leica|sigma|hasselblad|gopro|dji|kodak|minolta|konica minolta|casio|samsung techwin|insta360)\b/i;
 
 /** What made a camera's pictures: a scanner, a phone, a camera, or none that is known. */
-const cameraKind = (camera: NonNullable<Camera>): 'scans' | 'phone' | 'camera' | undefined => {
+const cameraSource = (camera: NonNullable<Camera>): 'scans' | 'phone' | 'camera' | undefined => {
   const both = `${camera.make ?? ''} ${camera.model ?? ''}`;
   if (SCANNER.test(both)) return 'scans';
   if (PHONE_MAKE.test(camera.make ?? '')) return 'phone';
@@ -172,7 +171,7 @@ const signsOf = (seen: Seen): Sign[] => {
   for (const mark of FOLDER_MARKS) {
     const hits = paths.filter((path) => mark.pattern.test(path));
     if (hits.length === 0) continue;
-    signs.push({ kind: mark.kind, weight: mark.weight, text: mark.what(basename(hits[0]), hits.length) });
+    signs.push({ source: mark.source, weight: mark.weight, text: mark.what(basename(hits[0]), hits.length) });
   }
 
   // Mimetypes of every file within.
@@ -181,83 +180,83 @@ const signsOf = (seen: Seen): Sign[] => {
   const tiff = ofType(/^image\/tiff$/);
   const heic = ofType(/^image\/hei[cf]/);
   const png = ofType(/^image\/png$/);
-  if (images >= 3 && tiff / images >= 0.5) signs.push({ kind: 'scans', weight: 2, text: `${percent(tiff, images)} of ${images} images are TIFF` });
-  if (images >= 3 && heic / images >= 0.2) signs.push({ kind: 'phone', weight: 2, text: `${percent(heic, images)} of ${images} images are HEIC` });
-  if (images >= 3 && png / images >= 0.8) signs.push({ kind: 'screenshots', weight: 1, text: `${percent(png, images)} of ${images} images are PNG` });
+  if (images >= 3 && tiff / images >= 0.5) signs.push({ source: 'scans', weight: 2, text: `${percent(tiff, images)} of ${images} images are TIFF` });
+  if (images >= 3 && heic / images >= 0.2) signs.push({ source: 'phone', weight: 2, text: `${percent(heic, images)} of ${images} images are HEIC` });
+  if (images >= 3 && png / images >= 0.8) signs.push({ source: 'screenshots', weight: 1, text: `${percent(png, images)} of ${images} images are PNG` });
 
   // The cameras the EXIF names.
   const named = seen.cameras.filter((camera): camera is NonNullable<Camera> => camera !== null);
-  const byKind = new Map<string, NonNullable<Camera>[]>();
+  const bySource = new Map<Source, NonNullable<Camera>[]>();
   for (const camera of named) {
-    const kind = cameraKind(camera);
-    if (kind) byKind.set(kind, [...byKind.get(kind) ?? [], camera]);
+    const source = cameraSource(camera);
+    if (source) bySource.set(source, [...bySource.get(source) ?? [], camera]);
   }
   const cameraName = (camera: NonNullable<Camera>) => [camera.make, camera.model].filter(Boolean).join(' ');
-  for (const [kind, cameras] of byKind) {
+  for (const [source, cameras] of bySource) {
     if (cameras.length * 2 < named.length) continue;
-    const weight: Weight = kind === 'scans' ? 3 : 2;
-    const what = kind === 'scans' ? 'a scanner' : kind === 'phone' ? 'a phone' : 'a camera';
-    signs.push({ kind: kind as SourceKind, weight, text: `${what} in the EXIF of ${cameras.length} of ${seen.cameras.length} files read (${cameraName(cameras[0])})` });
+    const weight: Weight = source === 'scans' ? 3 : 2;
+    const what = source === 'scans' ? 'a scanner' : source === 'phone' ? 'a phone' : 'a camera';
+    signs.push({ source, weight, text: `${what} in the EXIF of ${cameras.length} of ${seen.cameras.length} files read (${cameraName(cameras[0])})` });
   }
   const noCamera = seen.cameras.length >= 3 && named.length === 0;
-  if (noCamera) signs.push({ kind: 'scans', weight: 1, text: `no camera in the EXIF of ${seen.cameras.length} files read` });
+  if (noCamera) signs.push({ source: 'scans', weight: 1, text: `no camera in the EXIF of ${seen.cameras.length} files read` });
   if (seen.sizes.length >= 5) {
     const counts = new Map<string, number>();
     for (const size of seen.sizes) counts.set(size, (counts.get(size) ?? 0) + 1);
     const [size, count] = [...counts].sort((a, b) => b[1] - a[1])[0];
-    if (count / seen.sizes.length >= 0.8) signs.push({ kind: 'scans', weight: 1, text: `${count} of ${seen.sizes.length} images read are ${size}` });
+    if (count / seen.sizes.length >= 0.8) signs.push({ source: 'scans', weight: 1, text: `${count} of ${seen.sizes.length} images read are ${size}` });
   }
 
   // Sampled names.
   if (seen.media.length > 0) {
     const of = seen.media.length;
-    for (const kind of KINDS) {
-      const hits = seen.media.filter((name) => NAME_MARKS.some((mark) => mark.kind === kind && mark.pattern.test(name)));
+    for (const source of SOURCES) {
+      const hits = seen.media.filter((name) => NAME_MARKS.some((mark) => mark.source === source && mark.pattern.test(name)));
       const weight = shareWeight(hits.length, of);
-      if (weight !== 0) signs.push({ kind, weight, text: `${hits.length} of ${of} names like ${hits[0]}` });
+      if (weight !== 0) signs.push({ source, weight, text: `${hits.length} of ${of} names like ${hits[0]}` });
     }
     const raw = seen.media.filter((name) => RAW_EXT.test(name));
-    if (raw.length / of >= 0.1) signs.push({ kind: 'camera', weight: 2, text: `${raw.length} of ${of} files are camera RAW, such as ${raw[0]}` });
+    if (raw.length / of >= 0.1) signs.push({ source: 'camera', weight: 2, text: `${raw.length} of ${of} files are camera RAW, such as ${raw[0]}` });
     // A running number is a camera's or an iPhone's: the camera, or else HEIC, says which.
     const running = seen.media.filter((name) => RUNNING_NUMBER.test(name));
     const weight = shareWeight(running.length, of);
-    const owner = (byKind.get('camera')?.length ?? 0) * 2 >= named.length && named.length > 0
+    const owner = (bySource.get('camera')?.length ?? 0) * 2 >= named.length && named.length > 0
       ? 'camera'
-      : (byKind.get('phone')?.length ?? 0) * 2 >= named.length && named.length > 0
+      : (bySource.get('phone')?.length ?? 0) * 2 >= named.length && named.length > 0
       ? 'phone'
       : images > 0 && heic / images >= 0.2
       ? 'phone'
       : undefined;
-    if (weight !== 0 && owner) signs.push({ kind: owner, weight: weight === 3 ? 2 : weight, text: `${running.length} of ${of} names like ${running[0]}` });
+    if (weight !== 0 && owner) signs.push({ source: owner, weight: weight === 3 ? 2 : weight, text: `${running.length} of ${of} names like ${running[0]}` });
   }
 
   // Google's JSON.
   const supplemental = seen.json.filter((name) => SUPPLEMENTAL_JSON.test(name));
   const photoJson = seen.json.filter((name) => PHOTO_JSON.test(name) && !SUPPLEMENTAL_JSON.test(name));
-  if (supplemental.length > 0) signs.push({ kind: 'google-photos', weight: 3, text: `${supplemental.length} JSON names like ${supplemental[0]}` });
-  if (photoJson.length >= 2) signs.push({ kind: 'google-photos', weight: 2, text: `${photoJson.length} JSON names like ${photoJson[0]}` });
-  if (seen.bodies.google > 0) signs.push({ kind: 'google-photos', weight: 3, text: `${seen.bodies.google} of ${seen.bodies.read} JSON sidecars read are Google Photos'` });
+  if (supplemental.length > 0) signs.push({ source: 'google-photos', weight: 3, text: `${supplemental.length} JSON names like ${supplemental[0]}` });
+  if (photoJson.length >= 2) signs.push({ source: 'google-photos', weight: 2, text: `${photoJson.length} JSON names like ${photoJson[0]}` });
+  if (seen.bodies.google > 0) signs.push({ source: 'google-photos', weight: 3, text: `${seen.bodies.google} of ${seen.bodies.read} JSON sidecars read are Google Photos'` });
 
   return signs;
 };
 
 /** What a folder looks like, from what was read of it. */
-const classify = (seen: Seen): { kind: StagingCategoryKind; confidence: StagingDetectionConfidence; evidence: string[] } => {
+const classify = (seen: Seen): { source: StagingSource; confidence: StagingDetectionConfidence; evidence: string[] } => {
   const signs = signsOf(seen);
-  const scores = KINDS.map((kind) => ({ kind, score: signs.filter((sign) => sign.kind === kind).reduce((sum, sign) => sum + sign.weight, 0) }));
-  const ranked = scores.toSorted((a, b) => b.score - a.score || KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind));
+  const scores = SOURCES.map((source) => ({ source, score: signs.filter((sign) => sign.source === source).reduce((sum, sign) => sum + sign.weight, 0) }));
+  const ranked = scores.toSorted((a, b) => b.score - a.score || SOURCES.indexOf(a.source) - SOURCES.indexOf(b.source));
   const [best, next] = ranked;
   if (best.score === 0) {
     const sampled = seen.media.length + seen.json.length;
     return {
-      kind: 'generic',
+      source: 'generic',
       confidence: sampled >= 50 ? 'medium' : 'low',
       evidence: [seen.files === 0 ? 'no files within' : `no source's marks in ${sampled} names and ${seen.folders.length} folders`],
     };
   }
   const confidence: StagingDetectionConfidence = best.score >= 3 && next.score * 2 <= best.score ? 'high' : best.score >= 2 && next.score < best.score ? 'medium' : 'low';
-  const evidence = signs.filter((sign) => sign.kind === best.kind).toSorted((a, b) => b.weight - a.weight).map((sign) => sign.text);
-  return { kind: best.kind, confidence, evidence };
+  const evidence = signs.filter((sign) => sign.source === best.source).toSorted((a, b) => b.weight - a.weight).map((sign) => sign.text);
+  return { source: best.source, confidence, evidence };
 };
 
 /** Up to `count` of `items`, spread evenly over them. */
@@ -419,40 +418,23 @@ const arrivals = async (vfs: Vfs, access: Access, user: string): Promise<{ paths
 };
 
 /**
- * The category of `categories` a folder at `path` detected as `kind` goes to: the one it lies in
- * when that is of the kind, otherwise the first of the kind; null for none, and for `generic`.
- */
-const categoryFor = (categories: CategoryEntry[], path: string, kind: StagingCategoryKind): StagingDetection['category'] => {
-  if (kind === 'generic' || kind === 'inbox') return null;
-  const place = stagedPlace(path);
-  const found = categories.find((category) => category.name === place?.category && category.settings.kind === kind) ??
-    categories.find((category) => category.settings.kind === kind);
-  return found ? { name: found.name, label: found.settings.label, path: found.path } : null;
-};
-
-/**
  * `staging detect`: a detection of each of `paths`, or without any of the folders newly arrived
- * in `user`'s default category (`arrivals`). A staged folder's category is looked for among its
- * owner's categories, any other folder's among `user`'s.
+ * in `user`'s default category (`arrivals`).
  */
 export const detectFolders = async (vfs: Vfs, access: Access, user: string, paths: string[]): Promise<StagingDetectAnswer> => {
   if (paths.length > DETECT_MAX) throw new Error(`detect takes at most ${DETECT_MAX} folders`);
   const arrived = paths.length === 0 ? await arrivals(vfs, access, user) : { paths, more: false };
-  const categories = new Map<string, CategoryEntry[]>();
   const detections: StagingDetection[] = [];
   for (const path of arrived.paths) {
     const dismissed = paths.length > 0 && isDismissed((await vfs.get(access, path)).attrs);
     const seen = await gather(vfs, access, path);
-    const { kind, confidence, evidence } = classify(seen);
-    const owner = parseStagedPath(path)?.user ?? user;
-    if (!categories.has(owner)) categories.set(owner, await readCategories(vfs, access, owner).catch(() => []));
+    const { source, confidence, evidence } = classify(seen);
     detections.push({
       path,
       dismissed,
-      kind,
+      source,
       confidence,
       evidence,
-      category: categoryFor(categories.get(owner)!, path, kind),
       seen: { files: seen.files, sampled: seen.media.length + seen.json.length, folders: seen.folders.length },
     });
   }

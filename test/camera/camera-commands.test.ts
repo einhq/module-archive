@@ -21,7 +21,7 @@ type Relink = { linked: number; retimed: number; skipped: number };
 type RelinkAll = Relink & { cameras: { camera: string; linked: number }[]; unmatchable: number; failed: number };
 
 /** The hand-typed source and the attrs the resolver derives from it. */
-type Times = { whenManual?: string; takenAt?: string; takenAtUtc?: string; takenAtSource?: string };
+type Times = { whenManual?: string; takenAt?: string; takenAtUtc?: string; takenAtSource?: string; digitized?: boolean };
 
 Deno.test({
   name: 'camera commands',
@@ -244,11 +244,13 @@ Deno.test({
       attrs = await client.execJson<Times>('attrs /shots/scan.jpg');
       assertEquals(attrs.takenAt, '2024-05-01T11:37:34');
       assertEquals(attrs.takenAtSource, 'camera');
+      assertEquals(attrs.digitized, undefined, 'a file of a camera that is no digitizer is no scan');
 
       const suppressed = await client.execJson<{ relink: Relink }>(`camera-update ${CAMERAS_ROOT}/HP_ScanJet_3500 --digitizer`);
       assertEquals(suppressed.relink.retimed, 1);
       attrs = await client.execJson<Times>('attrs /shots/scan.jpg');
       assertEquals(attrs.takenAt, undefined);
+      assertEquals(attrs.digitized, true, "a digitizer's file is a scan");
 
       // The link remains a camera-page membership even after the scanner's
       // false capture date is correctly suppressed.

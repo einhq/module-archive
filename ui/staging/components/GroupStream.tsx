@@ -5,12 +5,11 @@ import type {
   StagingCategoryStatus,
   StagingDiscardResult,
   StagingEditResult,
-  StagingLaterResult,
   StagingPromoteResult,
   StagingUndoResult,
 } from '@archive/staging/api';
 import { type Proposal, proposalInputOf, proposeDestination } from '@archive/staging/proposal';
-import { EmptyState, PageLoader, SectionStream, type SectionStreamHandle, TablerIcon } from '@ein/ui/components';
+import { EmptyState, PageLoader, ScrollBox, SectionStream, type SectionStreamHandle, TablerIcon } from '@ein/ui/components';
 import {
   type MediaSelection,
   type SectionOrder,
@@ -41,7 +40,7 @@ import {
 import { dismissToast, execCommand, type MediaItem, notify, openMediaAt } from '@ein/ui/signals';
 import { Alert, Box, Button, Group, Menu, SegmentedControl, Select, Text, VisuallyHidden } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { albumRoute } from '../../media/lib/album-path.ts';
 import { type AlbumChoice, AlbumPickerDialog } from '../../media/components/AlbumPickerDialog.tsx';
@@ -54,7 +53,7 @@ import { useDuplicateSets } from '../hooks/useDuplicateSets.ts';
 import { groupDuplicates, separateCommand } from '../lib/duplicate-sets.ts';
 import { stepCandidate } from '../lib/compare.ts';
 import * as commands from '../lib/decision-commands.ts';
-import { type AlbumTarget, CONFIDENCE_WORDS, parseRecent, parseTarget, proposalLabel, stickyTarget, withRecent } from '../lib/destinations.ts';
+import { type AlbumTarget, CONFIDENCE_WORDS, parseRecent, proposalLabel, selectedAlbum, withRecent } from '../lib/destinations.ts';
 import { inLane, isLane, isLaneGroup, laneCounts, LANES, type StagingLane } from '../lib/lanes.ts';
 import { nameGiver } from '../lib/merge-name.ts';
 import { type PartSection, stepPart } from '../lib/part-sections.ts';
@@ -67,7 +66,6 @@ import {
   discardChunks,
   fileChunks,
   intoGroupChunks,
-  laterChunks,
   newAlbumChunks,
   noParts,
   partsCount,
@@ -79,15 +77,16 @@ import { useTriageKeys } from '../hooks/useTriageKeys.ts';
 import { BulkConfirmDialog } from './BulkConfirmDialog.tsx';
 import { CompareDialog } from './CompareDialog.tsx';
 import { DeleteGroupDialog } from './DeleteGroupDialog.tsx';
-import { DestinationColumn, type DropDestination } from './DestinationColumn.tsx';
+import { DestinationColumn, type DropDestination, RECENT_SHOWN } from './DestinationColumn.tsx';
 import { DiscardGroupDialog } from './DiscardGroupDialog.tsx';
 import { GroupPickerDialog } from './GroupPickerDialog.tsx';
 import type { GroupActions, GroupDrop, GroupFailure, GroupSelected } from './GroupHeader.tsx';
 import { closedSectionHeight, GroupSection, type PartMatch, SECTION_METRICS } from './GroupSection.tsx';
 import { NameDialog } from './NameDialog.tsx';
+import './sort-panes.css';
 
 type Props = {
-  /** The category whose suggested groups are sorted, and whose destination is the default target. */
+  /** The category whose suggested groups are sorted. */
   category: StagingCategoryStatus;
   /** Something was filed, merged or deleted, so the category's numbers changed; called once a run of decisions has rested. */
   onChanged: () => void;
@@ -115,17 +114,13 @@ type Decision<T> = {
   cursorTo?: string | null;
   /** The album filed into, remembered among the recent ones. */
   filedInto?: (answer: T) => AlbumTarget | undefined;
-  /** How to undo it when it changed no journaled files: `staging later` with `--off` (true) or without. */
-  laterOff?: boolean;
-  /** The group is still there once it is done, in another lane, as this says: it is changed so and read again, not dropped. */
-  stays?: (row: GroupRow) => GroupRow;
   /** An edit of the groups: those it made or changed are read again, and those it removed leave. */
   regrouped?: (answer: T) => StagingEditResult;
 };
 
 /** A decision of this session, newest last: what Z takes back. A run over many groups is undone whole. */
 type Taken =
-  | { id: number; label: string; row: GroupRow; queued: number; journal: string[] | null; laterOff?: boolean; bulk?: undefined }
+  | { id: number; label: string; row: GroupRow; queued: number; journal: string[] | null; bulk?: undefined }
   | { id: number; label: string; bulk: BulkHandle };
 
 /** Groups at least this large ask before X discards them. */
@@ -195,25 +190,27 @@ const skeletonImage = (phone: boolean): string => {
 
 /**
  * The Sort tab: a category's suggested albums (those in its groups directory) as one stream, oldest
- * first, the cursor's group open and the others closed to a strip of their pictures; on a wide page
- * the destination column beside it.
+ * first, the cursor's group open and the others closed to a strip of their pictures. Past a phone it
+ * is two panes side by side, filling the window below the page's header: the stream, which scrolls
+ * in its own box, and on a wide page the destination column, which scrolls by itself. A phone's
+ * stream scrolls with the page, and has no column.
  *
  * J and K move the cursor; Enter applies the group's proposal; 1, 2 and 3 file it into its candidate
- * albums, `,` and `.` move the highlight among them, R says the highlighted one is not where it
- * goes, and C widens the column to compare that album's pictures with the group's; N and P make it
- * a new album, shared or private; A files it into any album; B into the sticky target (⇧B chooses
- * it); X discards it; L puts it aside for later; E renames it; M merges it into the group above and
- * ⇧M the group below into it; T sets the time of its pictures; Z undoes the last decision of the
- * session. An Everyday lane's proposal files the days that match an album, each into its album;
- * a part of it with a match goes there on Enter.
+ * albums, `,` and `.` select among them (a click selects any album of the column, which Move to
+ * then files into), R says the selected candidate is not where it goes, and C widens the column to
+ * compare the selected album's pictures with the group's; N makes it a new
+ * album, named first; A files it into any album; X discards it; E renames it; T sets the time of its
+ * pictures; Z undoes the last decision of the session. An Everyday lane's proposal files the days
+ * that match an album, each into its album; a part of it with a match goes there on Enter. The keys
+ * are listed by the page's keyboard shortcuts (`?`), from `lib/triage-keys.ts`.
  *
  * Inside the open group, `[` and `]` step through its parts (a day each, or a month each in a long
  * group); with a part, or pictures of the group selected (Space on a picture, or a click once one
- * is), Enter, N, P, A, B and X act on those alone, S splits the group before them (in a lane it
- * makes them a group of their own), `<` and `>` move them into the group above or below, and G
- * into any group or a new one. With a picture under the arrows' cursor, S, `<`, `>` and G act on
- * it. Edits of the groups are journaled and undone as decisions are. A long open group has a time
- * rail of its own pictures in place of the stream's.
+ * is), Enter, N, A and X act on those alone, S splits the group before them (in a lane it makes
+ * them a group of their own), `<` and `>` move them into the group above or below, and G into any
+ * group or a new one. With a picture under the arrows' cursor, S, `<`, `>` and G act on it. Edits
+ * of the groups are journaled and undone as decisions are. A long open group has a time rail of its
+ * own pictures in place of the stream's.
  *
  * A decision takes its group out of the stream at once and moves the cursor on; its one command
  * waits its turn in the page's serial queue, and a reload asks first while any is waiting. One
@@ -226,10 +223,11 @@ const skeletonImage = (phone: boolean): string => {
  * Shift+K; the Select menu takes a lane's groups, or those whose proposal is sure; a lasso drawn
  * from the background or an unselected picture takes the closed groups it covers and the open
  * group's pictures it touches. A selection past the open group is decided on as many groups:
- * Enter accepts their proposals after a plan, N, P, A and B file them, X discards them and L puts
- * them aside, each a run of calls within the verbs' caps with a progress toast, Cancel and Undo
- * all (`hooks/useBulkRun.ts`). Selected pictures, or a header's grip, drag onto the destination
- * column's rows and onto other groups' headers, as the same commands.
+ * Enter accepts their proposals after a plan, N and A file them, X discards them, and the column
+ * merges two or more selected whole into the first of them, each a run of calls within the verbs'
+ * caps with a progress toast, Cancel and Undo all (`hooks/useBulkRun.ts`). Selected pictures drag
+ * onto the destination column's buttons and rows and onto other groups' headers, as the same
+ * commands.
  */
 export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }: Props) {
   useSignals();
@@ -238,7 +236,31 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const readingLine = useHeaderHeight();
+  // Past a phone the stream scrolls in a pane of its own, whose top is its reading line; a phone's
+  // scrolls with the page, under the page's headers.
+  const pane = !phone;
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const [paneTop, setPaneTop] = useState(0);
+  useLayoutEffect(() => {
+    if (!scroller) return;
+    // It fills the window below what is over it, so a change there resizes it; and should the page
+    // scroll after all, it moves.
+    const measure = () => setPaneTop(Math.round(scroller.getBoundingClientRect().top));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroller);
+    globalThis.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      observer.disconnect();
+      globalThis.removeEventListener('scroll', measure);
+    };
+  }, [scroller]);
+  const headerLine = useHeaderHeight();
+  const readingLine = pane ? paneTop : headerLine;
+  /** Scroll the stream by `top` px: its pane, or the page. */
+  const scrollStream = useCallback((top: number) => (scroller ?? globalThis).scrollBy({ top, behavior: 'auto' }), [scroller]);
+  /** Where what shows of the stream ends, in px from the top of the window. */
+  const streamBottom = useCallback(() => scroller ? scroller.getBoundingClientRect().bottom : globalThis.innerHeight, [scroller]);
   const streamRef = useRef<SectionStreamHandle>(null);
   const [widthRef, width] = useElementWidth<HTMLDivElement>();
   // One call per section, always the same number of them.
@@ -259,11 +281,9 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const [announce, setAnnounce] = useState('');
   const index = useGroupIndex(albumsPath, useCallback((name: string) => pendingRef.current.has(name), []));
 
-  // The viewer's own: the target chosen for this category, and the albums filed into lately.
-  const [chosenTarget, setChosenTarget] = usePersistedState<string>(`staging.target:${category.path}`, '');
+  // The viewer's own: the albums filed into lately.
   const [recentStored, setRecentStored] = usePersistedState<string>('staging.recent', '[]');
   const recent = useMemo(() => parseRecent(recentStored), [recentStored]);
-  const target = useMemo(() => stickyTarget(parseTarget(chosenTarget), category.destination, recent), [chosenTarget, category.destination, recent]);
   const remember = useCallback((album: AlbumTarget) => setRecentStored(JSON.stringify(withRecent(parseRecent(recentStored), album))), [recentStored, setRecentStored]);
 
   const statusTimer = useRef<number | undefined>(undefined);
@@ -324,8 +344,8 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     return groupDuplicates(sets, new Set(sets.flatMap((set) => set.staged.filter((member) => member.inScope).map((member) => member.id))));
   }, [openDuplicates.page]);
   const [comparingSet, setComparingSet] = useState<DuplicateSet | null>(null);
-  /** The candidate highlighted in the column (`,` and `.`), and whether the column is widened to compare (C). */
-  const [highlight, setHighlight] = useState(0);
+  /** The album selected in the column by path (`,` and `.`, or a click; none: the first candidate), and whether the column is widened to compare (C). */
+  const [albumPicked, setAlbumPicked] = useState<string | null>(null);
   const [comparing, setComparing] = useState(false);
 
   useEffect(() => {
@@ -346,11 +366,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     setWanted(urlCursor);
     broughtIntoView.current = false;
   }, [urlCursor]);
+  // In its pane, the stream is drawn once the pane is there to scroll.
+  const streamReady = !pane || scroller !== null;
   useEffect(() => {
-    if (broughtIntoView.current || cursor === null) return;
+    if (broughtIntoView.current || cursor === null || !streamReady) return;
     broughtIntoView.current = true;
     if (cursorIndex > 0) streamRef.current?.scrollToKey(cursor);
-  }, [cursor, cursorIndex]);
+  }, [cursor, cursorIndex, streamReady]);
 
   const [tileCursor, setTileCursor] = useState<string | null>(null);
   const tiles = useRef<{ items: MediaItem[]; boxes: TileBox[] }>({ items: [], boxes: [] });
@@ -369,7 +391,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const [insideOf, setInsideOf] = useState(cursor);
   if (insideOf !== cursor) {
     setInsideOf(cursor);
-    setHighlight(0);
+    setAlbumPicked(null);
     setTileCursor(null);
     setPartCursor(null);
     setOpenItems([]);
@@ -392,12 +414,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     setParts({ sections: [], byMonth: false });
     streamRef.current?.scrollToKey(name);
   }, []);
-  /** How far below the reading line the group `name` stands now, as far as the window shows; none when it is not below. */
+  /** How far below the reading line the group `name` stands now, as far as the stream shows; none when it is not below. */
   const belowReadingLine = useCallback((name: string): number | undefined => {
-    const top = document.querySelector(`[data-group="${CSS.escape(name)}"]`)?.getBoundingClientRect().top ?? globalThis.innerHeight;
-    const distance = Math.min(top, globalThis.innerHeight) - readingLine;
+    const bottom = streamBottom();
+    const top = document.querySelector(`[data-group="${CSS.escape(name)}"]`)?.getBoundingClientRect().top ?? bottom;
+    const distance = Math.min(top, bottom) - readingLine;
     return distance > 0 ? distance : undefined;
-  }, [readingLine]);
+  }, [readingLine, streamBottom]);
 
   // The cursor's pictures and the next groups' are asked for ahead; those it has moved well away from are given up.
   const prefetches = useRef(new Map<string, AbortController>());
@@ -445,15 +468,14 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     queue.enqueue({
       label: `Undoing: ${entry.label}`,
       run: () => {
-        if (entry.journal && entry.journal.length > 0) return execCommand<StagingUndoResult | StagingLaterResult>(commands.undoEntries(entry.journal));
-        if (entry.laterOff !== undefined) return execCommand<StagingUndoResult | StagingLaterResult>(commands.later(entry.row, entry.laterOff));
+        if (entry.journal && entry.journal.length > 0) return execCommand<StagingUndoResult>(commands.undoEntries(entry.journal));
         throw new Error('it changed nothing that can be put back');
       },
       onDone: (answer) => {
         index.reread([entry.row.path]);
         forgetMediaSet(entry.row.path);
         moveTo(entry.row.name);
-        const failed = 'failed' in answer ? answer.failed : [];
+        const failed = answer.failed;
         say(failed.length > 0 ? `Undone in part: ${failed[0].reason}` : `Undone: ${entry.label}`, undefined, failed.length > 0 ? 'yellow' : undefined);
         changed();
       },
@@ -484,7 +506,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       setAnnounce(`${decision.label}.${nextTitle ? ` Next: ${nextTitle}.` : ''}`);
     } else setAnnounce(`${decision.label}.`);
     setFailures((previous) => withoutKey(previous, row.name));
-    const entry: Taken = { id: ++takenIds.current, label: decision.label, row, queued: 0, journal: null, laterOff: decision.laterOff };
+    const entry: Taken = { id: ++takenIds.current, label: decision.label, row, queued: 0, journal: null };
     entry.queued = queue.enqueue({
       label: decision.label,
       run: async () => {
@@ -493,12 +515,10 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         return answer;
       },
       onDone: (answer) => {
-        if (whole && !decision.stays) {
+        if (whole) {
           index.remove([row.name]);
           setPending((previous) => without(previous, row.name));
         } else {
-          if (decision.stays) index.patch(row.name, decision.stays);
-          if (whole) setPending((previous) => without(previous, row.name));
           forgetMediaSet(row.path);
           index.reread([row.path]);
         }
@@ -511,8 +531,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
           if (touched.length > 0) index.reread(touched);
         }
         entry.journal = decision.journal(answer);
-        // Putting a group aside is not journaled, but undone by bringing it back.
-        const undoable = entry.journal.length > 0 || entry.laterOff !== undefined;
+        const undoable = entry.journal.length > 0;
         if (!undoable) taken.current = taken.current.filter((each) => each.id !== entry.id);
         const album = decision.filedInto?.(answer);
         if (album) remember(album);
@@ -664,13 +683,12 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   /** The selection by what acts on it (`lib/selection-command.ts`). */
   const chosen = useMemo(() => selectionParts(selection.selection, (name) => byName.get(name)), [selection.selection, byName]);
   const chosenCount = useMemo(() => partsCount(chosen), [chosen]);
-  /** Groups the selection holds, whole or but for some pictures: what Later and Enter act on. */
+  /** Groups the selection holds, whole or but for some pictures. */
   const selectedGroups = useMemo(() => [...chosen.groups, ...chosen.partial.map(({ group }) => group)], [chosen]);
-  const allLater = selectedGroups.length > 0 && selectedGroups.every((row) => row.staging.later !== undefined);
   // What is selected of groups that left the view (decided, gone, another lane) is let go.
   useEffect(() => selection.keep((section) => byName.has(section)), [byName]);
   const partPaths = useMemo(() => part?.items.map((item) => item.path) ?? [], [part]);
-  /** What Enter, N, P, A, B and X act on inside the open group: the selection, else the part; none for the whole group. */
+  /** What Enter, N, A and X act on inside the open group: the selection, else the part; none for the whole group. */
   const filing = selected.length > 0 ? selected : partPaths;
   /** What S, `<`, `>` and G act on: those, or the picture under the arrows' cursor. */
   const regrouping = filing.length > 0 ? filing : tileCursor !== null ? [tileCursor] : [];
@@ -706,13 +724,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   }, [decide, leaveInside]);
 
   /** Make the group, or the pictures selected in it, a new album titled `title`. */
-  const fileNew = useCallback((row: GroupRow, title: string, privately: boolean, files: readonly string[] = []) => {
+  const fileNew = useCallback((row: GroupRow, title: string, files: readonly string[] = []) => {
     const except = files.length > 0 ? openPaths.filter((path) => !files.includes(path)) : [];
     decide<StagingPromoteResult>({
       row,
       whole: files.length === 0,
-      command: commands.promoteNew(row, title, { private: privately, except }),
-      label: `Filing ${photos(files.length || (row.memberCount ?? 0))} in a new ${privately ? 'private ' : ''}album “${title}”`,
+      command: commands.promoteNew(row, title, except),
+      label: `Filing ${photos(files.length || (row.memberCount ?? 0))} in a new album “${title}”`,
       failed: `Couldn't make “${title}”`,
       check: unchanged,
       done: (answer) => `${photos(answer.moved)} filed in “${answer.album?.title ?? title}”`,
@@ -736,21 +754,6 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     });
     if (files.length > 0) leaveInside();
   }, [decide, leaveInside]);
-
-  const later = useCallback((row: GroupRow) => {
-    const off = row.staging.later !== undefined;
-    decide<StagingLaterResult>({
-      row,
-      whole: true,
-      command: commands.later(row, off),
-      label: off ? `“${row.title}” back in its lane` : `“${row.title}” put aside for later`,
-      failed: off ? "Couldn't bring it back" : "Couldn't put it aside",
-      done: () => off ? `“${row.title}” is back in its lane` : `“${row.title}” is in Later`,
-      journal: () => [],
-      laterOff: !off,
-      stays: (each) => ({ ...each, staging: off ? { ...each.staging, later: undefined } : { ...each.staging, later: new Date().toISOString() } }),
-    });
-  }, [decide]);
 
   const runBulk = useBulkRun({
     queue,
@@ -788,24 +791,23 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       label: `Filing ${selectionWords(count)} in “${album.title}”`,
       chunks: fileChunks(what, album.path),
       total: count,
-      undo: 'journal',
       done: (tally) => `${photos(tally.files)} filed in “${album.title}”`,
     });
     remember(album);
   }, [startRun, remember]);
 
   /** Make the selection one new album: the first call makes it, the rest file into it. */
-  const newAlbumParts = useCallback((what: SelectionParts<GroupRow>, title: string, privately: boolean) => {
-    const start = newAlbumChunks(what, title, privately);
+  const newAlbumParts = useCallback((what: SelectionParts<GroupRow>, title: string) => {
+    const start = newAlbumChunks(what, title);
     if (!start) {
-      say('A new album starts from a group: select one whole, or file these pictures into an album with A or B.');
+      say('A new album starts from a group: select one whole, or add these pictures to an album.');
       return;
     }
     const count = partsCount(what);
     let made: AlbumTarget | undefined;
     startRun({
       verb: 'Filing',
-      label: `Filing ${selectionWords(count)} in a new ${privately ? 'private ' : ''}album “${title}”`,
+      label: `Filing ${selectionWords(count)} in a new album “${title}”`,
       chunks: [start.first],
       then: (answer) => {
         const album = (answer as StagingPromoteResult).album;
@@ -815,7 +817,6 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         return fileChunks(start.rest, album.path);
       },
       total: count,
-      undo: 'journal',
       done: (tally) => `${photos(tally.files)} filed in “${made?.title ?? title}”`,
     });
   }, [startRun, remember, say]);
@@ -827,29 +828,9 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       label: `Discarding ${selectionWords(count)}`,
       chunks: discardChunks(what),
       total: count,
-      undo: 'journal',
       done: (tally) => `${photos(tally.files)} moved to the trash`,
     });
   }, [startRun]);
-
-  /** Put the selection's groups aside, or when every one of them is, bring them back. Nothing moves, so it is undone the other way round. */
-  const laterParts = useCallback((what: SelectionParts<GroupRow>) => {
-    const groups = [...what.groups, ...what.partial.map(({ group }) => group)];
-    if (groups.length === 0) {
-      say('Later puts groups aside: select groups whole.');
-      return;
-    }
-    const off = groups.every((row) => row.staging.later !== undefined);
-    startRun({
-      verb: off ? 'Bringing back' : 'Putting aside',
-      label: off ? `${groupCount(groups.length)} back in their lanes` : `${groupCount(groups.length)} put aside for later`,
-      chunks: laterChunks(groups, off),
-      total: { groups: groups.length, files: 0 },
-      stays: (group) => index.patch(group.name, (each) => ({ ...each, staging: { ...each.staging, later: off ? undefined : new Date().toISOString() } })),
-      undo: { laterOff: !off },
-      done: (tally) => off ? `${groupCount(tally.groups)} back in their lanes` : `${groupCount(tally.groups)} in Later`,
-    });
-  }, [startRun, say, index]);
 
   /** Accept the proposals of the groups confirmed in the plan dialog, at least as sure as `floor`. */
   const acceptGroups = useCallback((groups: GroupRow[], floor: MatchConfidence) => {
@@ -859,19 +840,19 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       label: `Accepting the proposals of ${groupCount(groups.length)}`,
       chunks: acceptChunks(groups, floor),
       total: { groups: groups.length, files },
-      undo: 'journal',
       done: (tally) => `${groupCount(tally.groups)} filed, ${photos(tally.files)}`,
     });
   }, [startRun]);
 
-  const [naming, setNaming] = useState<{ row: GroupRow; private: boolean; files: string[] } | null>(null);
+  /** Create album: of which group, which of its pictures (none: all of it), and the name it starts from. */
+  const [naming, setNaming] = useState<{ row: GroupRow; files: string[]; title: string } | null>(null);
   /** The decisions over many groups that ask first: their name, their album, the discard, the plan of their proposals. */
-  const [bulkNaming, setBulkNaming] = useState<{ parts: SelectionParts<GroupRow>; private: boolean } | null>(null);
+  const [bulkNaming, setBulkNaming] = useState<SelectionParts<GroupRow> | null>(null);
   const [bulkPicking, setBulkPicking] = useState<SelectionParts<GroupRow> | null>(null);
   const [bulkDiscarding, setBulkDiscarding] = useState<SelectionParts<GroupRow> | null>(null);
   const [accepting, setAccepting] = useState<GroupRow[] | null>(null);
-  /** The album picker: for whom, and whether what is picked becomes the target, is filed into, or both. */
-  const [picking, setPicking] = useState<{ row: GroupRow; files: string[]; setTarget: boolean; file: boolean } | null>(null);
+  /** The album picker: for which group, and which of its pictures (none: all of it). */
+  const [picking, setPicking] = useState<{ row: GroupRow; files: string[] } | null>(null);
   const [discarding, setDiscarding] = useState<GroupRow | null>(null);
   const [deleting, setDeleting] = useState<GroupRow | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -907,11 +888,10 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         proposalInputOf(
           row.title,
           row.staging,
-          category.destination,
           row.name === cursor && openDuplicates.page ? { members: row.memberCount ?? 0, libraryDuplicates: duplicatesView.library.files } : undefined,
         ),
       ),
-    [category.destination, cursor, openDuplicates.page, duplicatesView],
+    [cursor, openDuplicates.page, duplicatesView],
   );
 
   /** An Everyday lane's matched days, each into the album it matches: the rest of the lane stays. */
@@ -983,7 +963,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     const label = proposalLabel(proposal);
     if (label === undefined) return undefined;
     if (proposal.action === 'existing') return { label, run: () => fileInto(row, { path: proposal.album.path, title: proposal.album.title }, files) };
-    if (proposal.action === 'new') return { label, run: () => setNaming({ row, private: false, files }) };
+    if (proposal.action === 'new') return { label, run: () => setNaming({ row, files, title: proposal.title }) };
     if (proposal.action === 'discard') return { label, run: () => askDiscard(row, files) };
     if (files.length > 0) return undefined;
     if (proposal.action === 'parts') return { label, run: () => acceptParts(row, proposal) };
@@ -997,8 +977,14 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const apply = useCallback((row: GroupRow, files: string[]) => {
     const enter = enterFor(row, files);
     if (enter) enter.run();
-    else say('No proposal: N, A, B or X.');
+    else say('Nothing is proposed for it: create an album, add it to one, or discard it.');
   }, [enterFor, say]);
+
+  /** Create album: a new album of `files` of `row` (none: all of it), named in a dialog that starts from the proposed name, else the group's. */
+  const createAlbum = useCallback((row: GroupRow, files: string[]) => {
+    const proposal = proposalFor(row);
+    setNaming({ row, files, title: proposal.action === 'new' ? proposal.title : row.title });
+  }, [proposalFor]);
 
   /** The album each day of `row` is matched to, and filing the day there. */
   const partMatchOf = useCallback((row: GroupRow): PartMatch => (key: string) => {
@@ -1014,6 +1000,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
 
   /** The candidate albums of `row` as the column shows them. */
   const candidatesOf = useCallback((row: GroupRow) => details.get(row.path)?.candidates ?? [], [details]);
+  const cursorCandidates = useMemo(() => cursorRow ? candidatesOf(cursorRow) : [], [cursorRow, candidatesOf]);
 
   /** 1–3: into the candidate of that rank, when the reader may file into it. */
   const toCandidate = useCallback((row: GroupRow, index: number, files: string[]) => {
@@ -1026,7 +1013,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     fileInto(row, { path: candidate.album.path, title: candidate.album.title }, files);
   }, [candidatesOf, fileInto, say]);
 
-  /** R: the highlighted candidate is not where the group goes; it is matched again without it. */
+  /** R: the selected candidate is not where the group goes; it is matched again without it. */
   const rejectCandidate = useCallback((row: GroupRow, index: number) => {
     const candidate = candidatesOf(row)[index];
     if (!candidate) return;
@@ -1039,13 +1026,8 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       done: () => `“${candidate.album.title}” is no longer offered for “${row.title}”`,
       journal: editJournal,
     });
-    setHighlight(0);
+    setAlbumPicked(null);
   }, [candidatesOf, decide]);
-
-  const toTarget = useCallback((row: GroupRow, files: string[]) => {
-    if (target) fileInto(row, target, files);
-    else setPicking({ row, files, setTarget: true, file: true });
-  }, [target, fileInto]);
 
   const actionsFor = useCallback((row: GroupRow, at: number): GroupActions => {
     const proposal = proposalFor(row);
@@ -1058,10 +1040,8 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     return {
       ...(label ? { proposal: { label, run: () => apply(row, []) } } : {}),
       ...(hint ? { hint } : {}),
-      newAlbum: () => setNaming({ row, private: false, files: [] }),
-      privateAlbum: () => setNaming({ row, private: true, files: [] }),
-      addTo: () => setPicking({ row, files: [], setTarget: false, file: true }),
-      later: () => later(row),
+      newAlbum: () => createAlbum(row, []),
+      addTo: () => setPicking({ row, files: [] }),
       discard: () => askDiscard(row, []),
       rename: (title) => rename(row, title),
       mergeUp: at > 0 && mergeable(view[at - 1], row) ? () => mergeInto(view[at - 1], row) : undefined,
@@ -1070,16 +1050,15 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       date: () => dateGroup(row, []),
       ...(isLaneGroup(row) ? {} : { remove: () => setDeleting(row) }),
     };
-  }, [view, proposalFor, apply, later, askDiscard, rename, mergeInto, navigate, dateGroup]);
+  }, [view, proposalFor, apply, createAlbum, askDiscard, rename, mergeInto, navigate, dateGroup]);
 
   /** Bring the open group's part `id` up under its header. */
   const showPart = useCallback((id: string) => {
     if (cursor === null) return;
     const node = document.querySelector(`[data-group="${CSS.escape(cursor)}"] [data-part="${CSS.escape(id)}"]`);
     if (!node) return;
-    const top = node.getBoundingClientRect().top + globalThis.scrollY - readingLine - SECTION_METRICS.desktop.header - PART_MARGIN;
-    globalThis.scrollTo({ top, behavior: 'auto' });
-  }, [cursor, readingLine]);
+    scrollStream(node.getBoundingClientRect().top - readingLine - SECTION_METRICS.desktop.header - PART_MARGIN);
+  }, [cursor, readingLine, scrollStream]);
 
   /** The groups the G picker offers before a search: those around the open one, nearest first. */
   const neighbours = useMemo(() => {
@@ -1093,9 +1072,22 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   }, [view, cursorIndex]);
   const pickable = useMemo(() => cursor === null ? [] : streamOrder(index.rows).filter((row) => row.name !== cursor && !pending.has(row.name)), [index.rows, cursor, pending]);
 
+  /** The album selected in the column: a candidate of the open group (none past it), or one filed into lately. */
+  const shownRecent = useMemo(() => recent.slice(0, RECENT_SHOWN), [recent]);
+  const albumSelected = selectedAlbum(albumPicked, across ? [] : cursorCandidates.map((candidate) => candidate.album), shownRecent);
+  const selectedCandidate = albumSelected ? cursorCandidates.findIndex((candidate) => candidate.album.path === albumSelected.path) : -1;
+
+  /** Move to the album selected: the group, or what the column acts on — the part or pictures selected, the selection across groups. */
+  const moveToSelected = useCallback(() => {
+    if (!albumSelected) return;
+    const album = { path: albumSelected.path, title: albumSelected.title };
+    if (across) fileParts(chosen, album);
+    else if (cursorRow) fileInto(cursorRow, album, filing);
+  }, [albumSelected, across, chosen, cursorRow, filing, fileParts, fileInto]);
+
   const scope: TriageScope = across ? 'groups' : selected.length > 0 ? 'selection' : part ? 'part' : tileCursor !== null ? 'tile' : 'group';
 
-  /** Decide on a selection across groups: what Enter, N, P, A, B, X and L do in the `groups` scope, and what a drop of it does. */
+  /** Decide on a selection across groups: what Enter, N, A and X do in the `groups` scope, and what a drop of it does. */
   const actOnParts = useCallback((what: SelectionParts<GroupRow>, action: TriageAction): boolean => {
     switch (action) {
       case 'apply':
@@ -1103,26 +1095,18 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         else setAccepting(what.groups);
         return true;
       case 'new':
-      case 'private':
-        setBulkNaming({ parts: what, private: action === 'private' });
+        setBulkNaming(what);
         return true;
       case 'add-to':
         setBulkPicking(what);
         return true;
-      case 'target':
-        if (target) fileParts(what, target);
-        else setBulkPicking(what);
-        return true;
       case 'discard':
         setBulkDiscarding(what);
-        return true;
-      case 'later':
-        laterParts(what);
         return true;
       default:
         return false;
     }
-  }, [say, target, fileParts, laterParts]);
+  }, [say]);
   const act = useCallback((action: TriageAction) => {
     const items = tiles.current.items;
     const files = filing;
@@ -1145,35 +1129,19 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         if (cursorRow) apply(cursorRow, files);
         return;
       case 'new':
-      case 'private':
-        if (cursorRow) setNaming({ row: cursorRow, private: action === 'private', files });
+        if (cursorRow) createAlbum(cursorRow, files);
         return;
       case 'add-to':
-        if (cursorRow) setPicking({ row: cursorRow, files, setTarget: false, file: true });
-        return;
-      case 'target':
-        if (cursorRow) toTarget(cursorRow, files);
-        return;
-      case 'set-target':
-        if (cursorRow) setPicking({ row: cursorRow, files: [], setTarget: true, file: false });
+        if (cursorRow) setPicking({ row: cursorRow, files });
         return;
       case 'discard':
         if (cursorRow) askDiscard(cursorRow, files);
-        return;
-      case 'later':
-        if (cursorRow) later(cursorRow);
         return;
       case 'undo':
         undoLast();
         return;
       case 'rename':
         if (cursorRow) setRenaming(cursorRow.name);
-        return;
-      case 'merge-up':
-        if (cursorRow && previousRow && mergeable(previousRow, cursorRow)) mergeInto(previousRow, cursorRow);
-        return;
-      case 'merge-down':
-        if (cursorRow && nextRow && mergeable(cursorRow, nextRow)) mergeInto(cursorRow, nextRow);
         return;
       case 'part-next':
       case 'part-previous': {
@@ -1205,11 +1173,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         if (cursorRow && scope !== 'groups') toCandidate(cursorRow, Number(action.slice(-1)) - 1, files);
         return;
       case 'candidate-previous':
-      case 'candidate-next':
-        if (cursorRow) setHighlight((at) => stepCandidate(at, action === 'candidate-next' ? 1 : -1, candidatesOf(cursorRow).length));
+      case 'candidate-next': {
+        const to = cursorCandidates[stepCandidate(selectedCandidate, action === 'candidate-next' ? 1 : -1, cursorCandidates.length)];
+        if (to) setAlbumPicked(to.album.path);
         return;
+      }
       case 'reject':
-        if (cursorRow && scope !== 'groups') rejectCandidate(cursorRow, highlight);
+        if (cursorRow && scope !== 'groups' && selectedCandidate >= 0) rejectCandidate(cursorRow, selectedCandidate);
         return;
       case 'compare':
         setComparing((on) => !on);
@@ -1263,27 +1233,25 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     picked,
     selection,
     moveTo,
-    mergeInto,
     apply,
-    toTarget,
+    createAlbum,
     askDiscard,
-    later,
     undoLast,
     showPart,
     cut,
     moveInto,
     dateGroup,
     toCandidate,
-    candidatesOf,
+    cursorCandidates,
+    selectedCandidate,
     rejectCandidate,
-    highlight,
   ]);
 
   useTriageKeys(!phone, scope, act, modalOpen);
 
-  // Dragging: a selected picture carries the selection, a header's grip its group (or the
-  // selection it is in); either drops on the destination column's rows and on group headers. What
-  // a selection's drag carries is kept beside it, so the drop acts on that selection as it was.
+  // Dragging: a selected picture carries the selection, which drops on the destination column's
+  // rows and on group headers. What a drag carries is kept beside it, so the drop acts on that
+  // selection as it was.
   const dragged = useRef(new WeakMap<MediaDragPayload, SelectionParts<GroupRow>>());
   const selectionPayload = useMemo<MediaDragPayload | undefined>(() => {
     if (noParts(chosen)) return undefined;
@@ -1297,22 +1265,9 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     dragged.current.set(payload, chosen);
     return payload;
   }, [chosen, chosenCount, selectedGroups]);
-  const byPath = useMemo(() => new Map(view.map((row) => [row.path, row])), [view]);
-  /** What a drop carries, by what acts on it: the selection it was dragged from, else the groups it names whole. */
-  const partsOf = useCallback(
-    (payload: MediaDragPayload): SelectionParts<GroupRow> =>
-      dragged.current.get(payload) ??
-        { groups: payload.groups.map((path) => byPath.get(path)).filter((row): row is GroupRow => row !== undefined), partial: [], files: [] },
-    [byPath],
-  );
+  /** What a drop carries, by what acts on it: the selection it was dragged from; nothing from elsewhere. */
+  const partsOf = useCallback((payload: MediaDragPayload): SelectionParts<GroupRow> => dragged.current.get(payload) ?? { groups: [], partial: [], files: [] }, []);
   const dragPicture = useCallback((item: MediaItem) => picked?.isSelected(item.path) ? selectionPayload : undefined, [picked, selectionPayload]);
-  const gripOf = useCallback(
-    (row: GroupRow) => (): MediaDragPayload =>
-      selection.selection.sections.has(row.name) && selectionPayload
-        ? selectionPayload
-        : { label: row.title, count: row.memberCount ?? 0, groups: [row.path], files: [], except: [] },
-    [selection.selection, selectionPayload],
-  );
 
   /** A drop that is pictures of the open group alone, which the decisions inside it take. */
   const openFiles = useCallback(
@@ -1330,24 +1285,19 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       const one = oneGroup(what);
       const files = openFiles(what);
       const words = files ? photos(files.length) : one ? `“${one.title}”` : selectionWords(partsCount(what));
-      const groups = what.groups.length + what.partial.length;
       switch (destination.kind) {
         case 'proposal': {
           const proposal = one ? proposalFor(one) : files ? proposalFor(cursorRow) : undefined;
           if (proposal?.action === 'existing') return `${words} into “${proposal.album.title}”`;
-          if (proposal?.action === 'new') return `New album of ${words}…`;
+          if (proposal?.action === 'new') return `Create album of ${words}…`;
           return !one && !files && what.groups.length > 0 ? `Accept the proposals of ${groupCount(what.groups.length)}…` : null;
         }
         case 'new':
-          return files || one || newAlbumChunks(what, '', false) ? `New ${destination.private ? 'private ' : ''}album of ${words}…` : null;
-        case 'target':
-          return target ? `${words} into “${target.title}”` : null;
+          return files || one || newAlbumChunks(what, '') ? `Create album of ${words}…` : null;
         case 'recent':
           return `${words} into “${destination.album.title}”`;
         case 'add-to':
           return `Add ${words} to an album…`;
-        case 'later':
-          return groups > 0 ? `Later, ${one ? words : groupCount(groups)}` : null;
         case 'discard':
           return `Discard ${words}${files ? '' : '…'}`;
       }
@@ -1358,19 +1308,17 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       const files = openFiles(what) ?? [];
       if (row) {
         if (destination.kind === 'proposal') apply(row, files);
-        else if (destination.kind === 'new') setNaming({ row, private: destination.private, files });
-        else if (destination.kind === 'target') target && fileInto(row, target, files);
+        else if (destination.kind === 'new') createAlbum(row, files);
         else if (destination.kind === 'recent') fileInto(row, destination.album, files);
-        else if (destination.kind === 'add-to') setPicking({ row, files, setTarget: false, file: true });
-        else if (destination.kind === 'later') files.length === 0 && later(row);
+        else if (destination.kind === 'add-to') setPicking({ row, files });
         else askDiscard(row, files);
         return;
       }
       if (destination.kind === 'recent') fileParts(what, destination.album);
-      else actOnParts(what, destination.kind === 'proposal' ? 'apply' : destination.kind === 'new' ? (destination.private ? 'private' : 'new') : destination.kind);
+      else actOnParts(what, destination.kind === 'proposal' ? 'apply' : destination.kind);
     };
     return { accept: describe, onDrop: run };
-  }, [phone, cursorRow, partsOf, openFiles, proposalFor, target, apply, fileInto, later, askDiscard, fileParts, actOnParts]);
+  }, [phone, cursorRow, partsOf, openFiles, proposalFor, apply, createAlbum, fileInto, askDiscard, fileParts, actOnParts]);
 
   /**
    * What a drop on a group's header does: groups dropped whole merge into it, pictures move into
@@ -1400,12 +1348,35 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
           label: merging ? `Merging ${groupCount(chunk.groups.length)} into “${row.title}”` : `Moving ${photos(chunk.files)} into “${row.title}”`,
           chunks: [chunk],
           total: { groups: chunk.decides, files: chunk.files },
-          undo: 'journal',
           done: (tally) => merging ? `${groupCount(tally.groups)} merged into “${row.title}”` : `${photos(tally.files)} moved into “${row.title}”`,
         });
       },
     };
   }, [phone, partsOf, cursor, openPaths, startRun]);
+
+  /**
+   * Merge N groups, from the column: two or more groups selected whole merge into the first of them
+   * in the stream, which keeps its name. None for a lane's group, or past one call's worth.
+   */
+  const selectionMerge = useMemo(() => {
+    if (chosen.groups.length < 2 || chosen.partial.length > 0 || chosen.files.length > 0 || chosen.groups.some(isLaneGroup)) return undefined;
+    const position = new Map(names.map((name, at) => [name, at]));
+    const [into, ...rest] = chosen.groups.toSorted((a, b) => (position.get(a.name) ?? 0) - (position.get(b.name) ?? 0));
+    const result = intoGroupChunks({ groups: rest, partial: [], files: [] }, into, () => undefined);
+    if ('refused' in result) return undefined;
+    const { chunk } = result;
+    return {
+      label: `Merge ${groupCount(chosen.groups.length)}`,
+      run: () =>
+        startRun({
+          verb: 'Merging',
+          label: `Merging ${groupCount(chunk.groups.length)} into “${into.title}”`,
+          chunks: [chunk],
+          total: { groups: chunk.decides, files: chunk.files },
+          done: (tally) => `${groupCount(tally.groups)} merged into “${into.title}”`,
+        }),
+    };
+  }, [chosen, names, startRun]);
 
   /** How much of a group is selected, for its header's box. */
   const selectedIn = useMemo(() => {
@@ -1461,9 +1432,10 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
       if (frame === 0) frame = requestAnimationFrame(follow);
     };
     follow();
-    globalThis.addEventListener('scroll', onScroll, { passive: true });
+    // Captured, so the stream's own pane scrolling is heard as the window's is.
+    globalThis.addEventListener('scroll', onScroll, { capture: true, passive: true });
     return () => {
-      globalThis.removeEventListener('scroll', onScroll);
+      globalThis.removeEventListener('scroll', onScroll, true);
       if (frame !== 0) cancelAnimationFrame(frame);
     };
   }, [memberRail, cursor, readingLine]);
@@ -1472,14 +1444,13 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     const box = at < 0 ? undefined : tiles.current.boxes[at];
     const grids = cursor === null ? null : document.querySelector(`[data-group="${CSS.escape(cursor)}"] [data-parts]`);
     if (!box || !grids) return;
-    const top = grids.getBoundingClientRect().top + globalThis.scrollY + box.top - readingLine - SECTION_METRICS.desktop.header - PART_MARGIN;
-    globalThis.scrollTo({ top, behavior: 'auto' });
-  }, [memberDates, cursor, readingLine]);
+    scrollStream(grids.getBoundingClientRect().top + box.top - readingLine - SECTION_METRICS.desktop.header - PART_MARGIN);
+  }, [memberDates, cursor, readingLine, scrollStream]);
   const rail = memberRail || groupRail;
 
   // The lasso: what was selected as it started, where the stream and the open group's pictures
-  // were then (read once), and what the last frame took, so a frame that takes nothing new
-  // selects nothing anew.
+  // were then (read once, in the coordinates of what the stream scrolls in, as the band's are), and
+  // what the last frame took, so a frame that takes nothing new selects nothing anew.
   const lassoBase = useRef<SectionSelection>(selection.selection);
   const lassoGeometry = useRef<StreamGeometry | null>(null);
   const lassoLast = useRef<LassoHits | null>(null);
@@ -1487,6 +1458,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     enabled: !phone && view.length > 0,
     root: streamNode,
     topInset: readingLine,
+    scroller,
     onStart: () => {
       lassoBase.current = selection.selection;
       lassoLast.current = null;
@@ -1495,21 +1467,23 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         lassoGeometry.current = null;
         return;
       }
+      const scrollX = scroller ? scroller.scrollLeft : globalThis.scrollX;
+      const scrollY = scroller ? scroller.scrollTop : globalThis.scrollY;
       const metrics = SECTION_METRICS.desktop;
       const grids = cursor === null ? undefined : streamNode?.querySelector(`[data-group="${CSS.escape(cursor)}"] [data-parts]`)?.getBoundingClientRect();
       const { items, boxes } = tiles.current;
       lassoGeometry.current = {
-        left: box.left + globalThis.scrollX,
-        right: box.right + globalThis.scrollX - (rail ? RAIL_GUTTER : 0),
-        top: box.top + globalThis.scrollY,
+        left: box.left + scrollX,
+        right: box.right + scrollX - (rail ? RAIL_GUTTER : 0),
+        top: box.top + scrollY,
         inset: SECTION_INSET,
         header: metrics.header,
         strip: closedSectionHeight(false) - metrics.header - metrics.foot,
         open: cursor !== null && grids && items.length > 0 && boxes.length === items.length
           ? {
             key: cursor,
-            left: grids.left + globalThis.scrollX,
-            top: grids.top + globalThis.scrollY,
+            left: grids.left + scrollX,
+            top: grids.top + scrollY,
             index: tileIndex(boxes.map((tile) => ({ ...tile, height: tile.height ?? 0 }))),
             paths: items.map((item) => item.path),
           }
@@ -1531,7 +1505,6 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
   const openKeys = useMemo(() => new Set(cursor === null ? [] : [cursor]), [cursor]);
   const skeleton = useMemo(() => skeletonImage(phone), [phone]);
   const cursorProposal = cursorRow ? proposalFor(cursorRow) : undefined;
-  const cursorCandidates = useMemo(() => cursorRow ? candidatesOf(cursorRow) : [], [cursorRow, candidatesOf]);
   /** S can cut here: in a lane anything, elsewhere not before the group's first picture. */
   const canCut = cursorRow !== undefined && regrouping.length > 0 && (isLaneGroup(cursorRow) || regrouping[0] !== openItems[0]?.path);
   const backlog = queue.items.filter((item) => item.state !== 'failed');
@@ -1549,232 +1522,219 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
     );
   }
 
-  return (
-    <Box ref={widthRef}>
-      <Group justify='space-between' px='md' pb='xs' gap='xs'>
-        {lanesInUse.length > 1
-          ? (
-            <SegmentedControl
-              size='xs'
-              value={lane}
-              onChange={(value) => setParam('lane', value === 'sort' ? null : value)}
-              data={lanesInUse.map((each) => ({ value: each.id, label: `${each.label} ${counts[each.id].groups.toLocaleString()}` }))}
+  /** The groups, one section each; or, with none left in the lane, that it is all decided. */
+  const streamBody = view.length === 0
+    ? (
+      <EmptyState title={`Everything in ${LANES.find((each) => each.id === lane)?.label ?? 'this lane'} is decided`}>
+        {filed > 0 ? `${photos(filed)} filed today.` : 'Nothing is left to decide here.'}
+      </EmptyState>
+    )
+    : (
+      <Box ref={setStreamNode} pr={rail ? RAIL_GUTTER : 0}>
+        <SectionStream
+          ref={streamRef}
+          items={view}
+          itemKey={(row) => row.name}
+          openKeys={openKeys}
+          closedHeight={closedSectionHeight(phone)}
+          readingLine={readingLine}
+          scroller={scroller}
+          skeleton={skeleton}
+          onReadingLine={setAtLine}
+        >
+          {(row, at, open) => (
+            <GroupSection
+              row={row}
+              open={open}
+              phone={phone}
+              renaming={renaming === row.name}
+              onRenamingChange={(on) => setRenaming(on ? row.name : null)}
+              previous={at > 0 ? view[at - 1].title : undefined}
+              next={at < view.length - 1 ? view[at + 1].title : undefined}
+              failure={failures.get(row.name)}
+              onDismissFailure={() => setFailures((previous) => withoutKey(previous, row.name))}
+              onActivate={() => moveTo(row.name)}
+              actions={actionsFor(row, at)}
+              tileCursor={open ? tileCursor : null}
+              onTiles={open ? onTiles : undefined}
+              selection={open && !phone ? picked : undefined}
+              partCursor={open ? partCursor : null}
+              onParts={open ? onParts : undefined}
+              partCut={open
+                ? isLaneGroup(row)
+                  ? { label: 'New group', fromFirst: true, run: (section) => newGroup(row, section.items.map((item) => item.path)) }
+                  : { label: 'Split here', fromFirst: false, run: (section) => splitAt(row, section.items[0].path) }
+                : undefined}
+              partMatch={open ? partMatchOf(row) : undefined}
+              newGroup={open && !phone && filing.length > 0 ? { count: filing.length, run: () => newGroup(row, filing) } : undefined}
+              arriveFrom={open && arrival?.name === row.name ? arrival.from : undefined}
+              selected={selectedIn(row.name)}
+              onSelect={phone ? undefined : selectGroup(row)}
+              drop={headerDrop(row)}
+              dragPayload={open && !phone ? dragPicture : undefined}
+              scrollRoot={scroller ?? undefined}
+              column={column}
+              duplicates={open && duplicatesView.badges.size > 0
+                ? {
+                  badges: duplicatesView.badges,
+                  compare: (id) => setComparingSet(duplicatesView.setOf.get(id) ?? null),
+                  keepLibrary: duplicatesView.library.files > 0
+                    ? () => resolveSets(row, duplicatesView.library.keys, `Keeping the library copies of ${photos(duplicatesView.library.files)} in “${row.title}”`)
+                    : undefined,
+                }
+                : undefined}
             />
-          )
-          : (
-            <Text size='sm' c='dimmed'>
-              {index.complete ? '' : '≥ '}
-              {photos(view.reduce((sum, row) => sum + (row.memberCount ?? 0), 0))} to decide in {view.length.toLocaleString()} {view.length === 1 ? 'group' : 'groups'}
-            </Text>
           )}
-        <Group gap='xs'>
-          {backlog.length > 0 && <Text size='xs' c='dimmed'>◌ {backlog.length.toLocaleString()} applying</Text>}
-          {!phone && selection.active && (
-            <Text size='xs' c='dimmed' aria-live='polite'>
-              {selectionWords(chosenCount)} selected
-            </Text>
-          )}
-          {!phone && (
-            <Menu position='bottom-end' withinPortal>
-              <Menu.Target>
-                <Button size='xs' variant='default' leftSection={<TablerIcon name='checkbox' size={14} />}>Select</Button>
-              </Menu.Target>
-              <Menu.Dropdown>
-                <Menu.Item onClick={() => selection.setSections(names, true)} disabled={view.length === 0}>
-                  All in {LANES.find((each) => each.id === lane)?.label ?? 'this lane'} · {view.length.toLocaleString()}
-                </Menu.Item>
-                <Menu.Item onClick={() => selection.setSections(sure.map((row) => row.name), true)} disabled={sure.length === 0}>
-                  Those with a sure proposal · {sure.length.toLocaleString()}
-                </Menu.Item>
-                <Menu.Divider />
-                <Menu.Item onClick={() => selection.clear()} disabled={!selection.active} rightSection={<Text size='xs' c='dimmed'>Esc</Text>}>
-                  None
-                </Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
-          )}
-          <Select
-            size='xs'
-            w={150}
-            aria-label='Order'
-            value={newestFirst ? 'new' : 'old'}
-            onChange={(value) => setParam('order', value === 'new' ? 'new' : null)}
-            data={[{ value: 'old', label: 'Oldest first' }, { value: 'new', label: 'Newest first' }]}
-            allowDeselect={false}
-          />
-        </Group>
-      </Group>
+        </SectionStream>
+      </Box>
+    );
 
-      {finding && <Text size='sm' c='dimmed' px='md' pb='xs'>Finding where you were…</Text>}
-
-      <Group align='flex-start' gap='md' wrap='nowrap'>
-        <Box style={{ flex: 1, minWidth: 0 }}>
-          {view.length === 0
+  return (
+    <Box ref={widthRef} style={pane ? { flex: 1, minHeight: 0, display: 'flex', gap: 'var(--mantine-spacing-xs)' } : undefined}>
+      {/* The stream's pane: its controls over the stream, which scrolls in a box of its own (on a phone, with the page). */}
+      <Box style={pane ? { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' } : undefined}>
+        <Group justify='space-between' px='md' pb='xs' gap='xs'>
+          {lanesInUse.length > 1
             ? (
-              <EmptyState title={`Everything in ${LANES.find((each) => each.id === lane)?.label ?? 'this lane'} is decided`}>
-                {filed > 0 ? `${photos(filed)} filed today.` : 'Nothing is left to decide here.'}
-              </EmptyState>
+              <SegmentedControl
+                size='xs'
+                value={lane}
+                onChange={(value) => setParam('lane', value === 'sort' ? null : value)}
+                data={lanesInUse.map((each) => ({ value: each.id, label: `${each.label} ${counts[each.id].groups.toLocaleString()}` }))}
+              />
             )
             : (
-              <Box ref={setStreamNode} pr={rail ? RAIL_GUTTER : 0}>
-                <SectionStream
-                  ref={streamRef}
-                  items={view}
-                  itemKey={(row) => row.name}
-                  openKeys={openKeys}
-                  closedHeight={closedSectionHeight(phone)}
-                  readingLine={readingLine}
-                  skeleton={skeleton}
-                  onReadingLine={setAtLine}
-                >
-                  {(row, at, open) => (
-                    <GroupSection
-                      row={row}
-                      open={open}
-                      phone={phone}
-                      renaming={renaming === row.name}
-                      onRenamingChange={(on) => setRenaming(on ? row.name : null)}
-                      previous={at > 0 ? view[at - 1].title : undefined}
-                      next={at < view.length - 1 ? view[at + 1].title : undefined}
-                      failure={failures.get(row.name)}
-                      onDismissFailure={() => setFailures((previous) => withoutKey(previous, row.name))}
-                      onActivate={() => moveTo(row.name)}
-                      actions={actionsFor(row, at)}
-                      tileCursor={open ? tileCursor : null}
-                      onTiles={open ? onTiles : undefined}
-                      selection={open && !phone ? picked : undefined}
-                      partCursor={open ? partCursor : null}
-                      onParts={open ? onParts : undefined}
-                      partCut={open
-                        ? isLaneGroup(row)
-                          ? { label: 'New group', fromFirst: true, run: (section) => newGroup(row, section.items.map((item) => item.path)) }
-                          : { label: 'Split here', fromFirst: false, run: (section) => splitAt(row, section.items[0].path) }
-                        : undefined}
-                      partMatch={open ? partMatchOf(row) : undefined}
-                      newGroup={open && !phone && filing.length > 0 ? { count: filing.length, run: () => newGroup(row, filing) } : undefined}
-                      arriveFrom={open && arrival?.name === row.name ? arrival.from : undefined}
-                      selected={selectedIn(row.name)}
-                      onSelect={phone ? undefined : selectGroup(row)}
-                      grip={phone ? undefined : gripOf(row)}
-                      drop={headerDrop(row)}
-                      dragPayload={open && !phone ? dragPicture : undefined}
-                      duplicates={open && duplicatesView.badges.size > 0
-                        ? {
-                          badges: duplicatesView.badges,
-                          compare: (id) => setComparingSet(duplicatesView.setOf.get(id) ?? null),
-                          keepLibrary: duplicatesView.library.files > 0
-                            ? () => resolveSets(row, duplicatesView.library.keys, `Keeping the library copies of ${photos(duplicatesView.library.files)} in “${row.title}”`)
-                            : undefined,
-                        }
-                        : undefined}
-                    />
-                  )}
-                </SectionStream>
-              </Box>
+              <Text size='sm' c='dimmed'>
+                {index.complete ? '' : '≥ '}
+                {photos(view.reduce((sum, row) => sum + (row.memberCount ?? 0), 0))} to decide in {view.length.toLocaleString()} {view.length === 1 ? 'group' : 'groups'}
+              </Text>
             )}
-        </Box>
-        {column && (
-          // A side panel of its own: as tall as the window below the page's sticky header, scrolled by
-          // itself, so what it offers stays in reach however long the stream or the list of candidates.
-          <Box
-            w={comparing ? Math.round(width * COMPARE_SHARE) : COLUMN_WIDTH}
-            style={{
-              position: 'sticky',
-              top: readingLine + 8,
-              height: `calc(100dvh - ${readingLine + 16}px)`,
-              overflowY: 'auto',
-              overscrollBehavior: 'contain',
-              flexShrink: 0,
-            }}
-            pr='md'
-          >
-            <DestinationColumn
-              subject={across ? `${selectionWords(chosenCount)} selected` : cursorRow.title}
-              groups={across ? { count: chosenCount.groups, files: chosenCount.files } : undefined}
-              drop={destinationDrop}
-              selected={filing.length}
-              part={selected.length === 0 ? part?.label : undefined}
-              proposal={cursorProposal}
-              target={target}
-              recent={recent}
-              previous={previousRow?.title}
-              next={nextRow?.title}
-              later={across ? allLater : cursorRow.staging.later !== undefined}
-              onApply={() => act('apply')}
-              onNew={() => act('new')}
-              onPrivate={() => act('private')}
-              onAddTo={() => act('add-to')}
-              onTarget={() => act('target')}
-              onSetTarget={() => act('set-target')}
-              onRecent={(album) => across ? fileParts(chosen, album) : fileInto(cursorRow, album, selected)}
-              onLater={() => act('later')}
-              onDiscard={() => act('discard')}
-              onMergeUp={previousRow && cursorRow && mergeable(previousRow, cursorRow) ? () => act('merge-up') : undefined}
-              onMergeDown={nextRow && cursorRow && mergeable(cursorRow, nextRow) ? () => act('merge-down') : undefined}
-              split={canCut ? { label: isLaneGroup(cursorRow) ? 'New group' : 'Split the group here', run: () => act('split') } : undefined}
-              onMoveUp={() => act('move-up')}
-              onMoveDown={() => act('move-down')}
-              onMoveTo={() => act('move-to')}
-              onDate={() => act('date')}
-              onNotAGroup={isLaneGroup(cursorRow) ? undefined : () => setDeleting(cursorRow)}
-              candidates={cursorCandidates}
-              highlighted={highlight}
-              onCandidate={(index) => toCandidate(cursorRow, index, across ? [] : selected)}
-              onHighlight={setHighlight}
-              onReject={(index) => rejectCandidate(cursorRow, index)}
-              unmatched={cursorRow.staging.matchedAt !== undefined && !isLaneGroup(cursorRow)}
-              strip={{ timeStart: cursorRow.timeStart, timeEnd: cursorRow.timeEnd }}
-              comparing={comparing}
-              onCompare={() => setComparing((on) => !on)}
+          <Group gap='xs'>
+            {backlog.length > 0 && <Text size='xs' c='dimmed'>◌ {backlog.length.toLocaleString()} applying</Text>}
+            {!phone && selection.active && (
+              <Text size='xs' c='dimmed' aria-live='polite'>
+                {selectionWords(chosenCount)} selected
+              </Text>
+            )}
+            {!phone && (
+              <Menu position='bottom-end' withinPortal>
+                <Menu.Target>
+                  <Button size='xs' variant='default' leftSection={<TablerIcon name='checkbox' size={14} />}>Select</Button>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => selection.setSections(names, true)} disabled={view.length === 0}>
+                    All in {LANES.find((each) => each.id === lane)?.label ?? 'this lane'} · {view.length.toLocaleString()}
+                  </Menu.Item>
+                  <Menu.Item onClick={() => selection.setSections(sure.map((row) => row.name), true)} disabled={sure.length === 0}>
+                    Those with a sure proposal · {sure.length.toLocaleString()}
+                  </Menu.Item>
+                  <Menu.Divider />
+                  <Menu.Item onClick={() => selection.clear()} disabled={!selection.active} rightSection={<Text size='xs' c='dimmed'>Esc</Text>}>
+                    None
+                  </Menu.Item>
+                </Menu.Dropdown>
+              </Menu>
+            )}
+            <Select
+              size='xs'
+              w={150}
+              aria-label='Order'
+              value={newestFirst ? 'new' : 'old'}
+              onChange={(value) => setParam('order', value === 'new' ? 'new' : null)}
+              data={[{ value: 'old', label: 'Oldest first' }, { value: 'new', label: 'Newest first' }]}
+              allowDeselect={false}
             />
-          </Box>
-        )}
-      </Group>
+          </Group>
+        </Group>
 
-      {memberRail ? <TimelineScrubber facets={memberFacets} currentDate={memberAt} onSeek={seekMember} below={streamNode} ascending /> : groupRail && (
-        <TimelineScrubber
-          facets={facets}
-          currentDate={atLine === undefined ? undefined : byName.get(atLine)?.timeStart?.slice(0, 10)}
-          onSeek={seek}
-          below={streamNode}
-          ascending={!newestFirst}
-        />
+        {finding && <Text size='sm' c='dimmed' px='md' pb='xs'>Finding where you were…</Text>}
+
+        {pane
+          ? (
+            <Box className='mrx-sort-stream' data-railed={rail || undefined} pos='relative' style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <ScrollBox frameStyle={{ flex: 1, minHeight: 0 }} viewportRef={setScroller}>
+                {streamReady && streamBody}
+              </ScrollBox>
+              {memberRail ? <TimelineScrubber facets={memberFacets} currentDate={memberAt} onSeek={seekMember} inline ascending /> : groupRail && (
+                <TimelineScrubber
+                  facets={facets}
+                  currentDate={atLine === undefined ? undefined : byName.get(atLine)?.timeStart?.slice(0, 10)}
+                  onSeek={seek}
+                  inline
+                  ascending={!newestFirst}
+                />
+              )}
+            </Box>
+          )
+          : streamBody}
+      </Box>
+      {column && (
+        // The column's pane, beside the stream's: as tall as it, and scrolled by itself.
+        <Box w={comparing ? Math.round(width * COMPARE_SHARE) : COLUMN_WIDTH} h='100%' pr='md' style={{ flexShrink: 0 }}>
+          <DestinationColumn
+            acting={across
+              ? `${selectionWords(chosenCount)} selected`
+              : selected.length > 0
+              ? `${photos(selected.length)} selected`
+              : part
+              ? `${part.label} · ${photos(part.items.length)}`
+              : undefined}
+            across={across}
+            drop={destinationDrop}
+            selected={filing.length}
+            proposal={cursorProposal}
+            recent={shownRecent}
+            previous={previousRow?.title}
+            next={nextRow?.title}
+            onApply={() => act('apply')}
+            onNew={() => act('new')}
+            onAddTo={() => act('add-to')}
+            onDiscard={() => act('discard')}
+            merge={across ? selectionMerge : undefined}
+            split={canCut ? { label: isLaneGroup(cursorRow) ? 'New group' : 'Split the group here', run: () => act('split') } : undefined}
+            onMoveUp={() => act('move-up')}
+            onMoveDown={() => act('move-down')}
+            onMoveTo={() => act('move-to')}
+            onDate={() => act('date')}
+            onNotAGroup={isLaneGroup(cursorRow) ? undefined : () => setDeleting(cursorRow)}
+            candidates={cursorCandidates}
+            album={albumSelected}
+            onSelectAlbum={(album) => setAlbumPicked(album.path)}
+            onMove={moveToSelected}
+            onReject={(index) => rejectCandidate(cursorRow, index)}
+            unmatched={cursorRow.staging.matchedAt !== undefined && !isLaneGroup(cursorRow)}
+            strip={{ timeStart: cursorRow.timeStart, timeEnd: cursorRow.timeEnd }}
+            comparing={comparing}
+            onCompare={() => setComparing((on) => !on)}
+          />
+        </Box>
       )}
 
       {/* What was just done, and what is next, for a screen reader. */}
       <VisuallyHidden aria-live='polite'>{announce}</VisuallyHidden>
 
       <NameDialog
-        group={naming && { title: naming.row.title, count: naming.files.length || naming.row.memberCount }}
-        private={naming?.private}
+        group={naming && { title: naming.title, count: naming.files.length || naming.row.memberCount }}
         onClose={() => setNaming(null)}
         onConfirm={(title) => {
           const asked = naming;
           setNaming(null);
-          if (asked) fileNew(asked.row, title, asked.private, asked.files);
+          if (asked) fileNew(asked.row, title, asked.files);
         }}
       />
       <AlbumPickerDialog
         opened={picking !== null}
-        title={picking?.setTarget ? 'Choose the target' : 'Add to an album'}
-        allowNew={!picking?.setTarget || picking.file}
-        subtitle={picking ? (picking.file ? `${photos(picking.files.length || (picking.row.memberCount ?? 0))} from “${picking.row.title}”` : 'B files into it') : undefined}
+        title='Add to an album'
+        allowNew
+        subtitle={picking ? `${photos(picking.files.length || (picking.row.memberCount ?? 0))} from “${picking.row.title}”` : undefined}
         suggested={recent}
         onClose={() => setPicking(null)}
         onPick={(choice: AlbumChoice) => {
           const asked = picking;
           setPicking(null);
           if (!asked) return;
-          if (choice.create) {
-            fileNew(asked.row, choice.title, false, asked.files);
-            return;
-          }
-          const album = { path: choice.path, title: choice.title };
-          if (asked.setTarget) {
-            setChosenTarget(JSON.stringify(album));
-            say(`B now files into “${album.title}”`);
-          }
-          if (asked.file) fileInto(asked.row, album, asked.files);
+          if (choice.create) fileNew(asked.row, choice.title, asked.files);
+          else fileInto(asked.row, { path: choice.path, title: choice.title }, asked.files);
         }}
       />
       <DiscardGroupDialog
@@ -1814,13 +1774,12 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
         }}
       />
       <NameDialog
-        group={bulkNaming && { title: selectedGroups[0]?.title ?? '', count: partsCount(bulkNaming.parts).files }}
-        private={bulkNaming?.private}
+        group={bulkNaming && { title: selectedGroups[0]?.title ?? '', count: partsCount(bulkNaming).files }}
         onClose={() => setBulkNaming(null)}
         onConfirm={(title) => {
           const asked = bulkNaming;
           setBulkNaming(null);
-          if (asked) newAlbumParts(asked.parts, title, asked.private);
+          if (asked) newAlbumParts(asked, title);
         }}
       />
       <AlbumPickerDialog
@@ -1834,7 +1793,7 @@ export function GroupStream({ category, onChanged, onShowFiles, stillIndexing }:
           const asked = bulkPicking;
           setBulkPicking(null);
           if (!asked) return;
-          if (choice.create) newAlbumParts(asked, choice.title, false);
+          if (choice.create) newAlbumParts(asked, choice.title);
           else fileParts(asked, { path: choice.path, title: choice.title });
         }}
       />

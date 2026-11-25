@@ -1,26 +1,20 @@
-import type { StagingCategoryAnswer, StagingCategoryStatus } from '@archive/staging/api';
+import type { StagingCategoryAnswer } from '@archive/staging/api';
 import { appBackup, appBackupSet, appInfo, type EinAppBackupInto, shq } from '@ein/ui/lib';
 import { currentUser, execCommand, notify } from '@ein/ui/signals';
 import { Select } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { useEffect, useState } from 'react';
 import { refreshStagingStatus, useStagingStatus } from '../hooks/useStagingStatus.ts';
-import { categorySlug, freeSlug, PHONE_KINDS } from '../lib/overview.ts';
+import { categorySlug, freeSlug } from '../lib/overview.ts';
 
 /** The choice that makes a new category for the phone rather than naming one. */
 const NEW = '\u0000new';
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-/** The categories a phone's photos may go into: those that hold a phone's first, then the rest, as the area lists them. */
-const byPhoneFirst = (categories: StagingCategoryStatus[]): StagingCategoryStatus[] => [
-  ...categories.filter((category) => PHONE_KINDS.includes(category.kind)),
-  ...categories.filter((category) => !PHONE_KINDS.includes(category.kind)),
-];
-
 /**
  * `/staging/app-backup`, the EiN app's `app.backup` panel on its App page: which of the reader's
- * staging categories the phone's photo backup sends into, or a new `phone` category called after
+ * staging categories (by name) the phone's photo backup sends into, or a new category called after
  * the phone (`staging category --create`), handed to the app (`appBackupSet`). What it sends then
  * waits there to be sorted, as an upload does.
  */
@@ -32,7 +26,7 @@ export default function AppBackupPanel() {
 
 function Chooser({ user }: { user: string }) {
   const status = useStagingStatus(user);
-  const categories = byPhoneFirst(status.data?.categories ?? []);
+  const categories = status.data?.categories ?? [];
   const [into, setInto] = useState<EinAppBackupInto>();
   const [phone, setPhone] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -52,7 +46,7 @@ function Chooser({ user }: { user: string }) {
     try {
       let category = categories.find((each) => each.name === value);
       if (value === NEW) {
-        const answer = await execCommand<StagingCategoryAnswer>(`staging category ${shq(newName)} --create --kind phone --label ${shq(newLabel)}`);
+        const answer = await execCommand<StagingCategoryAnswer>(`staging category ${shq(newName)} --create --label ${shq(newLabel)}`);
         refreshStagingStatus();
         category = answer.category ?? undefined;
       }

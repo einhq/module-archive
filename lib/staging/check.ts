@@ -6,14 +6,14 @@
  *   as the home is, mode 0700; `staging/` is unlisted and wants every family of processing but
  *   text (`STAGING_PROCESSING`).
  * - `files/` and `albums/` hold directories only, and every directory of groups has its category.
- * - The default category exists, of the `inbox` kind.
+ * - The default category exists.
  * - Every link in a group points at a file in the group's own category, and at something there.
  * - A GPX file waiting for a device is in `routes/`.
  */
 import type { StagingCheckAnswer, StagingCheckProblem } from '@archive/staging/api';
 import type { Command } from '@ein/client';
 import { PROCESSING_ATTR, UNLISTED_ATTR } from '@ein/client';
-import { CATEGORY_ATTR, readCategories } from '@archive/staging/category';
+import { readCategories } from '@archive/staging/category';
 import { categoryAlbumsPath, DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, STAGING_PROCESSING, stagingRoots } from '@archive/staging/paths';
 import { basename, dirname } from '@std/path';
 
@@ -95,8 +95,8 @@ export const stagingCheck = async (vfs: Vfs, access: Access, user: string): Prom
 
   const categories = present.has('files') ? await readCategories(vfs, access, user) : [];
   const inbox = categories.find((category) => category.name === DEFAULT_CATEGORY);
-  if (present.has('files') && (!inbox || inbox.attrs[CATEGORY_ATTR] === undefined || inbox.settings.kind !== 'inbox')) {
-    problems.push({ code: 'no-inbox', path: `${roots.filesPath}/${DEFAULT_CATEGORY}`, detail: inbox ? 'not of the inbox kind' : 'no default category' });
+  if (present.has('files') && !inbox) {
+    problems.push({ code: 'no-inbox', path: `${roots.filesPath}/${DEFAULT_CATEGORY}`, detail: 'no default category' });
   }
   for (const category of categories) await checkDir(category.path);
 

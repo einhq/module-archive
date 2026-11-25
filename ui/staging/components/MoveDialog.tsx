@@ -18,8 +18,6 @@ type Props = {
   from: StagingCategoryStatus;
   /** Whether the move is to another category ("Move to category…") rather than to a folder of this one. */
   toCategory: boolean;
-  /** The category chosen when the dialog opens, by name; the first other one (or this one) by default. */
-  initialCategory?: string;
   onClose: () => void;
   /** Called once anything has moved. */
   onMoved: () => void;
@@ -32,12 +30,11 @@ type Props = {
  * what is in it. Pick the category, step down to a folder, or name a new one there. A name already
  * taken where they go is left where it was, and said.
  */
-export function MoveDialog({ paths, what, categories, from, toCategory, initialCategory, onClose, onMoved }: Props) {
+export function MoveDialog({ paths, what, categories, from, toCategory, onClose, onMoved }: Props) {
   const others = categories.filter((category) => category.name !== from.name);
   const offered = toCategory ? others : categories;
-  const [categoryName, setCategoryName] = useState(
-    offered.find((each) => each.name === initialCategory)?.name ?? (toCategory ? others[0]?.name ?? from.name : from.name),
-  );
+  // A move to another category starts at the first other one.
+  const [categoryName, setCategoryName] = useState(toCategory ? others[0]?.name ?? from.name : from.name);
   const [dir, setDir] = useState('');
   const [newFolder, setNewFolder] = useState('');
   const [busy, setBusy] = useState(false);

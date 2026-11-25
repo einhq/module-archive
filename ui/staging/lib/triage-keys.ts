@@ -20,16 +20,10 @@ export type TriageAction =
   | 'extend-previous'
   | 'apply'
   | 'new'
-  | 'private'
   | 'add-to'
-  | 'target'
-  | 'set-target'
   | 'discard'
-  | 'later'
   | 'undo'
   | 'rename'
-  | 'merge-up'
-  | 'merge-down'
   | 'part-previous'
   | 'part-next'
   | 'split'
@@ -62,13 +56,11 @@ type TriageKey = {
   label: string;
 };
 
-/** Enter, N, P, A, B and X for some pictures of the group (`what`: those selected, or a part's) rather than all of it. */
+/** Enter, N, A and X for some pictures of the group (`what`: those selected, or a part's) rather than all of it. */
 const filing = (scope: 'selection' | 'part', what: string): TriageKey[] => [
   { scope, keys: 'Enter', action: 'apply', label: `Accept the proposal for ${what}` },
-  { scope, keys: 'N', action: 'new', label: `New album of ${what}` },
-  { scope, keys: 'P', action: 'private', label: `New private album of ${what}` },
+  { scope, keys: 'N', action: 'new', label: `Create album of ${what}` },
   { scope, keys: 'A', action: 'add-to', label: `Add ${what} to album…` },
-  { scope, keys: 'B', action: 'target', label: `Put ${what} into the target` },
   { scope, keys: 'X', action: 'discard', label: `Discard ${what}` },
 ];
 
@@ -85,24 +77,17 @@ const candidate = (n: 1 | 2 | 3): TriageKey => ({ scope: 'group', keys: String(n
 /** What acts on a selection that reaches past the open group: the decisions over many groups at once. */
 const acrossGroups: TriageKey[] = [
   { scope: 'groups', keys: 'Enter', action: 'apply', label: 'Accept the proposals of the selected groups…' },
-  { scope: 'groups', keys: 'N', action: 'new', label: 'New album of the selection' },
-  { scope: 'groups', keys: 'P', action: 'private', label: 'New private album of the selection' },
+  { scope: 'groups', keys: 'N', action: 'new', label: 'Create album of the selection' },
   { scope: 'groups', keys: 'A', action: 'add-to', label: 'Add the selection to album…' },
-  { scope: 'groups', keys: 'B', action: 'target', label: 'Put the selection into the target' },
   { scope: 'groups', keys: 'X', action: 'discard', label: 'Discard the selection…' },
-  { scope: 'groups', keys: 'L', action: 'later', label: 'Later, or back to their lanes' },
   { scope: 'groups', keys: 'Esc', action: 'clear-selection', label: 'Clear the selection' },
 ];
 
 export const TRIAGE_KEYS: readonly TriageKey[] = [
   { scope: 'group', keys: 'Enter', action: 'apply', label: 'Accept the proposal' },
-  { scope: 'group', keys: 'N', action: 'new', label: 'New album from the group' },
-  { scope: 'group', keys: 'P', action: 'private', label: 'New private album' },
+  { scope: 'group', keys: 'N', action: 'new', label: 'Create album from the group' },
   { scope: 'group', keys: 'A', action: 'add-to', label: 'Add to album…' },
-  { scope: 'group', keys: 'B', action: 'target', label: 'Put into the target' },
-  { scope: 'group', keys: 'shift+B', action: 'set-target', label: 'Choose the target' },
   { scope: 'group', keys: 'X', action: 'discard', label: 'Discard' },
-  { scope: 'group', keys: 'L', action: 'later', label: 'Later, or back to its lane' },
   { scope: 'group', keys: 'Z', action: 'undo', label: 'Undo' },
   { scope: 'group', keys: 'J', action: 'next', label: 'Next group' },
   { scope: 'group', keys: 'K', action: 'previous', label: 'Previous group' },
@@ -117,12 +102,10 @@ export const TRIAGE_KEYS: readonly TriageKey[] = [
   candidate(1),
   candidate(2),
   candidate(3),
-  { scope: 'group', keys: 'R', action: 'reject', label: 'Not the highlighted album' },
-  { scope: 'group', keys: ',', action: 'candidate-previous', label: 'Highlight the candidate above' },
-  { scope: 'group', keys: '.', action: 'candidate-next', label: 'Highlight the candidate below' },
-  { scope: 'group', keys: 'C', action: 'compare', label: 'Compare with the highlighted album, or narrow the column again' },
-  { scope: 'group', keys: 'M', action: 'merge-up', label: 'Merge into the group above' },
-  { scope: 'group', keys: 'shift+M', action: 'merge-down', label: 'Merge the group below in' },
+  { scope: 'group', keys: 'R', action: 'reject', label: 'Not the selected candidate album' },
+  { scope: 'group', keys: ',', action: 'candidate-previous', label: 'Select the candidate album above' },
+  { scope: 'group', keys: '.', action: 'candidate-next', label: 'Select the candidate album below' },
+  { scope: 'group', keys: 'C', action: 'compare', label: 'Compare with the selected album, or narrow the column again' },
   { scope: 'group', keys: 'O', action: 'open', label: 'Open the first picture' },
   { scope: 'group', keys: '←', action: 'tile-left', label: 'Step through the pictures' },
   { scope: 'group', keys: '→', action: 'tile-right', label: 'Step through the pictures' },
@@ -153,7 +136,7 @@ export const TRIAGE_KEYS: readonly TriageKey[] = [
 const EVENT_KEY: Record<string, string> = { '←': 'ArrowLeft', '→': 'ArrowRight', '↑': 'ArrowUp', '↓': 'ArrowDown', Esc: 'Escape', Space: ' ' };
 
 /**
- * `shift+M` as the key event it stands for. Letters compare without case: the Shift key, not the
+ * `shift+J` as the key event it stands for. Letters compare without case: the Shift key, not the
  * letter's case, says which is meant.
  */
 export const parseKeys = (keys: string): { key: string; shift: boolean } => {

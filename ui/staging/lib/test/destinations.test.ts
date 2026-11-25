@@ -1,20 +1,18 @@
 import type { StagingAlbumRef } from '@archive/staging/api';
 import { assertEquals } from '@std/assert';
-import { parseRecent, parseTarget, proposalLabel, RECENT_MAX, stickyTarget, withRecent } from '../destinations.ts';
+import { parseRecent, proposalLabel, RECENT_MAX, selectedAlbum, withRecent } from '../destinations.ts';
 
 const summer = { path: '/archive/albums/summer', title: 'Summer 2019' };
 const lake = { path: '/archive/albums/lake', title: 'Lake trip 2019' };
-const destination = (writable: boolean): StagingAlbumRef => ({
+const prints: StagingAlbumRef = {
   id: 'd',
   path: '/archive/albums/prints',
   title: 'Family prints',
   ownership: { uid: 1, gid: 1, mode: 0o750 },
-  writable,
-});
+  writable: true,
+};
 
 Deno.test('what is kept reads back, and anything else is nothing', () => {
-  assertEquals(parseTarget(JSON.stringify(summer)), summer);
-  assertEquals([parseTarget(''), parseTarget('{"path":1}'), parseTarget('not json')], [null, null, null]);
   assertEquals(parseRecent(JSON.stringify([lake, { path: 2 }, summer])), [lake, summer]);
   assertEquals(parseRecent('[oops'), []);
 });
@@ -29,15 +27,17 @@ Deno.test('the recent albums keep the newest first, once each, eight at most', (
   assertEquals(recent[0].path, '/a/19');
 });
 
-Deno.test('the target is the one chosen, else the destination one may file into, else the last used', () => {
-  assertEquals(stickyTarget(lake, destination(true), [summer]), lake);
-  assertEquals(stickyTarget(null, destination(true), [summer]), { path: '/archive/albums/prints', title: 'Family prints' });
-  assertEquals(stickyTarget(null, destination(false), [summer]), summer);
-  assertEquals(stickyTarget(null, null, []), null);
+Deno.test('a proposal in the words of its button', () => {
+  assertEquals(proposalLabel({ action: 'existing', album: prints, confidence: 'medium', reason: 'match' }), 'Add to “Family prints”');
+  assertEquals(proposalLabel({ action: 'new', title: 'Lake weekend', confidence: 'low', compared: false }), 'Create album “Lake weekend”');
+  assertEquals(proposalLabel({ action: 'none' }), undefined);
 });
 
-Deno.test('a proposal in the words of its button', () => {
-  assertEquals(proposalLabel({ action: 'existing', album: destination(true), confidence: 'medium', reason: 'category' }), 'Add to “Family prints”');
-  assertEquals(proposalLabel({ action: 'new', title: 'Lake weekend', confidence: 'low', compared: false }), 'New album “Lake weekend”');
-  assertEquals(proposalLabel({ action: 'none' }), undefined);
+Deno.test('the column selects the album picked while it offers it, else the first candidate', () => {
+  assertEquals(selectedAlbum(null, [prints, summer], [lake]), prints);
+  assertEquals(selectedAlbum(summer.path, [prints, summer], [lake]), summer);
+  assertEquals(selectedAlbum(lake.path, [prints], [lake]), lake);
+  // One no longer offered (rejected, or the cursor moved on) gives way to the first candidate.
+  assertEquals(selectedAlbum('/archive/albums/gone', [prints], [lake]), prints);
+  assertEquals(selectedAlbum(null, [], [lake]), undefined);
 });

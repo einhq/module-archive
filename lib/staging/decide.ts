@@ -1,5 +1,5 @@
 /**
- * The decisions made in staging, as `staging promote`, `discard`, `accept`, `later` and `move` make
+ * The decisions made in staging, as `staging promote`, `discard`, `accept` and `move` make
  * them. Each that takes files out of the inbox is one journal entry (`file.ts`), so `staging undo`
  * reverses it, after a reload as before one. A promote's entry also keeps the matches the group had
  * when the person chose (`matchDecisionOf`); a promote that makes a new album profiles it at once
@@ -10,20 +10,12 @@
  * nothing is written for it.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
-import type {
-  MatchConfidence,
-  StagingAcceptResult,
-  StagingDiscardResult,
-  StagingLaterResult,
-  StagingMoveResult,
-  StagingPromoteResult,
-  StagingUndoPlan,
-} from '@archive/staging/api';
+import type { MatchConfidence, StagingAcceptResult, StagingDiscardResult, StagingMoveResult, StagingPromoteResult, StagingUndoPlan } from '@archive/staging/api';
 import type { Command } from '@ein/client';
 import { applySharePreference, readSettings, resolveDefaultOwnership, shq, verifyAccess } from '@ein/client';
 import { basename, dirname, resolve } from '@std/path';
 import { AUTO_ORIGIN, type AutoAlbumMeta, COVER_LINK_NAME } from '@archive/staging/auto-album';
-import { CATEGORY_ATTR, parseCategorySettings, readCategories } from '@archive/staging/category';
+import { CATEGORY_ATTR, parseCategorySettings } from '@archive/staging/category';
 import { applyFiling, discardStagedMany, fileStagedMany, filesWord, planFiling } from '@archive/staging/file';
 import { leaveSuggestedAlbums, suggestionsOf } from '@archive/staging/membership';
 import { createJournalEntry, finishJournalEntry } from '@archive/staging/journal';
@@ -42,8 +34,6 @@ type Access = Command['access'];
 /** Groups one `staging accept` decides at most, and plans at most with `--dry-run`. */
 export const ACCEPT_MAX = 20;
 export const ACCEPT_PLAN_MAX = 50;
-/** Groups one `staging later` puts aside at most. */
-export const LATER_MAX = 100;
 
 const FILES_DIR = 'files';
 
@@ -284,7 +274,7 @@ export const promoteGroups = async (cmd: Command, paths: string[], options: Prom
     result.groupsChanged = filed.groupsChanged;
 
     if (asGroup) {
-      await vfs.update(cmd.access, albumPath, { attrs: { origin: null, autoAlbum: null, stagingLaterAt: null, stagingMatches: null, name: title } });
+      await vfs.update(cmd.access, albumPath, { attrs: { origin: null, autoAlbum: null, stagingMatches: null, name: title } });
       result.groupsRemoved.push(first.path);
     }
 
@@ -432,18 +422,14 @@ export const acceptGroups = async (
   const max = dryRun ? ACCEPT_PLAN_MAX : ACCEPT_MAX;
   if (paths.length > max) throw new Error(`accept takes at most ${max} groups${dryRun ? ' with --dry-run' : ''}`);
   const floor = options.confidence ?? 'medium';
-  const { groups, changed, place } = await readGroups(cmd, paths, options.expect);
+  const { groups, changed } = await readGroups(cmd, paths, options.expect);
   const result: StagingAcceptResult = { ok: true, dryRun, plan: [], journal: [], skipped: changed.map((group) => ({ group, reason: 'changed' as const })) };
-
-  const category = (await readCategories(cmd.sys.vfs, cmd.access, place.user)).find((each) => each.name === place.category);
-  const targetId = category?.settings.destinationId;
-  const categoryTarget = targetId ? (await albumRefs(cmd.sys.vfs, cmd.access, [targetId])).get(targetId) ?? null : null;
 
   const refs = await albumRefs(cmd.sys.vfs, cmd.access, [...new Set(groups.flatMap((group) => matchedAlbumIds(group.attrs)))]);
   const decide: { group: Group; proposal: Proposal }[] = [];
   for (const group of groups) {
     const staging = stagingRowOf(group.attrs, refs);
-    const proposal = proposeDestination(staging ? proposalInputOf(group.name, staging, categoryTarget) : { kind: group.meta?.kind, title: group.name, categoryTarget });
+    const proposal = proposeDestination(staging ? proposalInputOf(group.name, staging) : { kind: group.meta?.kind, title: group.name });
     result.plan.push({ group: group.path, proposal, files: proposal.action === 'parts' ? proposal.files : group.links.length });
     // Accept files groups; keeping the library's copies is the open group's own decision.
     if (proposal.action === 'none' || proposal.action === 'dedupe') result.skipped.push({ group: group.path, reason: 'no-proposal' });
@@ -466,24 +452,6 @@ export const acceptGroups = async (
     if (promoted.journal) result.journal.push(promoted.journal);
   }
   return result;
-};
-
-/** Put suggested groups aside for later (`stagingLaterAt`), or with `off` back where they were. */
-export const laterGroups = async (cmd: Command, paths: string[], off: boolean): Promise<StagingLaterResult> => {
-  if (paths.length > LATER_MAX) throw new Error(`later takes at most ${LATER_MAX} groups`);
-  for (const path of paths) if (!isStagingGroup(path)) throw new Error(`not a suggested group: ${path}`);
-  const settled = await cmd.sys.vfs.updateMany(cmd.access, paths, {
-    attrs: { stagingLaterAt: off ? null : new Date().toISOString() },
-    guard: (node) => {
-      if (node.type !== 'album' || node.attrs.origin !== AUTO_ORIGIN) throw new Error('not a suggested group');
-    },
-  });
-  const refused = settled.findIndex((outcome) => outcome.status === 'rejected');
-  if (refused >= 0) {
-    const reason = (settled[refused] as PromiseRejectedResult).reason;
-    throw new Error(`${paths[refused]}: ${reason instanceof Error ? reason.message : String(reason)}`);
-  }
-  return { ok: true, groups: paths, later: !off };
 };
 
 /**

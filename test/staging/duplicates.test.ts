@@ -416,7 +416,7 @@ Deno.test({ name: 'staged duplicate findings', sanitizeResources: false, sanitiz
     });
 
     await t.step('a move between categories announces nothing; a folder moved in from outside is announced', async () => {
-      await cmd.shouldSucceed('staging category scans --create --kind scans --label Scans');
+      await cmd.shouldSucceed('staging category scans --create --label Scans');
       assertEquals(await staleFrom(() => admin.execJson<StagingMoveResult>(`staging move ${ADMIN_INBOX}/discarded /home/admin/staging/files/scans`)), []);
       await cmd.shouldSucceed('mkdir -p /home/admin/elsewhere/box');
       await put('/home/admin/elsewhere/box/b.jpg', hash('8'));

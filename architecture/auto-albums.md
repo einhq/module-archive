@@ -59,34 +59,26 @@ Curated albums (no `origin`) are never modified.
 | `event`   | a happening on the timeline worth a group of its own                                             | To sort                                 |
 | `trip`    | a run of two or more days away from home                                                         | To sort                                 |
 | `seed`    | a folder you named (`…/upload-2026-10-01/Lake weekend/`), or one an export titled                | To sort                                 |
-| `folder`  | a run of scans in one folder, in file-name order                                                 | To sort                                 |
 | `loose`   | the Everyday lane of a year (or month); with `precision`, pictures dated only to a year or month | Everyday; Needs a date with `precision` |
 | `clutter` | screenshots and images saved from messages, by year                                              | Clutter                                 |
 | `undated` | pictures with no capture time, per folder                                                        | Needs a date                            |
 
 A lane is found again on every run by its **key**: `loose:2014`, `loose:2014-06`,
 `clutter:2019`, `clutter:undated`, `period:1975:<folder id>`, `undated:<folder id>`,
-`seed:<folder id>`, and in a category grouped by month `none:<folder id>:2019-03`. A year's
+and `seed:<folder id>`. A year's
 Everyday or clutter lane switches to monthly lanes, once and for good, when it has held more than
 400 items; a month over 1,000 is chunked at day boundaries (`#2`, `#3`). Lane names: `Everyday ·
 2014`, `Screenshots and saved images · 2019`, `1987 · <folder>`, `Undated · <folder>`.
 
 A lane is no album of its own. On the Sort page an Everyday lane whose days were matched to
 library albums proposes filing those days, each into its album; clutter proposes discarding; else
-a lane's proposal is the category's destination when you may file into it, else none. It is not
+a lane has no proposal. It is not
 split, merged or deleted; a picture leaves it by `staging regroup`.
 
-## The strategy
+## The claim order
 
-Each category's settings say how its files are grouped (`stagingCategory.group`, set with
-`staging category <name> --strategy S --significance P`; every kind's default significance is
-`normal`):
-
-| strategy  | for                                          | each medium goes to the first that claims it                  |
-| --------- | -------------------------------------------- | ------------------------------------------------------------- |
-| `events`  | inbox, Google Photos, phone, camera, generic | a seed, clutter, the timeline, a period lane, an undated lane |
-| `folders` | scans                                        | a run of its folder: capture time never groups scans          |
-| `none`    | messaging, screenshots                       | a lane per folder and month, a period lane, an undated lane   |
+Every category is grouped the same way, by time and place. Each medium goes to the first that
+claims it: a seed, clutter, the timeline, a period lane, an undated lane.
 
 - **Clutter** is decided per item from its name, folders, type and size, and never stored: a
   `Screenshot…`/`Skärmavbild…` name or a `Screenshots` folder; a PNG or WebP of a phone's screen size
@@ -99,9 +91,6 @@ Each category's settings say how its files are grouped (`stagingCategory.group`,
 - **Period and undated lanes**: a medium dated only to a year or a month (`takenAt` `1975`,
   `1975-06`) goes to a period lane per value and folder, and one with no time to an undated lane
   per folder. Neither is ever placed at an instant: `1975` is not 31 Dec 1974 anywhere.
-- **Scan runs** split where the file-name stem changes, the counter jumps by more than 20, two
-  neighbours carry dates set by hand in different years, or a person cut; a run above 300 splits at
-  its largest jump, and one of fewer than three joins the run before it.
 
 ## The timeline: boundaries, stays and days
 
@@ -158,15 +147,14 @@ says which:
 
 **Shots** count members a few seconds apart from one camera once. **The year's usual day** is the
 median of the shots of each photographed day of the category that year, rounded down to 1, 2, 3, 4,
-6, 8, 12, 16, 24, 32, 48 or 64. The presets: `fewer` (mult 3, floor 5), `normal` (2, 4), `more`
-(1.5, 3). A planned event at least 80% of whose members a person dismissed is not a group.
+6, 8, 12, 16, 24, 32, 48 or 64. `mult` is 2 and `floor` 4. A planned event at least 80% of whose members a person dismissed is not a group.
 Everything else goes to its year's Everyday lane.
 
 ## Names and covers
 
 A name is `<what> · <where> · <when>`, each part only when known:
 
-- **what**: a seed's or a scan run's label; an occasion (`Christmas Eve`, `Midsummer`, `Easter`,
+- **what**: a seed's label; an occasion (`Christmas Eve`, `Midsummer`, `Easter`,
   `<Name>'s birthday`); at home, `With <A> and <B>`, the two rarest guests seen in at least 30% of
   the pictures; when nothing else names it, the weekday and part of the day of a single day
   whose pictures all fall in one part (`Saturday evening`: morning from 5, afternoon from 12,
@@ -215,7 +203,7 @@ of groups in the process, so an edit made while the organizer runs waits for it.
 ## The organizer
 
 `staging organize [--user U | --all] [<category>…] [--full] [--dry-run]` plans a category's
-groups: in full on its first run, when the category's grouping settings change, when asked
+groups: in full on its first run (or when its checkpoint is of an older shape), when asked
 (`--full`), a week after its last full build, when more than a fifth of it changed, when its groups
 are not as the last run left them, and for a caller who may not read the audit trail; else
 incrementally, only what changed since the last run. The pipeline runs it as an administrator,
@@ -303,19 +291,18 @@ within; nothing under `albums/` but a request, so the organizer's own writes sta
 `staging-organize` pipeline runs `staging organize <category>` on the `media` pool's `organize`
 kind (one slot, reserved, priority 15), held two minutes so an upload's facts arrive first, and a
 fact landing while it runs folds into one further run. The fact names the category, which is in no
-lane: a bulk category's runs never wait behind its own indexing.
+lane: its runs never wait behind indexing in the bulk lane.
 
-**Group now**: `staging organize <category> --queue` writes the category's request,
+**Asking for a run**: `staging organize <category> --queue` writes the category's request,
 `albums/<category>/.request` (a db-tier node of the owner's, 0600, `stagingRequest: {at}`), which
 the bridge turns into the fact. Anyone who may write in the category's directory of groups — its
-owner — may ask, without reading the trail. A run asked for is never deferred. Changing a
-category's grouping settings (`staging category <c> --strategy|--significance`) asks for one.
+owner — may ask, without reading the trail. A run asked for is never deferred.
 
 `staging-organizer` is the safety net, every 15 minutes: `staging organize --all --queue
 --if-pending` asks for a run of each category something waits for — records in its trail the last
 run did not apply (a face named, a geocode, a tag: writes the bridge does not announce), writes to
-its groups by others, edits made or undone, a category never organized or whose settings changed,
-or a week since its last full build — then `staging match --all --stale`. Hourly it also runs
+its groups by others, edits made or undone, a category never organized or whose checkpoint is of
+an older shape, or a week since its last full build — then `staging match --all --stale`. Hourly it also runs
 `staging init --all --idle-minutes 360` and `staging duplicates --repair --all`
 ([staging.md](staging.md)). The hourly album sweeps of `album-metadata` leave suggestions out:
 `media-album` follows each change the organizer makes.
@@ -324,9 +311,8 @@ or a week since its last full build — then `staging match --all --stale`. Hour
 
 `auto-album-cluster <path>…` shows how the organizer would group the media at and under the paths
 — directories, albums (their members) or files — and writes nothing: the groups it proposes, the
-home of each year, the media read, undated, geotagged and with people. It takes the strategy and
-significance of the category the paths lie in, or `--strategy` and `--significance`; `--user` for
-whose home and household count, `--home lat,lng|<location>`, and `--members` for each group's
+home of each year, the media read, undated, geotagged and with people. `--user` says whose home
+and household count, `--home lat,lng|<location>`, and `--members` for each group's
 member paths. No edits and no pins apply.
 
 `auto-album-assign` scores a file or subtree against existing albums by time, location and
@@ -409,7 +395,7 @@ All are private to staging, which owns its groups.
   summary, asking for a run, the readers the analysis shares, and putting dismissed members into
   their lanes.
 - `@archive/staging/facts` — the bridge's staging facts, `staging.category.changed` among them.
-- `@archive/staging/strategy` — `planCategory`, the claim order, clutter, seeds, scan runs, lanes,
+- `@archive/staging/strategy` — `planCategory`, the claim order, clutter, seeds, lanes,
   significance and edits.
 - `@archive/staging/cluster` — boundaries (`clusterMedia`), stays and days (`rollupClusters`),
   `mergeHomeDays`, `shotsOf`, `baselineOf`, `usualLocation`.

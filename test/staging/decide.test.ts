@@ -1,12 +1,12 @@
 /**
  * The decisions on suggested groups: promote into a new album or an existing one, with members
- * kept back or a group that changed refused; discard; later; accept by the proposal rule; and a
+ * kept back or a group that changed refused; discard; accept by the proposal rule; and a
  * move to another category. Each that takes files out of the inbox leaves one journal entry.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
-import type { StagingAcceptResult, StagingDiscardResult, StagingJournalPage, StagingLaterResult, StagingMoveResult, StagingPromoteResult } from '@archive/staging/api';
+import type { StagingAcceptResult, StagingDiscardResult, StagingJournalPage, StagingMoveResult, StagingPromoteResult } from '@archive/staging/api';
 import { type AutoAlbumMeta, memberKeyOf } from '@archive/staging/auto-album';
-import { assert, assertEquals } from '@std/assert';
+import { assertEquals } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import { listing, makeGroup, readMembers, stagePhotos } from './decisions-fixture.ts';
 
@@ -128,52 +128,27 @@ Deno.test({ name: 'staging decisions', sanitizeResources: false, sanitizeOps: fa
       assertEquals(await vfs.exists(ADMIN_ACCESS, folder), false);
     });
 
-    await t.step('later puts a group aside, and a rewrite by the organizer keeps it there', async () => {
-      const on = await client.execJson<StagingLaterResult>('staging later 2019-06-19');
-      assertEquals(on.later, true);
-      const at = (await vfs.get<{ stagingLaterAt?: string }>(ADMIN_ACCESS, `${GROUPS}/2019-06-19`)).attrs.stagingLaterAt;
-      assert(at);
-      // The organizer rewrites a group's name and `autoAlbum`, and nothing else.
-      const members = await readMembers(vfs, `${GROUPS}/2019-06-19`);
-      await vfs.update(ADMIN_ACCESS, `${GROUPS}/2019-06-19`, {
-        attrs: {
-          name: 'Reeds',
-          autoAlbum: { memberKey: memberKeyOf(members.map((_, i) => String(i))), memberCount: members.length, generatedAt: '', generatedBy: 'test' } satisfies AutoAlbumMeta,
-        },
-      });
-      const list = await client.execJson<{ items: { name: string; staging?: { later?: string } }[] }>(`album list ${GROUPS}`);
-      assertEquals(list.items.find((item) => item.name === '2019-06-19')?.staging?.later, at);
-      await client.execJson<StagingLaterResult>('staging later 2019-06-19 --off');
-      assertEquals((await vfs.get<{ stagingLaterAt?: string }>(ADMIN_ACCESS, `${GROUPS}/2019-06-19`)).attrs.stagingLaterAt, undefined);
-    });
-
-    await t.step('accept files into the category destination; a dry run plans the same and writes nothing', async () => {
+    await t.step('accept files what is sure enough; a dry run plans the same and writes nothing', async () => {
       const photos = await stagePhotos(vfs, BATCH, 'meadow', 2, owner);
       await makeGroup(vfs, `${GROUPS}/2019-06-22`, 'Meadow', photos, owner);
-      // Without a destination an event is a new album, unsure: below the default floor.
+      // An event no album fits is a new album, unsure: below the default floor.
       const unsure = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --dry-run');
       assertEquals(unsure.skipped, [{ group: `${GROUPS}/2019-06-22`, reason: 'below-confidence' }]);
+
       // The Web UI's "Every proposal" asks for the least sure as well.
-      const any = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --confidence low --dry-run');
-      assertEquals([any.skipped, any.plan.map((row) => row.proposal.action)], [[], ['new']]);
-
-      await cmd.shouldSucceed(`staging category inbox --destination ${ALBUMS_ROOT}/summer`);
       const before = (await journal()).entries.length;
-      const plan = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --dry-run');
-      assertEquals(plan.plan.map((row) => [row.group, row.proposal.action, row.files]), [[`${GROUPS}/2019-06-22`, 'existing', 2]]);
+      const plan = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --confidence low --dry-run');
+      assertEquals(plan.plan.map((row) => [row.group, row.proposal.action, row.files]), [[`${GROUPS}/2019-06-22`, 'new', 2]]);
       assertEquals([plan.journal, plan.skipped, (await journal()).entries.length], [[], [], before]);
-      const high = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --confidence high');
-      assertEquals([high.journal, high.skipped], [[], [{ group: `${GROUPS}/2019-06-22`, reason: 'below-confidence' }]]);
 
-      const done = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22');
+      const done = await client.execJson<StagingAcceptResult>('staging accept 2019-06-22 --confidence low');
       assertEquals(done.plan, plan.plan);
       assertEquals(done.journal.length, 1);
-      assertEquals(await vfs.exists(ADMIN_ACCESS, `${ALBUMS_ROOT}/summer/meadow-0.jpg`), true);
-      await cmd.shouldSucceed('staging category inbox --no-destination');
+      assertEquals(await vfs.exists(ADMIN_ACCESS, `${ALBUMS_ROOT}/Meadow/files/meadow-0.jpg`), true);
     });
 
     await t.step('a move to another category takes the files out of their groups first', async () => {
-      await cmd.shouldSucceed('staging category scans --create --kind scans');
+      await cmd.shouldSucceed('staging category scans --create');
       const folder = `${STAGING}/files/inbox/box-3`;
       await cmd.shouldSucceed(`mkdir -p ${folder}`);
       const photos = await stagePhotos(vfs, folder, 'print', 2, owner);

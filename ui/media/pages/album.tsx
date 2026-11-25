@@ -229,7 +229,7 @@ export default function AlbumDetailPage() {
     keys: SLIDESHOW_KEYS,
     kind: 'Album',
   };
-  const showOnItems = showOn ? [{ label: 'Show on…', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] : [];
+  const showOnItems = showOn ? [{ label: 'Show on', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] : [];
 
   // `keepMounted={false}`: the media tab is the expensive one, and a Leaflet map mounted in a
   // hidden panel measures itself as zero-sized.

@@ -1,0 +1,6 @@
+/* The Sort tab's stream scrolls in its own box (`ScrollBox`); beside a time rail that box draws no
+ * scrollbar of its own, as the page has none beside a pinned one: the rail, which shows the dates
+ * and seeks them, stands in for it. */
+.mrx-sort-stream[data-railed] .mrx-scroll-box-scrollbar {
+  display: none;
+}

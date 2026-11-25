@@ -30,7 +30,7 @@ Deno.test({ name: 'staging check', sanitizeResources: false, sanitizeOps: false 
     });
 
     await cmd.shouldSucceed('staging init --user anna');
-    await cmd.shouldSucceed(`staging category scans --user anna --create --kind scans`);
+    await cmd.shouldSucceed(`staging category scans --user anna --create`);
     await cmd.shouldSucceed(`mkdir -p ${FILES}/inbox/batch ${FILES}/scans/box`);
     for (const path of [`${FILES}/inbox/batch/a.jpg`, `${FILES}/inbox/batch/b.jpg`, `${FILES}/scans/box/scan.tif`]) {
       await cmd.shouldSucceed(`mknode -t file ${path} --as mimetype=image/jpeg`);

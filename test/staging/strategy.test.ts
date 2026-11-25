@@ -1,11 +1,11 @@
 /**
- * The plan of a category, pure: clutter, machine names, seeds, scan runs, period and undated
- * lanes, significance and its presets, Everyday lanes by year and month, a person's edits, and
- * that every item ends in exactly one group whatever the strategy. Fast tier: no VFS.
+ * The plan of a category, pure: clutter, machine names, seeds, period and undated lanes,
+ * significance, Everyday lanes by year and month, a person's edits, and that every item ends in
+ * exactly one group. Fast tier: no VFS.
  */
 import type { StagingEdit } from '@archive/staging/api';
 import { assert, assertEquals } from '@std/assert';
-import { classifyItem, folderRuns, isMachineName, planCategory, type PlanContext, type PlanFolder, type PlanItem, type PlannedGroup } from '../../lib/staging/strategy.ts';
+import { classifyItem, isMachineName, planCategory, type PlanContext, type PlanFolder, type PlanItem, type PlannedGroup } from '../../lib/staging/strategy.ts';
 
 const HOUR = 60 * 60 * 1000;
 const MIN = 60 * 1000;
@@ -44,7 +44,7 @@ const photo = (at: string, over: Partial<PlanItem> = {}): PlanItem => {
 const run = (start: string, n: number, everyMin = 5, over: Partial<PlanItem> = {}): PlanItem[] =>
   Array.from({ length: n }, (_, i) => photo(new Date(Date.parse(start) + i * everyMin * MIN).toISOString(), over));
 
-const ctx = (over: Partial<PlanContext> = {}): PlanContext => ({ strategy: 'events', significance: 'normal', edits: [], folders, home: () => STHLM, ...over });
+const ctx = (over: Partial<PlanContext> = {}): PlanContext => ({ edits: [], folders, home: () => STHLM, ...over });
 
 /** Every item of `items` is in exactly one group. */
 const assertPartition = (items: PlanItem[], groups: PlannedGroup[]) => {
@@ -115,44 +115,6 @@ Deno.test('seeds: a named folder below a batch, or one an import titled; not a b
   assertPartition(items, dismissed.groups);
 });
 
-Deno.test('scan runs: a stem change, a counter jump, a change of year by hand and a cut end a run; a short run joins the one before', () => {
-  const scan = (name: string, over: Partial<PlanItem> = {}): PlanItem => ({ ...photo('2026-10-01T10:00:00Z', { folderId: 'box' }), name, ...over });
-  const names = (runs: PlanItem[][]) => runs.map((each) => each.map((item) => item.name));
-  const box = ['scan_001', 'scan_002', 'scan_003', 'scan_004', 'scan_050', 'scan_051', 'scan_052', 'roll_001', 'roll_002', 'roll_003'].map((name) => scan(`${name}.tif`));
-  assertEquals(names(folderRuns(box)), [
-    ['roll_001.tif', 'roll_002.tif', 'roll_003.tif'],
-    ['scan_001.tif', 'scan_002.tif', 'scan_003.tif', 'scan_004.tif'],
-    ['scan_050.tif', 'scan_051.tif', 'scan_052.tif'],
-  ]);
-  // A two-scan run joins the run before it.
-  const short = ['a_001', 'a_002', 'a_003', 'a_090', 'a_091'].map((name) => scan(`${name}.tif`));
-  assertEquals(folderRuns(short).map((each) => each.length), [5]);
-  // Dates set by hand in two years split a run.
-  const dated = [
-    scan('p_1.tif', { takenAtSource: 'manual', takenAt: '1975' }),
-    scan('p_2.tif', { takenAtSource: 'manual', takenAt: '1975' }),
-    scan('p_3.tif', { takenAtSource: 'manual', takenAt: '1975' }),
-    scan('p_4.tif', { takenAtSource: 'manual', takenAt: '1980' }),
-    scan('p_5.tif', { takenAtSource: 'manual', takenAt: '1980' }),
-    scan('p_6.tif', { takenAtSource: 'manual', takenAt: '1980' }),
-  ];
-  assertEquals(folderRuns(dated).map((each) => each.length), [3, 3]);
-  // A person's cut.
-  assertEquals(folderRuns(box.slice(0, 4), new Set([box[1].id])).map((each) => each.length), [2, 2]);
-  // Scan time never groups: a scans category plans runs, whatever the clock says.
-  const plan = planCategory(box, ctx({ strategy: 'folders' }));
-  assertEquals(plan.groups.map((group) => [group.kind, group.items.length]), [['folder', 3], ['folder', 4], ['folder', 3]]);
-  assertPartition(box, plan.groups);
-});
-
-Deno.test('a run above 300 scans splits at its largest jump', () => {
-  const box = Array.from(
-    { length: 320 },
-    (_, i) => ({ ...photo('2026-10-01T10:00:00Z', { folderId: 'box' }), name: `s_${String(i < 150 ? i : i + 15).padStart(4, '0')}.tif` }),
-  );
-  assertEquals(folderRuns(box).map((each) => each.length), [150, 170]);
-});
-
 Deno.test('pictures dated to a year or a month go to period lanes per folder, and undated ones to undated lanes; never at an instant', () => {
   const year = [photo('1974-12-31T23:00:00Z', { takenAt: '1975', precision: 'year' }), photo('1974-12-31T23:00:00Z', { takenAt: '1975', precision: 'year' })];
   const month = [photo('1975-05-31T23:00:00Z', { takenAt: '1975-06', precision: 'month' })];
@@ -163,7 +125,7 @@ Deno.test('pictures dated to a year or a month go to period lanes per folder, an
   assertEquals(plan.groups[0].lane, { kind: 'period', folder: 'upload-2026-10-01', chunk: 1, period: '1975' });
 });
 
-Deno.test('significance: a big day, a trip and a small day under each preset', () => {
+Deno.test('significance: a big day and a trip are kept, a small day at home is not', () => {
   // A usual day of two shots, most days of the year.
   const usual = Array.from({ length: 9 }, (_, d) => run(`2019-03-${String(d + 1).padStart(2, '0')}T12:00:00Z`, 2, 60)).flat();
   const small = run('2019-05-04T10:00:00Z', 3, 30);
@@ -176,9 +138,6 @@ Deno.test('significance: a big day, a trip and a small day under each preset', (
   assertEquals(events.map((group) => [group.kind, group.significance?.reason, group.items.length]), [['event', 'size', 12], ['trip', 'trip', 6]]);
   assertEquals(normal.groups.filter((group) => group.kind === 'loose').map((group) => [group.key, group.items.length]), [['loose:2019', 21]]);
   assertPartition(items, normal.groups);
-  // `more` keeps the three-shot day; `fewer` keeps neither day at home, but still the trip.
-  assert(planCategory(items, ctx({ significance: 'more' })).groups.some((group) => group.kind === 'event' && group.items.length === 3));
-  assertEquals(planCategory(items, ctx({ significance: 'fewer' })).groups.filter((group) => group.kind === 'event').map((group) => group.items.length), [12]);
 });
 
 Deno.test('an occasion, guests and a named place each keep a day', () => {
@@ -201,7 +160,7 @@ Deno.test('Everyday lanes: a year, months above 400 items once and for good, and
   assertEquals(split.granularity['loose:2014'], 'month');
   // Over 400 in a year: by month, and the plan says so for the next run.
   const many = Array.from({ length: 450 }, (_, i) => photo(new Date(Date.parse('2015-01-01T12:00:00Z') + i * 18 * HOUR).toISOString()));
-  const monthly = planCategory(many, ctx({ significance: 'fewer', home: undefined }));
+  const monthly = planCategory(many, ctx({ home: undefined }));
   assert(monthly.groups.filter((group) => group.kind === 'loose').every((group) => /^loose:\d{4}-\d{2}$/.test(group.key!)));
   assertEquals(monthly.granularity['loose:2015'], 'month');
   assertPartition(many, monthly.groups);
@@ -256,15 +215,7 @@ Deno.test("a photo from a phone's messenger folder, as its Takeout sidecar names
   assertPartition([...saved, ...own], plan.groups);
 });
 
-Deno.test('a category grouped by month alone: a lane per folder and month', () => {
-  const items = [...run('2019-06-01T10:00:00Z', 3), ...run('2019-07-01T10:00:00Z', 2), ...run('2019-06-02T10:00:00Z', 2, 5, { folderId: 'lake' })];
-  const plan = planCategory(items, ctx({ strategy: 'none' }));
-  const lanes = plan.groups.map((group) => `${group.key} ${group.kind} ${group.items.length}`).sort();
-  assertEquals(lanes, ['none:batch:2019-06 loose 3', 'none:batch:2019-07 loose 2', 'none:lake:2019-06 loose 2']);
-  assertPartition(items, plan.groups);
-});
-
-Deno.test('every item is in exactly one group, whatever the mix and the strategy', () => {
+Deno.test('every item is in exactly one group, whatever the mix', () => {
   let seed = 7;
   const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const items: PlanItem[] = [];
@@ -278,10 +229,7 @@ Deno.test('every item is in exactly one group, whatever the mix and the strategy
     else if (roll < 0.12) items.push(photo(at, { folderId, name: `Screenshot_${i}.png` }));
     else items.push(photo(at, { folderId, ...where, ...(random() < 0.2 ? { persons: [random() < 0.5 ? 'p1' : 'p2'] } : {}) }));
   }
-  for (const strategy of ['events', 'folders', 'none'] as const) {
-    const plan = planCategory(items, ctx({ strategy }));
-    assertPartition(items, plan.groups);
-  }
+  assertPartition(items, planCategory(items, ctx()).groups);
   // The same items in another order plan the same groups.
   const shuffled = items.toSorted(() => random() - 0.5);
   const ids = (plan: { groups: PlannedGroup[] }) => plan.groups.map((group) => group.items.map((item) => item.id).sort().join()).sort();

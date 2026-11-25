@@ -433,7 +433,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       // of children; `node.props.count` is the *link* count (how many parents the node has) and
       // is at least 1 for anything reachable, so asking it never skipped a single file.
       const hasChildren = child.childCount > 0;
-      // In the lane the bridges would give them: a scan over a bulk category stays in the bulk lane.
+      // In the lane the bridges would give them: a scan over a folder of the bulk lane stays in it.
       const facts = await withLanes(
         [
           ...await deriveForFile(childPath, fileCtx, Date.now(), snapshot),

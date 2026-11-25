@@ -24,7 +24,7 @@ Deno.test({ name: 'staging journal', sanitizeResources: false, sanitizeOps: fals
   try {
     await cmd.shouldSucceed('group-exists users || group-create users --gid 1002');
     await cmd.shouldSucceed('staging init --user admin');
-    await cmd.shouldSucceed('staging category scans --create --kind scans');
+    await cmd.shouldSucceed('staging category scans --create');
     await cmd.shouldSucceed(`mkdir -p ${ALBUMS_ROOT} ${BATCH} ${SCANS}`);
     await cmd.shouldSucceed(`mknode -t album ${ALBUMS_ROOT}/summer --as name='Summer 2019'`);
     const home = await vfs.get(ADMIN_ACCESS, '/home/admin');
@@ -38,8 +38,7 @@ Deno.test({ name: 'staging journal', sanitizeResources: false, sanitizeOps: fals
     const ids: string[] = [];
     await t.step('each decision makes one entry', async () => {
       ids.push((await client.execJson<StagingPromoteResult>(`staging promote 2019-06-14 --name 'Lake weekend'`)).journal!);
-      await cmd.shouldSucceed(`staging category inbox --destination ${ALBUMS_ROOT}/summer`);
-      ids.push(...(await client.execJson<StagingAcceptResult>('staging accept 2019-06-15')).journal);
+      ids.push(...(await client.execJson<StagingAcceptResult>('staging accept 2019-06-15 --confidence low')).journal);
       ids.push((await client.execJson<StagingDiscardResult>('staging discard 2019-06-16')).journal!);
       ids.push(...(await client.execJson<AlbumAddResult>(`album add ${ALBUMS_ROOT}/summer ${photos[5]}`)).journal!);
       ids.push(...(await client.execJson<AlbumAddResult>(`album add ${ALBUMS_ROOT}/summer ${prints.join(' ')}`)).journal!);

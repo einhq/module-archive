@@ -20,11 +20,11 @@ Deno.test(`album path: a file outside ${ALBUMS_ROOT} has no album`, () => {
 });
 
 Deno.test("album path: a reader's own suggested group, in any category, has a route into its Sort stream, any other album none", () => {
-  assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox/auto-2019-06-14', 'anna'), '/staging?c=inbox&g=auto-2019-06-14');
+  assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox/auto-2019-06-14', 'anna'), '/staging?c=inbox&tab=sort&g=auto-2019-06-14');
   assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox/auto-2019-06-14/IMG_2.jpg', 'anna'), undefined);
   assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox', 'anna'), undefined);
   assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox/.organizer', 'anna'), undefined);
-  assertEquals(stagingGroupRoute('/home/anna/staging/albums/scans/box-3', 'anna'), '/staging?c=scans&g=box-3');
+  assertEquals(stagingGroupRoute('/home/anna/staging/albums/scans/box-3', 'anna'), '/staging?c=scans&tab=sort&g=box-3');
   assertEquals(stagingGroupRoute(`${ALBUMS_ROOT}/Lake weekend`, 'anna'), undefined);
   // Another user's suggestion is not in this reader's stream, though an administrator may open its page.
   assertEquals(stagingGroupRoute('/home/anna/staging/albums/inbox/auto-2019-06-14', 'bertil'), undefined);

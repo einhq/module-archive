@@ -44,3 +44,6 @@ export const moveBlocked = (target: string, sources: readonly string[]): 'into-i
 
 /** Whether `name` can be a new folder's name: one path segment, not `.` or `..`. */
 export const isFolderName = (name: string): boolean => name !== '' && name !== '.' && name !== '..' && !name.includes('/');
+
+/** The Files tab's `?view=` that shows every entry of the folder, whatever its type; without it, its media. */
+export const NODES_VIEW = 'nodes';

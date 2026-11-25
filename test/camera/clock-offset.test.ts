@@ -75,12 +75,6 @@ Deno.test('a camera reading a day ahead is put right, then read in its zone', as
     assertEquals(resolved.takenAt, '2017-07-25T14:58:00+02:00');
   });
 
-  await t.step('a name the camera gave the file', () => {
-    const resolved = resolveTime({ name: '2017-07-26T14:00:00', ...sources })!;
-    assertEquals(resolved.takenAt, '2017-07-25T14:58:00');
-    assertEquals(resolved.takenAtSource, 'name');
-  });
-
   await t.step("a Takeout instant near the clock is Google's reading of it, and put right too", () => {
     const resolved = resolveTime({ camera: parts('2017-07-26T14:00:00'), sidecar: { instant: '2017-07-26T12:00:00Z' }, ...sources })!;
     assertEquals(resolved.takenAtUtc, '2017-07-25T12:58:00Z');

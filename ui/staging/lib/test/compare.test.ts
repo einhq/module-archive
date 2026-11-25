@@ -31,7 +31,8 @@ Deno.test("the album's pictures as days, the group's days marked, the undated la
   ]);
 });
 
-Deno.test('the highlight steps among the candidates and holds at either end', () => {
+Deno.test('the selection steps among the candidates, from none to the first, and holds at either end', () => {
   assertEquals([stepCandidate(0, 1, 3), stepCandidate(2, 1, 3), stepCandidate(0, -1, 3), stepCandidate(1, -1, 3)], [1, 2, 0, 0]);
   assertEquals(stepCandidate(0, 1, 0), 0);
+  assertEquals([stepCandidate(-1, 1, 3), stepCandidate(-1, -1, 3)], [0, 0]);
 });

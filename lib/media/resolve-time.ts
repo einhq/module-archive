@@ -8,7 +8,7 @@
 
 import type { Command } from '@ein/client';
 import { SYSTEM_TIME_ZONE } from '@ein/client';
-import { resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { resolveTime, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 import type { CaptureWhen, ResolvedTime } from '@archive/media/capture-resolve';
 import { type CameraClock, clockForFile, clockSources } from '@archive/camera/camera-zone';
 import { readSidecar, sidecarTime } from '@archive/media/paired-sidecar';
@@ -48,10 +48,13 @@ type FileTimeOverrides = {
 /** The clocks of the cameras read so far, so files of one camera read its clock once. */
 type CameraClocks = Map<string, Promise<CameraClock>>;
 
+/** A file's resolved capture time, and whether its camera is a digitizer, which makes it a scan. */
+type FileTime = { resolved: ResolvedTime | null; digitizer: boolean | undefined };
+
 /**
  * Resolve one existing file's capture time from everything the archive knows about it.
  *
- * The single entry point for every writer that is not `exif-extract` — which has all of this in
+ * The single entry point for every writer that is not `exif-interpret` — which has all of this in
  * hand already and would only be re-reading its own work.
  */
 const resolveFileTime = async (
@@ -59,7 +62,7 @@ const resolveFileTime = async (
   filePath: string,
   overrides: FileTimeOverrides = {},
   clocks: CameraClocks = new Map(),
-): Promise<ResolvedTime | null> => {
+): Promise<FileTime> => {
   const node = await cmd.sys.vfs.get(cmd.access, filePath);
   const attrs = node.attrs as Record<string, unknown>;
 
@@ -72,27 +75,28 @@ const resolveFileTime = async (
   const when = await readExifWhen(cmd, filePath);
   const sidecar = sidecarTime(await readSidecar(cmd.sys.vfs, cmd.access, filePath));
 
-  return resolveTime({
+  const resolved = resolveTime({
     manual,
     gps: when?.gps,
     camera: when?.device,
     ...clockSources(clock, SYSTEM_TIME_ZONE),
-    ...stampedSources(attrs),
     ...(sidecar ? { sidecar } : {}),
   });
+  return { resolved, digitizer: clock.digitizer };
 };
 
 /**
- * Resolve and write a file's capture time. Returns what it wrote, or null when the file has no
- * believable date — in which case the time attrs are cleared rather than left stale.
+ * Resolve and write a file's capture time, and whether it is a scan (`digitized`). Returns what it
+ * wrote, or null when the file has no believable date — in which case the time attrs are cleared
+ * rather than left stale.
  */
 export const applyFileTime = async (
   cmd: Command,
   filePath: string,
   overrides: FileTimeOverrides = {},
 ): Promise<ResolvedTime | null> => {
-  const resolved = await resolveFileTime(cmd, filePath, overrides);
-  await cmd.sys.vfs.update(cmd.access, filePath, { attrs: timeAttrs(resolved) });
+  const { resolved, digitizer } = await resolveFileTime(cmd, filePath, overrides);
+  await cmd.sys.vfs.update(cmd.access, filePath, { attrs: timeAttrs(resolved, digitizer) });
   return resolved;
 };
 
@@ -109,7 +113,7 @@ type FileTimeChange = { path: string; manual: string | null; attrs?: Record<stri
  */
 export const applyFileTimes = async (cmd: Command, changes: FileTimeChange[]): Promise<PromiseSettledResult<ResolvedTime | null>[]> => {
   const clocks: CameraClocks = new Map();
-  const resolved: (ResolvedTime | null)[] = [];
+  const resolved: FileTime[] = [];
   for (const change of changes) {
     try {
       resolved.push(await resolveFileTime(cmd, change.path, { manual: change.manual }, clocks));
@@ -119,7 +123,7 @@ export const applyFileTimes = async (cmd: Command, changes: FileTimeChange[]): P
   }
   const written = await cmd.sys.vfs.updateEach(
     cmd.access,
-    changes.map((change, i) => ({ ref: change.path, attrs: { whenManual: change.manual, ...change.attrs, ...timeAttrs(resolved[i]) } })),
+    changes.map((change, i) => ({ ref: change.path, attrs: { whenManual: change.manual, ...change.attrs, ...timeAttrs(resolved[i].resolved, resolved[i].digitizer) } })),
   );
-  return written.map((result, i) => result.status === 'rejected' ? result : { status: 'fulfilled', value: resolved[i] });
+  return written.map((result, i) => result.status === 'rejected' ? result : { status: 'fulfilled', value: resolved[i].resolved });
 };

@@ -5,7 +5,6 @@ import {
   fileChunks,
   type GroupRef,
   intoGroupChunks,
-  laterChunks,
   newAlbumChunks,
   partsCount,
   planCommands,
@@ -56,26 +55,22 @@ Deno.test('filing names at most 20 groups a call, each with its member key, then
 });
 
 Deno.test('a new album is made by the first call, and the rest are filed into it', () => {
-  const start = newAlbumChunks({ groups: groups.slice(0, 25), partial: [], files: [{ group: groups[90], paths: ['/s/a.jpg'] }] }, 'Summer 2019', true);
+  const start = newAlbumChunks({ groups: groups.slice(0, 25), partial: [], files: [{ group: groups[90], paths: ['/s/a.jpg'] }] }, 'Summer 2019');
   assert(start);
   assertEquals(start.first.command.match(/--expect/g)?.length, 20);
-  assert(start.first.command.includes("--name 'Summer 2019' --share private"));
+  assert(start.first.command.includes("--name 'Summer 2019' --expect"));
   assertEquals(fileChunks(start.rest, '/archive/albums/Summer 2019').map((chunk) => [chunk.groups.length, chunk.files]), [[5, 50], [0, 1]]);
-  const fromPart = newAlbumChunks({ groups: [], partial: [{ group: groups[3], except: ['/s/x.jpg'] }], files: [] }, 'Box 3', false);
+  const fromPart = newAlbumChunks({ groups: [], partial: [{ group: groups[3], except: ['/s/x.jpg'] }], files: [] }, 'Box 3');
   assertEquals(fromPart?.first.command, `staging promote '${root}/g3' --name 'Box 3' --except '/s/x.jpg' --expect 'k3'`);
-  assertEquals(newAlbumChunks({ groups: [], partial: [], files: [{ group: groups[1], paths: ['/s/a.jpg'] }] }, 'Box 3', false), null);
+  assertEquals(newAlbumChunks({ groups: [], partial: [], files: [{ group: groups[1], paths: ['/s/a.jpg'] }] }, 'Box 3'), null);
 });
 
-Deno.test('discard takes 20 groups a call, Later 100, accept 20 and its plan 50', () => {
+Deno.test('discard takes 20 groups a call, accept 20 and its plan 50', () => {
   assertEquals(discardChunks({ groups: groups.slice(0, 41), partial: [], files: [] }).map((chunk) => chunk.groups.length), [20, 20, 1]);
   assertEquals(
     discardChunks({ groups: [], partial: [], files: [{ group: groups[0], paths: ['/s/a.jpg', '/s/b c.jpg'] }] })[0].command,
     `staging discard '/s/a.jpg' '/s/b c.jpg'`,
   );
-  const later = laterChunks(groups.slice(0, 200), false);
-  assertEquals(later.map((chunk) => chunk.groups.length), [100, 100]);
-  assert(!later[0].command.includes('--off'));
-  assert(laterChunks(groups.slice(0, 3), true)[0].command.endsWith(' --off'));
   assertEquals(acceptChunks(groups, 'medium').length, 11);
   assert(acceptChunks(groups.slice(0, 2), 'high')[0].command.includes("--confidence high --expect 'k0' --expect 'k1'"));
   const plans = planCommands(groups);

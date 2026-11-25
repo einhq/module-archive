@@ -101,7 +101,6 @@ export const categoryStatuses = async (
   at = new Date(),
 ): Promise<StagingCategoryStatus[]> => {
   const day = archiveDay(at);
-  const destinations = await albumRefs(vfs, access, [...new Set(categories.flatMap((category) => category.settings.destinationId ?? []))]);
   const decided = await journalTotals(vfs, access, user);
   const statuses: StagingCategoryStatus[] = [];
   for (const category of categories) {
@@ -113,9 +112,7 @@ export const categoryStatuses = async (
       albumsPath,
       uploadPath: uploadPathFor(category.path, day),
       label: category.settings.label,
-      kind: category.settings.kind,
       settings: category.settings,
-      destination: category.settings.destinationId ? destinations.get(category.settings.destinationId) ?? null : null,
       counts: await countCategory(vfs, access, user, category.path),
       organizer: await readOrganizerSummary(vfs, access, albumsPath),
       decided: decided.get(category.name) ?? { filed: 0, discarded: 0 },

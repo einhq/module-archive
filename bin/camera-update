@@ -231,7 +231,7 @@ cameraUpdate.spec = {
     { name: 'timezone', type: 'string' as const, description: 'IANA timezone its clock was set to, e.g. Europe/Stockholm' },
     { name: 'clock-offset', type: 'string' as const, description: 'how far its clock ran ahead of the time in its zone, e.g. +23h2m, -5m, 0 once right' },
     { name: 'clock-from', type: 'string' as const, description: 'with --clock-offset: the date it applies from (all its pictures without it)' },
-    { name: 'digitizer', type: 'bool' as const, description: 'mark as a scanner and suppress its camera dates on linked media' },
+    { name: 'digitizer', type: 'bool' as const, description: 'mark as a scanner: its linked media are scans, and its camera dates on them are suppressed' },
     { name: 'quicktime-utc', type: 'bool' as const, description: "read its videos' QuickTime CreateDate as UTC (phones), not local time" },
     { name: 'description', type: 'string' as const, description: 'free-text note' },
     { name: 'clips', type: 'string' as const, description: "what opens a clip of its device's stream: face (the default), motion (a face or motion) or off" },

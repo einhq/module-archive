@@ -1,13 +1,13 @@
 /**
  * The decisions as the inbox's owner makes them, not an administrator: Anna Andersson promotes,
- * puts aside, discards and files her own organizer-made groups, lists her journal and undoes each
+ * discards and files her own organizer-made groups, lists her journal and undoes each
  * decision. A promote that fails part-way leaves a `partial` entry that undoes what it did. A group
  * promoted to the library's default owner comes back to her; a journal entry she writes herself is
  * undone with no more than her own authority.
  */
 import { ALBUMS_ROOT } from '@archive/paths';
 import type { AlbumAddResult } from '@archive/media/api';
-import type { StagingDiscardResult, StagingJournalPage, StagingLaterResult, StagingPromoteResult, StagingUndoResult } from '@archive/staging/api';
+import type { StagingDiscardResult, StagingJournalPage, StagingPromoteResult, StagingUndoResult } from '@archive/staging/api';
 import { type AutoAlbumMeta, memberKeyOf } from '@archive/staging/auto-album';
 import { assertEquals, assertStringIncludes } from '@std/assert';
 import { ADMIN_ACCESS, createTestContext, type ShellClient, testCommands } from '@ein/testing';
@@ -54,11 +54,6 @@ Deno.test({ name: 'the inbox owner decides and undoes', sanitizeResources: false
       assertEquals(await listing(vfs, BATCH), before);
       const group = await vfs.get(ADMIN_ACCESS, `${GROUPS}/2019-06-14`);
       assertEquals([group.props.uid, group.props.gid, group.props.mode & 0o777], [3400, home.props.gid, 0o700]);
-    });
-
-    await t.step('she puts a group aside and brings it back', async () => {
-      assertEquals((await anna.execJson<StagingLaterResult>('staging later 2019-06-15')).later, true);
-      assertEquals((await anna.execJson<StagingLaterResult>('staging later 2019-06-15 --off')).later, false);
     });
 
     await t.step('she discards into her own trash, and undoes it', async () => {

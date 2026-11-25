@@ -46,7 +46,7 @@ pgTest('staging dedupe --apply and undo make as many statements for 32 sets as f
 
   /** `sets` pairs of copies in the category `category`. */
   const seed = async (category: string, sets: number) => {
-    await cmd.shouldSucceed(`staging category ${category} --create --kind generic && mkdir -p ${FILES}/${category}/seed`);
+    await cmd.shouldSucceed(`staging category ${category} --create && mkdir -p ${FILES}/${category}/seed`);
     await vfs.createTree(
       ADMIN_ACCESS,
       `${FILES}/${category}/seed`,

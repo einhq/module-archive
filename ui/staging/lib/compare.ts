@@ -52,5 +52,5 @@ export function stripDays<T>(items: readonly T[], dateOf: (item: T) => string | 
   return days;
 }
 
-/** The highlighted candidate after `step` from `at`, among `count`, held at either end. */
+/** The candidate selected after `step` from `at` (-1: none of them), among `count`, held at either end. */
 export const stepCandidate = (at: number, step: 1 | -1, count: number): number => count === 0 ? 0 : Math.min(count - 1, Math.max(0, at + step));

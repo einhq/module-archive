@@ -1,9 +1,9 @@
 /**
  * What a suggested group is called: `<what> · <where> · <when>`, each part only when it is known.
  *
- * - **what**: a folder's label (a seed or a scan run), an occasion (a holiday, or someone's
- *   birthday in the picture), or, at home, the guests seen in most of it; for a group nothing
- *   else names, when in the week it was (`Saturday evening`, `Weekend`);
+ * - **what**: a seed's folder label, an occasion (a holiday, or someone's birthday in the
+ *   picture), or, at home, the guests seen in most of it; for a group nothing else names, when in
+ *   the week it was (`Saturday evening`, `Weekend`);
  * - **where**: a named location, a point of interest, away from home the city or the country, or
  *   near home a neighbourhood other than the one most days are in;
  * - **when**: the dates, at the precision its members' capture times have.
@@ -202,12 +202,10 @@ const chunked = (name: string, chunk: number): string => chunk > 1 ? `${name} ($
 
 /**
  * What a lane is called: `Everyday · 2014` (or a month), `Screenshots and saved images · 2019`
- * (or `· Undated`), `1987 · <folder>` for pictures dated only to that year or month,
- * `Undated · <folder>`, and `<folder> · Jun 2019` for a month of a category grouped by month alone.
+ * (or `· Undated`), `1987 · <folder>` for pictures dated only to that year or month, and
+ * `Undated · <folder>`.
  */
-export const laneName = (
-  lane: { kind: 'loose' | 'clutter' | 'undated' | 'period' | 'month'; period?: string; folder?: string; chunk?: number },
-): string => {
+export const laneName = (lane: { kind: 'loose' | 'clutter' | 'undated' | 'period'; period?: string; folder?: string; chunk?: number }): string => {
   const chunk = lane.chunk ?? 1;
   const folder = lane.folder ?? '';
   switch (lane.kind) {
@@ -219,7 +217,5 @@ export const laneName = (
       return chunked(groupName({ what: 'Undated', where: folder }), chunk);
     case 'period':
       return chunked(groupName({ what: lane.period && periodName(lane.period), where: folder }), chunk);
-    case 'month':
-      return chunked(groupName({ what: folder, when: lane.period && periodName(lane.period) }), chunk);
   }
 };

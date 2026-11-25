@@ -19,8 +19,8 @@
  * state of their own for a picture are keyed by its path.
  */
 
-import { CoverAvatar, HatField, MapShape, MapView, ScrollBox, SharingChip, TablerIcon } from '@ein/ui/components';
-import { ActionIcon, Anchor, Badge, Box, Button, Group, Loader, Select, Stack, Text } from '@mantine/core';
+import { CoverAvatar, HatField, MapMarkers, MapShape, MapView, type PositionShape, ScrollBox, SharingChip, TablerIcon, useMapEnlarged } from '@ein/ui/components';
+import { Anchor, Badge, Box, Button, Group, Loader, Select, Stack, Text } from '@mantine/core';
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAccessIds } from '@ein/ui/hooks';
 import { canWrite, fileUrl, formatBytes, formatClock, formatDateTime, isGuest, thumbnailUrl } from '@ein/ui/lib';
@@ -354,6 +354,17 @@ function VersionsSection({ versions, onCompare, onShow }: {
   );
 }
 
+/** Where the picture was taken, as its shape; enlarged, the picture itself stands on the spot too. */
+function PlaceSpot({ shape, media }: { shape: PositionShape; media: MediaItem }) {
+  const enlarged = useMapEnlarged();
+  return (
+    <>
+      <MapShape shape={shape} />
+      {enlarged && <MapMarkers markers={[{ id: `spot-${media.id}`, lat: shape.lat, lng: shape.lng, label: media.name, thumbnailUrl: media.thumbnailUrl }]} />}
+    </>
+  );
+}
+
 export function MediaSidebar(
   {
     media,
@@ -365,7 +376,6 @@ export function MediaSidebar(
     onReviewUnknown,
     onShowFace,
     followedFace,
-    onOpenMap,
     canEdit,
     stackBusy = false,
     onStackPreview,
@@ -387,8 +397,6 @@ export function MediaSidebar(
     onShowFace?: (facePath: string) => void;
     /** The face being followed, whose button shows it. */
     followedFace?: string | null;
-    /** Open the lightbox-owned, enlarged view of this media location. */
-    onOpenMap?: () => void;
     canEdit: boolean;
     stackBusy?: boolean;
     onStackPreview: (member: StackMemberRef) => void;
@@ -411,6 +419,8 @@ export function MediaSidebar(
   const [asking, setAsking] = useState<string | null>(null);
   /** A comment's delete waits to be confirmed. */
   const [confirmingComment, setConfirmingComment] = useState(false);
+  /** The place's map is enlarged over the lightbox, which leaves it Escape. */
+  const [mapEnlarged, setMapEnlarged] = useState(false);
   const [shownPath, setShownPath] = useState(media.path);
   if (shownPath !== media.path) {
     setShownPath(media.path);
@@ -423,7 +433,7 @@ export function MediaSidebar(
   useLayoutEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [media.path]);
-  useEffect(() => onLayer(restoredCompare.open || asking !== null || confirmingComment), [restoredCompare.open, asking, confirmingComment]);
+  useEffect(() => onLayer(restoredCompare.open || asking !== null || confirmingComment || mapEnlarged), [restoredCompare.open, asking, confirmingComment, mapEnlarged]);
   // The chip under the name says how the file is shared; read again when its sharing, or that of
   // a folder above it, changes.
   const changed = sharingChanged.value;
@@ -673,25 +683,18 @@ export function MediaSidebar(
             )}
             {position?.address && <Text size='xs' c='dimmed'>{position.address}</Text>}
             {mapPoint && (
-              // Small, so without the detail tiles and the attribution they bring.
+              // Small: the spot alone, and a button that enlarges it over the lightbox with the pickers.
               <Box className='mrx-sidebar-map' style={{ position: 'relative', borderRadius: 4, overflow: 'hidden' }}>
-                <MapView center={mapPoint} zoom={14} details={false} style={{ height: 240, minHeight: 240 }}>
-                  <MapShape shape={mapPoint} />
+                <MapView
+                  center={mapPoint}
+                  zoom={14}
+                  controls={{ fullscreen: true }}
+                  title={location?.name ?? 'Where it was taken'}
+                  onEnlargedChange={setMapEnlarged}
+                  style={{ height: 240, minHeight: 240 }}
+                >
+                  <PlaceSpot shape={mapPoint} media={media} />
                 </MapView>
-                {onOpenMap && (
-                  <ActionIcon
-                    variant='filled'
-                    color='dark'
-                    size={44}
-                    onClick={onOpenMap}
-                    aria-label='Enlarge map'
-                    title='Enlarge map'
-                    // Under Leaflet's layers button (10 px in, 46 px high), so its list opens over this.
-                    style={{ position: 'absolute', top: 64, right: 11, zIndex: 1 }}
-                  >
-                    <TablerIcon name='maximize' size={22} />
-                  </ActionIcon>
-                )}
               </Box>
             )}
           </SidebarSection>

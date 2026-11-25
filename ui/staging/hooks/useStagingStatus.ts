@@ -141,16 +141,16 @@ export function useStagingStatus(user: string) {
 }
 
 /**
- * Today's upload folder in `user`'s category `category` (the default one unless named), for a page
- * that has not read the staging area: found when files are dropped rather than when the page
- * opens, after the staging directories are set up (`ensureStagingLayout`, which moves nothing), so
- * the folder is as private as the rest of it. It is the folder `staging status` names for today in
+ * Today's upload folder in `user`'s default category, for a page that has not read the staging
+ * area: found when files are dropped rather than when the page opens, after the staging
+ * directories are set up (`ensureStagingLayout`, which moves nothing), so the folder is as private
+ * as the rest of it. It is the folder `staging status` names for today in
  * the archive's time zone; the upload queue makes it. An upload action's `path`.
  */
-export const stagingUploadFolder = (user: string, category: string = DEFAULT_CATEGORY) => async (): Promise<string> => {
+export const stagingUploadFolder = (user: string) => async (): Promise<string> => {
   await ensureStagingLayout(user);
   const status = await execCommand<StagingStatus>(`staging status --user ${shq(user)}`);
-  const target = status.categories.find((entry) => entry.name === category);
-  if (!target) throw new Error(`no staging category ${category} for ${user}`);
+  const target = status.categories.find((entry) => entry.name === DEFAULT_CATEGORY);
+  if (!target) throw new Error(`no staging category ${DEFAULT_CATEGORY} for ${user}`);
   return target.uploadPath;
 };

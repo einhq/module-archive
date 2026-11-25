@@ -2,98 +2,96 @@ import type { StagingCandidate } from '@archive/staging/api';
 import type { Proposal } from '@archive/staging/proposal';
 import { formatRange, TablerIcon } from '@ein/ui/components';
 import { useDropTarget } from '@ein/ui/hooks';
-import { openShortcutHelp } from '@ein/ui/signals';
-import { ActionIcon, Badge, Box, Button, Divider, Group, Kbd, Paper, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { ActionIcon, Badge, Box, Button, Divider, Group, Paper, ScrollArea, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import type { ReactNode } from 'react';
-import { type AlbumTarget, CONFIDENCE_WORDS, proposalLabel } from '../lib/destinations.ts';
+import { type AlbumTarget, proposalLabel } from '../lib/destinations.ts';
 import { CompareStrip } from './CompareStrip.tsx';
 import type { GroupDrop } from './GroupHeader.tsx';
 
 /** A row of the column pictures can be dropped on. */
 export type DropDestination =
   | { kind: 'proposal' }
-  | { kind: 'new'; private: boolean }
-  | { kind: 'target' }
+  | { kind: 'new' }
   | { kind: 'recent'; album: AlbumTarget }
   | { kind: 'add-to' }
-  | { kind: 'later' }
   | { kind: 'discard' };
 
 type Props = {
-  /** What the column decides on: the group's name, or how many of its pictures are selected. */
-  subject: string;
+  /**
+   * What the column acts on when it is not the whole group — a part, the pictures selected, groups
+   * selected — as a dimmed line over its buttons; none for the whole group.
+   */
+  acting?: string;
   /** How many of the group's pictures the keys act on: those selected, or a part's. */
   selected: number;
-  /** The part the keys are on, by its name, when they act on a part rather than a selection. */
-  part?: string;
   proposal: Proposal;
-  target: AlbumTarget | null;
   recent: readonly AlbumTarget[];
-  /** The neighbouring groups' names, which M and ⇧M merge with. */
+  /** The neighbouring groups' names, which the selected pictures can move to. */
   previous?: string;
   next?: string;
-  later: boolean;
   onApply: () => void;
+  /** Create album: a new album of it, named in a dialog. */
   onNew: () => void;
-  onPrivate: () => void;
   onAddTo: () => void;
-  onTarget: () => void;
-  onSetTarget: () => void;
-  onRecent: (album: AlbumTarget) => void;
-  onLater: () => void;
   onDiscard: () => void;
-  onMergeUp?: () => void;
-  onMergeDown?: () => void;
-  /** S on the pictures: split the group before them, or in a lane make them a group (`split.label` says which). */
+  /** With groups selected whole: merge them into the first, as its label says. */
+  merge?: { label: string; run: () => void };
+  /** Split the group before the pictures, or in a lane make them a group (`split.label` says which). */
   split?: { label: string; run: () => void };
-  /** `<` and `>`: the pictures into the group above or below. */
+  /** The pictures into the group above or below. */
   onMoveUp?: () => void;
   onMoveDown?: () => void;
-  /** G: the pictures into a group chosen, or a new one. */
+  /** The pictures into a group chosen, or a new one. */
   onMoveTo?: () => void;
-  /** T: set the time of the group's pictures. */
+  /** Set the time of the group's pictures. */
   onDate?: () => void;
   /** The group is no group; absent for a lane. */
   onNotAGroup?: () => void;
-  /** A selection across groups, which the column then decides on: how many groups and photos it holds. */
-  groups?: { count: number; files: number };
+  /** The selection reaches across groups, which the column then decides on. */
+  across?: boolean;
   /** What a drop of pictures on a row does; none takes no drop. */
   drop?: (destination: DropDestination) => GroupDrop | undefined;
-  /**
-   * The library albums the group may go into, best first (at most three, keys 1–3), and the one
-   * highlighted (`,` and `.`), which R rejects and whose own pictures the strip shows.
-   */
+  /** The library albums the group may go into, best first (at most three). */
   candidates?: readonly StagingCandidate[];
-  highlighted?: number;
-  onCandidate?: (index: number) => void;
-  onHighlight?: (index: number) => void;
+  /**
+   * The album selected among the candidates and the recent albums: its own pictures are shown,
+   * with Move to it, and a candidate selected carries "Not this album".
+   */
+  album?: AlbumTarget & { writable?: boolean };
+  onSelectAlbum?: (album: AlbumTarget) => void;
+  /** Move the group (or what the column acts on) to the album selected. */
+  onMove?: () => void;
   onReject?: (index: number) => void;
   /** The group was compared with the library and no album fits it well. */
   unmatched?: boolean;
-  /** When the group was taken, which the strip of the highlighted album opens on. */
+  /** When the group was taken, which the strip of the selected album opens on. */
   strip?: { timeStart?: string; timeEnd?: string };
-  /** The column is widened to compare (C). */
+  /** The column is widened to compare. */
   comparing?: boolean;
   onCompare?: () => void;
 };
 
-const dots = { high: '●●●', medium: '●●○', low: '●○○' } as const;
+/** The albums filed into lately that the column lists. */
+export const RECENT_SHOWN = 4;
+
+/** A row selected: sunken, with the accent at its left edge. */
+const selectedStyle = { background: 'var(--mrx-surface-sunken)', boxShadow: 'inset 3px 0 0 var(--mrx-accent)' } as const;
 
 /** The look of a row a drag of pictures is over: dashed in the accent, saying what the drop would do. */
 const overStyle = { outline: '2px dashed var(--mrx-accent)', outlineOffset: -2 } as const;
 
 /**
- * One choice of the column: its key, what it does, and a quieter second line, which says what a
- * drop would do while pictures are dragged over it.
+ * One choice of the column: what it does, and a quieter second line, which says what a drop would
+ * do while pictures are dragged over it. An album's row is marked while it is the one selected.
  */
 function Row(
-  { keys, icon, label, detail, onClick, disabled, drop }: {
-    keys?: string;
+  { icon, label, detail, onClick, disabled, selected, drop }: {
     icon: string;
     label: ReactNode;
     detail?: ReactNode;
     onClick?: () => void;
     disabled?: boolean;
+    selected?: boolean;
     drop?: GroupDrop;
   },
 ) {
@@ -103,9 +101,10 @@ function Row(
       className='mrx-pick-row'
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={selected}
       px='xs'
       py={6}
-      style={{ borderRadius: 'var(--mantine-radius-sm)', ...(target.over ? overStyle : {}) }}
+      style={{ borderRadius: 'var(--mantine-radius-sm)', ...(selected ? selectedStyle : {}), ...(target.over ? overStyle : {}) }}
       {...target.props}
     >
       <Group gap='sm' wrap='nowrap' align='flex-start'>
@@ -114,23 +113,20 @@ function Row(
           <Text size='sm' truncate>{label}</Text>
           {target.over ? <Text size='xs' c='var(--mrx-accent)' truncate>{target.over}</Text> : detail && <Text size='xs' c='dimmed' truncate>{detail}</Text>}
         </Box>
-        {keys && <Kbd size='xs'>{keys}</Kbd>}
       </Group>
     </UnstyledButton>
   );
 }
 
 /**
- * One candidate album: its key, title, span and size, how likely, and why, as chips; one the reader
- * may not file into is shown and not offered. The highlighted one carries "Not this album".
+ * One candidate album: its title, span and size, how likely, and why, as chips; one the reader may
+ * not file into says so. A click selects it; the one selected carries "Not this album".
  */
 function CandidateRow(
-  { candidate, index, highlighted, onFile, onHighlight, onReject, drop }: {
+  { candidate, selected, onSelect, onReject, drop }: {
     candidate: StagingCandidate;
-    index: number;
-    highlighted: boolean;
-    onFile?: () => void;
-    onHighlight?: () => void;
+    selected: boolean;
+    onSelect?: () => void;
     onReject?: () => void;
     drop?: GroupDrop;
   },
@@ -143,17 +139,11 @@ function CandidateRow(
       className='mrx-pick-row'
       px='xs'
       py={6}
-      onMouseEnter={onHighlight}
-      style={{
-        borderRadius: 'var(--mantine-radius-sm)',
-        background: highlighted ? 'var(--mrx-surface-sunken)' : undefined,
-        boxShadow: highlighted ? 'inset 3px 0 0 var(--mrx-accent)' : undefined,
-        ...(target.over ? overStyle : {}),
-      }}
+      style={{ borderRadius: 'var(--mantine-radius-sm)', ...(selected ? selectedStyle : {}), ...(target.over ? overStyle : {}) }}
       {...target.props}
     >
       <Group gap='sm' wrap='nowrap' align='flex-start'>
-        <UnstyledButton onClick={album.writable ? onFile : undefined} disabled={!album.writable} style={{ flex: 1, minWidth: 0 }} aria-label={`Into ${album.title}`}>
+        <UnstyledButton onClick={onSelect} aria-pressed={selected} style={{ flex: 1, minWidth: 0 }}>
           <Group gap='sm' wrap='nowrap' align='flex-start'>
             <TablerIcon name='photo' size={16} />
             <Box style={{ flex: 1, minWidth: 0 }}>
@@ -174,27 +164,26 @@ function CandidateRow(
             </Box>
           </Group>
         </UnstyledButton>
-        <Stack gap={2} align='flex-end'>
-          {album.writable && <Kbd size='xs'>{index + 1}</Kbd>}
-          {highlighted && onReject && (
-            <Tooltip label='Not this album (R)'>
-              <ActionIcon size='xs' variant='subtle' color='gray' aria-label={`Not ${album.title}`} onClick={onReject}>
-                <TablerIcon name='x' size={12} />
-              </ActionIcon>
-            </Tooltip>
-          )}
-        </Stack>
+        {selected && onReject && (
+          <Tooltip label='Not this album'>
+            <ActionIcon size='xs' variant='subtle' color='gray' aria-label={`Not ${album.title}`} onClick={onReject}>
+              <TablerIcon name='x' size={12} />
+            </ActionIcon>
+          </Tooltip>
+        )}
       </Group>
     </Box>
   );
 }
 
-/** The proposal's button, which takes a drop as its row would. */
-function ProposalButton({ label, onClick, drop }: { label: string; onClick: () => void; drop?: GroupDrop }) {
+/** One of the column's buttons, which takes a drop as a row would: the first one filled. */
+function DropButton(
+  { label, icon, primary, onClick, drop }: { label: string; icon: string; primary: boolean; onClick: () => void; drop?: GroupDrop },
+) {
   const target = useDropTarget({ accept: (payload) => drop?.accept(payload) ?? null, onDrop: (payload) => drop?.onDrop(payload), disabled: !drop });
   return (
-    <Box {...target.props} mb={4} style={{ borderRadius: 'var(--mantine-radius-sm)', ...(target.over ? overStyle : {}) }}>
-      <Button fullWidth justify='space-between' onClick={onClick} rightSection={<Kbd size='xs'>Enter</Kbd>}>
+    <Box {...target.props} style={{ borderRadius: 'var(--mantine-radius-sm)', ...(target.over ? overStyle : {}) }}>
+      <Button fullWidth justify='flex-start' variant={primary ? 'filled' : 'default'} leftSection={<TablerIcon name={icon} size={16} />} onClick={onClick}>
         <Text span inherit truncate>{target.over ?? label}</Text>
       </Button>
     </Box>
@@ -202,133 +191,110 @@ function ProposalButton({ label, onClick, drop }: { label: string; onClick: () =
 }
 
 /**
- * The Sort tab's destination column, beside the stream: where the open group (or the pictures of
- * it the keys act on) can go, each with its key. The proposal first, then a new album, a private
- * one, the sticky target and the albums filed into lately, any album; then how its grouping can
- * change — for the group, the neighbours to merge with, its time and Not a group; for some of its
- * pictures, a split, the groups above and below, or any group; Later and Discard last. With a
- * selection across groups, it decides on that: Enter accepts the proposals of every group in it.
+ * The Sort tab's side panel, a pane beside the stream: where the open group (or the pictures of it
+ * the keys act on, which a dimmed line then names) can go. Its proposal first, as the filled button,
+ * when it is something other than a new album: an album that matches, the library's copies kept,
+ * clutter discarded, matched days filed. Then Create album (filled when nothing else is proposed),
+ * which names it in a dialog, starting from the suggested name; Add to album…, and the albums filed
+ * into lately. Under them the group's candidate albums, each with how likely and why. A click on
+ * an album, recent or candidate, selects it: its own pictures are shown around the group's days,
+ * with Move to it, and a wider column to compare them side by side. Then how its grouping can
+ * change — for the group, its time and Not a group; for some of its pictures, a split, the groups
+ * above and below, or any group — and Discard last. With groups selected, it decides on them:
+ * accepting their proposals, one new album or an album for all, merging them, discarding them.
  *
- * Under the proposal are the group's candidate albums (1–3), each with how likely and why; `,`
- * and `.` move the highlight, R says the highlighted one is not where the group goes, and the
- * highlighted album's own pictures around the group's days are under them. C widens the column to
- * compare them side by side.
- *
- * Pictures and groups dragged from the stream can be dropped on its rows (`drop`): each says what
- * the drop would do as they arrive.
+ * It scrolls by itself. Pictures dragged from the stream can be dropped on its buttons and rows
+ * (`drop`): each says what the drop would do as they arrive. The keys are listed by the page's
+ * keyboard shortcuts, not here.
  */
 export function DestinationColumn(props: Props) {
-  const { subject, selected, part, proposal, target, recent, previous, next, later, groups, drop } = props;
-  const candidates = groups ? [] : props.candidates ?? [];
-  const highlighted = Math.min(props.highlighted ?? 0, Math.max(0, candidates.length - 1));
-  const shown = candidates[highlighted];
+  const { acting, selected, proposal, recent, previous, next, across = false, drop, album } = props;
+  const candidates = across ? [] : props.candidates ?? [];
   const label = proposalLabel(proposal);
-  const heading = groups
-    ? `Put ${groups.count.toLocaleString()} ${groups.count === 1 ? 'group' : 'groups'} in`
-    : part
-    ? `Put ${part} in`
-    : selected > 0
-    ? `Put ${selected.toLocaleString()} selected in`
-    : 'Put it in';
-  const single = !groups && selected === 0;
+  const single = !across && selected === 0;
+  /** The proposal's own button, above Create album: for anything but a new album, and for a selection of groups their proposals. */
+  const proposed = across ? 'Accept their proposals…' : label && proposal.action !== 'new' && proposal.action !== 'none' ? label : undefined;
   return (
-    <Paper withBorder p='sm' radius='md'>
-      <Text size='xs' fw={700} tt='uppercase' c='dimmed' mb={6}>{heading}</Text>
-      <Text size='sm' fw={600} truncate mb='xs' title={subject}>{subject}</Text>
-      {groups
-        ? <ProposalButton label='Accept their proposals…' onClick={props.onApply} drop={drop?.({ kind: 'proposal' })} />
-        : label && proposal.action !== 'none'
-        ? <ProposalButton label={label} onClick={props.onApply} drop={drop?.({ kind: 'proposal' })} />
-        : <Text size='xs' c='dimmed' mb={4}>No proposal: N, A, B or X.</Text>}
-      {!groups && proposal.action !== 'none' && (
-        <Text size='xs' c='dimmed' mb='xs'>
-          {dots[proposal.confidence]} {CONFIDENCE_WORDS[proposal.confidence]}
-          {proposal.action === 'existing' && proposal.reason === 'category' ? ' · the category’s album' : ''}
-        </Text>
-      )}
-      {candidates.length > 0 && (
-        <Stack gap={0} mb='xs'>
-          {candidates.map((candidate, index) => (
-            <CandidateRow
-              key={candidate.album.id}
-              candidate={candidate}
-              index={index}
-              highlighted={index === highlighted}
-              onFile={() => props.onCandidate?.(index)}
-              onHighlight={() => props.onHighlight?.(index)}
-              onReject={props.onReject ? () => props.onReject?.(index) : undefined}
-              drop={drop?.({ kind: 'recent', album: { path: candidate.album.path, title: candidate.album.title } })}
-            />
-          ))}
+    <Paper withBorder p='sm' radius='md' h='100%'>
+      <ScrollArea type='auto' scrollbars='y' offsetScrollbars='y' h='100%'>
+        {acting && <Text size='xs' c='dimmed' mb={6} truncate title={acting}>{acting}</Text>}
+        <Stack gap={6} mb='xs'>
+          {proposed && <DropButton label={proposed} icon={across ? 'checks' : 'circle-check'} primary onClick={props.onApply} drop={drop?.({ kind: 'proposal' })} />}
+          <DropButton label='Create album' icon='photo-plus' primary={!proposed} onClick={props.onNew} drop={drop?.({ kind: 'new' })} />
+          <DropButton label='Add to album…' icon='library-plus' primary={false} onClick={props.onAddTo} drop={drop?.({ kind: 'add-to' })} />
         </Stack>
-      )}
-      {!groups && candidates.length === 0 && props.unmatched && <Text size='xs' c='dimmed' mb='xs'>No album in the library fits it well.</Text>}
-      {shown && props.strip && (
-        <Box mb='xs'>
-          <CompareStrip
-            key={`${shown.album.path}\n${props.strip.timeStart ?? ''}`}
-            album={shown.album}
-            timeStart={props.strip.timeStart}
-            timeEnd={props.strip.timeEnd}
-            wide={props.comparing === true}
-          />
-          {props.onCompare && (
-            <UnstyledButton onClick={props.onCompare} px='xs' mt={2}>
-              <Text size='xs' c='dimmed'>{props.comparing ? 'Narrow the column (C)' : 'Compare side by side (C)'}</Text>
-            </UnstyledButton>
-          )}
-        </Box>
-      )}
-      <Stack gap={0}>
-        <Row keys='N' icon='photo-plus' label='New album' onClick={props.onNew} drop={drop?.({ kind: 'new', private: false })} />
-        <Row keys='P' icon='lock' label='New private album' detail='Only you see it' onClick={props.onPrivate} drop={drop?.({ kind: 'new', private: true })} />
-        <Divider my={4} />
-        <Row
-          keys='B'
-          icon='star'
-          label={target ? target.title : 'Choose a target…'}
-          detail={target ? '⇧B chooses another' : undefined}
-          onClick={props.onTarget}
-          drop={drop?.({ kind: 'target' })}
-        />
-        {target && (
-          <UnstyledButton onClick={props.onSetTarget} px='xs'>
-            <Text size='xs' c='dimmed'>Choose another target</Text>
-          </UnstyledButton>
+        {recent.length > 0 && (
+          <Stack gap={0} mb='xs'>
+            {recent.slice(0, RECENT_SHOWN).map((each) => (
+              <Row
+                key={each.path}
+                icon='history'
+                label={each.title}
+                selected={each.path === album?.path}
+                onClick={() => props.onSelectAlbum?.(each)}
+                drop={drop?.({ kind: 'recent', album: each })}
+              />
+            ))}
+          </Stack>
         )}
-        {recent.filter((album) => album.path !== target?.path).slice(0, 4).map((album) => (
-          <Row
-            key={album.path}
-            icon='history'
-            label={album.title}
-            onClick={() => props.onRecent(album)}
-            drop={drop?.({ kind: 'recent', album })}
-          />
-        ))}
-        <Row keys='A' icon='library-plus' label='Add to album…' onClick={props.onAddTo} drop={drop?.({ kind: 'add-to' })} />
-        <Divider my={4} />
-        {single && previous && <Row keys='M' icon='arrow-merge-up' label={`Merge into “${previous}”`} onClick={props.onMergeUp} disabled={!props.onMergeUp} />}
-        {single && next && <Row keys='⇧M' icon='arrow-merge-down' label={`Merge “${next}” in`} onClick={props.onMergeDown} disabled={!props.onMergeDown} />}
-        {single && props.onDate && <Row keys='T' icon='clock-edit' label='Set the time…' onClick={props.onDate} />}
-        {single && props.onNotAGroup && <Row icon='unlink' label='Not a group…' detail='Its pictures go back to their lanes' onClick={props.onNotAGroup} />}
-        {!groups && selected > 0 && props.split && <Row keys='S' icon='scissors' label={props.split.label} onClick={props.split.run} />}
-        {!groups && selected > 0 && previous && <Row keys='<' icon='arrow-bar-to-up' label={`Move to “${previous}”`} onClick={props.onMoveUp} />}
-        {!groups && selected > 0 && next && <Row keys='>' icon='arrow-bar-to-down' label={`Move to “${next}”`} onClick={props.onMoveDown} />}
-        {!groups && selected > 0 && <Row keys='G' icon='arrows-transfer-up' label='Move to a group…' detail='Or a new group of their own' onClick={props.onMoveTo} />}
-        <Divider my={4} />
-        {(single || groups) && (
-          <Row
-            keys='L'
-            icon='clock-pause'
-            label={later ? (groups ? 'Back to their lanes' : 'Back to its lane') : 'Later'}
-            onClick={props.onLater}
-            drop={drop?.({ kind: 'later' })}
-          />
+        {candidates.length > 0 && (
+          <Stack gap={0} mb='xs'>
+            {candidates.map((candidate, index) => (
+              <CandidateRow
+                key={candidate.album.id}
+                candidate={candidate}
+                selected={candidate.album.path === album?.path}
+                onSelect={() => props.onSelectAlbum?.(candidate.album)}
+                onReject={props.onReject ? () => props.onReject?.(index) : undefined}
+                drop={drop?.({ kind: 'recent', album: { path: candidate.album.path, title: candidate.album.title } })}
+              />
+            ))}
+          </Stack>
         )}
-        <Row keys='X' icon='trash' label='Discard' detail='To the trash, with Undo' onClick={props.onDiscard} drop={drop?.({ kind: 'discard' })} />
-        <Divider my={4} />
-        <Row keys='?' icon='keyboard' label='Keyboard shortcuts' detail='Every key, for a group, a picture or a selection' onClick={openShortcutHelp} />
-      </Stack>
+        {!across && candidates.length === 0 && props.unmatched && <Text size='xs' c='dimmed' mb='xs'>No album in the library fits it well.</Text>}
+        {album && (
+          <Stack gap={6} mb='xs'>
+            {props.strip && (
+              <CompareStrip
+                key={`${album.path}\n${props.strip.timeStart ?? ''}`}
+                album={album}
+                timeStart={props.strip.timeStart}
+                timeEnd={props.strip.timeEnd}
+                wide={props.comparing === true}
+              />
+            )}
+            {props.onMove && (
+              <Button
+                fullWidth
+                justify='flex-start'
+                variant='light'
+                leftSection={<TablerIcon name='photo-check' size={16} />}
+                disabled={album.writable === false}
+                onClick={props.onMove}
+              >
+                <Text span inherit truncate>Move to “{album.title}”</Text>
+              </Button>
+            )}
+            {props.onCompare && props.strip && (
+              <UnstyledButton onClick={props.onCompare} px='xs'>
+                <Text size='xs' c='dimmed'>{props.comparing ? 'Narrow the column' : 'Compare side by side'}</Text>
+              </UnstyledButton>
+            )}
+          </Stack>
+        )}
+        <Stack gap={0}>
+          <Divider my={4} />
+          {props.merge && <Row icon='arrow-merge' label={props.merge.label} detail='Into the first, which keeps its name' onClick={props.merge.run} />}
+          {single && props.onDate && <Row icon='clock-edit' label='Set the time…' onClick={props.onDate} />}
+          {single && props.onNotAGroup && <Row icon='unlink' label='Not a group…' detail='Its pictures go back to their lanes' onClick={props.onNotAGroup} />}
+          {!across && selected > 0 && props.split && <Row icon='scissors' label={props.split.label} onClick={props.split.run} />}
+          {!across && selected > 0 && previous && <Row icon='arrow-bar-to-up' label={`Move to “${previous}”`} onClick={props.onMoveUp} />}
+          {!across && selected > 0 && next && <Row icon='arrow-bar-to-down' label={`Move to “${next}”`} onClick={props.onMoveDown} />}
+          {!across && selected > 0 && <Row icon='arrows-transfer-up' label='Move to a group…' detail='Or a new group of their own' onClick={props.onMoveTo} />}
+          <Divider my={4} />
+          <Row icon='trash' label='Discard' detail='To the trash, with Undo' onClick={props.onDiscard} drop={drop?.({ kind: 'discard' })} />
+        </Stack>
+      </ScrollArea>
     </Paper>
   );
 }

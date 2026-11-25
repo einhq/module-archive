@@ -38,7 +38,6 @@ const UNGATED: Record<string, string> = {
   'media-heal': "a pass over the albums, the archive's own tree",
   'media-album': "an album's members, in the archive's own tree",
   'staging-organize': 'a staging category',
-  'staging-retime': 'a staging category',
   'staging-sidecars': 'a staging category',
   'staging-unzip': 'a zip in a staging category',
   'gedcom-stage': 'a GEDCOM file in staging',

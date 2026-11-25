@@ -3,7 +3,7 @@
  * its verb's cap, so a decision over hundreds of groups is a run of bounded calls. Pure, so what
  * is sent is tested without a page.
  *
- * A selection is groups whole (`staging promote`, `discard`, `later`, `accept` over several at
+ * A selection is groups whole (`staging promote`, `discard`, `accept`, `merge` over several at
  * once), groups but for some of their pictures (one call each, with `--except`), and pictures one
  * by one (`album add`, `staging discard`). The selection itself never lists a whole group's
  * pictures, and neither do the commands.
@@ -18,8 +18,6 @@ export type GroupRef = { name: string; path: string; title: string; memberCount?
 const GROUPS_PER_COMMAND = 20;
 /** Groups each `staging accept --dry-run` plans at most. */
 export const PLAN_PER_COMMAND = 50;
-/** Groups each `staging later` names at most. */
-const LATER_PER_COMMAND = 100;
 /** Pictures each `album add` and `staging discard` names at most. */
 const FILES_PER_COMMAND = 500;
 /** Journal entries each `staging undo` takes at most. */
@@ -124,11 +122,11 @@ export function fileChunks(parts: SelectionParts, album: string): Chunk[] {
  * that call made. None when the selection holds no group, whole or in part: pictures alone are
  * filed into an album that is there.
  */
-export function newAlbumChunks<G extends GroupRef>(parts: SelectionParts<G>, title: string, privately: boolean): { first: Chunk; rest: SelectionParts<G> } | null {
+export function newAlbumChunks<G extends GroupRef>(parts: SelectionParts<G>, title: string): { first: Chunk; rest: SelectionParts<G> } | null {
   if (parts.groups.length > 0) {
     const groups = parts.groups.slice(0, GROUPS_PER_COMMAND);
     return {
-      first: { command: commands.promoteNew(groups, title, { private: privately }), groups, touched: [], decides: groups.length, files: members(groups) },
+      first: { command: commands.promoteNew(groups, title), groups, touched: [], decides: groups.length, files: members(groups) },
       rest: { ...parts, groups: parts.groups.slice(GROUPS_PER_COMMAND) },
     };
   }
@@ -136,7 +134,7 @@ export function newAlbumChunks<G extends GroupRef>(parts: SelectionParts<G>, tit
   if (!first) return null;
   return {
     first: {
-      command: commands.promoteNew(first.group, title, { private: privately, except: first.except }),
+      command: commands.promoteNew(first.group, title, first.except),
       groups: [],
       touched: [first.group],
       decides: 1,
@@ -166,10 +164,6 @@ export function discardChunks(parts: SelectionParts): Chunk[] {
     ...fileCalls(parts, (paths) => commands.discardFiles(paths)),
   ];
 }
-
-/** Put the groups aside, or with `off` bring them back. Nothing moves, so they count no pictures. */
-export const laterChunks = (groups: readonly GroupRef[], off: boolean): Chunk[] =>
-  chunks(groups, LATER_PER_COMMAND).map((batch) => ({ command: commands.later(batch, off), groups: batch, touched: [], decides: batch.length, files: 0 }));
 
 /** Apply the groups' proposals at least as sure as `confidence`. */
 export const acceptChunks = (groups: readonly GroupRef[], confidence: 'high' | 'medium' | 'low'): Chunk[] =>

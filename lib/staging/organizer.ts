@@ -12,7 +12,7 @@
  * 2. **Plan** (`planCategory`): the groups a person pinned, or edited by hand, keep their members,
  *    which are left out; the rest are planned whole.
  * 3. **Pair** each planned group with a group there already: a lane or a seed by its key, an event,
- *    trip or run by its members (the same, or at least half in common). A group keeps its path, a
+ *    or trip by its members (the same, or at least half in common). A group keeps its path, a
  *    name a person gave it, and its other attrs.
  * 4. **Write** only what differs: groups no plan claimed deleted, stale links unlinked, attrs
  *    rewritten, new links and groups created, each in as few calls as the VFS takes them.
@@ -42,21 +42,11 @@
  * household, each person's share of the library's faces, people's names, the named places) is
  * read by each run for the parts it plans, so a part planned again before such a change is not; and
  * each year's home stays as the last full build found it, as one found from the category's own
- * GPS needs all of a year's. A full build runs a week after the last, and on the first run, when
- * the category's grouping settings change, when asked (`--full`), when more than a fifth of the
+ * GPS needs all of a year's. A full build runs a week after the last, and on the first run (or one
+ * whose checkpoint is of an older shape), when asked (`--full`), when more than a fifth of the
  * category changed, and when the groups are not as the last run left them.
  */
-import type {
-  AutoAlbumHome,
-  ClusterGroupReport,
-  GroupKind,
-  OrganizeFullReason,
-  OrganizeResult,
-  OrganizerSummary,
-  StagingCategorySettings,
-  StagingEdit,
-  StagingQueued,
-} from '@archive/staging/api';
+import type { AutoAlbumHome, ClusterGroupReport, GroupKind, OrganizeFullReason, OrganizeResult, OrganizerSummary, StagingEdit, StagingQueued } from '@archive/staging/api';
 import type { AuditRecord } from '@ein/api';
 import type { Command, NodeChildEntry } from '@ein/client';
 import { accessOfUser, isAdmin } from '@ein/client';
@@ -162,8 +152,7 @@ const FULL_EVERY_MS = 7 * DAY_MS;
 
 /** What the checkpoint's body holds: what the next run starts from. */
 type Checkpoint = {
-  version: 2;
-  paramsKey: string;
+  version: 3;
   granularity: Record<string, 'year' | 'month'>;
   baselines: Record<string, number>;
   /** The distinct shots of each day of the timeline. */
@@ -510,7 +499,7 @@ const readCheckpoint = async (vfs: Vfs, access: Access, albumsPath: string): Pro
     const handle = await vfs.open(access, `${albumsPath}/${ORGANIZER_CHECKPOINT}`, { mode: 'r' });
     try {
       const body = JSON.parse(await new Response(handle.readable).text()) as Checkpoint;
-      return body.version === 2 ? body : undefined;
+      return body.version === 3 ? body : undefined;
     } finally {
       await handle.close();
     }
@@ -717,7 +706,6 @@ const guestOf = (library: LibraryInputs) => (id: string): boolean => !library.ho
 const nameOf = (group: PlannedGroup, owner: OwnerContext, library: LibraryInputs, names: Namer): { name: string; location?: string } => {
   if (group.lane) return { name: laneName(group.lane) };
   const when = formatDates(group.items.flatMap((item) => item.takenAt ?? []));
-  if (group.kind === 'folder' && group.run) return { name: groupName({ what: group.run.label, when: group.run.years }) || when || 'Scans' };
   const found = names.locationFor(group.items);
   // Home is where most days happen: naming it says nothing a date does not.
   const located = found && names.home(dayOf(group.items[0]))?.location === found.path ? undefined : found;
@@ -829,7 +817,6 @@ const slugBase = (group: PlannedGroup, folders: ReadonlyMap<string, PlanFolder>)
   switch (group.kind) {
     case 'loose':
       if (key.startsWith('period:')) return segment(`${period}-period-${folderName(group.folderId)}${suffix}`);
-      if (key.startsWith('none:')) return segment(`${key.split(':')[2]?.replace(/#.*/, '')}-${folderName(group.folderId)}${suffix}`);
       return segment(`${period.replace(/#.*/, '')}-loose${suffix}`);
     case 'clutter':
       return segment(`${period.replace(/#.*/, '')}-clutter${suffix}`);
@@ -837,8 +824,6 @@ const slugBase = (group: PlannedGroup, folders: ReadonlyMap<string, PlanFolder>)
       return segment(`undated-${folderName(group.folderId)}${suffix}`);
     case 'seed':
       return segment(`seed-${group.seed?.label ?? folderName(group.folderId)}`);
-    case 'folder':
-      return segment(`folder-${group.run?.label ?? folderName(group.folderId)}`);
     default:
       return dayOf(group.items.toSorted(compareItems)[0]);
   }
@@ -871,7 +856,7 @@ const pair = (planned: PlannedGroup[], existing: ExistingGroup[]): (ExistingGrou
     }
   });
 
-  // Events, trips and runs by their members: the same key first, then the most in common.
+  // Events and trips by their members: the same key first, then the most in common.
   const holder = new Map<string, ExistingGroup>();
   for (const group of free) {
     if (group.claimed || group.attrs.autoAlbum?.key) continue;
@@ -914,9 +899,6 @@ const reportOf = (
   withPaths: boolean,
 ): ClusterGroupReport => ({ action, kind, name, members: members.length, ...extra, ...(withPaths ? { memberPaths: members } : {}) });
 
-/** The parameters a plan depends on beside the items: when they change, everything is planned again. */
-const paramsKeyOf = (settings: StagingCategorySettings): string => `v2:${settings.group.strategy}:${settings.group.significance}`;
-
 /** The local years of the items with an instant, and their GPS points by year. */
 const pointsByYearOf = (items: PlanItem[]): { years: string[]; points: Map<string, Geo[]> } => {
   const dated = items.filter((item) => item.precision === 'instant');
@@ -933,7 +915,6 @@ const pointsByYearOf = (items: PlanItem[]): { years: string[]; points: Map<strin
 
 /** The planning context of a scope, beside what a plan of part of a category is told (`seedFolders`, `dayShots`, `lanes`). */
 type ScopeOptions = Pick<PlanContext, 'seedFolders' | 'dayShots' | 'lanes'> & {
-  strategy: StagingCategorySettings['group'];
   edits: StagingEdit[];
   items?: PlanItem[];
   granularity?: Record<string, 'year' | 'month'>;
@@ -950,8 +931,6 @@ const planWith = async (vfs: Vfs, media: ScopeMedia, owner: OwnerContext, option
   await readPeople(vfs, owner, items.flatMap((item) => item.persons ?? []));
   const names = namer(media, owner, options.homes, await readLinkedLocations(vfs, media, owner));
   const ctx: PlanContext = {
-    strategy: options.strategy.strategy,
-    significance: options.strategy.significance,
     edits: options.edits,
     folders: media.folders,
     home: (day) => names.home(day),
@@ -974,7 +953,7 @@ export const planScope = async (
   vfs: Vfs,
   media: ScopeMedia,
   owner: OwnerContext,
-  options: { strategy: StagingCategorySettings['group']; edits: StagingEdit[]; items?: PlanItem[]; granularity?: Record<string, 'year' | 'month'>; flagHome?: Geo },
+  options: { edits: StagingEdit[]; items?: PlanItem[]; granularity?: Record<string, 'year' | 'month'>; flagHome?: Geo },
 ): Promise<{ plan: Plan; homes: Map<string, AutoAlbumHome>; names: Namer; library: LibraryInputs }> => {
   const items = options.items ?? media.items;
   const { years, points } = pointsByYearOf(items);
@@ -1267,7 +1246,6 @@ type Run = {
   owner: OwnerContext;
   category: CategoryEntry;
   albumsPath: string;
-  paramsKey: string;
   options: OrganizeOptions;
   started: number;
 };
@@ -1306,10 +1284,9 @@ const fullBuild = async (run: Run, checkpoint: Checkpoint | undefined, why: Orga
   for (const group of existing) if (group.pinned) { for (const id of group.memberIds) if (id) held.add(id); }
   const free = media.items.filter((item) => !held.has(item.id));
   const { plan, homes, names, library } = await planScope(vfs, media, owner, {
-    strategy: category.settings.group,
     edits: entries.map((entry) => entry.edit),
     items: free,
-    granularity: checkpoint?.paramsKey === run.paramsKey ? checkpoint.granularity : {},
+    granularity: checkpoint?.granularity ?? {},
   });
 
   const ctx: WriteContext = {
@@ -1345,8 +1322,7 @@ const fullBuild = async (run: Run, checkpoint: Checkpoint | undefined, why: Orga
       pending: result.pending,
       byKind: result.byKind,
     }, {
-      version: 2,
-      paramsKey: run.paramsKey,
+      version: 3,
       granularity: plan.granularity,
       baselines: plan.baselines,
       dayShots: plan.dayShots,
@@ -1472,8 +1448,8 @@ type FamilyOf = (key: string) => string | undefined;
 
 /**
  * The family of each lane key: an Everyday or clutter lane's year (`loose:2014`), or its month once
- * the year is split (`loose:2014-06`); a period lane's value and folder; an undated lane's folder;
- * a `none` lane's folder and month. Chunks (`#2`) are their lane's. A seed is no lane.
+ * the year is split (`loose:2014-06`); a period lane's value and folder; an undated lane's folder.
+ * Chunks (`#2`) are their lane's. A seed is no lane.
  */
 const familyRule = (granularity: Readonly<Record<string, 'year' | 'month'>>, yearLanes: ReadonlySet<string>): FamilyOf => (key) => {
   const base = key.replace(/#\d+$/, '');
@@ -1486,11 +1462,11 @@ const familyRule = (granularity: Readonly<Record<string, 'year' | 'month'>>, yea
 };
 
 /** The lane families an item may go to, by its class: the Everyday lanes of its day, for a timeline item, as it may end up there. */
-const familiesOf = (item: PlanItem, cls: ReturnType<typeof classOf>, strategy: StagingCategorySettings['group']['strategy'], family: FamilyOf): string[] => {
+const familiesOf = (item: PlanItem, cls: ReturnType<typeof classOf>, family: FamilyOf): string[] => {
   const day = item.precision === 'none' ? '' : dayOf(item);
   switch (cls) {
     case 'timeline':
-      return [strategy === 'none' ? `none:${item.folderId}:${day.slice(0, 7)}` : family(`loose:${day.slice(0, 7)}`)!];
+      return [family(`loose:${day.slice(0, 7)}`)!];
     case 'clutter':
       return [item.precision === 'none' ? 'clutter:undated' : family(`clutter:${day.slice(0, 7)}`)!];
     case 'period':
@@ -1510,7 +1486,6 @@ const laneClassOf = (family: string): 'loose' | 'clutter' | undefined => family.
 const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean): Promise<OrganizeResult | OrganizeFullReason> => {
   const { vfs, access, owner, category, albumsPath, options } = run;
   const root = category.path;
-  const strategy = category.settings.group.strategy;
   const dryRun = options.dryRun === true;
   const result = emptyResult(owner.user, category.name, 'incremental', dryRun);
   const limit = Math.max(FULL_FLOOR, FULL_SHARE * checkpoint.items);
@@ -1646,8 +1621,7 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
   }
 
   /** The class of a planning item now: in a seed, on the timeline, or in a lane. */
-  const classify = (item: PlanItem): 'seed' | 'run' | ReturnType<typeof classOf> =>
-    strategy === 'folders' ? 'run' : strategy === 'events' && seeds.has(item.folderId) ? 'seed' : classOf(item, { strategy, folders: media.folders });
+  const classify = (item: PlanItem): 'seed' | ReturnType<typeof classOf> => seeds.has(item.folderId) ? 'seed' : classOf(item, { folders: media.folders });
 
   /** Read the files `rows` as planning items, with their signals, those not read yet. */
   const readIds = new Set<string>();
@@ -1687,10 +1661,7 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
       const of = key ? family(key) : undefined;
       if (key?.startsWith('seed:')) folders.add(key.slice('seed:'.length));
       else if (of) families.add(of);
-      else {
-        if (group.attrs.autoAlbum?.folderId && strategy === 'folders') folders.add(group.attrs.autoAlbum.folderId);
-        for (const id of group.memberIds) if (id && !planned.has(id) && !fixed.has(id)) touch(id);
-      }
+      else for (const id of group.memberIds) if (id && !planned.has(id) && !fixed.has(id)) touch(id);
     }
   };
 
@@ -1719,10 +1690,8 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
     for (const id of ids) {
       const item = items.get(id);
       if (!item) gone.add(id);
-      if (strategy === 'events') {
-        for (const time of dirty.get(id)!.times) spans.add(time);
-        if (item?.precision === 'instant') spans.add(item.timeMs);
-      }
+      for (const time of dirty.get(id)!.times) spans.add(time);
+      if (item?.precision === 'instant') spans.add(item.timeMs);
       // Its folder may be a seed or stop being one, held now or not: a seed counts the files no person keeps.
       if (item) folders.add(item.folderId);
       if (item && !held.has(id)) planned.add(id);
@@ -1730,11 +1699,10 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
     await holdersOf([...new Set(ids.flatMap((id) => [...dirty.get(id)!.paths]))]);
   };
 
-  /** Whether each folder a change touched is a seed, or (by folder) a run of scans, and its files part of the run when it is. */
+  /** Whether each folder a change touched is a seed, and its files part of the run when it is. */
   const evaluateFolders = async (): Promise<void> => {
     const todo = [...folders].filter((id) => !evaluated.has(id) && !id.startsWith('dir:'));
     for (const id of todo) evaluated.add(id);
-    if (strategy === 'none' || todo.length === 0) return;
     const paths = await batched(todo, (page) => vfs.resolveIdPaths(access, page));
     const nodes = await batched(todo, (page) => vfs.getNodesByIds(access, page));
     for (const id of todo) {
@@ -1749,7 +1717,7 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
       const below = path.startsWith(`${root}/`) ? path.slice(root.length + 1).split('/') : [];
       const title = (nodes.get(id)?.attrs as { title?: unknown }).title;
       const folder: PlanFolder = { id, path, name: basename(path), depth: below.length, ...(typeof title === 'string' && title.trim() ? { title: title.trim() } : {}) };
-      if (strategy === 'events' && !wasSeed && !isNameable(folder)) continue;
+      if (!wasSeed && !isNameable(folder)) continue;
       const rows: FileRow[] = [];
       let after: string | undefined;
       while (true) {
@@ -1760,11 +1728,6 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
       }
       await readRows(rows);
       const inFolder = rows.flatMap((row) => items.get(row.id) ?? []).filter((item) => !held.has(item.id));
-      if (strategy === 'folders') {
-        for (const item of inFolder) planned.add(item.id);
-        await holdersOf(inFolder.map((item) => item.path));
-        continue;
-      }
       const nowSeed = isNameable(folder) && isSeedFolder(folder, inFolder, edits);
       if (nowSeed !== wasSeed) {
         for (const item of inFolder) touch(item.id, item.path);
@@ -1831,7 +1794,7 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
       placed.add(id);
       const item = items.get(id)!;
       const cls = classify(item);
-      if (cls !== 'seed' && cls !== 'run') { for (const each of familiesOf(item, cls, strategy, family)) families.add(each); }
+      if (cls !== 'seed') { for (const each of familiesOf(item, cls, family)) families.add(each); }
     }
     for (const each of [...families].filter((name) => !familiesRead.has(name))) {
       familiesRead.add(each);
@@ -1859,7 +1822,6 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
 
   /** The years whose usual day the spans as planned change, whose every segment is then planned again. */
   const checkBaselines = (): boolean => {
-    if (strategy !== 'events') return false;
     const timeline = [...planned].map((id) => items.get(id)!).filter((item) => item.precision === 'instant' && classify(item) === 'timeline').toSorted(compareItems);
     const replacedDays = new Set(spans.replaced().flatMap((segment) => segment.days));
     const shots = new Map(Object.entries(checkpoint.dayShots).filter(([day]) => !replacedDays.has(day)));
@@ -1941,7 +1903,6 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
   }
   const library = await libraryOf(vfs, access, owner, planItems);
   const { plan, names } = await planWith(vfs, media, owner, {
-    strategy: category.settings.group,
     edits,
     items: planItems,
     granularity,
@@ -2024,7 +1985,6 @@ const incremental = async (run: Run, checkpoint: Checkpoint, requested: boolean)
 /** Why a run of the category with `checkpoint` plans it whole before reading what changed, if it does. */
 const fullReason = (run: Run, checkpoint: Checkpoint | undefined): OrganizeFullReason | undefined => {
   if (!checkpoint) return 'first';
-  if (checkpoint.paramsKey !== run.paramsKey) return 'settings';
   if (run.options.full) return 'asked';
   if (!isAdmin(run.access)) return 'trail';
   if (run.started - Date.parse(checkpoint.lastFullAt) > FULL_EVERY_MS) return 'week';
@@ -2049,7 +2009,6 @@ export const organizeCategory = async (cmd: Command, owner: OwnerContext, catego
     owner,
     category,
     albumsPath,
-    paramsKey: paramsKeyOf(category.settings),
     options,
     started: Date.now(),
   };
@@ -2078,14 +2037,14 @@ export const organizeCategory = async (cmd: Command, owner: OwnerContext, catego
 
 /**
  * What waits for a run of the category, if anything: a category never organized (or whose
- * checkpoint is of an older shape, or whose settings changed), a week since its last full build,
+ * checkpoint is of an older shape), a week since its last full build,
  * edits made or undone since its last run, or records in its audit trail (or writes to its groups
  * by others) the last run did not apply. Reads the trail, so only for an administrator.
  */
 const waiting = async (vfs: Vfs, access: Access, user: string, category: CategoryEntry): Promise<StagingQueued['why'] | undefined> => {
   const albumsPath = categoryAlbumsPath(user, category.name);
   const checkpoint = await readCheckpoint(vfs, access, albumsPath);
-  if (!checkpoint || checkpoint.paramsKey !== paramsKeyOf(category.settings)) return 'first';
+  if (!checkpoint) return 'first';
   if (Date.now() - Date.parse(checkpoint.lastFullAt) > FULL_EVERY_MS) return 'week';
   const entries = await liveEditEntries(vfs, access, user, category.name);
   const live = entries.map((entry) => entry.id);
@@ -2150,8 +2109,6 @@ export const fileIntoLanes = async (
   const media = await readMedia(vfs, access, rows, category.path);
   const checkpoint = await readCheckpoint(vfs, access, albumsPath);
   const plan = planCategory(media.items, {
-    strategy: category.settings.group.strategy,
-    significance: category.settings.group.significance,
     edits,
     folders: media.folders,
     granularity: checkpoint?.granularity ?? {},

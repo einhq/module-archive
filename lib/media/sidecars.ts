@@ -384,7 +384,7 @@ export const pairSidecars = async (cmd: Command, root: string, dryRun: boolean):
   for (const { medium, sidecar } of touched) {
     if (typeof medium.attrs.indexedAt !== 'string') continue;
     answer.retimed++;
-    const point = sidecarPoint({ ...sidecar, pairedAt: '' }, medium.attrs.digitized === true);
+    const point = sidecarPoint({ ...sidecar, pairedAt: '' });
     const placed = medium.children.some((child) => child.name === POSITION_CHILD) || medium.attrs.positionManual !== undefined;
     if (point && !placed) answer.positioned++;
     if (dryRun) continue;

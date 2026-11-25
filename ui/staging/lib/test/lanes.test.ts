@@ -7,7 +7,6 @@ Deno.test('a kind decides the lane, and no kind is an event to sort', () => {
   assertEquals(laneOf({ staging: { kind: 'trip' } }), 'sort');
   assertEquals(laneOf({ staging: { kind: 'event' } }), 'sort');
   assertEquals(laneOf({ staging: { kind: 'seed' } }), 'sort');
-  assertEquals(laneOf({ staging: { kind: 'folder' } }), 'sort');
   assertEquals(laneOf({ staging: { kind: 'loose' } }), 'everyday');
   assertEquals(laneOf({ staging: { kind: 'undated' } }), 'undated');
   assertEquals(laneOf({ staging: { kind: 'clutter' } }), 'clutter');
@@ -16,11 +15,6 @@ Deno.test('a kind decides the lane, and no kind is an event to sort', () => {
   assertEquals(laneOf({ staging: { kind: 'loose', precision: 'month' } }), 'undated');
   // A kind from a newer server than this page is sorted, not lost.
   assertEquals(laneOf({ staging: { kind: 'newfangled' as 'trip' } }), 'sort');
-});
-
-Deno.test('a group put aside is in Later, whatever its kind', () => {
-  assertEquals(laneOf({ staging: { later: '2026-10-17T10:00:00Z' } }), 'later');
-  assertEquals(laneOf({ staging: { kind: 'clutter', later: '2026-10-17T10:00:00Z' } }), 'later');
 });
 
 Deno.test('counts are groups and their files per lane', () => {
@@ -35,18 +29,17 @@ Deno.test('counts are groups and their files per lane', () => {
     everyday: { groups: 1, files: 412 },
     undated: { groups: 0, files: 0 },
     clutter: { groups: 1, files: 0 },
-    later: { groups: 0, files: 0 },
   });
   assertEquals(inLane(rows, 'sort'), [rows[0], rows[1]]);
 });
 
 Deno.test('only a known lane is a lane', () => {
-  assertEquals([isLane('sort'), isLane('clutter'), isLane('later'), isLane('elsewhere'), isLane(null)], [true, true, true, false, false]);
+  assertEquals([isLane('sort'), isLane('clutter'), isLane('later'), isLane('elsewhere'), isLane(null)], [true, true, false, false, false]);
 });
 
 Deno.test("a lane's group is Everyday, clutter or undated, never an event", () => {
   assertEquals((['loose', 'clutter', 'undated'] as const).map((kind) => isLaneGroup({ staging: { kind } })), [true, true, true]);
-  assertEquals((['event', 'trip', 'seed', 'folder'] as const).map((kind) => isLaneGroup({ staging: { kind } })), [false, false, false, false]);
+  assertEquals((['event', 'trip', 'seed'] as const).map((kind) => isLaneGroup({ staging: { kind } })), [false, false, false]);
   assertEquals(isLaneGroup({}), false);
 });
 

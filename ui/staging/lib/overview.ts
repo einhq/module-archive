@@ -1,4 +1,4 @@
-import type { StagingCategoryKind, StagingCategoryStatus, StagingFileCounts } from '@archive/staging/api';
+import type { StagingCategoryStatus, StagingFileCounts } from '@archive/staging/api';
 import { CATEGORY_SLUG } from '@archive/staging/paths';
 import type { UploadCounts } from '@ein/ui/lib';
 
@@ -6,24 +6,6 @@ import type { UploadCounts } from '@ein/ui/lib';
  * What the overview and the progress strip say about a category, from its `staging status`
  * counts. Pure, so the numbers the bars draw are tested without a page.
  */
-
-/** What a category holds, as the pages call it; `generic` is any other. */
-export const KIND_LABELS: Record<StagingCategoryKind, string> = {
-  inbox: 'Inbox',
-  'google-photos': 'Google Photos export',
-  scans: 'Scans',
-  phone: 'Phone',
-  camera: 'Camera',
-  messaging: 'Messaging',
-  screenshots: 'Screenshots',
-  generic: 'Other',
-};
-
-/** The kinds whose files a phone makes, so whose categories show how a phone's backup app sends into them. */
-export const PHONE_KINDS: StagingCategoryKind[] = ['phone', 'screenshots', 'messaging'];
-
-/** The kinds a new category can be, in the order they are offered: every kind but the inbox's. */
-export const NEW_KINDS: StagingCategoryKind[] = ['google-photos', 'scans', 'phone', 'camera', 'messaging', 'screenshots', 'generic'];
 
 export type CategorySegmentKey = 'preparing' | 'ready' | 'undated' | 'other';
 

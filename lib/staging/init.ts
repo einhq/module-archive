@@ -4,9 +4,9 @@
  * 1. `staging/` and each of `STAGING_DIRS` are directories owned as the home is, mode 0700, and
  *    `staging/` is unlisted (`UNLISTED_ATTR`), so the library's views leave out what it holds, and
  *    wants the processing `STAGING_PROCESSING` names (`PROCESSING_ATTR`).
- * 2. The default category exists with the `inbox` kind, and every other directory under `files/`
- *    is a category: one without settings is adopted with the `generic` kind's. Each category has
- *    its directory of groups under `albums/`, owned and private the same way.
+ * 2. The default category exists, and every other directory under `files/` is a category: one
+ *    without settings is adopted with its name for a label. Each category has its directory of
+ *    groups under `albums/`, owned and private the same way.
  * 3. Unless only the layout is asked for, what does not belong where it is moves, with every link
  *    to it following (`renameMany`): a GPX file waiting for a device into `routes/`; any other
  *    entry of `files/` that is not a directory into the default category's loose batch; an entry
@@ -21,7 +21,7 @@
 import type { StagingInitUser } from '@archive/staging/api';
 import type { Command } from '@ein/client';
 import { PROCESSING_ATTR, UNLISTED_ATTR } from '@ein/client';
-import { CATEGORY_ATTR, presetSettings, readCategories } from '@archive/staging/category';
+import { CATEGORY_ATTR, newCategorySettings, readCategories } from '@archive/staging/category';
 import { DEFAULT_CATEGORY, STAGING_DIRS, STAGING_MODE, STAGING_PROCESSING, stagingRoots } from '@archive/staging/paths';
 import { basename } from '@std/path';
 
@@ -106,17 +106,14 @@ export const initStaging = async (vfs: Vfs, access: Access, user: string, option
 
   const categories = await readCategories(vfs, access, user);
   const inbox = categories.find((category) => category.name === DEFAULT_CATEGORY);
-  if (!inbox) await ensureDir(roots.filesPath, DEFAULT_CATEGORY, { [CATEGORY_ATTR]: presetSettings('inbox', DEFAULT_CATEGORY) });
+  if (!inbox) await ensureDir(roots.filesPath, DEFAULT_CATEGORY, { [CATEGORY_ATTR]: newCategorySettings(DEFAULT_CATEGORY) });
   for (const category of categories) {
     await ensureDir(roots.filesPath, category.name);
-    const stored = category.attrs[CATEGORY_ATTR];
-    if (category.name === DEFAULT_CATEGORY && (stored === undefined || category.settings.kind !== 'inbox')) {
+    if (category.attrs[CATEGORY_ATTR] !== undefined) continue;
+    if (category.name === DEFAULT_CATEGORY) {
       if (!answer.repaired.includes(category.path)) answer.repaired.push(category.path);
-      if (!dryRun) await vfs.update(access, category.path, { attrs: { [CATEGORY_ATTR]: { ...category.settings, kind: 'inbox' } } });
-    } else if (stored === undefined) {
-      answer.adopted.push(category.path);
-      if (!dryRun) await vfs.update(access, category.path, { attrs: { [CATEGORY_ATTR]: presetSettings('generic', category.name) } });
-    }
+    } else answer.adopted.push(category.path);
+    if (!dryRun) await vfs.update(access, category.path, { attrs: { [CATEGORY_ATTR]: newCategorySettings(category.name) } });
   }
   for (const name of new Set([DEFAULT_CATEGORY, ...categories.map((category) => category.name)])) await ensureDir(roots.albumsPath, name);
 

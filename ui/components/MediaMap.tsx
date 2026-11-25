@@ -1,13 +1,11 @@
-import { MapMarkers, MapView } from '@ein/ui/components';
+import { MapView } from '@ein/ui/components';
 import { Box, Center, Loader } from '@mantine/core';
-import { execCommand, openMediaAt } from '@ein/ui/signals';
+import { execCommand } from '@ein/ui/signals';
 import type { GeoBounds, PositionPoint } from '@ein/ui/lib';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { MapClusterMedia } from './MapClusterMedia.tsx';
-import { filterFlags, type MapCluster, useMapMedia } from '../hooks/useMapMedia.ts';
-import { cellFor, clusterMarkers } from '../lib/map-clusters.ts';
-import { hitToMediaItem, type MediaHit } from '../lib/map-hits.ts';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { filterFlags, type MapCluster } from '../hooks/useMapMedia.ts';
 import type { MapFilters } from '../lib/map-params.ts';
+import { MEDIA_LAYER, mediaLayerSettings } from '../lib/map-layer.ts';
 
 /**
  * The cell size the extent the map opens on is read in: about a kilometre, close enough to where
@@ -64,34 +62,18 @@ type MediaMapProps = {
   empty: ReactNode;
 };
 
+/** What the map opens with: the media layer, the others the reader may turn on in its picker. */
+const OPENING_LAYERS = [MEDIA_LAYER];
+
 /**
- * Media on a map, clustered by the server as on the map page (`find-within`): a cell of one drawn
- * as its picture and a pile as its count, which opens the pictures behind it. The map opens fitted
- * to the media and `around` together, and fills the box it is given.
+ * Media on a map: the archive's media layer kept to `filters`, a cell of one drawn as its picture
+ * and a pile as its count, which opens the pictures behind it; and the other layers in its picker.
+ * The map opens fitted to the media and `around` together, and fills the box it is given.
  */
 export function MediaMap({ filters, around, layers, note, empty }: MediaMapProps) {
-  const { clusters, loading, query } = useMapMedia({}, filters);
   const points = useMediaPoints(filters);
-  const [zoom, setZoom] = useState(12);
-  const [open, setOpen] = useState<{ cluster: MapCluster; bounds: GeoBounds } | null>(null);
-
   const extent = useMemo(() => points && around && extentOf([...points, ...around]), [points, around]);
-
-  const onMoveEnd = useCallback((bounds: GeoBounds, z: number) => {
-    setZoom(z);
-    query(bounds, cellFor(z));
-  }, [query]);
-
-  // The arrow keys in the lightbox walk every picture drawn as a picture, not just the one clicked.
-  const singles = useMemo(() => clusters.flatMap((cluster) => cluster.hit ? [cluster.hit] : []), [clusters]);
-  const openHit = useCallback((hit: MediaHit) => {
-    openMediaAt(Math.max(singles.findIndex((candidate) => candidate.id === hit.id), 0), singles.map(hitToMediaItem));
-  }, [singles]);
-
-  const markers = useMemo(
-    () => clusterMarkers(clusters, zoom, openHit, (cluster, bounds) => setOpen({ cluster, bounds })),
-    [clusters, zoom, openHit],
-  );
+  const layerSettings = useMemo(() => ({ [MEDIA_LAYER]: mediaLayerSettings(filters) }), [JSON.stringify(filters)]);
 
   // Fitted once, to everything drawn, so all of it is waited for.
   if (points === null || around === null) {
@@ -107,21 +89,14 @@ export function MediaMap({ filters, around, layers, note, empty }: MediaMapProps
   const foot = note?.(points.length > 0);
   return (
     <Box h='100%' pos='relative'>
-      <MapView bounds={extent} onMoveEnd={onMoveEnd} style={{ height: '100%' }}>
+      <MapView bounds={extent} defaultLayers={OPENING_LAYERS} layerSettings={layerSettings} controls={{ style: true, layers: true }} style={{ height: '100%' }}>
         {layers}
-        <MapMarkers markers={markers} />
       </MapView>
-      {loading && (
-        <Box pos='absolute' top={10} left={10} style={{ zIndex: 1000 }} role='status' aria-label='Loading the map'>
-          <Loader size={18} />
-        </Box>
-      )}
       {foot && (
         <Box pos='absolute' bottom={10} left={10} maw='calc(100% - 20px)' style={{ zIndex: 1000 }}>
           {foot}
         </Box>
       )}
-      <MapClusterMedia open={open} filters={filters} onClose={() => setOpen(null)} />
     </Box>
   );
 }

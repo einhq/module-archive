@@ -864,7 +864,7 @@ const readGroups = async (
     const parsed = parseStagedPath(path)!;
     const memberIds = (targets.get(path) ?? []).flatMap((target) => files.get(target)?.id ?? []);
     const meta = attrs.autoAlbum!;
-    const label = meta.seed?.label ?? (meta.kind === 'folder' ? attrs.name : undefined);
+    const label = meta.seed?.label;
     groups.push({
       path,
       user: parsed.user,
@@ -957,7 +957,7 @@ const batchesOf = async (vfs: Vfs, access: Access, paths: string[]): Promise<str
 
 /**
  * Match the suggested groups `paths` and write what is found on each as `stagingMatches`: an
- * event, trip, seed or scan run against the library; a dated Everyday lane a day at a time;
+ * event, trip or seed against the library; a dated Everyday lane a day at a time;
  * clutter, undated and period lanes not at all. Albums are judged by what each group's owner may
  * read and file into, and the owner's live rejections are honoured. Groups are read and written a
  * batch at a time.

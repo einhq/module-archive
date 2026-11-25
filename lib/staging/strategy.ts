@@ -3,19 +3,14 @@
  * the groups they fall into, in which every item is in exactly one group (`planCategory`). The
  * organizer reads the items and writes the groups; nothing here does any IO.
  *
- * The category's strategy (`stagingCategory.group.strategy`) decides the claim order:
- *
- * | strategy  | each item goes to the first that claims it                                       |
- * | --------- | -------------------------------------------------------------------------------- |
- * | `events`  | a seed (a folder a person named), clutter, the timeline, a period lane, undated   |
- * | `folders` | a run of scans in its folder, in file-name order; capture time never groups them  |
- * | `none`    | a lane per folder and month, a period lane, an undated lane per folder            |
+ * Each item goes to the first that claims it: a seed (a folder a person named), a clutter lane, the
+ * timeline, a period lane, an undated lane.
  *
  * On the timeline, the rules of `cluster.ts` cut parts and roll them up into events and trips. An
- * event is kept as a group of its own only when it is significant: a trip, away from home, more
- * shots than the category's usual day that year, days joined at home, a named place, a holiday or
- * a birthday, guests, or a person's edit. Everything else goes to its year's Everyday lane, which
- * splits into months, once and for good, above 400 items. A person's edits (`StagingEdit`) are
+ * event is kept as a group of its own only when it is significant: a trip, away from home, twice
+ * the shots of the category's usual day that year, days joined at home, a named place, a holiday
+ * or a birthday, guests, or a person's edit. Everything else goes to its year's Everyday lane,
+ * which splits into months, once and for good, above 400 items. A person's edits (`StagingEdit`) are
  * applied on every plan: cuts and joins as boundaries, dismissals as demotions, and assignments
  * last of all.
  *
@@ -25,7 +20,7 @@
  * usual day. That is what lets the organizer plan part of a category (`PlanContext.seedFolders`,
  * `dayShots`, `loose`) and get the groups a plan of the whole would give.
  */
-import type { GroupKind, GroupStrategy, SignificancePreset, SignificanceReason, StagingEdit } from '@archive/staging/api';
+import type { GroupKind, SignificanceReason, StagingEdit } from '@archive/staging/api';
 import { baselineOf, type Cluster, type ClusterItem, clusterMedia, compareItems, dayOf, mergeHomeDays, rollupClusters, shotsOf } from '@archive/staging/cluster';
 import { type CastMember, holidayPair, occasionOf } from '@archive/staging/naming';
 import { haversineMeters } from '@archive/staging/scoring';
@@ -59,14 +54,14 @@ export type PlanItem = ClusterItem & {
 export type PlanFolder = { id: string; path: string; name: string; depth: number; title?: string };
 
 /** How a lane is named. */
-type LaneLabel = { kind: 'loose' | 'clutter' | 'undated' | 'period' | 'month'; period?: string; folder?: string; chunk?: number };
+type LaneLabel = { kind: 'loose' | 'clutter' | 'undated' | 'period'; period?: string; folder?: string; chunk?: number };
 
 /** One group of a plan. */
 export type PlannedGroup = {
   kind: GroupKind;
-  /** A lane's or a seed's key, by which the organizer finds it again; none for events, trips and runs. */
+  /** A lane's or a seed's key, by which the organizer finds it again; none for events and trips. */
   key?: string;
-  /** Its members, in time order (lanes and runs: in their own order). */
+  /** Its members, in time order (lanes: in their own order). */
   items: PlanItem[];
   shots: number;
   /** Events and trips: what was rolled up into them. */
@@ -75,15 +70,11 @@ export type PlannedGroup = {
   precision?: 'year' | 'month';
   folderId?: string;
   seed?: { source: 'takeout-album' | 'folder'; label: string };
-  /** A scan run's name: its folder below the category, and its years when most are dated by hand. */
-  run?: { label: string; years?: string };
   lane?: LaneLabel;
 };
 
 /** What planning knows beside the items, each read once by the organizer. */
 export type PlanContext = {
-  strategy: GroupStrategy;
-  significance: SignificancePreset;
   /** The live edits of the category, oldest first. */
   edits: StagingEdit[];
   folders: ReadonlyMap<string, PlanFolder>;
@@ -136,20 +127,13 @@ const SPLIT_METERS = 2_000;
 /** A lane switches to months above this many items, and a month is chunked above the next. */
 const LANE_MONTHLY_ABOVE = 400;
 const LANE_CHUNK = 1_000;
-/** A folder needs this many items to be a seed; a scan run this many to stand alone. */
+/** A folder needs this many items to be a seed. */
 const SEED_MIN = 3;
-const RUN_MIN = 3;
-/** A scan run splits where the counter jumps further than this, and at its largest jump above `RUN_MAX`. */
-const RUN_JUMP = 20;
-const RUN_MAX = 300;
 /** A dismissal covers a group holding at least this share of members it names. */
 const DISMISS_SHARE = 0.8;
-/** The significance presets: shots against the year's usual day (`mult` times it) and the least a group needs (`floor`). */
-const PRESETS: Record<SignificancePreset, { mult: number; floor: number }> = {
-  fewer: { mult: 3, floor: 5 },
-  normal: { mult: 2, floor: 4 },
-  more: { mult: 1.5, floor: 3 },
-};
+/** An event is significant by size with this many times the shots of its year's usual day; by size, a merge or a place, with at least `FLOOR_SHOTS`. */
+const BASELINE_MULT = 2;
+const FLOOR_SHOTS = 4;
 /** Home-day merge: a cottage is at least this far from home, and two days' places at most this far apart. */
 const COTTAGE_METERS = 5_000;
 const SAME_PLACE_METERS = 2_000;
@@ -217,65 +201,6 @@ const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
 
 /** File names as a person sorts them: `IMG_2` before `IMG_10`. */
 export const naturalCompare = (a: string, b: string): number => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
-
-/** A file name taken apart: its stem without the trailing counter, and the counter. */
-const counterOf = (name: string): { stem: string; counter?: number } => {
-  const base = name.replace(/\.[^.]*$/, '');
-  const match = base.match(/^(.*?)(\d+)$/);
-  return match ? { stem: match[1], counter: Number(match[2]) } : { stem: base };
-};
-
-const yearOfManual = (item: PlanItem): string | undefined => item.takenAtSource === 'manual' && item.takenAt ? item.takenAt.slice(0, 4) : undefined;
-
-/**
- * One folder's scans as runs, in file-name order: a run ends where the stem changes, the counter
- * jumps by more than 20, two neighbours carry dates set by hand in different years, or a person
- * cut (`cutAfter`); a run above 300 splits at its largest jump. A run of fewer than three joins the
- * one before it in the folder, unless a person cut between them.
- */
-export const folderRuns = (items: PlanItem[], cutAfter: ReadonlySet<string> = new Set()): PlanItem[][] => {
-  const sorted = items.toSorted((a, b) => naturalCompare(a.name, b.name));
-  const runs: PlanItem[][] = [];
-  for (const item of sorted) {
-    const run = runs[runs.length - 1];
-    const prev = run?.[run.length - 1];
-    if (prev) {
-      const [a, b] = [counterOf(prev.name), counterOf(item.name)];
-      const [ya, yb] = [yearOfManual(prev), yearOfManual(item)];
-      const jump = a.counter !== undefined && b.counter !== undefined ? Math.abs(b.counter - a.counter) : 0;
-      const breaks = cutAfter.has(prev.id) || a.stem !== b.stem || jump > RUN_JUMP || (ya !== undefined && yb !== undefined && ya !== yb);
-      if (!breaks) {
-        run.push(item);
-        continue;
-      }
-    }
-    runs.push([item]);
-  }
-  const capped = runs.flatMap((run) => capRun(run));
-  const out: PlanItem[][] = [];
-  for (const run of capped) {
-    const prev = out[out.length - 1];
-    if (prev && run.length < RUN_MIN && !cutAfter.has(prev[prev.length - 1].id)) prev.push(...run);
-    else out.push(run);
-  }
-  return out;
-};
-
-/** A run above `RUN_MAX`, split at its largest counter jump until every piece fits. */
-const capRun = (run: PlanItem[]): PlanItem[][] => {
-  if (run.length <= RUN_MAX) return [run];
-  let at = Math.floor(run.length / 2);
-  let largest = -1;
-  for (let i = 1; i < run.length; i++) {
-    const [a, b] = [counterOf(run[i - 1].name).counter, counterOf(run[i].name).counter];
-    const jump = a !== undefined && b !== undefined ? b - a : 0;
-    if (jump > largest) {
-      largest = jump;
-      at = i;
-    }
-  }
-  return [...capRun(run.slice(0, at)), ...capRun(run.slice(at))];
-};
 
 // ── lanes ───────────────────────────────────────────────────────────────────
 
@@ -489,7 +414,6 @@ const planTimeline = (
   const baselines: Record<string, number> = {};
   for (const [year, shots] of byYear) baselines[year] = baselineOf(shots);
 
-  const preset = PRESETS[ctx.significance];
   const isGuest = ctx.isGuest ?? (() => false);
   const guestsIn = (cluster: Cluster): Set<string> => new Set(cluster.items.flatMap((item) => item.persons ?? []).filter(isGuest));
   const cast = (cluster: Cluster): CastMember[] => [...new Set(cluster.items.flatMap((item) => item.persons ?? []))].flatMap((id) => ctx.cast?.(id) ?? []);
@@ -500,9 +424,9 @@ const planTimeline = (
     const baseline = baselines[dayOf(cluster.items[0]).slice(0, 4)] ?? 1;
     if (cluster.kind === 'trip') return 'trip';
     if (cluster.away === true && shots >= 3) return 'away';
-    if (shots >= Math.max(preset.floor, preset.mult * baseline)) return 'size';
-    if (cluster.merged && shots >= preset.floor) return 'merged';
-    if (shots >= preset.floor && ctx.atPlace?.(cluster.items as PlanItem[])) return 'place';
+    if (shots >= Math.max(FLOOR_SHOTS, BASELINE_MULT * baseline)) return 'size';
+    if (cluster.merged && shots >= FLOOR_SHOTS) return 'merged';
+    if (shots >= FLOOR_SHOTS && ctx.atPlace?.(cluster.items as PlanItem[])) return 'place';
     if (shots >= 3 && occasionOf(daysOf(cluster), cast(cluster)) !== undefined) return 'occasion';
     const guests = guestsIn(cluster);
     if (guests.size > 0 && cluster.items.filter((item) => (item.persons ?? []).some((p) => guests.has(p))).length >= 3) return 'guests';
@@ -586,14 +510,13 @@ const isSeed = (folder: PlanFolder | undefined, inFolder: PlanItem[], dismissals
 export const isSeedFolder = (folder: PlanFolder, inFolder: PlanItem[], edits: StagingEdit[]): boolean => isSeed(folder, inFolder, editSets(edits).dismissals);
 
 /**
- * Which part of a plan of a timeline strategy an item (not in a seed) falls to: a clutter lane
- * (`events` only), the timeline (or with `none`, its month's lane), a period lane, or an undated
- * lane. Depends on the item and its folders alone.
+ * Which part of a plan an item (not in a seed) falls to: a clutter lane, the timeline, a period
+ * lane, or an undated lane. Depends on the item and its folders alone.
  */
-export const classOf = (item: PlanItem, ctx: Pick<PlanContext, 'strategy' | 'folders'>): 'clutter' | 'timeline' | 'period' | 'undated' => {
+export const classOf = (item: PlanItem, ctx: Pick<PlanContext, 'folders'>): 'clutter' | 'timeline' | 'period' | 'undated' => {
   // The phone folder a Takeout names counts as one of the item's folders: `WhatsApp Images`.
   const folderNames = [...folderNamesOf(item, ctx.folders), ...(item.localFolder ? [item.localFolder] : [])];
-  if (ctx.strategy === 'events' && classifyItem({ ...item, cameraPath: item.camera, folderNames })) return 'clutter';
+  if (classifyItem({ ...item, cameraPath: item.camera, folderNames })) return 'clutter';
   if (item.precision === 'none') return 'undated';
   if (item.precision !== 'instant') return 'period';
   return 'timeline';
@@ -607,89 +530,57 @@ export const classOf = (item: PlanItem, ctx: Pick<PlanContext, 'strategy' | 'fol
  */
 export const planCategory = (items: PlanItem[], ctx: PlanContext): Plan => {
   const granularity: Record<string, 'year' | 'month'> = { ...ctx.granularity };
-  let baselines: Record<string, number> = {};
-  let dayShots: Record<string, number> = {};
-  let segments: Segment[] = [];
-  const seedFolders: string[] = [];
   const edits = editSets(ctx.edits);
   const groups: PlannedGroup[] = [];
 
-  if (ctx.strategy === 'folders') {
-    const byFolder = new Map<string, PlanItem[]>();
-    for (const item of items) pushTo(byFolder, item.folderId, item);
-    for (const [folderId, inFolder] of byFolder) {
-      const label = folderNamesOf(inFolder[0], ctx.folders).join(' · ') || inFolder[0].folder.split('/').pop() || '';
-      for (const run of folderRuns(inFolder, edits.cutAfter)) {
-        const manual = run.map(yearOfManual).filter((year): year is string => year !== undefined).sort();
-        const years = manual.length >= 0.6 * run.length && manual.length > 0 ? (manual[0] === manual.at(-1) ? manual[0] : `${manual[0]}–${manual.at(-1)}`) : undefined;
-        groups.push({ kind: 'folder', items: run, shots: run.length, folderId, run: { label, ...(years ? { years } : {}) } });
-      }
-    }
-  } else {
-    let rest = items;
-    if (ctx.strategy === 'events') {
-      const seeds = findSeeds(items, ctx, edits.dismissals);
-      seedFolders.push(...seeds.keys());
-      for (const [folderId, members] of seeds) {
-        const folder = ctx.folders.get(folderId)!;
-        // Those with an instant in time order, then the others by name: an order whatever the items came in.
-        const dated = members.filter((item) => item.precision === 'instant').sort(compareItems);
-        const sorted = [...dated, ...members.filter((item) => item.precision !== 'instant').sort((a, b) => naturalCompare(a.name, b.name) || a.id.localeCompare(b.id))];
-        groups.push({
-          kind: 'seed',
-          key: `seed:${folderId}`,
-          items: sorted,
-          shots: shotsOf(sorted.filter((item) => item.precision === 'instant')),
-          folderId,
-          seed: { source: folder.title !== undefined ? 'takeout-album' : 'folder', label: folder.title ?? folder.name },
-          significance: { reason: 'seed', baseline: 1 },
-        });
-      }
-      const seeded = new Set([...seeds.values()].flat().map((item) => item.id));
-      rest = items.filter((item) => !seeded.has(item.id));
-    }
-
-    const parts = { clutter: [] as PlanItem[], timeline: [] as PlanItem[], period: [] as PlanItem[], undated: [] as PlanItem[] };
-    const known: PlanItem[] = [];
-    for (const item of rest) {
-      const lane = ctx.strategy === 'events' ? ctx.lanes?.get(item.id) : undefined;
-      if (lane === 'loose') known.push(item);
-      else if (lane === 'clutter') parts.clutter.push(item);
-      else parts[classOf(item, ctx)].push(item);
-    }
-    const { clutter, timeline, period, undated } = parts;
-
-    if (ctx.strategy === 'events') {
-      const planned = planTimeline(timeline, ctx, edits);
-      ({ baselines, segments } = planned);
-      dayShots = Object.fromEntries(planned.dayShots);
-      groups.push(...planned.kept, ...datedLanes('loose', [...planned.loose, ...known], granularity));
-      const [datedClutter, undatedClutter] = [clutter.filter((item) => item.precision !== 'none'), clutter.filter((item) => item.precision === 'none')];
-      groups.push(...datedLanes('clutter', datedClutter, granularity));
-      if (undatedClutter.length > 0) {
-        groups.push(laneGroup('clutter', 'clutter:undated', undatedClutter.toSorted((a, b) => naturalCompare(a.name, b.name)), { kind: 'clutter' }));
-      }
-    } else {
-      // `none`: a lane per folder and local month.
-      const byKey = new Map<string, PlanItem[]>();
-      for (const item of timeline.toSorted(compareItems)) {
-        const key = `none:${item.folderId}:${dayOf(item).slice(0, 7)}`;
-        pushTo(byKey, key, item);
-      }
-      for (const [key, inKey] of byKey) {
-        chunkByDay(inKey).forEach((chunk, i) => {
-          const folder = ctx.folders.get(chunk[0].folderId)?.name ?? '';
-          const group = laneGroup('loose', `${key}${i > 0 ? `#${i + 1}` : ''}`, chunk, { kind: 'month', period: dayOf(chunk[0]).slice(0, 7), folder, chunk: i + 1 });
-          group.folderId = chunk[0].folderId;
-          groups.push(group);
-        });
-      }
-    }
-    groups.push(...folderLanes('period', period, ctx.folders), ...folderLanes('undated', undated, ctx.folders));
+  const seeds = findSeeds(items, ctx, edits.dismissals);
+  for (const [folderId, members] of seeds) {
+    const folder = ctx.folders.get(folderId)!;
+    // Those with an instant in time order, then the others by name: an order whatever the items came in.
+    const dated = members.filter((item) => item.precision === 'instant').sort(compareItems);
+    const sorted = [...dated, ...members.filter((item) => item.precision !== 'instant').sort((a, b) => naturalCompare(a.name, b.name) || a.id.localeCompare(b.id))];
+    groups.push({
+      kind: 'seed',
+      key: `seed:${folderId}`,
+      items: sorted,
+      shots: shotsOf(sorted.filter((item) => item.precision === 'instant')),
+      folderId,
+      seed: { source: folder.title !== undefined ? 'takeout-album' : 'folder', label: folder.title ?? folder.name },
+      significance: { reason: 'seed', baseline: 1 },
+    });
   }
+  const seeded = new Set([...seeds.values()].flat().map((item) => item.id));
+
+  const parts = { clutter: [] as PlanItem[], timeline: [] as PlanItem[], period: [] as PlanItem[], undated: [] as PlanItem[] };
+  const known: PlanItem[] = [];
+  for (const item of items) {
+    if (seeded.has(item.id)) continue;
+    const lane = ctx.lanes?.get(item.id);
+    if (lane === 'loose') known.push(item);
+    else if (lane === 'clutter') parts.clutter.push(item);
+    else parts[classOf(item, ctx)].push(item);
+  }
+  const { clutter, timeline, period, undated } = parts;
+
+  const planned = planTimeline(timeline, ctx, edits);
+  const { baselines, segments } = planned;
+  groups.push(...planned.kept, ...datedLanes('loose', [...planned.loose, ...known], granularity));
+  const [datedClutter, undatedClutter] = [clutter.filter((item) => item.precision !== 'none'), clutter.filter((item) => item.precision === 'none')];
+  groups.push(...datedLanes('clutter', datedClutter, granularity));
+  if (undatedClutter.length > 0) {
+    groups.push(laneGroup('clutter', 'clutter:undated', undatedClutter.toSorted((a, b) => naturalCompare(a.name, b.name)), { kind: 'clutter' }));
+  }
+  groups.push(...folderLanes('period', period, ctx.folders), ...folderLanes('undated', undated, ctx.folders));
 
   applyAssigns(groups, edits.assigns);
-  return { groups: groups.filter((group) => group.items.length > 0), granularity, baselines, seeds: seedFolders, dayShots, segments };
+  return {
+    groups: groups.filter((group) => group.items.length > 0),
+    granularity,
+    baselines,
+    seeds: [...seeds.keys()],
+    dayShots: Object.fromEntries(planned.dayShots),
+    segments,
+  };
 };
 
 /**

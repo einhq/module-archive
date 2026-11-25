@@ -77,6 +77,25 @@ type ClusterResponse = {
   total: number;
 };
 
+/** Reads asked and not yet answered, by command line, and kept a moment after. */
+const reading = new Map<string, Promise<ClusterResponse>>();
+
+/** How long an answer is shared after it arrives: long enough for a second layer asking the same of the same move. */
+const SHARED_MS = 1_000;
+
+/**
+ * One read for each command line, shared while it is asked: the media and the locations layers of
+ * one map ask the same `find-within` for every move, and take their own part of its answer.
+ */
+const readShared = (command: string): Promise<ClusterResponse> => {
+  let answer = reading.get(command);
+  if (!answer) {
+    answer = execCommand<ClusterResponse>(command).finally(() => setTimeout(() => reading.delete(command), SHARED_MS));
+    reading.set(command, answer);
+  }
+  return answer;
+};
+
 /**
  * Query geotagged media + locations inside map viewport bounds (debounced;
  * stale responses are dropped).
@@ -109,7 +128,7 @@ export function useMapMedia(years: YearRange = {}, filters?: MapFilters): UseMap
       const generation = ++generationRef.current;
       try {
         setLoading(reason);
-        const result = await execCommand<ClusterResponse>(
+        const result = await readShared(
           `find-within --north=${bounds.north} --south=${bounds.south} --east=${bounds.east} --west=${bounds.west}` +
             ` --cell=${cell} --covers` + yearFlags({ fromYear, toYear }) + filterFlags(JSON.parse(filterKey)),
         );

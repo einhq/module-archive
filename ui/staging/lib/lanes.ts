@@ -1,12 +1,11 @@
 import type { GroupKind } from '@archive/staging/api';
 
 /**
- * The lanes a category's suggested groups fall into: what was put aside for later, whatever its
- * kind; else by kind, the events, trips, seeds and scan runs to sort, the everyday pictures, what
- * needs a date (undated pictures, and those dated only to a year or a month), and clutter. Pure,
- * so the counts and the views the page draws are tested without one.
+ * The lanes a category's suggested groups fall into, by kind: the events, trips and seeds to sort,
+ * the everyday pictures, what needs a date (undated pictures, and those dated only to a year or a
+ * month), and clutter. Pure, so the counts and the views the page draws are tested without one.
  */
-export type StagingLane = 'sort' | 'everyday' | 'undated' | 'clutter' | 'later';
+export type StagingLane = 'sort' | 'everyday' | 'undated' | 'clutter';
 
 /** The lanes in the order the page offers them, as the reader calls them. */
 export const LANES: readonly { id: StagingLane; label: string }[] = [
@@ -14,29 +13,25 @@ export const LANES: readonly { id: StagingLane; label: string }[] = [
   { id: 'everyday', label: 'Everyday' },
   { id: 'undated', label: 'Needs a date' },
   { id: 'clutter', label: 'Clutter' },
-  { id: 'later', label: 'Later' },
 ];
 
 /** What the lanes read of an `album list` row of a suggested album. */
-type LaneRow = { memberCount?: number; staging?: { kind?: GroupKind; precision?: 'year' | 'month'; later?: string } };
+type LaneRow = { memberCount?: number; staging?: { kind?: GroupKind; precision?: 'year' | 'month' } };
 
-const LANE_OF_KIND: Record<GroupKind, Exclude<StagingLane, 'later'>> = {
+const LANE_OF_KIND: Record<GroupKind, StagingLane> = {
   event: 'sort',
   trip: 'sort',
   seed: 'sort',
-  folder: 'sort',
   loose: 'everyday',
   undated: 'undated',
   clutter: 'clutter',
 };
 
 /**
- * A row's lane: Later once put aside; else by kind, an everyday lane dated only to a year or a
- * month needing a date, and one without a kind (or of a kind this page does not know) an ordinary
- * event.
+ * A row's lane, by kind: an everyday lane dated only to a year or a month needs a date, and one
+ * without a kind (or of a kind this page does not know) is an ordinary event.
  */
 export const laneOf = (row: LaneRow): StagingLane => {
-  if (row.staging?.later) return 'later';
   if (row.staging?.kind === 'loose' && row.staging.precision) return 'undated';
   return (row.staging?.kind && LANE_OF_KIND[row.staging.kind]) || 'sort';
 };

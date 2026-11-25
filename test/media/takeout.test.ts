@@ -37,15 +37,12 @@ Deno.test("a photo's JSON gives its times in UTC, its place, caption, people, fa
   });
 });
 
-Deno.test('a place set in Google Photos is marked edited; 0,0 and a time of 0 are nothing', () => {
+Deno.test("Google's place wins over the file's own; 0,0 and a time of 0 are nothing", () => {
   const moved = { ...PHOTO, geoData: { latitude: 59.33, longitude: 18.07 } };
   const edited = parseTakeoutJson(JSON.stringify(moved));
-  assertEquals(edited?.kind === 'takeout' && [edited.where, edited.whereEdited], [{ lat: 59.33, lng: 18.07 }, true]);
-  const same = parseTakeoutJson(JSON.stringify(PHOTO));
-  assertEquals(same?.kind === 'takeout' && same.whereEdited, undefined);
-  // A place only Google has, none in the file's own tags, is a person's too.
-  const added = parseTakeoutJson(JSON.stringify({ ...PHOTO, geoDataExif: { latitude: 0, longitude: 0 } }));
-  assertEquals(added?.kind === 'takeout' && [added.where, added.whereEdited], [{ lat: 57.7, lng: 11.95 }, true]);
+  assertEquals(edited?.kind === 'takeout' && edited.where, { lat: 59.33, lng: 18.07 });
+  const own = parseTakeoutJson(JSON.stringify({ ...PHOTO, geoData: { latitude: 0, longitude: 0 } }));
+  assertEquals(own?.kind === 'takeout' && own.where, { lat: 57.7, lng: 11.95 });
   const blank = parseTakeoutJson(JSON.stringify({
     title: 'IMG_0001.jpg',
     photoTakenTime: { timestamp: '0' },

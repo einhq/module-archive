@@ -183,7 +183,6 @@ const SOURCE_LABELS: Record<string, string> = {
   sidecar: 'from Google Photos or a sidecar',
   gps: 'from GPS',
   camera: 'from the camera clock',
-  name: 'from the file name',
 };
 
 /**

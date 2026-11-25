@@ -265,7 +265,7 @@ export default function MediaPage() {
           ...(uploadPath ? { upload: { path: uploadPath, name: 'staging', keepFolders: true } } : {}),
           // The slideshow of what is found, or of the whole feed, on a screen or speaker.
           nearby: slideshowTarget,
-          ...(showOn ? { items: [{ label: 'Show on…', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] } : {}),
+          ...(showOn ? { items: [{ label: 'Show on', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] } : {}),
         }}
         subtitle={
           <Text size='sm' c='gray.2'>

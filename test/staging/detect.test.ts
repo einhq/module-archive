@@ -1,7 +1,7 @@
 /**
  * `staging detect`: each source's rule on invented trees, one that has its marks and one that only
- * looks alike; the suggested category; the folders newly arrived in the default category; and the
- * bound on what a folder costs to read, however large its tree.
+ * looks alike; the folders newly arrived in the default category; and the bound on what a folder
+ * costs to read, however large its tree.
  */
 import type { StagingDetectAnswer, StagingDetection } from '@archive/staging/api';
 import { BODY_READS, DETECT_SAMPLE, EXIF_READS, FOLDERS_PER_LEVEL, gather, LISTING_LEVELS, LISTING_PAGE } from '@archive/staging/detect';
@@ -90,25 +90,24 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
     assertEquals(answer.detections.length, 1);
     return answer.detections[0];
   };
-  const kindOf = async (path: string) => {
+  const sourceOf = async (path: string) => {
     const found = await detect(path);
-    return [found.kind, found.confidence];
+    return [found.source, found.confidence];
   };
 
   try {
     await cmd.shouldSucceed('user-create anna --uid 3610');
     await cmd.shouldSucceed('staging init --user anna');
-    await cmd.shouldSucceed('staging category export --user anna --create --kind google-photos --label "Family export"');
 
-    await t.step('a Takeout tree is Google Photos, and names the category of that kind', async () => {
+    await t.step('a Takeout tree is Google Photos, and a detection names no category', async () => {
       const path = await tree('takeout-001', [
         ...run(6, (n) => `Takeout/Google Photos/Photos from 2019/IMG_${pad(n)}.jpg`),
         ...run(6, (n) => `Takeout/Google Photos/Photos from 2019/IMG_${pad(n)}.jpg.supplemental-metadata.json`),
         { path: 'Takeout/Google Photos/Lake trip/metadata.json' },
       ]);
       const found = await detect(path);
-      assertEquals([found.kind, found.confidence], ['google-photos', 'high']);
-      assertEquals(found.category, { name: 'export', label: 'Family export', path: '/home/anna/staging/files/export' });
+      assertEquals([found.source, found.confidence], ['google-photos', 'high']);
+      assert(!('category' in found) && !('kind' in found), JSON.stringify(found));
       assertEquals(found.evidence[0], 'a Takeout/Google Photos folder');
       assert(found.evidence.some((line) => line.startsWith('6 JSON names like ') && line.endsWith('.jpg.supplemental-metadata.json')), found.evidence.join('; '));
       assertEquals(found.seen.files, 13);
@@ -120,63 +119,61 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
         await write(`${google}/${name}.jpg.json`, JSON.stringify({ title: `${name}.jpg`, photoTakenTime: { timestamp: '1559392496' } }));
       }
       const found = await detect(google);
-      assertEquals([found.kind, found.confidence], ['google-photos', 'high']);
+      assertEquals([found.source, found.confidence], ['google-photos', 'high']);
       assert(found.evidence.some((line) => line.includes("JSON sidecars read are Google Photos'")), found.evidence.join('; '));
 
       const notes = await tree('notes', [{ path: 'holiday-1.jpg' }, { path: 'holiday-2.jpg' }, { path: 'list.json' }, { path: 'plan.json' }]);
       await write(`${notes}/list.json`, JSON.stringify({ name: 'packing', items: ['a sailboat'] }));
       await write(`${notes}/plan.json`, JSON.stringify({ name: 'plan' }));
-      assertEquals((await detect(notes)).kind, 'generic');
+      assertEquals((await detect(notes)).source, 'generic');
     });
 
     await t.step('TIFFs named by a scanner with no camera in their EXIF are scans; so is what a scanner names', async () => {
       const box = await tree('Box 3', run(8, (n) => `scan${pad(n)}.tif`, { attrs: { width: 3000, height: 2000 }, camera: null }));
       const found = await detect(box);
-      assertEquals([found.kind, found.confidence], ['scans', 'high']);
+      assertEquals([found.source, found.confidence], ['scans', 'high']);
       assert(found.evidence.some((line) => line.includes('TIFF')), found.evidence.join('; '));
       assert(found.evidence.some((line) => line.startsWith('no camera in the EXIF')), found.evidence.join('; '));
 
       const epson = await tree('prints', run(6, (n) => `IMG_20190601_${pad(n)}.jpg`, { camera: { make: 'EPSON', model: 'Perfection V600' } }));
-      assertEquals(await kindOf(epson), ['scans', 'high']);
+      assertEquals(await sourceOf(epson), ['scans', 'high']);
       // A folder whose name only holds the letters is no scans.
-      assertEquals((await detect(await tree('Scandinavia 2019', run(6, (n) => `holiday-${n}.jpg`)))).kind, 'generic');
+      assertEquals((await detect(await tree('Scandinavia 2019', run(6, (n) => `holiday-${n}.jpg`)))).source, 'generic');
     });
 
     await t.step("a phone's camera roll is a phone, and its dated names are no scanner's", async () => {
-      assertEquals(await kindOf(await tree('pixel', run(6, (n) => `DCIM/Camera/PXL_20190601_10345${n}789.jpg`))), ['phone', 'high']);
-      assertEquals(await kindOf(await tree('android', run(6, (n) => `IMG_20190601_12345${n}.jpg`))), ['phone', 'high']);
-      assertEquals(await kindOf(await tree('iphone', run(6, (n) => `IMG_${pad(n)}.HEIC`))), ['phone', 'high']);
+      assertEquals(await sourceOf(await tree('pixel', run(6, (n) => `DCIM/Camera/PXL_20190601_10345${n}789.jpg`))), ['phone', 'high']);
+      assertEquals(await sourceOf(await tree('android', run(6, (n) => `IMG_20190601_12345${n}.jpg`))), ['phone', 'high']);
+      assertEquals(await sourceOf(await tree('iphone', run(6, (n) => `IMG_${pad(n)}.HEIC`))), ['phone', 'high']);
     });
 
     await t.step('WhatsApp folders and names are messaging', async () => {
-      assertEquals(await kindOf(await tree('chats', run(6, (n) => `WhatsApp Images/IMG-20190601-WA${pad(n)}.jpg`))), ['messaging', 'high']);
-      assertEquals(await kindOf(await tree('signal', run(6, (n) => `signal-2019-06-01-12345${n}.jpg`))), ['messaging', 'high']);
+      assertEquals(await sourceOf(await tree('chats', run(6, (n) => `WhatsApp Images/IMG-20190601-WA${pad(n)}.jpg`))), ['messaging', 'high']);
+      assertEquals(await sourceOf(await tree('signal', run(6, (n) => `signal-2019-06-01-12345${n}.jpg`))), ['messaging', 'high']);
     });
 
     await t.step('screenshot names are screenshots', async () => {
-      assertEquals(await kindOf(await tree('shots', run(6, (n) => `Screenshot_20190601-12345${n}.png`))), ['screenshots', 'high']);
+      assertEquals(await sourceOf(await tree('shots', run(6, (n) => `Screenshot_20190601-12345${n}.png`))), ['screenshots', 'high']);
     });
 
     await t.step("a camera's card is a camera; a running number alone says nothing", async () => {
-      assertEquals(await kindOf(await tree('card', run(6, (n) => `DCIM/100NIKON/DSC_${pad(n)}.JPG`))), ['camera', 'high']);
+      assertEquals(await sourceOf(await tree('card', run(6, (n) => `DCIM/100NIKON/DSC_${pad(n)}.JPG`))), ['camera', 'high']);
       const canon = await tree('canon', run(6, (n) => `IMG_${pad(n)}.JPG`, { camera: { make: 'Canon', model: 'Canon EOS 80D' } }));
       const found = await detect(canon);
-      assertEquals([found.kind, found.confidence], ['camera', 'high']);
-      assertEquals(found.category, null);
-      assertEquals((await detect(await tree('numbers', run(6, (n) => `IMG_${pad(n)}.JPG`)))).kind, 'generic');
+      assertEquals([found.source, found.confidence], ['camera', 'high']);
+      assertEquals((await detect(await tree('numbers', run(6, (n) => `IMG_${pad(n)}.JPG`)))).source, 'generic');
     });
 
     await t.step('a folder with no source’s marks is generic, and so is an empty one', async () => {
       const found = await detect(await tree('Summer', run(6, (n) => `holiday-${pad(n, 3)}.jpg`)));
-      assertEquals([found.kind, found.category], ['generic', null]);
+      assertEquals(found.source, 'generic');
       await cmd.shouldSucceed(`mkdir -p ${TREES}/empty`);
       assertEquals(await detect(`${TREES}/empty`), {
         path: `${TREES}/empty`,
         dismissed: false,
-        kind: 'generic',
+        source: 'generic',
         confidence: 'low',
         evidence: ['no files within'],
-        category: null,
         seen: { files: 0, sampled: 0, folders: 0 },
       });
     });
@@ -192,16 +189,12 @@ Deno.test({ name: 'staging detect', sanitizeResources: false, sanitizeOps: false
       await vfs.createTree(ADMIN_ACCESS, `${INBOX}/from-sftp`, specs(run(4, (n) => `Screenshot_20190601-12345${n}.png`)) as Parameters<typeof vfs.createTree>[2]);
       const answer = await client.execJson<StagingDetectAnswer>('staging detect --user anna');
       assertEquals(answer.more, false);
-      assertEquals(answer.detections.map((each) => [each.path, each.kind, each.category]).toSorted(), [
-        [`${INBOX}/from-sftp`, 'screenshots', null],
-        [`${INBOX}/upload-2026-10-17/Phone dump`, 'phone', null],
+      assertEquals(answer.detections.map((each) => [each.path, each.source]).toSorted(), [
+        [`${INBOX}/from-sftp`, 'screenshots'],
+        [`${INBOX}/upload-2026-10-17/Phone dump`, 'phone'],
       ]);
-
-      await cmd.shouldSucceed('staging category phone --user anna --create --kind phone');
-      const again = await client.execJson<StagingDetectAnswer>('staging detect --user anna');
-      assertEquals(again.detections.find((each) => each.kind === 'phone')?.category?.name, 'phone');
       const text = await client.execString('staging detect --user anna', { json: false });
-      assert(text.includes(`${INBOX}/upload-2026-10-17/Phone dump: phone (high; category phone)`), text);
+      assert(text.includes(`${INBOX}/upload-2026-10-17/Phone dump: phone (high)`), text);
     });
 
     await t.step('a dismissed folder is left out of the arrivals, and says so when named', async () => {

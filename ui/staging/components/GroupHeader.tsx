@@ -1,6 +1,6 @@
 import { formatRange, TablerIcon } from '@ein/ui/components';
 import { useDropTarget } from '@ein/ui/hooks';
-import { endMediaDrag, type MediaDragPayload, startMediaDrag } from '@ein/ui/lib';
+import type { MediaDragPayload } from '@ein/ui/lib';
 import { ActionIcon, Badge, Box, Button, Checkbox, Group, Kbd, Menu, Text, TextInput, Tooltip } from '@mantine/core';
 import { type MouseEvent, useEffect, useRef, useState } from 'react';
 import type { GroupRow } from '../hooks/useGroupIndex.ts';
@@ -12,9 +12,7 @@ export type GroupActions = {
   /** Where it is proposed to go, when that is an album of the library: what a closed section says of it. */
   hint?: string;
   newAlbum: () => void;
-  privateAlbum: () => void;
   addTo: () => void;
-  later: () => void;
   discard: () => void;
   rename: (title: string) => void;
   /** Set the time of every picture in it. */
@@ -66,27 +64,27 @@ type Props = {
   /** How much of it is selected; with `onSelect`, a box to select it whole. */
   selected?: GroupSelected;
   onSelect?: GroupSelect;
-  /** What its grip ⠿ carries when dragged: the group, or the selection it is in. */
-  grip?: () => MediaDragPayload;
   /** Pictures or groups dropped on it. */
   drop?: GroupDrop;
   /** Its copies and look-alikes, when it is open and has any. */
   duplicates?: GroupDuplicates;
+  /** The destination column stands beside the stream, offering Create album, which the menu then leaves out. */
+  column?: boolean;
 };
 
 const photos = (count: number) => `${count.toLocaleString()} ${count === 1 ? 'photo' : 'photos'}`;
 
 /**
  * A group's two lines: its name, then when it was, how much it holds and what the organizer says
- * of it (a trip, still indexing, kept as yours, put aside). Where a decision on it failed, the
- * second line says why, with Retry. The ⋯ menu holds every action, so a phone has them too; an
+ * of it (a trip, still indexing, kept as yours). Where a decision on it failed, the
+ * second line says why, with Retry. The ⋯ menu holds its actions but Create album while the
+ * destination column beside the stream has it (`column`); an
  * open group also has what Enter does as a button, and, when some of its pictures copy or look like
  * others, a chip saying how many, whose menu compares, keeps the library's copies or selects them.
  *
  * On a desktop it has a box that selects it whole (Shift selects on from where the last selection
  * started, across the groups between), and so does a click on its name with Shift, Ctrl or Cmd;
- * a grip that drags it (or the selection it is in) to a destination or another group; and it
- * takes pictures and groups dropped on it, saying what the drop would do as they arrive.
+ * and it takes pictures and groups dropped on it, saying what the drop would do as they arrive.
  */
 export function GroupHeader(
   {
@@ -104,9 +102,9 @@ export function GroupHeader(
     actions,
     selected = 'none',
     onSelect,
-    grip,
     drop,
     duplicates,
+    column = false,
   }: Props,
 ) {
   const [draft, setDraft] = useState(row.title);
@@ -120,7 +118,6 @@ export function GroupHeader(
   }, [renaming]);
 
   const target = useDropTarget({ accept: (payload) => drop?.accept(payload) ?? null, onDrop: (payload) => drop?.onDrop(payload), disabled: !drop });
-  const gripRef = useRef<HTMLDivElement | null>(null);
   const clickName = (event: MouseEvent) => {
     if (onSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
@@ -154,19 +151,6 @@ export function GroupHeader(
       }}
       {...target.props}
     >
-      {grip && (
-        <Box
-          ref={gripRef}
-          draggable
-          onDragStart={(event) => startMediaDrag(event, grip(), gripRef.current)}
-          onDragEnd={endMediaDrag}
-          title='Drag to an album, or onto another group'
-          aria-label={`Drag ${row.title}`}
-          style={{ cursor: 'grab', display: 'flex', color: 'var(--mrx-text-tertiary)', marginRight: -6 }}
-        >
-          <TablerIcon name='grip-vertical' size={16} />
-        </Box>
-      )}
       {onSelect && (
         <Checkbox
           size='xs'
@@ -226,7 +210,6 @@ export function GroupHeader(
                   <Badge size='xs' variant='light' color='yellow' leftSection={<TablerIcon name='hourglass' size={10} />}>Still indexing</Badge>
                 </Tooltip>
               )}
-              {row.staging.later && <Badge size='xs' variant='light' color='gray' leftSection={<TablerIcon name='clock-pause' size={10} />}>Later</Badge>}
               {open && duplicates && <DuplicatesChip duplicates={duplicates} />}
               {!open && actions.hint && <Text size='xs' c='var(--mrx-accent)' truncate title={actions.hint}>{actions.hint}</Text>}
               {row.pinned && (
@@ -245,7 +228,7 @@ export function GroupHeader(
             rightSection={phone ? undefined : <Kbd size='xs'>{actions.proposal ? 'Enter' : 'N'}</Kbd>}
             style={{ maxWidth: phone ? 180 : 320 }}
           >
-            <Text span inherit truncate>{actions.proposal?.label ?? 'New album…'}</Text>
+            <Text span inherit truncate>{actions.proposal?.label ?? 'Create album…'}</Text>
           </Button>
         )}
         {/* Not handing focus back: Rename puts it in the name field, and taking it back would end the edit at once. */}
@@ -256,34 +239,20 @@ export function GroupHeader(
             </ActionIcon>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Item leftSection={<TablerIcon name='photo-plus' size={14} />} rightSection={<Kbd size='xs'>N</Kbd>} onClick={actions.newAlbum}>
-              New album…
-            </Menu.Item>
-            <Menu.Item leftSection={<TablerIcon name='lock' size={14} />} rightSection={<Kbd size='xs'>P</Kbd>} onClick={actions.privateAlbum}>
-              New private album…
-            </Menu.Item>
+            {!column && (
+              <Menu.Item leftSection={<TablerIcon name='photo-plus' size={14} />} rightSection={<Kbd size='xs'>N</Kbd>} onClick={actions.newAlbum}>
+                Create album…
+              </Menu.Item>
+            )}
             <Menu.Item leftSection={<TablerIcon name='library-plus' size={14} />} rightSection={<Kbd size='xs'>A</Kbd>} onClick={actions.addTo}>
               Add to album…
             </Menu.Item>
-            <Menu.Item leftSection={<TablerIcon name='clock-pause' size={14} />} rightSection={<Kbd size='xs'>L</Kbd>} onClick={actions.later}>
-              {row.staging.later ? 'Back to its lane' : 'Later'}
-            </Menu.Item>
             <Menu.Item leftSection={<TablerIcon name='pencil' size={14} />} rightSection={<Kbd size='xs'>E</Kbd>} onClick={startRename}>Rename</Menu.Item>
             <Menu.Item leftSection={<TablerIcon name='clock-edit' size={14} />} rightSection={<Kbd size='xs'>T</Kbd>} onClick={actions.date}>Set the time…</Menu.Item>
-            <Menu.Item
-              leftSection={<TablerIcon name='arrow-merge-up' size={14} />}
-              rightSection={<Kbd size='xs'>M</Kbd>}
-              disabled={!actions.mergeUp}
-              onClick={actions.mergeUp}
-            >
+            <Menu.Item leftSection={<TablerIcon name='arrow-merge-up' size={14} />} disabled={!actions.mergeUp} onClick={actions.mergeUp}>
               {previous ? `Merge into “${previous}”` : 'Merge into the group above'}
             </Menu.Item>
-            <Menu.Item
-              leftSection={<TablerIcon name='arrow-merge-down' size={14} />}
-              rightSection={<Kbd size='xs'>⇧M</Kbd>}
-              disabled={!actions.mergeDown}
-              onClick={actions.mergeDown}
-            >
+            <Menu.Item leftSection={<TablerIcon name='arrow-merge-down' size={14} />} disabled={!actions.mergeDown} onClick={actions.mergeDown}>
               {next ? `Merge “${next}” in` : 'Merge the group below in'}
             </Menu.Item>
             <Menu.Item leftSection={<TablerIcon name='external-link' size={14} />} onClick={actions.openPage}>Open as an album page</Menu.Item>

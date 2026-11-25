@@ -2,7 +2,7 @@ import type { CommandQueueHandle } from '@ein/ui/hooks';
 import { execCommand, notifyProgress, type ProgressToast } from '@ein/ui/signals';
 import { useCallback, useRef } from 'react';
 import { journalOf, leftOf, progressLine } from '../lib/bulk.ts';
-import { type Chunk, type GroupRef, laterChunks, undoCommands } from '../lib/selection-command.ts';
+import { type Chunk, type GroupRef, undoCommands } from '../lib/selection-command.ts';
 
 /** A decision over many groups, as a run of calls through the page's queue. */
 export type BulkSpec = {
@@ -16,10 +16,6 @@ export type BulkSpec = {
   then?: (answer: unknown) => Chunk[];
   /** What the run decides in all, for the progress line. */
   total: { groups: number; files: number };
-  /** The groups decided whole stay in the index changed so (put aside, into another lane), rather than leaving it. */
-  stays?: (group: GroupRef) => void;
-  /** How the run is undone: its journal entries, or `staging later` the other way round (`off` as the undo passes it). */
-  undo: 'journal' | { laterOff: boolean };
   /** What it says once done, from how many groups and pictures it decided. */
   done: (tally: { groups: number; files: number }) => string;
 };
@@ -29,7 +25,7 @@ export type BulkHandle = {
   label: string;
   /** Cancel the calls that have not run; false when none was left. */
   cancel: () => boolean;
-  /** Undo what it did: cancel what has not run, then undo every journal entry it made (or bring its groups back), newest first. */
+  /** Undo what it did: cancel what has not run, then undo every journal entry it made, newest first. */
   undoAll: () => void;
 };
 
@@ -83,7 +79,7 @@ export function useBulkRun(host: BulkHost): (spec: BulkSpec) => BulkHandle {
     const finish = () => {
       const did = spec.done(tally);
       const failed = failures > 0 ? ` ${failures} ${failures === 1 ? 'call' : 'calls'} failed: ${firstError}` : '';
-      const undoable = !undone && (spec.undo === 'journal' ? journal.length > 0 : decided.length > 0);
+      const undoable = !undone && journal.length > 0;
       toast.finish({
         message: `${did}${stopping ? ' (stopped)' : ''}.${failed}`,
         color: failures > 0 ? (tally.groups + tally.files > 0 ? 'yellow' : 'red') : 'green',
@@ -116,8 +112,7 @@ export function useBulkRun(host: BulkHost): (spec: BulkSpec) => BulkHandle {
           decided.push(...whole);
           for (const group of chunk.touched) touched.set(group.name, group);
           const host = hostRef.current;
-          if (spec.stays) { for (const group of whole) spec.stays(group); }
-          else host.remove(whole.map((group) => group.name));
+          host.remove(whole.map((group) => group.name));
           host.show(names(chunk));
           host.reread([...chunk.groups.filter((group) => left.has(group.path)), ...chunk.touched].map((group) => group.path));
           const kept = whole.length === chunk.groups.length;
@@ -163,7 +158,7 @@ export function useBulkRun(host: BulkHost): (spec: BulkSpec) => BulkHandle {
         label: `Undoing: ${spec.label}`,
         run: async () => {
           const groups = [...decided, ...touched.values()];
-          const commands = spec.undo === 'journal' ? undoCommands(journal) : laterChunks(decided, spec.undo.laterOff).map((chunk) => chunk.command);
+          const commands = undoCommands(journal);
           const progress = notifyProgress({ message: `Undoing: ${spec.label}`, progress: 0 });
           const failed: string[] = [];
           for (const [at, command] of commands.entries()) {

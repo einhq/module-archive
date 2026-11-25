@@ -149,23 +149,9 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
       assertEquals((await vfs.get(ADMIN_ACCESS, STAGING)).attrs[PROCESSING_ATTR], STAGING_PROCESSING);
       assert(!STAGING_PROCESSING.includes('text'), 'a staged file waits to be filed for its text to be read');
       const inbox = await vfs.get<{ stagingCategory?: unknown }>(ADMIN_ACCESS, `${FILES}/inbox`);
-      assertEquals(inbox.attrs.stagingCategory, {
-        kind: 'inbox',
-        label: 'Inbox',
-        group: { strategy: 'events', significance: 'normal' },
-        time: { digitized: false, filenameDates: true },
-        lane: 'normal',
-        sidecars: 'pair',
-      });
+      assertEquals(inbox.attrs.stagingCategory, { label: 'Inbox' });
       const legacy = await vfs.get<{ stagingCategory?: unknown }>(ADMIN_ACCESS, `${FILES}/legacy`);
-      assertEquals(legacy.attrs.stagingCategory, {
-        kind: 'generic',
-        label: 'legacy',
-        group: { strategy: 'events', significance: 'normal' },
-        time: { digitized: false, filenameDates: false },
-        lane: 'normal',
-        sidecars: 'pair',
-      });
+      assertEquals(legacy.attrs.stagingCategory, { label: 'legacy' });
       assertEquals((await client.execJson<StagingCheckAnswer>('staging check --user anna')).problems, []);
     });
 

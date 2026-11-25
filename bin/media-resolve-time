@@ -5,7 +5,8 @@
  * The repair pass for files dated under other rules than the current ones. It reads each
  * original's `whenManual` and its exif child's normalized `when`, runs
  * `@archive/media/capture-resolve` over them, and writes `takenAt` / `takenAtUtc` /
- * `takenAtSource` where they differ from what the rules give:
+ * `takenAtSource`, and `digitized` for a file whose camera is a digitizer, where they differ from
+ * what the rules give:
  *
  * - an offset reaches `takenAt` only where one can be established, since a range query compares
  *   the attr as bytes;
@@ -30,7 +31,7 @@
 import type { AttrCondition, CmdReturn, Command, NodeAttrs, NodeQueryCursor, NodeQueryEntry } from '@ein/client';
 import { collectUnknownFlags, NOT_DERIVED, parseArgs, reportUnknownFlags, SYSTEM_TIME_ZONE } from '@ein/client';
 import type { MediaResolveTimeResult } from '@archive/media/api';
-import { isValidGpsDate, resolveTime, stampedSources, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
+import { isValidGpsDate, resolveTime, timeAttrs, whenFromExifAttrs } from '@archive/media/capture-resolve';
 import { type CameraClock, clockForFile, clockSources, NO_CAMERA_CLOCK } from '@archive/camera/camera-zone';
 import { resolve } from '@std/path';
 
@@ -117,11 +118,11 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
       gps: when.gps,
       camera: when.device,
       ...clockSources(clock, SYSTEM_TIME_ZONE),
-      ...stampedSources(attrs),
     });
 
     if (
-      str(attrs.takenAt) === resolved?.takenAt && str(attrs.takenAtUtc) === resolved?.takenAtUtc && str(attrs.takenAtSource) === resolved?.takenAtSource
+      str(attrs.takenAt) === resolved?.takenAt && str(attrs.takenAtUtc) === resolved?.takenAtUtc && str(attrs.takenAtSource) === resolved?.takenAtSource &&
+      (attrs.digitized === true) === (clock.digitizer === true)
     ) {
       untouched++;
       return;
@@ -138,7 +139,7 @@ const mediaResolveTime = async (cmd: Command): CmdReturn => {
       );
     }
 
-    if (!dry) await vfs.update(access, row.absPath, { attrs: timeAttrs(resolved) });
+    if (!dry) await vfs.update(access, row.absPath, { attrs: timeAttrs(resolved, clock.digitizer) });
   };
 
   // Renditions are left out in the store. `--camera`: the files linked to one camera, which the

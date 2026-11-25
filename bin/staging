@@ -25,22 +25,18 @@ import type {
   StagingInitAnswer,
   StagingJournalAction,
   StagingJournalPage,
-  StagingLaterResult,
   StagingMatchResult,
   StagingMoveResult,
   StagingOrganizeReport,
   StagingPromoteResult,
   StagingQueued,
   StagingQueueReport,
-  StagingRetimeAnswer,
   StagingStatus,
-  StagingTimeRules,
   StagingUndoResult,
 } from '@archive/staging/api';
-import { CATEGORY_KINDS, editCategory, GROUP_STRATEGIES, readCategories, SIGNIFICANCE_PRESETS, STAGING_LANES, STAGING_SIDECARS } from '@archive/staging/category';
-import { emptyRetime, retimeScope } from '@archive/staging/retime';
+import { editCategory, readCategories } from '@archive/staging/category';
 import { stagingCheck } from '@archive/staging/check';
-import { ACCEPT_MAX, ACCEPT_PLAN_MAX, acceptGroups, discardTargets, LATER_MAX, laterGroups, moveStaged, promoteGroups } from '@archive/staging/decide';
+import { ACCEPT_MAX, ACCEPT_PLAN_MAX, acceptGroups, discardTargets, moveStaged, promoteGroups } from '@archive/staging/decide';
 import { initStaging } from '@archive/staging/init';
 import { JOURNAL_PAGE_MAX, listJournal, UNDO_MAX, undoJournalEntries } from '@archive/staging/journal';
 import { deleteGroup, mergeGroups, pinGroup, REGROUP_MAX, regroupInto, regroupNew, renameGroup, splitGroup } from '@archive/staging/edits';
@@ -69,7 +65,7 @@ import {
 import { DEDUPE_FILES_MAX, DEDUPE_SETS_MAX, dedupeApply, dedupeGroupScope, dedupeKeys, dedupeScope } from '@archive/staging/dedupe';
 
 /** The subcommands a dry run is for: each then says what it would do and does none of it. */
-const DRY_RUNS = ['init', 'organize', 'promote', 'discard', 'accept', 'dedupe', 'duplicates', 'retime'];
+const DRY_RUNS = ['init', 'organize', 'promote', 'discard', 'accept', 'dedupe', 'duplicates'];
 
 /** Files a `duplicates --refresh` announces per call unless `--limit` says otherwise. */
 const REFRESH_LIMIT = 5_000;
@@ -178,30 +174,6 @@ const keysFlag = (value: unknown): string[] => listFlag(value).flatMap((each) =>
 /** A folder of `user`'s staged files named by path, or a category by its name. */
 const scopePath = (cmd: Command, user: string, raw: string): string => raw.includes('/') ? resolve(cmd.cwd, raw) : categoryPath(user, raw);
 
-/** The words for what a retime did, or would do. */
-const retimeLine = (answer: StagingRetimeAnswer): string => {
-  const sources = Object.entries(answer.bySource).map(([source, n]) => `${n} by ${source}`).join(', ');
-  return `${answer.path}: ${answer.scanned} media read, ${answer.policyChanged} restamped, ${answer.retimed} dated again` +
-    (sources ? ` (${sources})` : '') + (answer.cleared > 0 ? `, ${answer.cleared} left undated` : '') + (answer.dryRun ? ' (dry run, nothing written)' : '');
-};
-
-/**
- * What `staging retime` dates again: the categories of `user` named by `raw` (a category's name,
- * or a path at or under `files/`), each with its time rules, and the path the answer names. No
- * `raw` is every category.
- */
-const retimeScopes = async (cmd: Command, user: string, raw: string | undefined): Promise<{ path: string; scopes: { path: string; rules: StagingTimeRules }[] }> => {
-  const path = raw === undefined ? stagingRoots(user).filesPath : scopePath(cmd, user, raw);
-  const parsed = parseStagedPath(path);
-  if (parsed?.area !== 'files') throw new Error(`not a category, nor a folder or file of one: ${path}`);
-  if (!canActAs(cmd, parsed.user)) throw new Error(`cannot retime this: ${path}`);
-  const categories = await readCategories(cmd.sys.vfs, cmd.access, parsed.user);
-  if (parsed.category === undefined) return { path, scopes: categories.map((category) => ({ path: category.path, rules: category.settings.time })) };
-  const category = categories.find((each) => each.name === parsed.category);
-  if (!category) throw new Error(`no category ${parsed.category} in ${stagingRoots(parsed.user).filesPath}`);
-  return { path, scopes: [{ path, rules: category.settings.time }] };
-};
-
 const WHERES: DuplicateWhere[] = ['library', 'inbox'];
 
 /** `--where`: findings of what lies in the library, or in the inbox; both when absent. */
@@ -237,7 +209,7 @@ const staging = async (cmd: Command): CmdReturn => {
   const subcommand = cmd.args[0];
   if (!subcommand) {
     await cmd.writeError(
-      'usage: staging <init|status|check|detect|category|retime|organize|promote|discard|accept|later|undo|journal|move|split|regroup|merge|delete|rename|pin|reject|match|dedupe|duplicates|separate> [options]\n',
+      'usage: staging <init|status|check|detect|category|organize|promote|discard|accept|undo|journal|move|split|regroup|merge|delete|rename|pin|reject|match|dedupe|duplicates|separate> [options]\n',
     );
     return 1;
   }
@@ -256,20 +228,12 @@ const staging = async (cmd: Command): CmdReturn => {
       'cursor',
       'loose-batch',
       'idle-minutes',
-      'kind',
       'label',
-      'destination',
       'except',
       'expect',
       'where',
       'keep',
       'at',
-      'strategy',
-      'significance',
-      'digitized',
-      'filename-dates',
-      'lane',
-      'sidecars',
       'since',
     ],
     collect: ['except', 'expect'],
@@ -282,7 +246,6 @@ const staging = async (cmd: Command): CmdReturn => {
       'layout-only',
       'create',
       'remove',
-      'no-destination',
       'refresh',
       'repair',
       'force',
@@ -369,9 +332,8 @@ const staging = async (cmd: Command): CmdReturn => {
       if (cmd.json) await cmd.writeJSON(answer satisfies StagingDetectAnswer);
       else {
         for (const detection of answer.detections) {
-          const to = detection.category ? `; category ${detection.category.name}` : '';
           const dismissed = detection.dismissed ? '; dismissed' : '';
-          await cmd.writeLn(`${detection.path}: ${detection.kind} (${detection.confidence}${to}${dismissed})`);
+          await cmd.writeLn(`${detection.path}: ${detection.source} (${detection.confidence}${dismissed})`);
           for (const line of detection.evidence) await cmd.writeLn(`  ${line}`);
         }
         if (answer.detections.length === 0) await cmd.writeLn('No newly arrived folders');
@@ -398,31 +360,13 @@ const staging = async (cmd: Command): CmdReturn => {
       const edit = await editCategory(cmd, user, String(name), {
         create: Boolean(flags.create),
         remove: Boolean(flags.remove),
-        kind: flags.kind as string | undefined,
         label: flags.label as string | undefined,
-        destination: flags.destination as string | undefined,
-        noDestination: Boolean(flags['no-destination']),
-        strategy: flags.strategy as string | undefined,
-        significance: flags.significance as string | undefined,
-        digitized: flags.digitized as string | undefined,
-        filenameDates: flags['filename-dates'] as string | undefined,
-        lane: flags.lane as string | undefined,
-        sidecars: flags.sidecars as string | undefined,
       });
-      // New time rules apply to the files already there, which are dated again now; new grouping
-      // settings to its groups, which the organizer plans again on a run asked for now.
-      let retime: StagingRetimeAnswer | null = null;
-      if (edit.entry && edit.changed.includes('time')) {
-        retime = emptyRetime(user, edit.entry.path, false);
-        await retimeScope(cmd, edit.entry.path, edit.entry.settings.time, retime);
-      }
-      if (edit.entry && edit.changed.includes('group')) await queueRun(cmd, user, edit.entry, false);
       const answer: StagingCategoryAnswer = {
         ok: true,
         created: edit.created,
         removed: edit.removed,
         changed: edit.changed,
-        retime,
         category: edit.entry ? (await categoryStatuses(cmd.sys.vfs, cmd.access, user, [edit.entry]))[0] : null,
       };
       if (cmd.json) await cmd.writeJSON(answer satisfies StagingCategoryAnswer);
@@ -430,30 +374,11 @@ const staging = async (cmd: Command): CmdReturn => {
       else if (answer.category) {
         const { category } = answer;
         await cmd.writeLn(
-          `${category.name}: ${category.label} (${category.kind})${category.destination ? `, into ${category.destination.path}` : ''}` +
-            `${category.settings.lane === 'bulk' ? ', bulk lane' : ''}; ${category.counts.files} media` +
+          `${category.name}: ${category.label}; ${category.counts.files} media` +
             (answer.created ? ', created' : answer.changed.length > 0 ? `, changed ${answer.changed.join(', ')}` : ''),
         );
-        if (answer.retime) await cmd.writeLn(retimeLine(answer.retime));
       }
-      for (const failure of answer.retime?.failed ?? []) await cmd.writeError(`staging category: ${failure.path}: ${failure.error}\n`);
-      return answer.retime?.ok === false ? 1 : 0;
-    }
-
-    // Dating staged files again by their category's time rules: every category of the user, one, or
-    // a folder or file of one. The pipeline runs it for what the bridge saw moved between categories.
-    if (subcommand === 'retime') {
-      const raws = (flags._ as unknown[]).map(String);
-      if (raws.length > 1) throw new Error('staging retime takes one category, folder or file');
-      const [user] = raws.length === 1 && raws[0].includes('/') ? [parseStagedPath(resolve(cmd.cwd, raws[0]))?.user ?? ''] : await selectedUsers(cmd, flags);
-      const { path, scopes } = await retimeScopes(cmd, user, raws[0]);
-      const answer = emptyRetime(user, path, Boolean(flags['dry-run']));
-      const clocks = new Map();
-      for (const scope of scopes) await retimeScope(cmd, scope.path, scope.rules, answer, clocks);
-      if (cmd.json) await cmd.writeJSON(answer satisfies StagingRetimeAnswer);
-      else await cmd.writeLn(retimeLine(answer));
-      for (const failure of answer.failed) await cmd.writeError(`staging retime: ${failure.path}: ${failure.error}\n`);
-      return answer.ok ? 0 : 1;
+      return 0;
     }
 
     // Every category of each user on its own: one that fails is reported, and the others are still
@@ -620,15 +545,6 @@ const staging = async (cmd: Command): CmdReturn => {
         }
         for (const skip of result.skipped) await cmd.writeLn(`${skip.group}: left as it is, ${skip.reason}`);
       }
-      return 0;
-    }
-
-    if (subcommand === 'later') {
-      const raws = (flags._ as unknown[]).map(String);
-      if (raws.length === 0) throw new Error('staging later needs at least one group');
-      const result = await laterGroups(cmd, raws.map((raw) => groupPath(cmd, flags, raw, 'put aside')), Boolean(flags.off));
-      if (cmd.json) await cmd.writeJSON(result satisfies StagingLaterResult);
-      else await cmd.writeLn(`${result.later ? 'Put aside' : 'Brought back'} ${result.groups.length} group(s)`);
       return 0;
     }
 
@@ -926,18 +842,16 @@ staging.spec = {
   name: 'staging',
   effect: 'read' as const,
   description:
-    "Manage a user's private staging area: its categories and which one a newly arrived folder looks like it belongs in, their suggested groups and the organizer that makes them, the edits that change them, and the decisions that file them into the library or discard them, each journaled and undoable",
+    "Manage a user's private staging area: its categories and where a newly arrived folder looks like it came from, their suggested groups and the organizer that makes them, the edits that change them, and the decisions that file them into the library or discard them, each journaled and undoable",
   args: [
     {
       name: 'subcommand',
       writes: [
         'init',
-        'retime',
         'organize',
         'promote',
         'discard',
         'accept',
-        'later',
         'undo',
         'move',
         'split',
@@ -958,12 +872,10 @@ staging.spec = {
         'check',
         'detect',
         'category',
-        'retime',
         'organize',
         'promote',
         'discard',
         'accept',
-        'later',
         'undo',
         'journal',
         'move',
@@ -985,7 +897,7 @@ staging.spec = {
       type: 'path' as const,
       variadic: true,
       description:
-        `a category's name, or suggested groups by path or slug in the default category of --user, as required; detect takes at most ${DETECT_MAX} folders, of staging or not (by default the folders newly arrived in the default category); organize takes the categories to organize (every one by default); retime takes a category, or a folder or file of one (every category by default); discard also takes staged files and folders; accept takes at most ${ACCEPT_MAX} groups (${ACCEPT_PLAN_MAX} with --dry-run), later ${LATER_MAX}; undo takes at most ${UNDO_MAX} journal entries; move takes what to move, then the folder; regroup takes the group, then the staged files to move into it (at most ${REGROUP_MAX}), or with --new the files alone; merge takes the group to keep, then the groups to fold into it; rename takes the new name after it; reject takes the group, then the library album it does not go into; match takes groups (every group of the user's by default); duplicates takes a category, a folder of staged files (all of them by default), a suggested group, or staged files (at most ${FILE_SETS_MAX}) for the sets they belong to; dedupe takes the sets to resolve (exact:<id> or near:<id>), with a category, a folder in one or a suggested group to drop their files from (the default category by default); separate takes a staged file, then the files it is no duplicate of`,
+        `a category's name, or suggested groups by path or slug in the default category of --user, as required; detect takes at most ${DETECT_MAX} folders, of staging or not (by default the folders newly arrived in the default category); organize takes the categories to organize (every one by default); discard also takes staged files and folders; accept takes at most ${ACCEPT_MAX} groups (${ACCEPT_PLAN_MAX} with --dry-run); undo takes at most ${UNDO_MAX} journal entries; move takes what to move, then the folder; regroup takes the group, then the staged files to move into it (at most ${REGROUP_MAX}), or with --new the files alone; merge takes the group to keep, then the groups to fold into it; rename takes the new name after it; reject takes the group, then the library album it does not go into; match takes groups (every group of the user's by default); duplicates takes a category, a folder of staged files (all of them by default), a suggested group, or staged files (at most ${FILE_SETS_MAX}) for the sets they belong to; dedupe takes the sets to resolve (exact:<id> or near:<id>), with a category, a folder in one or a suggested group to drop their files from (the default category by default); separate takes a staged file, then the files it is no duplicate of`,
     },
   ],
   flags: [
@@ -1066,7 +978,7 @@ staging.spec = {
     {
       name: 'off',
       type: 'bool' as const,
-      description: 'pin: unpin, so the organizer manages the group again; later: bring back into its lane; separate: no longer keep the files apart',
+      description: 'pin: unpin, so the organizer manages the group again; separate: no longer keep the files apart',
     },
     { name: 'exact', type: 'bool' as const, description: 'duplicates, dedupe --apply: only byte copies' },
     { name: 'near', type: 'bool' as const, description: 'duplicates, dedupe --apply: only look-alikes: the same picture in other bytes' },
@@ -1076,57 +988,7 @@ staging.spec = {
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: `${DRY_RUNS.join(', ')} --refresh: say what would be done, and do none of it` },
     { name: 'create', writes: true, type: 'bool' as const, description: 'category: make it, with its directory of groups' },
     { name: 'remove', writes: true, type: 'bool' as const, description: 'category: remove it, which only an empty one other than the default can be' },
-    {
-      name: 'kind',
-      writes: true,
-      type: 'string' as const,
-      description: `category: what it holds, which resets its other settings to the kind's (${CATEGORY_KINDS.join(', ')})`,
-    },
     { name: 'label', writes: true, type: 'string' as const, description: 'category: what a page calls it' },
-    { name: 'destination', writes: true, type: 'path' as const, description: 'category: the library album its files are filed into by default' },
-    { name: 'no-destination', writes: true, type: 'bool' as const, description: 'category: no default album' },
-    {
-      name: 'strategy',
-      writes: true,
-      type: 'string' as const,
-      description: `category: how its files are grouped (${GROUP_STRATEGIES.join(', ')}): by time and place, by folder and file-name run, or into monthly lanes`,
-    },
-    {
-      name: 'significance',
-      writes: true,
-      type: 'string' as const,
-      description: `category: how readily a day becomes a group of its own rather than part of an Everyday lane (${SIGNIFICANCE_PRESETS.join(', ')})`,
-    },
-    {
-      name: 'digitized',
-      writes: true,
-      type: 'string' as const,
-      description:
-        'category: on, its files are digitized copies (scans), and no clock recorded while digitizing them (camera, GPS, file name) dates them; off, they do. Its files are dated again',
-    },
-    {
-      name: 'filename-dates',
-      writes: true,
-      type: 'string' as const,
-      description:
-        "category: on, a date its files' names spell (IMG_20190601_123456.jpg) dates them when nothing better does; off, names are not dates. Its files are dated again",
-    },
-    {
-      name: 'lane',
-      writes: true,
-      type: 'string' as const,
-      description: `category: the lane the work on its files runs in (${
-        STAGING_LANES.join(', ')
-      }); bulk runs below all other work, for an import of thousands, and applies to work announced from then on`,
-    },
-    {
-      name: 'sidecars',
-      writes: true,
-      type: 'string' as const,
-      description: `category: whether the Google Photos Takeout JSON and XMP sidecars arriving there are paired with their files (${
-        STAGING_SIDECARS.join(', ')
-      }), from then on`,
-    },
   ],
   examples: [
     'staging init --all --loose-batch old-scans --dry-run',
@@ -1134,14 +996,9 @@ staging.spec = {
     'staging check',
     'staging detect',
     'staging detect /home/anna/staging/files/inbox/upload-2026-10-18/Takeout',
-    'staging category scans --create --kind scans --label "Box 3"',
-    'staging category scans --destination /archive/albums/family-prints',
-    'staging category inbox --significance more',
-    'staging category box-3 --digitized on',
-    'staging category takeout --lane bulk',
-    'staging category whatsapp --sidecars ignore',
-    'staging retime /home/anna/staging/files/inbox --dry-run',
-    'staging retime scans --user anna',
+    'staging category scans --create --label "Box 3"',
+    "staging category scans --label 'Family prints'",
+    'staging category scans --remove',
     'staging organize --all',
     'staging organize inbox --user anna --full --dry-run',
     'staging organize inbox --queue',
@@ -1163,7 +1020,6 @@ staging.spec = {
     'staging discard 2019-06-21',
     'staging discard /home/anna/staging/files/inbox/upload-2026-10-01/blurry',
     'staging accept 2019-06-14 2019-06-16 --dry-run',
-    'staging later 2019-07-02',
     'staging journal inbox --limit 50',
     'staging undo 01JA2B3C4D5E6F7G8H9J0K1M2N',
     'staging move /home/anna/staging/files/inbox/box-3 /home/anna/staging/files/scans',
@@ -1181,7 +1037,7 @@ staging.spec = {
     'staging separate /home/anna/staging/files/inbox/IMG_0001.jpg /home/anna/staging/files/inbox/IMG_0002.jpg',
   ],
   returns:
-    'promote: StagingPromoteResult; discard: StagingDiscardResult; accept: StagingAcceptResult; later: StagingLaterResult; undo: StagingUndoResult; journal: StagingJournalPage; move: StagingMoveResult; split, regroup, merge, delete, rename, pin, reject: StagingEditResult; match: StagingMatchResult; organize: StagingOrganizeReport, with --queue StagingQueueReport; init: StagingInitAnswer; retime: StagingRetimeAnswer; status: StagingStatus; check: StagingCheckAnswer; detect: StagingDetectAnswer; category: StagingCategoryAnswer; duplicates: DuplicatePage; duplicates --counts: DuplicateCounts; dedupe: DuplicateResolveResult; separate: DuplicateSeparateResult; duplicates --refresh: DuplicateRefreshResult; duplicates --repair: DuplicateRepairResult',
+    'promote: StagingPromoteResult; discard: StagingDiscardResult; accept: StagingAcceptResult; undo: StagingUndoResult; journal: StagingJournalPage; move: StagingMoveResult; split, regroup, merge, delete, rename, pin, reject: StagingEditResult; match: StagingMatchResult; organize: StagingOrganizeReport, with --queue StagingQueueReport; init: StagingInitAnswer; status: StagingStatus; check: StagingCheckAnswer; detect: StagingDetectAnswer; category: StagingCategoryAnswer; duplicates: DuplicatePage; duplicates --counts: DuplicateCounts; dedupe: DuplicateResolveResult; separate: DuplicateSeparateResult; duplicates --refresh: DuplicateRefreshResult; duplicates --repair: DuplicateRepairResult',
 };
 
 export default staging;

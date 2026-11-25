@@ -39,16 +39,9 @@ export const sidecarTime = (sidecar: MediaSidecar | undefined): SidecarTime | un
   return { instant: sidecar.takenAt, ...(sidecar.uploadedAt ? { uploaded: sidecar.uploadedAt } : {}) };
 };
 
-/**
- * Where a paired sidecar says its file was, when that is believed: always from an XMP packet, and
- * from a Takeout unless the file is a digitized copy, whose Google location is where it was
- * scanned or uploaded, but for a place a person set there (`whereEdited`).
- */
-export const sidecarPoint = (sidecar: MediaSidecar | undefined, digitized: boolean): SidecarPoint | undefined => {
-  if (sidecar?.kind === 'xmp') return sidecar.where;
-  if (sidecar?.kind !== 'takeout' || !sidecar.where) return undefined;
-  return !digitized || sidecar.whereEdited ? sidecar.where : undefined;
-};
+/** Where a paired sidecar says its file was: an XMP packet's place, or a Takeout's location. */
+export const sidecarPoint = (sidecar: MediaSidecar | undefined): SidecarPoint | undefined =>
+  sidecar?.kind === 'xmp' || sidecar?.kind === 'takeout' ? sidecar.where : undefined;
 
 /** Write `point` into the `position` child of the file at `filePath`, making it when there is none. */
 export const writePosition = async (vfs: Vfs, access: Access, filePath: string, point: SidecarPoint): Promise<void> => {

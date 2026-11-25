@@ -10,6 +10,5 @@ face-crops reserve ops=image.renditions,video.poster  # the face crops detection
 face-assign reserve                                   # a kNN over every known face embedding               (priority 40)
 speaker-assign reserve                                # the same for a recording's voices                   (priority 40)
 dedupe reserve                                        # a staged file's duplicate findings                  (priority 20)
-retime reserve                                        # staged files dated by a category's rules            (priority 20)
 organize reserve                                      # a staging category's groups planned again           (priority 15)
 sidecars reserve                                      # Takeout and XMP sidecars paired with files          (priority 30)

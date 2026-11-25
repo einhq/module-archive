@@ -55,16 +55,9 @@ const pointOf = (value: unknown): SidecarPoint | undefined => {
   return isPlace(lat, lng) ? { lat, lng } : undefined;
 };
 
-/** Two points closer than this, in degrees, are one: Google rounds the two copies differently. */
-const SAME_POINT = 1e-5;
-
-const samePoint = (a: SidecarPoint, b: SidecarPoint): boolean => Math.abs(a.lat - b.lat) < SAME_POINT && Math.abs(a.lng - b.lng) < SAME_POINT;
-
 /** A photo's sidecar from its parsed JSON. */
 const mediaSidecar = (json: Json): TakeoutSidecar => {
-  const shown = pointOf(json.geoData);
-  const own = pointOf(json.geoDataExif);
-  const where = shown ?? own;
+  const where = pointOf(json.geoData) ?? pointOf(json.geoDataExif);
   const people = Array.isArray(json.people) ? json.people.flatMap((person) => isObject(person) && text(person.name) ? [text(person.name)!] : []) : [];
   const origin = isObject(json.googlePhotosOrigin) && isObject(json.googlePhotosOrigin.mobileUpload) ? json.googlePhotosOrigin.mobileUpload : undefined;
   const localFolder = origin && isObject(origin.cameraFolder) ? text(origin.cameraFolder.localFolderName) : undefined;
@@ -77,7 +70,6 @@ const mediaSidecar = (json: Json): TakeoutSidecar => {
   if (takenAt) sidecar.takenAt = takenAt;
   if (uploadedAt) sidecar.uploadedAt = uploadedAt;
   if (where) sidecar.where = where;
-  if (shown && !(own && samePoint(shown, own))) sidecar.whereEdited = true;
   if (description) sidecar.description = description;
   if (people.length > 0) sidecar.people = people;
   if (json.favorited === true) sidecar.favorited = true;

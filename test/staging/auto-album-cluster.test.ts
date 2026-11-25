@@ -63,7 +63,7 @@ Deno.test({ name: 'auto-album-cluster', sanitizeResources: false, sanitizeOps: f
 
     await t.step('a flag or an unknown value is named, not swallowed', async () => {
       await cmd.shouldFailWith(`auto-album-cluster ${FILES} --bogus`, 'unknown flag --bogus');
-      await cmd.shouldFailWith(`auto-album-cluster ${FILES} --strategy albums`, '--strategy is one of');
+      await cmd.shouldFailWith(`auto-album-cluster ${FILES} --home nowhere`, '--home is lat,lng or a location');
       await cmd.shouldFailWith('auto-album-cluster', 'usage: auto-album-cluster <path>');
     });
 

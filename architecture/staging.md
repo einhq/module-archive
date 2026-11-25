@@ -17,11 +17,11 @@ Archive's `staging` area (the `staging` module until ein/core#442) owns a privat
   routes/                              GPX files waiting for the track they belong to
 ```
 
-A category is a directory under `files/`, its settings (`kind`, `label`, a default
-`destinationId`, and how it is grouped, `group: {strategy, significance}`) in
-`attrs.stagingCategory`; its name is its key and never changes.
-`files/inbox` is the default category, of the `inbox` kind, and cannot be removed;
-browser uploads land in its `upload-YYYY-MM-DD/`. Only
+A category is a directory under `files/`, a bucket for one source of files: its name is its key
+and never changes, and its one setting, `label`, what a page calls it, is in
+`attrs.stagingCategory`. Every category is sorted and handled the same way. `files/inbox` is
+the default category, labelled Inbox, and cannot be removed; browser uploads land in its
+`upload-YYYY-MM-DD/`. Only
 [`lib/staging/paths.ts`](../lib/staging/paths.ts) knows this shape
 (`stagingRoots`, `parseStagedPath`, `stagedPlace`, `isStagingGroup`, `uploadPathFor`);
 everything else asks it. `staging init` makes an area whole and is idempotent: the
@@ -34,19 +34,15 @@ indexed yet by the file's `indexedAt`, the undated, bytes), one read of each cat
 checkpoint its organizer summary, and one aggregate over the journal what was decided per
 category (`decided`). `staging check` reports what
 breaks the layout's rules, a group's link outside its category or to nothing among them.
-`staging category <name>` reads a category, and with `--create`, `--kind`, `--label`,
-`--destination`, `--no-destination`, `--strategy`, `--significance`, `--lane` or `--remove` changes it.
-A category whose `lane` is `bulk` sets `lane` on its folder too, and the bridges put every fact
-about a file under a folder of the bulk lane in the bulk lane (`withLanes`, the media module's
-`@media/file-rules`), reading each folder at most once a minute, so the work on it runs below
-everything else (Lanes (core's `docs/architecture.md`)).
+`staging category <name>` reads a category, and with `--create`, `--label` or `--remove`
+changes it.
 
 The organizer (`staging organize`, [`lib/staging/organizer.ts`](../lib/staging/organizer.ts))
 keeps every indexed staged medium of a category in exactly one group: an event, a trip, a seed
-(a folder a person named), a scan run, or a lane — Everyday by year or month, clutter, period and
+(a folder a person named), or a lane — Everyday by year or month, clutter, period and
 undated lanes. A full build reads the category in one `within` query a page at a time and its
 signals in batched lookups by node id (`vfs.getPoints` for GPS), never a file at a time and never
-a library-wide scan of points; plans with the category's strategy
+a library-wide scan of points; plans by time and place
 ([`lib/staging/strategy.ts`](../lib/staging/strategy.ts), the rules of
 [`cluster.ts`](../lib/staging/cluster.ts)); pairs each planned group with a
 group there already (a lane by its key, an event by its members), so paths are never renamed;
@@ -109,9 +105,9 @@ descendants. `discardStagedMany` takes files out of the groups the same way, the
 them into trash batches of at most 2,000 whose ids it chose beforehand. `staging move`
 moves staged entries to another category, out of their old category's groups first.
 A group named with its member key (`--expect`) is decided only while the key is the same.
-The module's `/staging` route opens on Sort, the stream of the default category's
-groups with its destination column (the group's candidate albums and the highlighted one's compare
-strip from `album info`), beside Duplicates, Files and Done tabs
+The module's `/staging` route opens a category's page on Files, its folders and files, beside
+Sort, the stream of its groups with its destination column (the group's candidate albums and the
+highlighted one's compare strip from `album info`), Duplicates, Done and Info tabs
 over this command surface — each decision one command through the page's serial queue
 (the kit's `useCommandQueue`), the Done tab `staging journal <category>`;
 its Upload, and the Media page's, go to today's upload folder of the default

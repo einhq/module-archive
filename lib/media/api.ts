@@ -266,11 +266,11 @@ export type MediaDetails = {
   takenAt?: string;
   /** The instant, `YYYY-MM-DDTHH:MM:SSZ`. Only needed to offer the viewer's own reading. */
   takenAtUtc?: string;
-  /** Which source won: `manual`, `gps`, `camera` or `name`. */
+  /** Which source won: `manual`, `sidecar`, `gps` or `camera`. */
   takenAtSource?: string;
   /** `about` when the date is only about then, as a scan's sidecar can say. */
   takenAtQualifier?: 'about';
-  /** A digitized copy (a scan): the clocks recorded while digitizing were not believed. */
+  /** A digitized copy (a scan): its camera is a digitizer, whose clock was not believed. */
   digitized?: true;
   /**
    * How damaged the picture was found to be (`find-damage`): the kinds found, `faded`, `dust` or
@@ -634,8 +634,8 @@ export type SidecarPoint = { lat: number; lng: number };
 /**
  * What a Google Photos Takeout JSON says about its photo or video: the name it was uploaded under
  * (`title`), when it was taken (`takenAt`, `photoTakenTime`) and uploaded (`uploadedAt`,
- * `creationTime`), both UTC (`…Z`); where (`where`, Google's location, and `whereEdited` when a
- * person set one other than the file's own); the caption, the people named in it, whether it was a
+ * `creationTime`), both UTC (`…Z`); where (`where`, Google's location, else the file's own); the
+ * caption, the people named in it, whether it was a
  * favourite, archived or in Google's trash, and the phone folder it was uploaded from
  * (`localFolder`).
  */
@@ -645,7 +645,6 @@ export type TakeoutSidecar = {
   takenAt?: string;
   uploadedAt?: string;
   where?: SidecarPoint;
-  whereEdited?: boolean;
   description?: string;
   people?: string[];
   favorited?: boolean;

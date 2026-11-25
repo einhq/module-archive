@@ -1,8 +1,9 @@
 # Read how faded, dusty and scratched a scan is (`find-damage`, EMS `image.damage`), so the scans
 # worth restoring can be listed. ein/core#1200.
 #
-# A scan is a file its staging category stamped `digitized`, which `exif-interpret` reads before it
-# writes `interpretedAt`, so the fact says it. A file marked a scan after it was interpreted, one
+# A scan is a file whose camera the camera registry marks a digitizer (a scanner): it is marked
+# `digitized` where its time is resolved, by `exif-interpret` in the write of `interpretedAt` too,
+# so the fact says it. A file whose camera was marked a digitizer after it was interpreted, one
 # that arrived while nothing listened and one read by an older method are `media-scan`'s gap,
 # `media.damage.missing`, read again with `-f`. The pictures EMS's restoration ops read only.
 name: media-damage
