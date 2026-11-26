@@ -76,10 +76,16 @@ const currentUsername = (cmd: Command): string => cmd.env.USER || cmd.env.HOME?.
 
 const canActAs = (cmd: Command, user: string): boolean => isAdmin(cmd.access) || user === currentUsername(cmd);
 
+/**
+ * Every user who has a staging area. One is made where it is first needed (the Staging page, an
+ * import, a route or family tree staged), never for all, so an account nobody uses keeps an empty
+ * home that can go when it is disabled.
+ */
 const allUsers = async (cmd: Command): Promise<string[]> => {
   if (!isAdmin(cmd.access)) throw new Error('--all requires administrator access');
-  const accounts = await cmd.sys.vfs.children(cmd.access, USERS_PATH);
-  return accounts.filter((entry) => entry.node.type === 'user').map((entry) => entry.name);
+  const accounts = (await cmd.sys.vfs.children(cmd.access, USERS_PATH)).filter((entry) => entry.node.type === 'user').map((entry) => entry.name);
+  const staged = await Promise.all(accounts.map((user) => cmd.sys.vfs.exists(cmd.access, stagingRoots(user).stagingPath, { follow: false })));
+  return accounts.filter((_, i) => staged[i]);
 };
 
 const selectedUsers = async (cmd: Command, flags: Record<string, unknown>): Promise<string[]> => {
@@ -902,7 +908,7 @@ staging.spec = {
   ],
   flags: [
     { name: 'user', type: 'string' as const, description: 'act on this user (defaults to the current user)' },
-    { name: 'all', type: 'bool' as const, description: 'init, organize, match, duplicates --repair: act on every user (administrator only)' },
+    { name: 'all', type: 'bool' as const, description: 'init, organize, match, duplicates --repair: act on every user who has a staging area (administrator only)' },
     {
       name: 'stale',
       type: 'bool' as const,

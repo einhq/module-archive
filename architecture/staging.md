@@ -24,7 +24,11 @@ the default category, labelled Inbox, and cannot be removed; browser uploads lan
 `upload-YYYY-MM-DD/`. Only
 [`lib/staging/paths.ts`](../lib/staging/paths.ts) knows this shape
 (`stagingRoots`, `parseStagedPath`, `stagedPlace`, `isStagingGroup`, `uploadPathFor`);
-everything else asks it. `staging init` makes an area whole and is idempotent: the
+everything else asks it. An area is made where it is first needed, never for every account: the
+Staging page, an upload, `import-files`, `track-stage` and `gedcom-stage` run `staging init`
+(`--layout-only`) for their user, and `--all` acts on the users who have one, so the home of an
+account nobody used holds nothing and goes when the account is disabled. `staging init` makes an
+area whole and is idempotent: the
 directories, the default category, a category's settings for any other directory under
 `files/`, and with every link following (`renameMany`) a loose entry of `files/` into the
 default category's loose batch, a loose group of `albums/` into `albums/inbox/`, and a GPX

@@ -2035,14 +2035,24 @@ export const organizeCategory = async (cmd: Command, owner: OwnerContext, catego
   return result;
 };
 
+/** Whether the category holds a file or a group; one that holds neither has nothing to organize. */
+const holdsAnything = async (vfs: Vfs, access: Access, category: CategoryEntry, albumsPath: string): Promise<boolean> => {
+  if ((await vfs.query(access, { types: ['file'], within: category.path, limit: 1 })).length > 0) return true;
+  const groups = await vfs.children(access, albumsPath, { types: ['album'], page: { limit: 1 } }).catch(() => []);
+  return groups.length > 0;
+};
+
 /**
  * What waits for a run of the category, if anything: a category never organized (or whose
  * checkpoint is of an older shape), a week since its last full build,
  * edits made or undone since its last run, or records in its audit trail (or writes to its groups
- * by others) the last run did not apply. Reads the trail, so only for an administrator.
+ * by others) the last run did not apply. Nothing waits in a category that holds no file and no
+ * group, so an area nobody used keeps nothing but its directories. Reads the trail, so only for
+ * an administrator.
  */
 const waiting = async (vfs: Vfs, access: Access, user: string, category: CategoryEntry): Promise<StagingQueued['why'] | undefined> => {
   const albumsPath = categoryAlbumsPath(user, category.name);
+  if (!(await holdsAnything(vfs, access, category, albumsPath))) return undefined;
   const checkpoint = await readCheckpoint(vfs, access, albumsPath);
   if (!checkpoint) return 'first';
   if (Date.now() - Date.parse(checkpoint.lastFullAt) > FULL_EVERY_MS) return 'week';

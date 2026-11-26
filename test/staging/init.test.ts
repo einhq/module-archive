@@ -231,6 +231,14 @@ Deno.test({ name: 'staging init', sanitizeResources: false, sanitizeOps: false }
         bertil.close();
       }
     });
+
+    await t.step('--all acts on the staging areas there are, and makes none for an account without one', async () => {
+      await cmd.shouldSucceed('user-create cecilia --uid 3502');
+      const all = await client.execJson<StagingInitAnswer>('staging init --all');
+      assertEquals(all.users.map((each) => each.user).includes('cecilia'), false);
+      assert(all.users.some((each) => each.user === 'anna'));
+      assertEquals(await vfs.exists(ADMIN_ACCESS, '/home/cecilia/staging'), false);
+    });
   } finally {
     client.close();
     await testCtx.teardown();

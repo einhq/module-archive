@@ -223,6 +223,45 @@ Deno.test({ name: 'media hot-path reads and reconciliation backpressure', saniti
       assertEquals([runs[0].scanned, last.complete, runs.every((run) => run.unchecked.length === 0)], [1, true, true]);
       assertEquals(owed.every((type) => last.pass.held.includes(type)), true, JSON.stringify(last));
     });
+
+    await t.step("a scan of / passes over EiN's own trees and leaves a fact whose run failed to pipeline heal", async () => {
+      const picture = async (path: string, body: string) => {
+        assertEquals((await client.exec(`mkdir -p ${path.slice(0, path.lastIndexOf('/'))} && echo '${body}' > ${path}`)).success, true, path);
+        await vfs.update(ADMIN_ACCESS, path, { attrs: { mimetype: 'image/png' } });
+      };
+      const own = ['/usr/share/icons/u.png', '/etc/e.png', '/var/lib/v.png', '/tmp/t.png'];
+      for (const path of own) await picture(path, 'an icon');
+      await picture('/photos/a.png', 'a picture');
+      await picture('/photos/b.png', 'another picture');
+      type Scan = { paths: string[]; failing: number };
+      const scan = () => client.execJson<Scan>(`CFG_EMS_URL=${ems.url} media-scan / -n --restart --scan-limit 0 --limit 0 --max-active 0`);
+
+      const all = await scan();
+      assertEquals(own.filter((path) => all.paths.includes(path)), []);
+      assertEquals(['/photos/a.png', '/photos/b.png'].every((path) => all.paths.includes(path)), true, JSON.stringify(all.paths));
+      assertEquals(all.failing, 0);
+
+      // The run discovery started for a.png failed, on the bytes a.png still has.
+      const a = await vfs.get(ADMIN_ACCESS, '/photos/a.png');
+      const fact = {
+        type: 'media.file.discovered',
+        subject: '/photos/a.png',
+        nodeId: a.id,
+        time: 1,
+        source: 'media-scan',
+        data: { sha256: String(a.attrs.sha256 ?? ''), size: Number(a.attrs.size), mimetype: 'image/png' },
+      };
+      const instance = `/var/pipelines/instances/media-ingest/${a.id}`;
+      assertEquals((await client.exec(`mkdir -p ${instance}`)).success, true);
+      await vfs.update(ADMIN_ACCESS, instance, { attrs: { pipelineName: 'media-ingest', status: 'failed', triggerEvent: { id: 'x', ...fact } } });
+      const failed = await scan();
+      assertEquals([failed.paths.includes('/photos/a.png'), failed.paths.includes('/photos/b.png'), failed.failing], [false, true, 1]);
+
+      // New bytes are a new fact, announced as any other.
+      await picture('/photos/a.png', 'the picture, edited');
+      const changed = await scan();
+      assertEquals([changed.paths.includes('/photos/a.png'), changed.failing], [true, 0]);
+    });
   } finally {
     client.close();
     await ems.close();

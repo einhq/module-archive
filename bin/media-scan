@@ -46,6 +46,11 @@
  * the scans never read. Under `--if-idle` it then waits, leaving the pass where it is; a run by hand walks on,
  * names the types it could not check (`unchecked`) and counts them as held back, which the pass then
  * owes (ein/core#1006).
+ *
+ * It walks only where media is read: not into `/usr`, `/etc`, `/var`, `/dev` or `/tmp`, whose
+ * pictures are EiN's own and the bridges' rules pass over too (ein/core#1552). Nor does it announce
+ * a fact a failed pipeline run was started by, unchanged since: that run is `pipeline heal`'s, and
+ * the run counts those facts as `failing`.
  */
 
 import { POOLS_PATH } from '@ein/paths';
@@ -55,8 +60,8 @@ import { collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, readSettings, reportU
 import { join } from '@std/path';
 import { ulid } from '@std/ulid/ulid';
 import { deriveGaps, MEDIA_EVENTS, type NodeSnapshot, type RuleContext } from '@archive/media/event-rules';
-import { deriveForFile, withLanes } from '@media/file-rules';
-import { LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
+import { deriveForFile, isMediaPath, withLanes } from '@media/file-rules';
+import { failedAlike, LAST_PASS_ATTR, type LastPass, type Pass, PASS_ATTR, readPass } from '@archive/media/scan';
 import { allWait, factsWaiting } from '@media/waiting';
 import { generations } from '@ems/client';
 import { weatherOn } from '@archive/weather/at';
@@ -332,10 +337,13 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   /** What the pass's earlier runs examined, so its progress goes on from where they left it. */
   const before = resumed?.scanned ?? 0;
   const total = await filesUnder(cmd, root);
+  const failed = await failedAlike(cmd);
 
   let scanned = 0;
   let emitted = 0;
   const emittedPaths: string[] = [];
+  /** Facts not announced because a run they started failed, on what is still there. */
+  let failing = 0;
   /** The fact types a gap was found for and held back, because their work waits. */
   const held = new Set<string>();
   /** Node ids already descended into, so a cycle cannot make the walk diverge. */
@@ -386,6 +394,9 @@ const mediaScan = async (cmd: Command): CmdReturn => {
       const child = children[i];
       const childPath = join(path, child.name);
       const childResume = tail && i === start ? tail.slice(1) : undefined;
+
+      // EiN's own trees, and whatever lies in them, hold nobody's media.
+      if (!isMediaPath(childPath)) continue;
 
       // Descend into anything that is not a file, except a softlink. Container
       // node types are open-ended — modules define their own (`album`,
@@ -440,6 +451,10 @@ const mediaScan = async (cmd: Command): CmdReturn => {
           ...(gaps && hasChildren ? await deriveGaps(childPath, fileCtx, Date.now(), snapshot) : []),
         ].filter((fact) => {
           if (only && !only.has(fact.type)) return false;
+          if (failed(fact)) {
+            failing++;
+            return false;
+          }
           if (!waiting?.get(fact.type)) return true;
           held.add(fact.type);
           return false;
@@ -491,7 +506,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
   }
 
   if (cmd.json) {
-    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...new Set([...held, ...unchecked])], unchecked });
+    await cmd.writeJSON({ scanned, emitted, budget, complete: !stopped, cursor, pass, paths: emittedPaths, held: [...new Set([...held, ...unchecked])], unchecked, failing });
   } else {
     // A finished pass is told whole: run as a pipeline step, this is what its instance found.
     const told = stopped ? { scanned, emitted, held: [...held] } : pass;
@@ -500,6 +515,7 @@ const mediaScan = async (cmd: Command): CmdReturn => {
     const waited = told.held.filter((type) => !unchecked.includes(type));
     if (waited.length > 0) await cmd.writeLn(`Held back while their work waits: ${waited.join(', ')}`);
     if (unchecked.length > 0) await cmd.writeLn(`Not checked, EMS could not say what it runs now: ${unchecked.join(', ')}`);
+    if (failing > 0) await cmd.writeLn(`Left to pipeline heal, as their runs failed on the same input: ${failing} fact(s)`);
     if (verbose) {
       for (const p of emittedPaths) await cmd.writeLn(`  ${p}`);
     }

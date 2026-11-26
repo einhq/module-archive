@@ -185,16 +185,20 @@ Deno.test({
       try {
         const controller = new AbortController();
         const started = Date.now();
-        const search = client.exec(`CFG_EMS_URL=${stub.url} search 'a boat'`, { signal: controller.signal, timeout: 20_000 });
+        const search = client.exec(`CFG_EMS_URL=${stub.url} search 'a boat'`, { signal: controller.signal, timeout: 60_000 });
         // Cancelled once the providers' embeds are waiting on EMS: both of search-media's, and the
-        // other providers' text embeds.
+        // other providers' text embeds. The first search of the file probes every provider first,
+        // which the parallel fast tier can stretch past ten seconds, so the wait is a generous one.
         const ops = () => new Set(stub.requests.map((request) => request.op));
-        while (ops().size < 2 && Date.now() - started < 10_000) await new Promise((resolve) => setTimeout(resolve, 20));
+        while (ops().size < 2 && Date.now() - started < 45_000) await new Promise((resolve) => setTimeout(resolve, 20));
+        assertEquals(ops(), new Set(['text.embed', 'vision.embed_text']), 'the embeds never reached EMS');
         await new Promise((resolve) => setTimeout(resolve, 300));
+        const aborted = Date.now();
         controller.abort();
         await search;
         const ended = Date.now();
-        assertLess(ended - started, 10_000);
+        // The answers are 30 s away: a search that waited for them is a search the cancel did not end.
+        assertLess(ended - aborted, 10_000);
 
         // Each embed asks for a minute from when it was sent, some time within the search.
         const deadlines = stub.requests.map((request) => (request.body.options as { deadline?: number } | undefined)?.deadline ?? 0);

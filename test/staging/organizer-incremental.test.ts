@@ -394,6 +394,10 @@ Deno.test({ name: 'the incremental organizer gives the groups a full build would
       await cmd.shouldSucceed('staging init --user bo');
       const bo = await testCtx.server.createShellClient({ username: 'bo', password: 'secret1' });
       try {
+        // A category that holds nothing waits for nothing, so the safety net leaves no request in it.
+        const empty = await client.execJson<StagingQueueReport>('staging organize inbox --user bo --queue --if-pending');
+        assertEquals(empty.results.map((each) => [each.user, each.queued]), [['bo', false]]);
+        assertEquals(await vfs.exists(ADMIN_ACCESS, '/home/bo/staging/albums/inbox/.request', { follow: false }), false);
         const asked = await bo.execJson<StagingQueueReport>('staging organize inbox --queue');
         assertEquals(asked.results.map((each) => [each.user, each.category, each.queued]), [['bo', 'inbox', true]]);
         const request = await vfs.get(ADMIN_ACCESS, '/home/bo/staging/albums/inbox/.request', { follow: false });

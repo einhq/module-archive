@@ -3,12 +3,12 @@
 # announce (a person named on a face, a geocode, a tag, a pin or a link made by hand in a group)
 # still lands in the audit trail, so every 15 minutes each category with anything waiting since
 # its last run, or a week since its last full build, is asked for a run (`--if-pending`), which
-# the pipeline makes. Then the groups due a match are matched (`staging match --stale`): no
+# the pipeline makes; one holding no file and no group never is. Then the groups due a match are matched (`staging match --stale`): no
 # matches for their members as they are, or a candidate album's profile newer than them.
 #
-# Hourly, each user's staging area is made whole: a file copied loose into `files/` moves into the
-# default category's `unsorted` batch once nothing has changed on it for six hours, so a copy
-# still being written is left alone. Then every inbox's duplicate findings are checked against
+# Hourly, each staging area there is is made whole (none is made here: an area is made where it is
+# first needed): a file copied loose into `files/` moves into the default category's `unsorted`
+# batch once nothing has changed on it for six hours, so a copy still being written is left alone. Then every inbox's duplicate findings are checked against
 # where their files are now, which a move made outside staging's own verbs can leave wrong. Live
 # uploads are indexed by archive-bridge's pipelines; this loop does not run media-scan, since
 # repeating a gap-recovery producer while the pipeline is behind creates duplicate trigger events.

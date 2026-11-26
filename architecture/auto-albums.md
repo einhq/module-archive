@@ -302,7 +302,7 @@ owner — may ask, without reading the trail. A run asked for is never deferred.
 --if-pending` asks for a run of each category something waits for — records in its trail the last
 run did not apply (a face named, a geocode, a tag: writes the bridge does not announce), writes to
 its groups by others, edits made or undone, a category never organized or whose checkpoint is of
-an older shape, or a week since its last full build — then `staging match --all --stale`. Hourly it also runs
+an older shape, or a week since its last full build, but never one holding no file and no group — then `staging match --all --stale`. Hourly it also runs
 `staging init --all --idle-minutes 360` and `staging duplicates --repair --all`
 ([staging.md](staging.md)). The hourly album sweeps of `album-metadata` leave suggestions out:
 `media-album` follows each change the organizer makes.

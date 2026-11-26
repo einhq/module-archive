@@ -434,7 +434,7 @@ export type StagingInitUser = {
   failed: { path: string; error: string }[];
 };
 
-/** `staging init [--user u | --all] [--loose-batch name] [--layout-only] [--idle-minutes n] [--dry-run]`: each user's staging area made whole. */
+/** `staging init [--user u | --all] [--loose-batch name] [--layout-only] [--idle-minutes n] [--dry-run]`: the user's staging area made whole, or with `--all` each one there is. */
 export type StagingInitAnswer = { ok: boolean; dryRun: boolean; users: StagingInitUser[] };
 
 /**

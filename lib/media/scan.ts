@@ -1,9 +1,11 @@
 /**
  * What `media-scan` keeps on the root it scans: shared by `media-scan`, which walks, and
- * `media-heal`, which says when a pass is due. Whether work waits for a fact is `@media/waiting`.
+ * `media-heal`, which says when a pass is due. Also which facts a failed run already has, which a
+ * scan leaves to `pipeline heal`. Whether work waits for a fact is `@media/waiting`.
  */
 
-import type { Command } from '@ein/client';
+import { PIPELINE_INSTANCES_PATH } from '@ein/paths';
+import type { AttrCondition, Command, DomainEvent, NodeQueryCursor } from '@ein/client';
 
 /**
  * An unfinished pass, kept on the node that was scanned.
@@ -76,6 +78,46 @@ export const readPass = async (cmd: Command, root: string): Promise<Pass | undef
     held: isStrings(pass.held) ? pass.held : [],
     ...(isStrings(pass.busy) ? { busy: pass.busy } : {}),
   };
+};
+
+/** Failed instances one query page returns. */
+const FAILED_PAGE = 500;
+
+/** `data` as a string that is the same for the same keys and values, whatever their order. */
+const canonical = (data: Record<string, unknown> | undefined): string =>
+  JSON.stringify(Object.keys(data ?? {}).filter((key) => data![key] !== undefined).sort().map((key) => [key, data![key]]));
+
+/** A fact as `failedAlike` compares it. */
+type FactKey = { type: string; nodeId?: string; data?: Record<string, unknown> };
+
+/**
+ * Whether a fact is the one a failed pipeline instance was started by: the same type, the same
+ * node and the same data, so the same bytes or the same model as the run that failed. Such a fact
+ * is `pipeline heal`'s to run again, after a wait that grows with each try; announced again, it
+ * would replace the failed instance with a fresh one every pass and reset that count.
+ *
+ * Read once, from every failed instance, so a pass asks no more of each file. A fact that differs
+ * in anything — the file's bytes changed, EMS runs another model — is announced as before.
+ */
+export const failedAlike = async (cmd: Command): Promise<(fact: FactKey) => boolean> => {
+  const failed = new Set<string>();
+  const where: AttrCondition[] = [{ ref: 'pipelineName', op: 'exists' }, { ref: 'status', op: 'eq', value: 'failed' }];
+  let after: NodeQueryCursor | undefined;
+  try {
+    do {
+      const page = await cmd.sys.vfs.query(cmd.access, { where, within: PIPELINE_INSTANCES_PATH, after, limit: FAILED_PAGE });
+      for (const row of page) {
+        const event = (row.node.attrs as { triggerEvent?: DomainEvent }).triggerEvent;
+        if (event?.type && event.nodeId) failed.add(`${event.nodeId} ${event.type} ${canonical(event.data)}`);
+      }
+      after = page.length === FAILED_PAGE ? { value: page[page.length - 1].sortValue, id: page[page.length - 1].id } : undefined;
+    } while (after);
+  } catch (error) {
+    // Unreadable: every fact is announced, as it would be with no failure on record.
+    await cmd.writeError(`media-scan: could not read the failed pipeline instances: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+
+  return (fact) => fact.nodeId !== undefined && failed.has(`${fact.nodeId} ${fact.type} ${canonical(fact.data)}`);
 };
 
 /** The last finished pass recorded on `root`, or undefined when none is. */
