@@ -8,7 +8,7 @@ type Props = {
   onConfirm: () => void;
 };
 
-/** The ⋯ menu's Not a group: only the grouping goes, never a photo, and the organizer remembers it. */
+/** The card menu's Not a group: only the grouping goes, never a photo, and the organizer remembers it. */
 export function DeleteGroupDialog({ group, onClose, onConfirm }: Props) {
   const count = group?.memberCount ?? 0;
   return (

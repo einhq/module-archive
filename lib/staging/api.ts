@@ -318,6 +318,8 @@ export type StagingRowInfo = {
   matchNew?: number;
   /** The best album it was matched to that the reader can see, with how likely. */
   top?: { album: StagingAlbumRef; p: number };
+  /** How many of its candidate albums are offered (seen by the reader, at least 50% likely): those `album info` lists as its candidates. */
+  candidates?: number;
   /** An Everyday lane: its days matched to an album the reader may file into, and their photos. */
   partsMatched?: { parts: number; files: number };
 };

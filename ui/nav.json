@@ -76,11 +76,11 @@
     {
       "id": "archive.import",
       "parent": "ui.create",
-      "title": "Import media",
-      "icon": "cloud-upload",
+      "title": "Upload",
+      "icon": "upload",
       "color": "indigo",
       "action": {
-        "dialog": "/staging/import"
+        "navigate": "/staging"
       },
       "order": 5,
       "signedIn": true
@@ -174,9 +174,9 @@
     {
       "id": "archive.share",
       "slot": "share.receive",
-      "label": "Import media",
-      "icon": "cloud-upload",
-      "route": "/staging/import",
+      "label": "Upload",
+      "icon": "upload",
+      "route": "/staging/receive",
       "signedIn": true
     },
     {
@@ -196,7 +196,7 @@
       "id": "archive.start-upload",
       "signedIn": true,
       "slot": "home.start",
-      "label": "Import media",
+      "label": "Upload",
       "route": "/start/upload"
     },
     {

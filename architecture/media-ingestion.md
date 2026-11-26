@@ -1228,6 +1228,15 @@ additionally fenced by mutual-kNN, a stricter `--cluster-threshold` for grouping
 voting, and `--max-cluster`, because clusters are single-link components: one weak edge
 chains two people together.
 
+**Nobody before their birth.** A person born after a photo was taken gets no vote on its faces
+in `assign-faces`, and `cluster-faces` drops such an assignment (`@archive/people/before-birth`,
+ein/core#1587): a look-alike older sibling's faces would otherwise put a child on photos from
+before the child was born. Only a photo surely older counts, so a year-only `takenAt`, an `about`
+or a `born` only known as `before` some date rules nobody out. `person-merge` and
+`person-detach --to` leave such faces where they are and report them (`beforeBirth`), until
+`--before-birth` says they are that person all the same; the Web UI offers that as **Move anyway**.
+`person-check` lists the ones already there.
+
 **Undoing a fused person.** Those fences narrow the failure without closing it, so there is a
 repair. `subcluster-faces <person>` (read-only) re-clusters one person's own faces with
 **average linkage** over _every_ pairwise distance — affordable because a person is thousands of

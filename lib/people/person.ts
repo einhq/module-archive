@@ -33,6 +33,7 @@ import type { PersonAttrs, PersonGender } from '@archive/people/types';
 import type { FaceDoubtView } from '@archive/people/api';
 import { CROP_PADDING, MAX_CROP_DIMENSION } from '@archive/media/face-crop';
 import { FACE_EMBEDDING_NAME, REGION_TYPE } from '@archive/media/regions';
+import { facesBeforeBirth } from '@archive/people/before-birth';
 import { readStoryboards } from '@media/storyboard';
 import type { Storyboard } from '@media/api';
 
@@ -610,11 +611,15 @@ type MergeOptions = {
   dryRun?: boolean;
   /** Merge even when the source has children this does not know how to move. */
   force?: boolean;
+  /** Move faces from photos taken before the destination was born too, which otherwise stay. */
+  beforeBirth?: boolean;
 };
 
 export type MergeReport = {
   src: string;
   dst: string;
+  /** The destination's name, for saying where the faces went or why some did not. */
+  dstName: string;
   faces: number;
   /** Voices of recordings, which follow the person like faces do. */
   voices: number;
@@ -626,6 +631,13 @@ export type MergeReport = {
   sources: number;
   /** Images that end up showing the surviving person twice — reported, not fixed. */
   conflicts: number;
+  /**
+   * Faces left on the source because their photos were taken before the destination was born
+   * (ein/core#1587): the source keeps them and is not removed.
+   */
+  beforeBirth: string[];
+  /** The destination's birth date, which `beforeBirth` is measured against. */
+  born: string | null;
   skippedChildren: string[];
   deleted: boolean;
   dryRun: boolean;
@@ -672,6 +684,7 @@ export const mergePersons = async (
   const report: MergeReport = {
     src: srcPath,
     dst: dstPath,
+    dstName: dst.attrs.name ?? basename(dstPath),
     faces: 0,
     voices: 0,
     events: 0,
@@ -679,13 +692,19 @@ export const mergePersons = async (
     links: 0,
     sources: 0,
     conflicts: 0,
+    beforeBirth: [],
+    born: typeof dst.attrs.born === 'string' ? dst.attrs.born : null,
     skippedChildren,
     deleted: false,
     dryRun,
   };
 
   // --- faces: the bulk of it, and the reason merge exists ---
-  const faces = await regionsOf(vfs, access, src.id);
+  // Those on photos from before the destination was born are somebody else, unless told otherwise.
+  const all = (await regionsOf(vfs, access, src.id)).map((face) => ({ ...face, path: face.absPath, attrs: face.node.attrs as { fileId?: unknown } }));
+  const early = new Set<(typeof all)[number]>(opts.beforeBirth ? [] : await facesBeforeBirth(vfs, access, dst.attrs, all));
+  report.beforeBirth = [...early].map((face) => face.path);
+  const faces = all.filter((face) => !early.has(face));
   const dstFiles = new Set(
     (await regionsOf(vfs, access, dst.id))
       .map((f) => (f.node.attrs as { fileId?: string }).fileId)
@@ -781,7 +800,10 @@ export const mergePersons = async (
     await vfs.update(access, link.absPath, { readlink: true, props: { softlink: dstPath } });
   }
 
-  if (!dryRun) {
+  if (!dryRun && early.size > 0) {
+    // The source still holds the faces that stayed: it is kept, with a representative of its own.
+    await releasePerson(vfs, access, src.id, new Set(faces.map((face) => face.node.id)));
+  } else if (!dryRun) {
     await vfs.unlink(access, srcPath, dirname(srcPath), { recursive: true });
     report.deleted = true;
   }

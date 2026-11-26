@@ -24,6 +24,7 @@ export type TriageAction =
   | 'discard'
   | 'undo'
   | 'rename'
+  | 'expand'
   | 'part-previous'
   | 'part-next'
   | 'split'
@@ -34,10 +35,6 @@ export type TriageAction =
   | 'candidate-1'
   | 'candidate-2'
   | 'candidate-3'
-  | 'candidate-previous'
-  | 'candidate-next'
-  | 'reject'
-  | 'compare'
   | 'tile-left'
   | 'tile-right'
   | 'tile-up'
@@ -60,7 +57,7 @@ type TriageKey = {
 const filing = (scope: 'selection' | 'part', what: string): TriageKey[] => [
   { scope, keys: 'Enter', action: 'apply', label: `Accept the proposal for ${what}` },
   { scope, keys: 'N', action: 'new', label: `Create album of ${what}` },
-  { scope, keys: 'A', action: 'add-to', label: `Add ${what} to album…` },
+  { scope, keys: 'A', action: 'add-to', label: `Add ${what} to an existing album…` },
   { scope, keys: 'X', action: 'discard', label: `Discard ${what}` },
 ];
 
@@ -71,8 +68,8 @@ const moves = (scope: 'selection' | 'part' | 'tile', what: string): TriageKey[] 
   { scope, keys: 'G', action: 'move-to', label: `Move ${what} to a group…` },
 ];
 
-/** 1, 2 and 3: into the candidate album of that rank. */
-const candidate = (n: 1 | 2 | 3): TriageKey => ({ scope: 'group', keys: String(n), action: `candidate-${n}`, label: `Into candidate album ${n}` });
+/** 1, 2 and 3: into the suggested album of that rank. */
+const candidate = (n: 1 | 2 | 3): TriageKey => ({ scope: 'group', keys: String(n), action: `candidate-${n}`, label: `Into suggested album ${n}` });
 
 /** What acts on a selection that reaches past the open group: the decisions over many groups at once. */
 const acrossGroups: TriageKey[] = [
@@ -86,7 +83,7 @@ const acrossGroups: TriageKey[] = [
 export const TRIAGE_KEYS: readonly TriageKey[] = [
   { scope: 'group', keys: 'Enter', action: 'apply', label: 'Accept the proposal' },
   { scope: 'group', keys: 'N', action: 'new', label: 'Create album from the group' },
-  { scope: 'group', keys: 'A', action: 'add-to', label: 'Add to album…' },
+  { scope: 'group', keys: 'A', action: 'add-to', label: 'Add to an existing album…' },
   { scope: 'group', keys: 'X', action: 'discard', label: 'Discard' },
   { scope: 'group', keys: 'Z', action: 'undo', label: 'Undo' },
   { scope: 'group', keys: 'J', action: 'next', label: 'Next group' },
@@ -96,16 +93,13 @@ export const TRIAGE_KEYS: readonly TriageKey[] = [
   { scope: 'group', keys: 'shift+↓', action: 'extend-next', label: 'Select on to the next group' },
   { scope: 'group', keys: 'shift+↑', action: 'extend-previous', label: 'Select on to the previous group' },
   { scope: 'group', keys: 'E', action: 'rename', label: 'Rename' },
+  { scope: 'group', keys: 'Space', action: 'expand', label: 'Show the pictures by day, or in one grid again' },
   { scope: 'group', keys: 'T', action: 'date', label: 'Set the time of the pictures' },
   { scope: 'group', keys: '[', action: 'part-previous', label: 'Previous day or month of the group' },
   { scope: 'group', keys: ']', action: 'part-next', label: 'Next day or month of the group' },
   candidate(1),
   candidate(2),
   candidate(3),
-  { scope: 'group', keys: 'R', action: 'reject', label: 'Not the selected candidate album' },
-  { scope: 'group', keys: ',', action: 'candidate-previous', label: 'Select the candidate album above' },
-  { scope: 'group', keys: '.', action: 'candidate-next', label: 'Select the candidate album below' },
-  { scope: 'group', keys: 'C', action: 'compare', label: 'Compare with the selected album, or narrow the column again' },
   { scope: 'group', keys: 'O', action: 'open', label: 'Open the first picture' },
   { scope: 'group', keys: '←', action: 'tile-left', label: 'Step through the pictures' },
   { scope: 'group', keys: '→', action: 'tile-right', label: 'Step through the pictures' },

@@ -285,6 +285,8 @@ Deno.test({ name: 'staging match and reject', sanitizeResources: false, sanitize
       const info = await anna.execJson<AlbumInfoAnswer>(`album info ${pierGroup}`);
       const detail = info.albums[0].suggested!;
       assertEquals(detail.candidates[0].album.title, 'Lake trip 2019');
+      // The row counts the candidates the reader sees, as album info lists them.
+      assertEquals(row.staging?.candidates, detail.candidates.length);
       assertEquals(detail.candidates[0].evidence, (await matchesOf(pierGroup))?.candidates[0].evidence);
     });
 

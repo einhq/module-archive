@@ -551,11 +551,11 @@ export function MediaSidebar(
 
         {details?.description && <DescriptionSection description={details.description} />}
 
-        {/* A staged file's copies and look-alikes: what the reader decides on while sorting an import. */}
+        {/* A staged file's exact copies: what the reader decides on while sorting an import. */}
         <StagedDuplicates
           key={media.path}
           path={media.path}
-          row={(children) => <SidebarSection id='duplicates' label='Copies' icon='copy'>{children}</SidebarSection>}
+          section={(count, children) => <SidebarSection id='duplicates' label='Duplicates' icon='copy' count={count}>{children}</SidebarSection>}
           onLayer={onLayer}
         />
 

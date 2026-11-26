@@ -71,6 +71,7 @@
     "@archive/news-albums": "./lib/news-albums.ts",
     "@archive/paths": "./lib/paths.ts",
     "@archive/people/api": "./lib/people/api.ts",
+    "@archive/people/before-birth": "./lib/people/before-birth.ts",
     "@archive/people/cover": "./lib/people/cover.ts",
     "@archive/people/date-qualifier": "./lib/people/date-qualifier.ts",
     "@archive/people/events": "./lib/people/events.ts",

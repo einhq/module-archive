@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { execCommand } from '@ein/ui/signals';
 import { shq } from '@ein/ui/lib';
 import type { PersonFace } from './usePersonFaces.ts';
+import { type BeforeBirth, noticeBeforeBirth } from '../lib/before-birth.ts';
 import type { UnknownFaceThumb, UnknownListResult, UnknownPerson } from '@archive/people/api';
 export type { UnknownPerson } from '@archive/people/api';
 
@@ -169,7 +170,14 @@ export function useUnknownPeople({ faces = 4, pageSize = 200, sort = 'faces', mi
   }, [dropped]);
 
   const mergeInto = useCallback(async (srcPath: string, dstPath: string) => {
-    await execCommand(`person-merge ${shq(srcPath)} ${shq(dstPath)}`);
+    const result = await execCommand<{ merged: ({ dstName: string } & BeforeBirth)[] }>(`person-merge ${shq(srcPath)} ${shq(dstPath)}`);
+    const report = result.merged[0];
+    if (report?.beforeBirth?.length) {
+      // The faces from before the destination was born stayed, and so did the person holding them.
+      noticeBeforeBirth(execCommand, report, { path: dstPath, name: report.dstName }, () => void fetchPeople());
+      void fetchPeople();
+      return;
+    }
     setPeople((current) => {
       const source = current.find((person) => person.path === srcPath);
       return current
@@ -185,7 +193,7 @@ export function useUnknownPeople({ faces = 4, pageSize = 200, sort = 'faces', mi
         );
     });
     dropped(1);
-  }, [faces, dropped]);
+  }, [faces, dropped, fetchPeople]);
 
   const discard = useCallback(async (paths: string[]) => {
     try {

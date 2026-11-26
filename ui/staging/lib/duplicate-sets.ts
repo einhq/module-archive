@@ -3,7 +3,8 @@
  * as text and command lines: the tab's classes, a set's words, a suggested group's tile badges and
  * header count. Pure, so all of it is tested without a page.
  */
-import type { DuplicateKeepRule, DuplicateKind, DuplicateSet, DuplicateWhere, MergeField } from '@archive/media/api';
+import type { DuplicateKeepRule, DuplicateKind, DuplicateMember, DuplicateSet, DuplicateWhere, MergeField } from '@archive/media/api';
+import { parseStagedPath } from '@archive/staging/paths';
 import { shq } from '@ein/ui/lib';
 
 /** A class of findings as the tab shows it: its kind, where what they copy or look like lies, and what the tab calls it. */
@@ -32,15 +33,16 @@ const BULK_COPIES = 2_000;
 /** Journal entries one `staging undo` takes at most. */
 const UNDO_MAX = 20;
 
+/** Why a file is kept, to follow "because". */
 const KEEP_WORDS: Record<DuplicateKeepRule, string> = {
-  library: 'it is in the library',
-  earliest: 'it came first',
+  library: 'it is already in the library',
+  earliest: 'it arrived in staging first',
   chosen: 'you chose it',
   pixels: 'it has more pixels',
-  format: 'its format is better',
-  capture: 'its time is surer',
+  format: 'its file format is better',
+  capture: 'its date comes from a surer source',
   bytes: 'it is the larger file',
-  name: 'its name is not a copy’s',
+  name: 'its name has no copy mark such as “(1)”',
 };
 
 const FIELD_WORDS: Record<MergeField, string> = {
@@ -56,11 +58,20 @@ const FIELD_WORDS: Record<MergeField, string> = {
   albums: 'albums',
 };
 
-/** Why a set keeps what it keeps: "kept: it is in the library", with the numbers when a reason has them. */
-export const keepLine = (set: DuplicateSet): string => {
-  const reason = set.reasons[0];
+/** Why the kept file is kept over `over` (any file when absent), after "because", with the numbers when the reason has them. */
+const keepReason = (set: DuplicateSet, over?: string): string => {
+  const reason = set.reasons.find((each) => each.over === over) ?? set.reasons[0];
   const rule = reason?.rule ?? (set.where === 'library' ? 'library' : 'earliest');
-  return `kept: ${KEEP_WORDS[rule]}${reason?.detail ? ` (${reason.detail})` : ''}`;
+  return `${KEEP_WORDS[rule]}${reason?.detail ? ` (${reason.detail})` : ''}`;
+};
+
+/** The file `set` keeps, when it lists it. */
+const keptMember = (set: DuplicateSet): DuplicateMember | undefined => [...set.existing, ...set.staged].find((member) => member.id === set.keep);
+
+/** Which file a set keeps and why: "Keeps IMG_0001.jpg because it is already in the library". */
+export const keepLine = (set: DuplicateSet): string => {
+  const kept = keptMember(set);
+  return `${kept ? `Keeps ${kept.name}` : 'Keeps one'} because ${keepReason(set)}`;
 };
 
 /** How alike a set's files are, as a percentage: "97% alike"; null for copies. */
@@ -126,12 +137,16 @@ export const setsCommand = (...paths: string[]): string => `staging duplicates $
 /** Staged files one `staging duplicates` takes at most. */
 export const FILE_SETS_READ = 200;
 
-/** What `set` says of its file `id`, as the lightbox shows it: kept over the others, or what it copies or looks like. */
-export const fileSetLine = (set: DuplicateSet, id: string): string => {
-  const others = set.discard.filter((each) => each !== id).length;
-  if (id === set.keep) return set.kind === 'near' ? `Kept over ${others.toLocaleString()} look-alike${others === 1 ? '' : 's'}` : `Kept over ${copiesWord(others)}`;
-  if (set.kind === 'near') return set.where === 'library' ? 'Looks like a library photo' : 'Looks like a photo in this import';
-  return set.where === 'library' ? 'A copy of a library photo' : 'A copy of a photo in this import';
+/**
+ * Where a set's file lies, in words: the library album holding it, or its folder in staging
+ * ("Staged in phone/2024-06"); its full path says the rest.
+ */
+export const memberWhere = (member: DuplicateMember): string => {
+  if (member.place === 'library') return member.album ? `In the album ${member.album.name}` : 'In the library';
+  const parsed = parseStagedPath(member.path);
+  if (parsed?.category === undefined) return 'Staged';
+  const slash = parsed.rest.lastIndexOf('/');
+  return `Staged in ${slash < 0 ? parsed.category : `${parsed.category}/${parsed.rest.slice(0, slash)}`}`;
 };
 
 /**
@@ -147,59 +162,48 @@ export const droppedPaths = (set: DuplicateSet, keep: string, category: string):
     .filter((path) => path.startsWith(`${category}/`));
 };
 
-/** A file's badge on its tile in a group: a copy or look-alike of a library photo, or of another staged one. */
-export type TileBadge = 'library' | 'inbox';
-
 /**
- * What a suggested group's sets say of its pictures, by id: each file a set would drop gets the
- * badge of its set's class (a library one wins), and the sets of library photos that resolve
- * unasked, with how many of the group's pictures they drop — what "Keep the library copies" does.
+ * What a suggested group's sets say of keeping the library's copies: the sets of library photos
+ * that resolve unasked, with how many of the group's pictures (`members`, by id) they drop — what
+ * "Keep the library copies" does.
  */
-export const groupDuplicates = (sets: readonly DuplicateSet[], members: ReadonlySet<string>): {
-  badges: Map<string, TileBadge>;
-  setOf: Map<string, DuplicateSet>;
-  library: { keys: string[]; files: number };
-} => {
-  const badges = new Map<string, TileBadge>();
-  const setOf = new Map<string, DuplicateSet>();
+export const groupDuplicates = (sets: readonly DuplicateSet[], members: ReadonlySet<string>): { library: { keys: string[]; files: number } } => {
   const keys: string[] = [];
   let files = 0;
   for (const set of sets) {
-    const dropped = set.discard.filter((id) => members.has(id));
-    for (const id of dropped) {
-      if (badges.get(id) !== 'library') {
-        badges.set(id, set.where);
-        setOf.set(id, set);
-      }
-    }
-    if (set.where === 'library' && set.bulk && dropped.length > 0) {
+    const dropped = set.discard.filter((id) => members.has(id)).length;
+    if (set.where === 'library' && set.bulk && dropped > 0) {
       keys.push(set.key);
-      files += dropped.length;
+      files += dropped;
     }
   }
-  return { badges, setOf, library: { keys, files } };
+  return { library: { keys, files } };
 };
 
+/** A tile's duplicate mark: how many files hold its bytes, itself included, and whether one of them is in the library. */
+export type TileBadge = { files: number; library: boolean };
+
 /**
- * What staged files' sets say of their tiles, by path, in a list that leaves the copies out and
- * knows its files by path: each file a set drops gets its class's badge, as in a group, and a file
- * a set keeps over staged ones gets the within-import badge, since its copies have no tile of their
- * own.
+ * What staged files' sets say of their tiles, by path: each staged file of a set of exact copies —
+ * the one kept or a copy — is marked with how many files the set holds, and its set. Look-alikes
+ * are not duplicates and mark nothing.
  */
 export const fileDuplicates = (sets: readonly DuplicateSet[], paths: ReadonlySet<string>): {
   badges: Map<string, TileBadge>;
   setOf: Map<string, DuplicateSet>;
 } => {
-  const pathOf = new Map(sets.flatMap((set) => set.staged).filter((member) => paths.has(member.path)).map((member) => [member.id, member.path]));
-  const { badges, setOf } = groupDuplicates(sets, new Set(pathOf.keys()));
+  const badges = new Map<string, TileBadge>();
+  const setOf = new Map<string, DuplicateSet>();
   for (const set of sets) {
-    if (pathOf.has(set.keep) && !badges.has(set.keep) && set.discard.length > 0) {
-      badges.set(set.keep, 'inbox');
-      setOf.set(set.keep, set);
+    if (set.kind !== 'exact') continue;
+    const badge = { files: set.existing.length + set.staged.length, library: set.existing.length > 0 };
+    for (const member of set.staged) {
+      if (!paths.has(member.path) || badges.has(member.path)) continue;
+      badges.set(member.path, badge);
+      setOf.set(member.path, set);
     }
   }
-  const byPath = <T>(map: Map<string, T>) => new Map([...map].map(([id, value]) => [pathOf.get(id)!, value]));
-  return { badges: byPath(badges), setOf: byPath(setOf) };
+  return { badges, setOf };
 };
 
 /** The `staging undo` lines that undo `ids`, newest first, as many entries as one takes each. */

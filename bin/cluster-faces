@@ -26,6 +26,7 @@ import { parseArgs } from '@ein/client';
 import { type FaceEdge, mutualEdges, propagateLabels } from '@archive/media/face-cluster';
 import { allRegions, FACE_EMBEDDING_TYPE } from '@archive/media/regions';
 import { createUnnamedPerson } from '@archive/people/person';
+import { type BornAttrs, type TakenAttrs, takenBeforeBirth } from '@archive/people/before-birth';
 
 const occ = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v !== 'null';
 
@@ -151,12 +152,28 @@ const clusterFaces = async (cmd: Command): CmdReturn => {
   for (const [faceId, personId] of labeledPerson) take(fileIdByFace.get(faceId), personId);
   for (const tag of tags) if (occ(tag.attrs.personId)) take(tag.attrs.fileId, tag.attrs.personId);
 
-  let written = 0, sameFileConflicts = 0, lockedSkipped = 0;
+  // Nobody is on a photo taken before they were born (ein/core#1587): read the birth of every
+  // person recognised and the date of every file they were recognised on.
+  const people = await vfs.getNodesByIds<BornAttrs>(access, [...new Set(assignments.map((a) => a.personId))]);
+  const dated = assignments.filter((a) => typeof people.get(a.personId)?.attrs.born === 'string');
+  const filesTaken = await vfs.getNodesByIds<TakenAttrs>(access, [...new Set(dated.map((a) => fileIdByFace.get(a.faceId)).filter(occ))]);
+  const beforeBirth = (a: (typeof assignments)[number]): boolean => {
+    const person = people.get(a.personId);
+    const file = filesTaken.get(fileIdByFace.get(a.faceId) ?? '');
+    return !!person && !!file && takenBeforeBirth(file.attrs, person.attrs);
+  };
+
+  let written = 0, sameFileConflicts = 0, lockedSkipped = 0, beforeBirthSkipped = 0;
   for (const a of assignments) {
     const path = facePathById.get(a.faceId);
     if (!path) continue;
     if (lockedFaces.has(a.faceId)) {
       lockedSkipped++;
+      continue;
+    }
+    if (beforeBirth(a)) {
+      beforeBirthSkipped++;
+      if (verbose) await cmd.writeLn(`before birth ${path}: ${a.personId} was born after this image was taken`);
       continue;
     }
     const fileId = fileIdByFace.get(a.faceId);
@@ -268,6 +285,7 @@ const clusterFaces = async (cmd: Command): CmdReturn => {
     written,
     sameFileConflicts,
     lockedSkipped,
+    beforeBirthSkipped,
     suggestionClusters: suggestions.length,
     suggestionFaces: suggestions.reduce((s, c) => s + c.size, 0),
     clusterSizes: histogram(clusters.map((c) => c.size)),
@@ -289,6 +307,9 @@ const clusterFaces = async (cmd: Command): CmdReturn => {
       `recognized ${summary.recognized}` + (dryRun ? ' (dry run)' : `, wrote ${written}`) +
       `; ${summary.suggestionClusters} new-person cluster${summary.suggestionClusters === 1 ? '' : 's'} (${summary.suggestionFaces} faces)`,
   );
+  if (beforeBirthSkipped > 0) {
+    await cmd.writeLn(`  ${beforeBirthSkipped} left untagged: the person recognised was born after the image was taken`);
+  }
   await cmd.writeLn(`  cluster sizes: ${Object.entries(summary.clusterSizes).map(([k2, v]) => `${k2}:${v}`).join(' ') || 'none'} (largest ${summary.largestCluster})`);
   if (oversized.length > 0) {
     await cmd.writeLn(`  ${oversized.length} cluster(s) over --max-cluster ${maxCluster} skipped — raise --cluster-threshold if this is high`);

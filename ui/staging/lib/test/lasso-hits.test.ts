@@ -3,7 +3,7 @@ import { tileIndex } from '@ein/ui/lib';
 import { type StreamGeometry, streamHits } from '../lasso-hits.ts';
 
 /** A stream at page y 200, 1,000 px wide, closed sections 300 px tall (a 64 px header over a 211 px strip). */
-const geometry = (open?: StreamGeometry['open']): StreamGeometry => ({ left: 0, right: 1000, top: 200, inset: 16, header: 64, strip: 211, open });
+const geometry = (open?: StreamGeometry['open']): StreamGeometry => ({ left: 0, right: 1000, top: 200, inset: 16, header: 64, foot: 25, open });
 
 Deno.test('closed sections are taken by their header or half their strip', () => {
   const crossed = [

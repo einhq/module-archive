@@ -23,6 +23,7 @@ const near = (base: number[], seed: number) => base.map((v, i) => (v === 1 && i 
 const ANNA = dir(0);
 const BOB = dir(1);
 const CARL = dir(2);
+const DORA = dir(3);
 
 Deno.test({
   name: 'assign-faces',
@@ -309,6 +310,35 @@ Deno.test({
 
       await client.execJson(`person-detach --rematch ${wrong}`);
       assertEquals((await attrsOf(wrong)).personId, bobId);
+    });
+
+    await t.step('nobody is recognised on a photo taken before they were born, nor moved there unasked', async () => {
+      const dated = async (image: string, takenAt: string, vector: number[]) => {
+        await makeImage(image);
+        await vfs.update(ADMIN_ACCESS, image, { attrs: { takenAt } });
+        return await addFace(image, 'face-0', vector);
+      };
+      const seed = await dated('/img/bb-2019.jpg', '2019-06-01T12:00:00+02:00', near(DORA, 0));
+      await client.execJson<Summary>('assign-faces /img/bb-2019.jpg');
+      const doraId = (await attrsOf(seed)).personId!;
+      const dora = (await unknownPeople()).find((p) => p.node.id === doraId)!;
+      const doraPath = `${PEOPLE_ROOT}/unknown/${dora.name}`;
+      await vfs.update(ADMIN_ACCESS, doraPath, { attrs: { born: '2018-04-18T10:34' } });
+
+      // In a photo only dated 2018 it may be her; her look-alike in 2017 is somebody else.
+      const sameYear = await dated('/img/bb-2018.jpg', '2018', near(DORA, 2));
+      await client.execJson<Summary>('assign-faces /img/bb-2018.jpg');
+      assertEquals((await attrsOf(sameYear)).personId, doraId);
+      const early = await dated('/img/bb-2017.jpg', '2017-08-01T18:14:39+02:00', near(DORA, 1));
+      await client.execJson<Summary>('assign-faces /img/bb-2017.jpg');
+      assertEquals((await attrsOf(early)).personId !== doraId, true);
+
+      // Moved there by hand, the 2017 face stays and is reported, until told it is her all the same.
+      const kept = await client.execJson<{ ok: boolean; detached: number; beforeBirth: string[]; born: string }>(`person-detach --to ${doraPath} ${early}`);
+      assertEquals([kept.ok, kept.detached, kept.beforeBirth, kept.born], [true, 0, [early], '2018-04-18T10:34']);
+      assertEquals((await attrsOf(early)).personId !== doraId, true);
+      await client.execJson(`person-detach --before-birth --to ${doraPath} ${early}`);
+      assertEquals((await attrsOf(early)).personId, doraId);
     });
   } finally {
     await client.close();

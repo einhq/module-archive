@@ -2,12 +2,13 @@ import { ALBUMS_ROOT, PEOPLE_ROOT } from '@archive/paths';
 import { assertEquals, assertRejects } from '@std/assert';
 import { DETACH_CHUNK, detachFromPerson } from '../person-detach.ts';
 
-/** Records what was run and answers as `person-detach --to-new-person` does. */
-const fakeExec = (person: string | null = `${PEOPLE_ROOT}/unknown/new1`) => {
+/** Records what was run and answers as `person-detach` does: the person the faces went to, and any that stayed. */
+const fakeExec = (person: string | null = `${PEOPLE_ROOT}/unknown/new1`, name = 'Unknown new1', stayed: string[] = []) => {
   const commands: string[] = [];
   const exec = <T>(command: string): Promise<T> => {
     commands.push(command);
-    return Promise.resolve({ person: person ? { id: 'new1', path: person, name: 'Unknown new1' } : null } as T);
+    const beforeBirth = stayed.length > 0 ? { beforeBirth: stayed, born: '2018-04-18T10:34' } : {};
+    return Promise.resolve({ person: person ? { id: 'new1', path: person, name } : null, ...beforeBirth } as T);
   };
   return { commands, exec };
 };
@@ -23,9 +24,15 @@ Deno.test('detach faces: unassigning passes the paths and nothing else', async (
 });
 
 Deno.test('detach faces: an existing person is the target from the first chunk', async () => {
-  const { commands, exec } = fakeExec();
-  assertEquals(await detachFromPerson(exec, paths(1), { kind: 'person', path: `${PEOPLE_ROOT}/anna` }), { path: `${PEOPLE_ROOT}/anna` });
+  const { commands, exec } = fakeExec(`${PEOPLE_ROOT}/anna`, 'Anna');
+  assertEquals(await detachFromPerson(exec, paths(1), { kind: 'person', path: `${PEOPLE_ROOT}/anna` }), { path: `${PEOPLE_ROOT}/anna`, name: 'Anna' });
   assertEquals(commands, [`person-detach --to '${PEOPLE_ROOT}/anna' '${ALBUMS_ROOT}/p0.jpg/faces/face-0'`]);
+});
+
+Deno.test('detach faces: the faces each chunk left before the birth are gathered', async () => {
+  const { exec } = fakeExec(`${PEOPLE_ROOT}/anna`, 'Anna', ['early']);
+  const landed = await detachFromPerson(exec, paths(DETACH_CHUNK + 1), { kind: 'person', path: `${PEOPLE_ROOT}/anna` });
+  assertEquals(landed, { path: `${PEOPLE_ROOT}/anna`, name: 'Anna', beforeBirth: ['early', 'early'], born: '2018-04-18T10:34' });
 });
 
 Deno.test('detach faces: a batch spanning chunks mints exactly one person', async () => {

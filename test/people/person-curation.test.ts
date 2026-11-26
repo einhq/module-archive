@@ -553,6 +553,37 @@ Deno.test({
       assertEquals((await client.exec(`person-detach --rematch ${person.facePaths[0]}`)).success, false);
       assertEquals((await attrsOf(person.facePaths[0])).personId, person.id);
     });
+
+    await t.step('person-merge leaves the faces from before the destination was born on the source, which stays', async () => {
+      const keep = await seedUnknown('bb1', 1);
+      const group = await seedUnknown('bb2', 3);
+      await vfs.update(ADMIN_ACCESS, keep.path, { attrs: { born: '2018-04' } });
+      // Before, on the month of, and after the birth: only the first is surely somebody else.
+      for (const [i, takenAt] of ['2018-03-31T23:00:00+02:00', '2018-04', '2019'].entries()) {
+        await vfs.update(ADMIN_ACCESS, `/img/bb2-${i}.jpg`, { attrs: { takenAt } });
+      }
+
+      const res = await client.execJson<MergeResult & { beforeBirth: number; merged: (MergeReport & { beforeBirth: string[]; born: string })[] }>(
+        `person-merge ${group.path} ${keep.path}`,
+      );
+      assertEquals([res.ok, res.faces, res.beforeBirth], [true, 2, 1]);
+      assertEquals([res.merged[0].beforeBirth, res.merged[0].born, res.merged[0].deleted], [[group.facePaths[0]], '2018-04', false]);
+      assertEquals((await attrsOf(group.facePaths[0])).personId, group.id);
+      assertEquals((await attrsOf(group.facePaths[1])).personId, keep.id);
+      assertEquals(await vfs.exists(ADMIN_ACCESS, group.path), true);
+
+      // person-check exits 1 on whatever it finds, here among the other steps' people too.
+      const beforeBirthFound = async () => {
+        const out = await client.execString(`person-check --json ${PEOPLE_ROOT}/unknown || true`);
+        return (JSON.parse(out) as { kind: string; detail: string }[]).filter((p) => p.kind === 'face-before-birth').map((p) => p.detail);
+      };
+      assertEquals(await beforeBirthFound(), []);
+
+      // Told it is them all the same, the last face moves and the empty source goes.
+      const forced = await client.execJson<MergeResult>(`person-merge --before-birth ${group.path} ${keep.path}`);
+      assertEquals([forced.faces, forced.merged[0].deleted], [1, true]);
+      assertEquals(await beforeBirthFound(), [`${group.facePaths[0]} was taken before born 2018-04`]);
+    });
   } finally {
     await client.close();
     await testCtx.teardown();

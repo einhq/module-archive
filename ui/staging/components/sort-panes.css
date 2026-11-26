@@ -4,3 +4,18 @@
 .mrx-sort-stream[data-railed] .mrx-scroll-box-scrollbar {
   display: none;
 }
+
+/* A card's pen shows while the pointer is over its name, or it has the focus; where nothing hovers
+ * (a touch screen) it always shows. */
+.mrx-card-name .mrx-card-pen {
+  opacity: 0;
+}
+.mrx-card-name:hover .mrx-card-pen,
+.mrx-card-pen:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .mrx-card-name .mrx-card-pen {
+    opacity: 1;
+  }
+}

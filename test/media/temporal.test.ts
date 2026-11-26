@@ -40,7 +40,7 @@ Deno.test({ name: 'temporal commands', sanitizeResources: false, sanitizeOps: fa
       await cmd.shouldFailWith('dayinhistory 9-2', 'expected the day as MM-DD');
       await cmd.shouldFailWith('dayinhistory 02-30', 'expected the day as MM-DD');
       await cmd.shouldSucceed('dayinhistory 02-29');
-      await cmd.shouldFailWith('dayinhistory 09-02 --years=x', '--years must be a non-negative whole number');
+      await cmd.shouldFailWith('dayinhistory 09-02 --years=x', '--years must be a non-negative whole number or all');
       await cmd.shouldFailWith('latest 0', 'expected a count of at least 1');
       await cmd.shouldFailWith('onthisday-media 02-30', 'expected the day as MM-DD');
       await cmd.shouldFailWith('onthisday-media 09-02 --limit=x', '--limit must be a non-negative whole number');
@@ -88,6 +88,16 @@ Deno.test({ name: 'temporal commands', sanitizeResources: false, sanitizeOps: fa
       const newest = await client.execJson<DatedMedia[]>('latest 3');
       assertEquals(newest.map((item) => item.path), [`${ALBUMS_ROOT}/d.jpg`, `${ALBUMS_ROOT}/b.jpg`, `${ALBUMS_ROOT}/a.jpg`]);
       assertEquals(newest[0].takenAt, '2019-09-03T08:00:00');
+    });
+
+    await t.step('--years all and --limit all reach past the default eight years', async () => {
+      for (let year = 2005; year <= 2014; year++) await mkmedia(`may-${year}.jpg`, `${year}-05-05T12:00:00`);
+      assertEquals((await client.execJson<DayInHistory>('dayinhistory 05-05')).years.length, 8);
+      const all = await client.execJson<DayInHistory>('dayinhistory 05-05 --years all --per-year 1');
+      assertEquals(all.years.map((year) => year.year), [2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007, 2006, 2005]);
+      assertEquals((await client.execJson<Provided<OnThisDayEntry>[]>('onthisday-media 05-05')).length, 8);
+      assertEquals((await client.execJson<Provided<OnThisDayEntry>[]>('onthisday-media 05-05 --limit all')).length, 10);
+      assertEquals((await client.execJson<OnThisDayEntry[]>('onthisday 05-05 --limit all')).length, 10);
     });
   } finally {
     client.close();

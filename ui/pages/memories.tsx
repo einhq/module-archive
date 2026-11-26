@@ -17,8 +17,6 @@ export const handle = { fullBleed: true };
 const SLIDE_SECONDS = 5;
 /** Pictures a year can bring to the story. */
 const PER_YEAR = 24;
-/** How far back the story reaches. */
-const YEARS = 30;
 /** Longer than the cross-fade (twice `--mrx-dur-slow`), after which the old picture goes. */
 const FADE_MS = 800;
 /** A press held this long pauses rather than steps. */
@@ -45,7 +43,7 @@ export default function MemoriesPage() {
   const { day = '' } = useParams();
   const [searchParams] = useSearchParams();
   const surface = useSurface();
-  const { data, loading } = useCommand<DayInHistory>(`dayinhistory ${day} --years ${YEARS} --per-year ${PER_YEAR}`);
+  const { data, loading } = useCommand<DayInHistory>(`dayinhistory ${day} --years all --per-year ${PER_YEAR}`);
 
   const years = useMemo(() => (data?.years ?? []).filter((year) => year.items.length > 0), [data]);
   const startYear = Number(searchParams.get('year'));

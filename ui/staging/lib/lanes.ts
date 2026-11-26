@@ -54,5 +54,17 @@ export function laneCounts(rows: readonly LaneRow[]): Record<StagingLane, LaneCo
   return counts;
 }
 
+/**
+ * The lane the stream shows: the one the page asked for while it has groups, else To sort while it
+ * has groups, else the first lane with groups — so a category whose only groups are Everyday opens
+ * on them, and a lane whose last group is decided gives way to the next. Until the index is read
+ * in full a lane may still get groups, so the one asked for (or To sort) stays.
+ */
+export const shownLane = (asked: string | null | undefined, counts: Record<StagingLane, LaneCount>, complete: boolean): StagingLane => {
+  if (isLane(asked) && (counts[asked].groups > 0 || !complete)) return asked;
+  if (counts.sort.groups > 0 || !complete) return 'sort';
+  return LANES.find((lane) => counts[lane.id].groups > 0)?.id ?? 'sort';
+};
+
 /** The rows in `lane`, in the order given. */
 export const inLane = <T extends LaneRow>(rows: readonly T[], lane: StagingLane): T[] => rows.filter((row) => laneOf(row) === lane);

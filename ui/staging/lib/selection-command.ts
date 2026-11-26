@@ -175,6 +175,16 @@ export const acceptChunks = (groups: readonly GroupRef[], confidence: 'high' | '
     files: members(batch),
   }));
 
+/** Each group a new album of its own, titled as `titleOf` says: one call per group, as one `staging promote` of several makes one album. */
+export const ownAlbumChunks = <G extends GroupRef>(groups: readonly G[], titleOf: (group: G) => string): Chunk[] =>
+  groups.map((group) => ({
+    command: commands.promoteNew(group, titleOf(group)),
+    groups: [group],
+    touched: [],
+    decides: 1,
+    files: group.memberCount ?? 0,
+  }));
+
 /** What each group's proposal would file, whatever its confidence: the calls that read the plan. */
 export const planCommands = (groups: readonly GroupRef[]): string[] => chunks(groups, PLAN_PER_COMMAND).map((batch) => commands.accept(batch, 'low', { dryRun: true }));
 

@@ -37,9 +37,9 @@ const onthisdayMedia = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  const limit = count(flags.limit, DEFAULT_LIMIT);
+  const limit = flags.limit === 'all' ? Infinity : count(flags.limit, DEFAULT_LIMIT);
   if (limit === undefined) {
-    await cmd.writeError('onthisday-media: --limit must be a non-negative whole number\n');
+    await cmd.writeError('onthisday-media: --limit must be a non-negative whole number or all\n');
     return 1;
   }
 
@@ -70,11 +70,12 @@ onthisdayMedia.spec = {
     { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today, UTC)', optional: true },
   ],
   flags: [
-    { name: 'limit', type: 'number' as const, description: `years returned, newest first (default ${DEFAULT_LIMIT})` },
+    { name: 'limit', type: 'string' as const, description: `years returned, newest first, or all of them (default ${DEFAULT_LIMIT})` },
   ],
   examples: [
     'onthisday-media',
     'onthisday-media 06-21 --limit 20',
+    'onthisday-media --limit all',
   ],
   returns:
     "one onthisday entry per year with pictures taken on that day, newest year first: the year, a title, the year's first picture, and the route that draws it as a ring.",

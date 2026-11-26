@@ -12,12 +12,12 @@ import {
   droppedPaths,
   DUPLICATE_TABS,
   fileDuplicates,
-  fileSetLine,
   flagLines,
   gainsLine,
   groupDuplicates,
   keepLine,
   memberFacts,
+  memberWhere,
   pageCommand,
   resolveCommand,
   scoreLine,
@@ -47,9 +47,12 @@ const set = (key: string, more: Partial<DuplicateSet> = {}): DuplicateSet => ({
 });
 
 Deno.test('a set is said in words: why its file is kept, what it gains, what blocks it', () => {
-  assertEquals(keepLine(set('exact:a')), 'kept: it is in the library');
-  assertEquals(keepLine(set('exact:a', { where: 'inbox', reasons: [{ rule: 'earliest', keep: 'k', over: 'd' }] })), 'kept: it came first');
-  assertEquals(keepLine(set('exact:a', { reasons: [{ rule: 'chosen', keep: 'k', over: 'd' }] })), 'kept: you chose it');
+  assertEquals(keepLine(set('exact:a')), 'Keeps one because it is already in the library');
+  assertEquals(
+    keepLine(set('exact:a', { where: 'inbox', staged: [member('k'), member('d')], reasons: [{ rule: 'earliest', keep: 'k', over: 'd' }] })),
+    'Keeps k.jpg because it arrived in staging first',
+  );
+  assertEquals(keepLine(set('exact:a', { reasons: [{ rule: 'chosen', keep: 'k', over: 'd' }] })), 'Keeps one because you chose it');
   assertEquals(gainsLine([]), null);
   assertEquals(gainsLine(['description', 'faces', 'people']), 'the kept one gains: description, people');
   assertEquals(blockedLine(set('exact:a')), null);
@@ -113,11 +116,12 @@ Deno.test('a set of look-alikes says how alike, why, and what to look out for', 
     kind: 'near',
     score: 0.968,
     flags: ['possible-burst', 'outside-scope'],
+    staged: [member('k')],
     reasons: [{ rule: 'pixels', keep: 'k', over: 'd', detail: '4032×3024 over 2048×1536' }],
   });
   assertEquals(scoreLine(near.score), '97% alike');
   assertEquals(scoreLine(undefined), null);
-  assertEquals(keepLine(near), 'kept: it has more pixels (4032×3024 over 2048×1536)');
+  assertEquals(keepLine(near), 'Keeps k.jpg because it has more pixels (4032×3024 over 2048×1536)');
   assertEquals(flagLines(near), ['perhaps two shots of a burst: same size, same camera, same second', 'files in other folders stay']);
   assertEquals(blockedLine(set('near:a', { blocked: 'needs-review' })), 'look-alikes are for you to look at: Remove all leaves them');
   assertEquals(
@@ -126,25 +130,26 @@ Deno.test('a set of look-alikes says how alike, why, and what to look out for', 
   );
 });
 
-Deno.test("a group's sets give its tiles badges, a library badge first, and what keeping the library's copies drops", () => {
+Deno.test("a group's sets say what keeping the library's copies drops", () => {
   const library = set('near:a', { kind: 'near', where: 'library', discard: ['a', 'x'], bulk: true });
   const within = set('exact:b', { where: 'inbox', discard: ['a', 'b'], bulk: true });
   const review = set('near:c', { kind: 'near', where: 'library', discard: ['c'], bulk: false, blocked: 'needs-review' });
   const view = groupDuplicates([within, library, review], new Set(['a', 'b', 'c']));
-  assertEquals([...view.badges].sort(), [['a', 'library'], ['b', 'inbox'], ['c', 'library']]);
-  assertEquals(view.setOf.get('a')?.key, 'near:a');
   assertEquals(view.library, { keys: ['near:a'], files: 1 }, 'a member it drops; a set for a person to look at is left');
 });
 
-Deno.test('staged files badged by path, one kept over its copies too, a library badge still first', () => {
+Deno.test('staged files with identical files are marked by path with how many there are; look-alikes are not', () => {
   const staged = (...ids: string[]) => ids.map((id) => ({ id, path: `${SCOPE}/${id}.jpg` })) as DuplicateSet['staged'];
-  const within = set('exact:k', { where: 'inbox', keep: 'k', discard: ['c'], staged: staged('k', 'c') });
-  const library = set('exact:l', { keep: 'l', discard: ['k'], staged: staged('k') });
-  const alone = set('near:m', { kind: 'near', where: 'inbox', keep: 'm', discard: [], staged: staged('m') });
-  const view = fileDuplicates([within, alone], new Set([`${SCOPE}/k.jpg`, `${SCOPE}/m.jpg`]));
-  assertEquals([...view.badges], [[`${SCOPE}/k.jpg`, 'inbox']]);
-  assertEquals(view.setOf.get(`${SCOPE}/k.jpg`), within);
-  assertEquals([...fileDuplicates([within, library], new Set([`${SCOPE}/k.jpg`])).badges], [[`${SCOPE}/k.jpg`, 'library']]);
+  const within = set('exact:k', { where: 'inbox', keep: 'k', discard: ['c', 'e'], staged: staged('k', 'c', 'e') });
+  const library = set('exact:l', { keep: 'l', discard: ['n'], existing: [member('l', { place: 'library' })], staged: staged('n') });
+  const alike = set('near:m', { kind: 'near', where: 'inbox', keep: 'm', discard: ['o'], staged: staged('m', 'o') });
+  const view = fileDuplicates([within, library, alike], new Set([`${SCOPE}/k.jpg`, `${SCOPE}/c.jpg`, `${SCOPE}/n.jpg`, `${SCOPE}/m.jpg`]));
+  assertEquals([...view.badges], [
+    [`${SCOPE}/k.jpg`, { files: 3, library: false }],
+    [`${SCOPE}/c.jpg`, { files: 3, library: false }],
+    [`${SCOPE}/n.jpg`, { files: 2, library: true }],
+  ]);
+  assertEquals(view.setOf.get(`${SCOPE}/n.jpg`), library);
 });
 
 Deno.test('the compare dialog: arrows move, K keeps a staged file, Enter applies, X keeps them apart', () => {
@@ -160,13 +165,11 @@ Deno.test('the compare dialog: arrows move, K keeps a staged file, Enter applies
   assertEquals(compareKey('q', start, members), null);
 });
 
-Deno.test('a staged file is said in its set: kept over the others, or what it copies or looks like', () => {
-  assertEquals(fileSetLine(set('exact:k', { where: 'inbox', discard: ['d', 'e'] }), 'k'), 'Kept over 2 copies');
-  assertEquals(fileSetLine(set('near:k', { kind: 'near', where: 'inbox', discard: ['d'] }), 'k'), 'Kept over 1 look-alike');
-  assertEquals(fileSetLine(set('exact:k'), 'd'), 'A copy of a library photo');
-  assertEquals(fileSetLine(set('exact:k', { where: 'inbox' }), 'd'), 'A copy of a photo in this import');
-  assertEquals(fileSetLine(set('near:d', { kind: 'near' }), 'd'), 'Looks like a library photo');
-  assertEquals(fileSetLine(set('near:d', { kind: 'near', where: 'inbox' }), 'd'), 'Looks like a photo in this import');
+Deno.test('a file of a set is placed in its album, in the library, or in its staged folder', () => {
+  assertEquals(memberWhere(member('l', { place: 'library', album: { path: '/home/anna/photos/summer', name: 'Summer 2024' } })), 'In the album Summer 2024');
+  assertEquals(memberWhere(member('l', { place: 'library', path: '/home/anna/photos/x.jpg' })), 'In the library');
+  assertEquals(memberWhere(member('a')), 'Staged in inbox');
+  assertEquals(memberWhere(member('a', { path: '/home/anna/staging/files/phone/2024-06/a.jpg' })), 'Staged in phone/2024-06');
 });
 
 Deno.test('resolving a set drops its discards, or every other staged file when another is kept, only in the category', () => {

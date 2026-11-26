@@ -27,10 +27,18 @@ export const matchedAlbumIds = (attrs: GroupRowAttrs): string[] => {
   return matches ? [...new Set([...matches.candidates.map((candidate) => candidate.albumId), ...(matches.days ?? []).map((day) => day.albumId)])] : [];
 };
 
+/** How likely a candidate must be to be offered in Add to existing and counted on its button. */
+export const OFFERED_MIN_P = 0.5;
+
+/** The candidates the reader can see (`refs`, by album id) and likely enough to offer, best first. */
+const offeredOf = (matches: StagingMatches | undefined, refs: ReadonlyMap<string, StagingAlbumRef>) =>
+  (matches?.candidates ?? []).filter((candidate) => refs.has(candidate.albumId) && candidate.score >= OFFERED_MIN_P);
+
 /**
- * What staging decides a suggested group by, beside its card: its key, kind and summary, and its
- * best match the reader can see (`refs`, by album id). That match is as sure as stored only when it
- * is the first candidate; past an album the reader cannot see, it is unsure.
+ * What staging decides a suggested group by, beside its card: its key, kind and summary, its
+ * best match the reader can see (`refs`, by album id), and how many of its candidates are offered
+ * (`offeredOf`). That match is as sure as stored only when it is the first candidate; past an album the
+ * reader cannot see, it is unsure.
  */
 export const stagingRowOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, StagingAlbumRef>): StagingRowInfo | undefined => {
   const auto = attrs.autoAlbum;
@@ -38,6 +46,7 @@ export const stagingRowOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, Sta
   const matches = currentMatches(attrs);
   const at = matches ? matches.candidates.findIndex((candidate) => refs.has(candidate.albumId)) : -1;
   const top = matches && at >= 0 ? matches.candidates[at] : undefined;
+  const seen = offeredOf(matches, refs).length;
   const parts = (matches?.days ?? []).filter((day) => refs.get(day.albumId)?.writable);
   return {
     memberKey: auto.memberKey,
@@ -55,14 +64,15 @@ export const stagingRowOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, Sta
       }
       : {}),
     ...(top ? { top: { album: refs.get(top.albumId)!, p: top.score } } : {}),
+    ...(seen > 0 ? { candidates: seen } : {}),
     ...(parts.length > 0 ? { partsMatched: { parts: parts.length, files: parts.reduce((sum, day) => sum + day.files, 0) } } : {}),
   };
 };
 
 /**
  * A group's parts and candidates as `album info` gives them: an Everyday lane's days with their
- * matches, or the parts an event or trip was rolled up from; the candidates the reader can see,
- * best first.
+ * matches, or the parts an event or trip was rolled up from; the candidates offered
+ * (`offeredOf`), best first.
  */
 export const groupDetailOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, StagingAlbumRef>): StagingGroupDetail => {
   const auto = attrs.autoAlbum;
@@ -73,10 +83,13 @@ export const groupDetailOf = (attrs: GroupRowAttrs, refs: ReadonlyMap<string, St
     : (auto?.parts ?? []).map((part) => ({ timeStart: part.timeStart, timeEnd: part.timeEnd, memberCount: part.memberCount }));
   return {
     parts,
-    candidates: (matches?.candidates ?? []).flatMap((candidate) => {
-      const album = refs.get(candidate.albumId);
-      return album ? [{ album, p: candidate.score, margin: candidate.margin, reasons: candidate.reasons, evidence: candidate.evidence }] : [];
-    }),
+    candidates: offeredOf(matches, refs).map((candidate) => ({
+      album: refs.get(candidate.albumId)!,
+      p: candidate.score,
+      margin: candidate.margin,
+      reasons: candidate.reasons,
+      evidence: candidate.evidence,
+    })),
     visual: matches?.visual ?? false,
   };
 };

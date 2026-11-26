@@ -6,6 +6,7 @@ import {
   type GroupRef,
   intoGroupChunks,
   newAlbumChunks,
+  ownAlbumChunks,
   partsCount,
   planCommands,
   selectionParts,
@@ -104,4 +105,17 @@ Deno.test('a drop on a header merges groups into it, or moves pictures into it, 
   assert('refused' in intoGroupChunks({ groups: [groups[1]], partial: [], files: [{ group: groups[3], paths: ['/s/a.jpg'] }] }, into, () => undefined));
   assert('refused' in intoGroupChunks({ groups: [into], partial: [], files: [] }, into, () => undefined));
   assert('refused' in intoGroupChunks({ groups: groups.slice(20, 42), partial: [], files: [] }, into, () => undefined));
+});
+
+Deno.test('a new album of its own for each group, one call each, under the title asked for', () => {
+  const pair = [
+    { name: 'a', path: '/g/a', title: 'Lake · 3 Aug 2014', memberCount: 12, staging: { memberKey: 'ka' } },
+    { name: 'b', path: '/g/b', title: 'Picnic', memberCount: 4, staging: { memberKey: 'kb' } },
+  ];
+  const made = ownAlbumChunks(pair, (group) => group.title.split(' · ')[0]);
+  assertEquals(made.map((chunk) => chunk.command), [
+    "staging promote '/g/a' --name 'Lake' --expect 'ka'",
+    "staging promote '/g/b' --name 'Picnic' --expect 'kb'",
+  ]);
+  assertEquals(made.map((chunk) => [chunk.decides, chunk.files]), [[1, 12], [1, 4]]);
 });

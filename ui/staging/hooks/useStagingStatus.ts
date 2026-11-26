@@ -1,5 +1,5 @@
 import type { StagingStatus } from '@archive/staging/api';
-import { DEFAULT_CATEGORY, stagingRoots } from '@archive/staging/paths';
+import { stagingRoots } from '@archive/staging/paths';
 import { useCommand } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, uploadBatchDone, uploadSummaryByTarget } from '@ein/ui/signals';
@@ -139,18 +139,3 @@ export function useStagingStatus(user: string) {
 
   return { ...status, eta };
 }
-
-/**
- * Today's upload folder in `user`'s default category, for a page that has not read the staging
- * area: found when files are dropped rather than when the page opens, after the staging
- * directories are set up (`ensureStagingLayout`, which moves nothing), so the folder is as private
- * as the rest of it. It is the folder `staging status` names for today in
- * the archive's time zone; the upload queue makes it. An upload action's `path`.
- */
-export const stagingUploadFolder = (user: string) => async (): Promise<string> => {
-  await ensureStagingLayout(user);
-  const status = await execCommand<StagingStatus>(`staging status --user ${shq(user)}`);
-  const target = status.categories.find((entry) => entry.name === DEFAULT_CATEGORY);
-  if (!target) throw new Error(`no staging category ${DEFAULT_CATEGORY} for ${user}`);
-  return target.uploadPath;
-};

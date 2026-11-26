@@ -24,6 +24,7 @@ import { toText } from '@std/streams/to-text';
 import { type FaceEdge, propagateLabels } from '@archive/media/face-cluster';
 import { type Dims, displayDims, toPixels } from '@media/orientation';
 import { createUnnamedPerson, releasePerson } from '@archive/people/person';
+import { type TakenAttrs, unbornAt } from '@archive/people/before-birth';
 import { FACE_EMBEDDING_TYPE, faceEmbeddingPathOf, faceEmbeddingsOfRegions, type RegionAttrs, regionsOfEmbeddings, regionsPathOf } from '@archive/media/regions';
 
 type Vfs = Command['sys']['vfs'];
@@ -137,7 +138,9 @@ const readVector = async (vfs: Vfs, access: Access, path: string): Promise<Uint8
  * The person a face's vector votes for: its `k` nearest stored faces that belong to someone, each
  * a vote as strong as their likeness, decided by the same rules as every assignment
  * (`propagateLabels`). `faceId` is the face's own embedding, never its own neighbour; `counts` says
- * which neighbours may vote. Undefined when no person wins clearly enough.
+ * which neighbours may vote, and nobody born after `taken` gets a vote: a look-alike older
+ * sibling's faces would otherwise put a child on photos from before the child was born
+ * (ein/core#1587). Undefined when no person wins clearly enough.
  */
 const voteForPerson = async (
   vfs: Vfs,
@@ -147,6 +150,7 @@ const voteForPerson = async (
   opts: Pick<AssignOptions, 'k' | 'voteThreshold' | 'margin' | 'attachThreshold'>,
   counts: (neighbour: FaceAttrs & { personId: string }) => boolean,
   rejected?: string[],
+  taken: TakenAttrs = {},
 ): Promise<{ personId: string; confidence: number } | undefined> => {
   const matches = (await vfs.findSimilar(access, FACE_EMBEDDING_TYPE, vector, opts.k, opts.voteThreshold)).filter((m) => m.id !== faceId);
   const regionOf = await regionsOfEmbeddings(vfs, access, matches.map((m) => m.id));
@@ -163,11 +167,12 @@ const voteForPerson = async (
     labeled.set(m.id, personId);
     edges.push({ a: m.id, b: faceId, sim: m.similarity });
   }
+  const refused = new Set([...(rejected ?? []), ...await unbornAt(vfs, access, taken, [...new Set(labeled.values())])]);
   const { assignments } = propagateLabels(edges, labeled, {
     threshold: opts.voteThreshold,
     minMargin: opts.margin,
     minVotes: opts.attachThreshold,
-    rejected: rejected ? new Map([[faceId, new Set(rejected)]]) : undefined,
+    rejected: refused.size > 0 ? new Map([[faceId, refused]]) : undefined,
   });
   const winner = assignments.find((a) => a.faceId === faceId);
   return winner ? { personId: winner.personId, confidence: winner.confidence } : undefined;
@@ -234,12 +239,14 @@ export const assignFacesForFile = async (
   const embeddingOf = await faceEmbeddingsOfRegions(vfs, access, children.map((c) => c.node.id));
 
   // The size gate is in pixels, the boxes are fractions: one read of the image gives the frame
-  // they are fractions of.
+  // they are fractions of, and when it was taken, which rules out everyone born after.
   let dims: Dims | undefined;
+  let taken: TakenAttrs = {};
   try {
-    const file = await vfs.get<{ width?: number; height?: number; angle?: unknown }>(access, filePath);
+    const file = await vfs.get<{ width?: number; height?: number; angle?: unknown } & TakenAttrs>(access, filePath);
     const { width, height } = file.attrs;
     if (typeof width === 'number' && typeof height === 'number') dims = displayDims(width, height, file.attrs.angle);
+    taken = { takenAt: file.attrs.takenAt, takenAtQualifier: file.attrs.takenAtQualifier };
   } catch {
     // no dimensions — the gate below is skipped rather than guessed
   }
@@ -299,6 +306,7 @@ export const assignFacesForFile = async (
         opts,
         (neighbour) => !(neighbour.fileId && neighbour.fileId === attrs.fileId) && (opts.allowDuplicatePerson || !takenPersonIds.has(neighbour.personId)),
         Array.isArray(attrs.rejectedPersonIds) ? attrs.rejectedPersonIds : undefined,
+        taken,
       );
 
       if (winner) {

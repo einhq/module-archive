@@ -1,7 +1,7 @@
 import type { StagingStatus } from '@archive/staging/api';
 import { uploadsUnder } from '@ein/ui/lib';
 import { uploadSummaryByTarget } from '@ein/ui/signals';
-import { Stack } from '@mantine/core';
+import { SimpleGrid } from '@mantine/core';
 import { useSignals } from '@preact/signals-react/runtime';
 import { CategoryCard } from './CategoryCard.tsx';
 
@@ -14,8 +14,8 @@ type Props = {
 };
 
 /**
- * `/staging` without a category: a card per category, each the width of the page, with the
- * uploads into it from this browser. What waits to be sorted is on the category pages: the folders
+ * `/staging` without a category: a card per category, two side by side at most and one on a phone,
+ * with the uploads into it from this browser. What waits to be sorted is on the category pages: the folders
  * of the default category that look like one source, and the GPS tracks and family trees, on its
  * page.
  */
@@ -23,7 +23,7 @@ export function CategoryOverview({ status, eta, onOpen }: Props) {
   useSignals();
   const uploads = uploadSummaryByTarget.value;
   return (
-    <Stack gap='md' px='md'>
+    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing='md' px='md'>
       {status.categories.map((category) => (
         <CategoryCard
           key={category.name}
@@ -33,6 +33,6 @@ export function CategoryOverview({ status, eta, onOpen }: Props) {
           onOpen={() => onOpen(category.name)}
         />
       ))}
-    </Stack>
+    </SimpleGrid>
   );
 }

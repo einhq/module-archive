@@ -1,10 +1,11 @@
-import { openDialog } from '@ein/ui/signals';
 import { Button } from '@mantine/core';
+import { useNavigate } from 'react-router-dom';
 
 /**
  * The home page's way to begin while its News is empty (a `home.start` panel, for the signed in):
- * a button that opens Import media, where pictures go into Staging.
+ * a button that opens Staging, where pictures are uploaded.
  */
 export default function StartUpload() {
-  return <Button variant='light' onClick={() => openDialog('/staging/import')}>Import media</Button>;
+  const navigate = useNavigate();
+  return <Button variant='light' onClick={() => navigate('/staging')}>Upload</Button>;
 }

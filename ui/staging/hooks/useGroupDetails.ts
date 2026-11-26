@@ -42,7 +42,7 @@ export function useGroupDetails(rows: readonly GroupRow[]): ReadonlyMap<string, 
         });
       })
       .catch(() => {
-        // Read again when the rows change; until then the column shows the row's own summary.
+        // Read again when the rows change; until then the row's own summary stands in.
       });
     return () => controller.abort();
   }, [wanted]);

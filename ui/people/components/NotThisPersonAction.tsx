@@ -6,6 +6,7 @@ import { execCommand, MediaItem } from '@ein/ui/signals';
 import type { PersonEntry } from '../hooks/usePeople.ts';
 import type { MediaSelection } from '@ein/ui/hooks';
 import { detachFromPerson, type RematchedFace, rematchFaces } from '../lib/person-detach.ts';
+import { noticeBeforeBirth } from '../lib/before-birth.ts';
 import { regionCount } from '../lib/face-crop.ts';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
 
@@ -122,9 +123,12 @@ export function NotThisPersonAction({ selection, items, tags, person, named, sug
         if (tagged.length > 0) lines.push(`${regionCount(0, tagged.length)} taken off ${person.name}`);
         setResult({ lines, moved: moving });
       } else {
-        await detachFromPerson(execCommand, moving, choice === 'person' ? { kind: 'person', path: target! } : { kind: choice });
+        const landed = await detachFromPerson(execCommand, moving, choice === 'person' ? { kind: 'person', path: target! } : { kind: choice });
+        // Faces from before that person was born stayed here, until told to move all the same.
+        const stayed = new Set(landed?.beforeBirth ?? []);
+        if (landed) noticeBeforeBirth(execCommand, landed, landed, () => onApplied([...stayed]));
         modal.close();
-        finish(moving);
+        finish(moving.filter((path) => !stayed.has(path)));
       }
     } catch (err) {
       // A batch that fails part way has moved some faces already; the page refetches either way.

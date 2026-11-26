@@ -2,7 +2,8 @@
 /**
  * dayinhistory — media taken on one calendar day, in the years the archive has any. The walk is
  * `onThisDay` in [lib](../lib/media/on-this-day.ts): one indexed day range per year, newest first,
- * stopping once `--years` of them have had something.
+ * stopping once `--years` of them have had something, or, with `--years all`, at the oldest year the
+ * archive has.
  */
 
 import type { CmdReturn, Command } from '@ein/client';
@@ -38,10 +39,10 @@ const dayinhistory = async (cmd: Command): CmdReturn => {
     return 1;
   }
 
-  const years = count(flags.years, DEFAULT_YEARS);
+  const years = flags.years === 'all' ? Infinity : count(flags.years, DEFAULT_YEARS);
   const perYear = count(flags['per-year'], DEFAULT_PER_YEAR);
   if (years === undefined || perYear === undefined) {
-    await cmd.writeError(`dayinhistory: --${years === undefined ? 'years' : 'per-year'} must be a non-negative whole number\n`);
+    await cmd.writeError(`dayinhistory: --${years === undefined ? 'years' : 'per-year'} must be a non-negative whole number${years === undefined ? ' or all' : ''}\n`);
     return 1;
   }
 
@@ -71,12 +72,13 @@ dayinhistory.spec = {
     { name: 'day', type: 'string' as const, description: 'day as MM-DD (default today)', optional: true },
   ],
   flags: [
-    { name: 'years', type: 'number' as const, description: `years with media to collect, newest first (default ${DEFAULT_YEARS})` },
+    { name: 'years', type: 'string' as const, description: `years with media to collect, newest first, or all of them (default ${DEFAULT_YEARS})` },
     { name: 'per-year', type: 'number' as const, description: `media kept per year, earliest first (default ${DEFAULT_PER_YEAR})` },
   ],
   examples: [
     'dayinhistory',
     'dayinhistory 06-21 --years 20 --per-year 1',
+    'dayinhistory --years all --per-year 1',
   ],
   returns: 'monthDay, and the years that have media taken on that day, newest first, each with its first media.',
 };

@@ -157,12 +157,9 @@ Deno.test('across groups, the filing keys act on the selection, and Shift with J
   assertEquals(matchTriageKey(press('ArrowDown'), 'tile')?.action, 'tile-down');
 });
 
-Deno.test('1, 2 and 3 file into the candidates, R rejects the selected one, comma and full stop select another, C compares', () => {
+Deno.test('1, 2 and 3 file into the suggested albums, and R, comma, full stop and C do nothing', () => {
   assertEquals(['1', '2', '3'].map((key) => matchTriageKey(press(key), 'group')?.action), ['candidate-1', 'candidate-2', 'candidate-3']);
-  assertEquals(matchTriageKey(press('r'), 'group')?.action, 'reject');
-  assertEquals(matchTriageKey(press(','), 'group')?.action, 'candidate-previous');
-  assertEquals(matchTriageKey(press('.'), 'group')?.action, 'candidate-next');
-  assertEquals(matchTriageKey(press('c'), 'group')?.action, 'compare');
-  // From a picture or a selection they reach the group's candidates too.
+  assertEquals([',', '.', 'r', 'c'].map((key) => matchTriageKey(press(key), 'group')), [undefined, undefined, undefined, undefined]);
+  // From a picture or a selection they reach the group's suggestions too.
   assertEquals(matchTriageKey(press('2'), 'selection')?.action, 'candidate-2');
 });

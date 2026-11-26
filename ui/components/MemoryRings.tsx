@@ -1,5 +1,6 @@
-import { Box, Text, UnstyledButton } from '@mantine/core';
+import { Text, UnstyledButton } from '@mantine/core';
 import './memories.css';
+import { ScrollRow } from '@ein/ui/components';
 import { gridUrl } from '@ein/ui/lib';
 import { openFullscreen } from '@ein/ui/signals';
 import type { DayInHistory } from '@archive/media/api';
@@ -30,14 +31,14 @@ export function MemoryRing({ monthDay, year, cover, role }: { monthDay: string; 
   );
 }
 
-/** This calendar day in earlier years, as a row of rings, one a year that had pictures. */
+/** This calendar day in earlier years, as a row of rings that scrolls sideways, one a year that had pictures. */
 export function MemoryRings({ day }: { day: DayInHistory }) {
   const years = day.years.filter((year) => year.items.length > 0);
   if (years.length === 0) return null;
 
   return (
-    <Box className='mrx-memory-rings' role='list' aria-label='On this day'>
+    <ScrollRow label='On this day'>
       {years.map(({ year, items }) => <MemoryRing key={year} monthDay={day.monthDay} year={year} cover={items[0].path} role='listitem' />)}
-    </Box>
+    </ScrollRow>
   );
 }

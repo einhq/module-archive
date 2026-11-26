@@ -107,7 +107,7 @@ export function DoneTab({ category, onChanged }: Props) {
       {entries.length === 0 && !loading && <Text size='sm' c='dimmed'>No group has been changed by hand here yet.</Text>}
       <Stack gap={4}>
         {entries.map((entry) => (
-          <Group key={entry.id} justify='space-between' wrap='nowrap' gap='sm' py={6} style={{ borderBottom: '1px solid var(--mrx-border-subtle)' }}>
+          <Group key={entry.id} justify='space-between' wrap='nowrap' gap='sm' py={6} style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
             <Group gap='sm' wrap='nowrap' style={{ minWidth: 0 }}>
               <TablerIcon name={ENTRY_ICONS[entry.action]} size={16} />
               <Text size='xs' c='dimmed' style={{ flexShrink: 0 }}>{time(entry.at)}</Text>
@@ -117,12 +117,21 @@ export function DoneTab({ category, onChanged }: Props) {
                     ? (
                       <>
                         {entry.files.toLocaleString()} {entry.files === 1 ? 'file' : 'files'} →{' '}
-                        <Anchor component='button' type='button' size='sm' onClick={() => navigate(albumRoute(entry.destination!.path))}>{entry.destination.title}</Anchor>
+                        <Anchor
+                          component='button'
+                          type='button'
+                          size='sm'
+                          onClick={() => navigate(albumRoute(entry.destination!.path))}
+                        >
+                          {entry.destination.title}
+                        </Anchor>
                       </>
                     )
                     : entry.summary}
                 </Text>
-                {entry.groups && entry.groups.length > 0 && <Text size='xs' c='dimmed' truncate>{entry.groups.map((group) => group.name).join(', ')}</Text>}
+                {entry.groups && entry.groups.length > 0 && (
+                  <Text size='xs' c='dimmed' truncate>{entry.groups.map((group) => group.name).join(', ')}</Text>
+                )}
               </Box>
               {entry.share === 'private' && <Badge size='xs' variant='light' color='gray'>only you</Badge>}
               {entry.edit && !entry.undoneAt && (
@@ -132,13 +141,17 @@ export function DoneTab({ category, onChanged }: Props) {
               )}
               {entry.state === 'partial' && <Badge size='xs' variant='light' color='yellow'>in part</Badge>}
             </Group>
-            {entry.undoneAt
-              ? <Text size='xs' c='dimmed' style={{ flexShrink: 0 }}>undone {time(entry.undoneAt)}</Text>
-              : (
-                <Button size='compact-xs' variant='subtle' loading={undoing === entry.id} disabled={undoing !== null} onClick={() => void undo(entry)}>
-                  Undo
-                </Button>
-              )}
+            {entry.undoneAt ? <Text size='xs' c='dimmed' style={{ flexShrink: 0 }}>undone {time(entry.undoneAt)}</Text> : (
+              <Button
+                size='compact-xs'
+                variant='subtle'
+                loading={undoing === entry.id}
+                disabled={undoing !== null}
+                onClick={() => void undo(entry)}
+              >
+                Undo
+              </Button>
+            )}
           </Group>
         ))}
       </Stack>

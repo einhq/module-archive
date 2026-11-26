@@ -4,8 +4,8 @@ import type { FindEntry } from '@ein/api';
 import { EmptyState, NodeBrowser, TablerIcon } from '@ein/ui/components';
 import { useCommand } from '@ein/ui/hooks';
 import { baseName, countOf, parentPath, type SearchFilters, shq } from '@ein/ui/lib';
-import { invalidateListing, type MediaItem, openDialog } from '@ein/ui/signals';
-import { ActionIcon, Box, Button, Group, Menu, SimpleGrid, Stack, Text } from '@mantine/core';
+import { addToQueue, invalidateListing, type MediaItem } from '@ein/ui/signals';
+import { ActionIcon, Box, Button, FileButton, Group, Menu, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useMediaQuery } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
@@ -18,7 +18,6 @@ import type { DetectHint } from '../lib/detect-hint.ts';
 import { useDetectHints } from '../hooks/useDetectHints.ts';
 import { useFileDuplicates } from '../hooks/useFileDuplicates.ts';
 import { useSetActions } from '../hooks/useSetActions.ts';
-import { importRoute } from './CategoryCard.tsx';
 import { CompareDialog } from './CompareDialog.tsx';
 import { DetectHints } from './DetectHints.tsx';
 import { DiscardDialog } from './DiscardDialog.tsx';
@@ -53,9 +52,8 @@ type Props = {
  * **Nodes** in the header the Nodes page's pane over the folder (`?view=nodes`), every entry
  * whatever its type, held to the category and filling the page below its header, with a side panel
  * that moves the selection to another folder or category or discards it (as Delete does there). A
- * subfolder can be moved or discarded from its card; the folder on screen from the header's ⋮. A picture that copies or looks like another,
- * in the library or here, or is kept over copies left out of the list, carries the Sort stream's
- * badge, which compares it with its set. In the default category, a newly arrived folder that
+ * subfolder can be moved or discarded from its card; the folder on screen from the header's ⋮. A picture with identical files, in the
+ * library or here, carries the Sort stream's badge with how many there are, which compares them. In the default category, a newly arrived folder that
  * looks like it came from one source (`staging detect`) says so above the folders, with a move to a
  * category and a new category for it.
  */
@@ -155,7 +153,9 @@ export function FilesTab({ category, categories, defaultCategory, reloadToken, o
           <EmptyState
             title={`Nothing in ${category.label} yet`}
             actions={
-              <Button variant='light' leftSection={<TablerIcon name='cloud-upload' size={16} />} onClick={() => openDialog(importRoute(category.name))}>Import media</Button>
+              <FileButton multiple onChange={(files) => files.length > 0 && addToQueue(files, category.uploadPath, { label: category.label })}>
+                {(props) => <Button {...props} variant='light' leftSection={<TablerIcon name='upload' size={16} />}>Upload</Button>}
+              </FileButton>
             }
           >
             <Stack gap='xs' align='center'>

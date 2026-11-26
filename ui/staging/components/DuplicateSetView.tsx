@@ -2,7 +2,7 @@ import type { DuplicateMember, DuplicateSet } from '@archive/media/api';
 import { TablerIcon } from '@ein/ui/components';
 import { formatBytes, formatDateTime, gridUrl, thumbnailUrl } from '@ein/ui/lib';
 import { Badge, Box, Button, Card, Group, Image, Stack, Text } from '@mantine/core';
-import { blockedLine, copiesWord, flagLines, gainsLine, keepLine, scoreLine } from '../lib/duplicate-sets.ts';
+import { blockedLine, copiesWord, flagLines, gainsLine, keepLine, memberWhere, scoreLine } from '../lib/duplicate-sets.ts';
 
 /** A tile's side, in pixels. */
 const TILE = 168;
@@ -27,10 +27,11 @@ type Props = {
 /**
  * One duplicate set on the Duplicates tab: the kept file first, marked with where it is, then the
  * files resolving it drops, each drawn from its renditions or its twin's, with its size, picture
- * size, name and time — for look-alikes how alike it is too; a library file with the album holding
- * it. Below them why the kept one is kept, what it gains, and what to look out for; then Remove,
- * which drops the others, and Compare, which shows them side by side. In a set within the inbox each
- * other staged file can be kept instead; look-alikes can be said to be no duplicates.
+ * size, name, the album or staged folder holding it (its full path on hover) and time — for
+ * look-alikes how alike it is too. Below them which file is kept and why, what it gains, and what
+ * to look out for; then Remove, which drops the others, and Compare, which shows them side by
+ * side. In a set within the inbox each other staged file can be kept instead; look-alikes can be
+ * said to be no duplicates.
  */
 export function DuplicateSetView({ set, focused, disabled, onResolve, onFocus, onCompare, onSeparate }: Props) {
   const members = [...set.existing, ...set.staged].sort((a, b) => (a.id === set.keep ? -1 : b.id === set.keep ? 1 : 0));
@@ -162,7 +163,8 @@ function MemberTile({ member, kept, dropped, canKeep, onKeep }: { member: Duplic
           {kept ? (member.place === 'library' ? 'Keep · library' : 'Keep') : dropped ? 'Drop' : 'Elsewhere'}
         </Badge>
       </Box>
-      <Text size='xs' mt={4} truncate title={member.path}>{member.place === 'library' && member.album ? member.album.name : member.name}</Text>
+      <Text size='xs' mt={4} truncate title={member.path}>{member.name}</Text>
+      <Text size='xs' c='dimmed' truncate title={member.path}>{memberWhere(member)}</Text>
       {size && <Text size='xs' c='dimmed'>{size}</Text>}
       {taken && <Text size='xs' c='dimmed'>{taken}</Text>}
       {dropped && member.carries.length > 0 && <Text size='xs' c='dimmed'>gives {member.carries.join(', ')}</Text>}

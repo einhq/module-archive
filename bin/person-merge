@@ -5,7 +5,9 @@
  * The correction for recognition splitting someone across two identities, or
  * for a cluster that turns out to be a person already in the archive. Faces are
  * re-pointed by id and marked personSource=manual, so no later automatic pass
- * undoes the decision.
+ * undoes the decision. Faces on photos taken before the destination was born
+ * stay on the source, which is then kept, unless --before-birth says they are
+ * that person all the same (ein/core#1587).
  *
  * The last argument is the destination and every earlier one is a source, so
  * `person-merge a b` still means what it always did. Several sources are merged
@@ -20,7 +22,7 @@ import { mergePersons, type MergeReport, personPathOf } from '@archive/people/pe
 const personMerge = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
-    boolean: ['dry-run', 'force', 'verbose'],
+    boolean: ['dry-run', 'force', 'before-birth', 'verbose'],
     alias: { n: 'dry-run', v: 'verbose' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -49,6 +51,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
         await mergePersons(cmd.sys.vfs, cmd.access, src, dst, {
           dryRun: !!flags['dry-run'],
           force: !!flags.force,
+          beforeBirth: !!flags['before-birth'],
         }),
       );
     } catch (error) {
@@ -64,6 +67,7 @@ const personMerge = async (cmd: Command): CmdReturn => {
     links: sum((r) => r.links),
     sources: sum((r) => r.sources),
     conflicts: sum((r) => r.conflicts),
+    beforeBirth: sum((r) => r.beforeBirth.length),
   };
 
   if (cmd.json) {
@@ -84,8 +88,15 @@ const personMerge = async (cmd: Command): CmdReturn => {
         `${report.voices} voice${report.voices === 1 ? '' : 's'}, ` +
         `${report.events} event${report.events === 1 ? '' : 's'}, ${report.relations} relation${report.relations === 1 ? '' : 's'}, ` +
         `${report.links} link${report.links === 1 ? '' : 's'}, ${report.sources} source${report.sources === 1 ? '' : 's'}` +
-        (report.dryRun ? ' (dry run)' : ', source removed'),
+        (report.dryRun ? ' (dry run)' : report.deleted ? ', source removed' : ', source kept'),
     );
+    if (report.beforeBirth.length > 0) {
+      await cmd.writeLn(
+        `  ${report.beforeBirth.length} face${
+          report.beforeBirth.length === 1 ? '' : 's'
+        } stayed: taken before ${report.dst} was born (${report.born}); --before-birth moves them too`,
+      );
+    }
     if (report.conflicts > 0) {
       await cmd.writeLn(`  ${report.conflicts} image(s) now show the surviving person twice — review them`);
     }
@@ -115,6 +126,7 @@ personMerge.spec = {
   flags: [
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would move without changing anything' },
     { name: 'force', type: 'bool' as const, description: 'merge even if a source has children this cannot move' },
+    { name: 'before-birth', type: 'bool' as const, description: 'move faces from photos taken before the destination was born too; without it they stay on the source' },
     { name: 'verbose', type: 'bool' as const, description: 'print detail' },
   ],
   examples: [

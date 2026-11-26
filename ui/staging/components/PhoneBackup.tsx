@@ -3,6 +3,7 @@ import { notify } from '@ein/ui/signals';
 import { Anchor, Button, Stack, Text } from '@mantine/core';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { InfoFact } from '../../components/InfoSection.tsx';
 import { CopyValue } from './CopyValue.tsx';
 
 /** The guide's section on a phone that backs itself up. */
@@ -14,26 +15,30 @@ const HTTPS_GUIDE = '/docs/admin/network#put-ein-behind-https';
 /**
  * How a phone sends its new photos into the category at `path` (called `label`) by itself. In the
  * EiN app, a button that turns the app's photo backup on to send here; its App page has the rest.
- * Elsewhere, what a backup app is given: EiN's WebDAV address and the category's folder, each with a
- * button that copies it. Such an app takes WebDAV over HTTPS only, so on a page reached over plain
- * HTTP it says what is missing.
+ * Elsewhere, what a backup app is given: EiN's WebDAV address and the category's folder, a row each
+ * of an Info section with a button that copies it. Such an app takes WebDAV over HTTPS only, so on a
+ * page reached over plain HTTP it says what is missing.
  */
 export function PhoneBackup({ path, label }: { path: string; label: string }) {
   if (inEinApp()) return <AppBackupHere path={path} label={label} />;
   const secure = location.protocol === 'https:';
   return (
-    <Stack gap={4}>
-      <Text size='sm'>Let an app on your phone send its new photos here by itself, over WebDAV, to this address and folder:</Text>
-      <CopyValue value={`${location.origin}${davUrl()}`} label='Copy the address' />
-      <CopyValue value={`${path}/`} label='Copy the folder'>
-        <Anchor component={Link} to={PHONE_GUIDE} size='sm' style={{ whiteSpace: 'nowrap' }}>How</Anchor>
-      </CopyValue>
+    <>
+      <Text size='sm' c='dimmed'>Let an app on your phone send its new photos here by itself, over WebDAV.</Text>
+      <InfoFact label='Address'>
+        <CopyValue value={`${location.origin}${davUrl()}`} label='Copy the address' />
+      </InfoFact>
+      <InfoFact label='Folder'>
+        <CopyValue value={`${path}/`} label='Copy the folder'>
+          <Anchor component={Link} to={PHONE_GUIDE} size='sm' style={{ whiteSpace: 'nowrap' }}>How</Anchor>
+        </CopyValue>
+      </InfoFact>
       {!secure && (
         <Text size='sm' c='dimmed'>
           A phone app needs EiN at an address that begins with https://, which your administrator gives you. <Anchor component={Link} to={HTTPS_GUIDE} size='sm'>HTTPS</Anchor>
         </Text>
       )}
-    </Stack>
+    </>
   );
 }
 

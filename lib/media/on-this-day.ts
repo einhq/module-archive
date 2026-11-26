@@ -9,8 +9,8 @@
  *
  * `takenAtUtc` is indexed (`_taken_utc_idx`), so this asks the store the
  * question it can answer fastest: one `gte`/`lt` range per year, each a tight
- * index scan over a single day, walked newest-first and stopped as soon as
- * enough years have something in them. On an archive whose photographs are
+ * index scan over a single day, walked newest-first a few years at a time and
+ * stopped as soon as enough years have something in them. On an archive whose photographs are
  * mostly recent that is a handful of probes, not one per year of history.
  *
  * The day boundaries are UTC rather than local. A picture taken at half past
@@ -40,6 +40,12 @@ const NODE_TYPE_FILE: NodeType = 'file';
  */
 const MAX_PROBES = 80;
 
+/**
+ * Probes asked at once. Every year back to the oldest (`--years all`) is a long walk one at a time;
+ * a batch costs about what one probe does, and a walk that stops early asks at most a batch more.
+ */
+const PROBES_AT_ONCE = 8;
+
 const MS_PER_DAY = 86_400_000;
 
 /**
@@ -55,7 +61,7 @@ export const NOT_A_DERIVATIVE: AttrCondition = { ref: 'sourceId', op: 'missing' 
 type OnThisDayOptions = {
   /** The calendar day, as `MM-DD`. */
   monthDay: string;
-  /** How many years with hits to collect before stopping. */
+  /** How many years with hits to collect before stopping; `Infinity` for every one. */
   years: number;
   /** How many pictures to keep per year. */
   perYear: number;
@@ -141,19 +147,19 @@ export const onThisDay = async (cmd: Command, opts: OnThisDayOptions): Promise<D
   const [newest, oldest] = await Promise.all([edgeYear(cmd, 'desc', notWithin), edgeYear(cmd, 'asc', notWithin)]);
   if (newest === undefined || oldest === undefined) return empty;
 
+  // 29 February in a common year. There is no such day, so there is nothing
+  // to ask about — and it does not count against the probe budget either.
+  const probed: number[] = [];
+  for (let year = newest; year >= oldest && probed.length < MAX_PROBES; year--) if (isRealDate(`${year}-${monthDay}`)) probed.push(year);
+
   const years: DayInHistory['years'] = [];
-  let probes = 0;
-
-  for (let year = newest; year >= oldest && years.length < opts.years && probes < MAX_PROBES; year--) {
-    const date = `${year}-${monthDay}`;
-    // 29 February in a common year. There is no such day, so there is nothing
-    // to ask about — and it does not count against the probe budget either.
-    if (!isRealDate(date)) continue;
-
-    probes++;
-    const items = await mediaOn(cmd, date, opts.perYear, notWithin);
-    if (items.length > 0) years.push({ year, items });
+  for (let at = 0; at < probed.length && years.length < opts.years; at += PROBES_AT_ONCE) {
+    const batch = probed.slice(at, at + PROBES_AT_ONCE);
+    const found = await Promise.all(batch.map((year) => mediaOn(cmd, `${year}-${monthDay}`, opts.perYear, notWithin)));
+    batch.forEach((year, i) => {
+      if (found[i].length > 0) years.push({ year, items: found[i] });
+    });
   }
 
-  return { monthDay, years };
+  return { monthDay, years: years.slice(0, opts.years) };
 };

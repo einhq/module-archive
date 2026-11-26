@@ -40,8 +40,8 @@ function LifeEventChart({ events, kind, label, color }: Props & typeof SERIES[nu
                 display: 'flex',
                 alignItems: 'flex-end',
                 gap: 5,
-                borderBottom: '1px solid var(--mrx-border-subtle)',
-                backgroundImage: 'linear-gradient(to bottom, var(--mrx-border-subtle) 1px, transparent 1px)',
+                borderBottom: '1px solid var(--mantine-color-default-border)',
+                backgroundImage: 'linear-gradient(to bottom, var(--mantine-color-default-border) 1px, transparent 1px)',
                 backgroundSize: '100% 50%',
               }}
             >

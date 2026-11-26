@@ -1,7 +1,7 @@
 import { MediaTimeline } from '../components/MediaTimeline.tsx';
 import { MemoryRings } from '../components/MemoryRings.tsx';
 import { useDayInHistory } from '../hooks/useDayInHistory.ts';
-import { stagingUploadFolder } from '../staging/hooks/useStagingStatus.ts';
+import { stagingRoots } from '@archive/staging/paths';
 import { SetTimeAction } from '../media/components/SetTimeAction.tsx';
 import { RestoreAction } from '../media/components/RestoreAction.tsx';
 import { SearchByPicture } from '../media/components/SearchByPicture.tsx';
@@ -67,22 +67,17 @@ const LAYOUT_OPTIONS = [
 ] as const;
 
 /**
- * The damage a scan is found to have (`find-damage`), as the filter offers it: each kind as the
- * value `search --has damage=<kind>` matches, and the steps a restoration of them is first offered.
+ * The damage a scan is found to have (`find-damage`), as a `damage=<kind>` chip names it: each kind
+ * as the value `search --has damage=<kind>` matches, and the steps a restoration of them is first
+ * offered.
  */
 const DAMAGE_PREFIX = 'damage=';
 const DAMAGE_FILTERS = [
-  { value: '', label: 'Any condition', icon: <TablerIcon name='photo' size={18} />, steps: {} },
-  { value: 'faded', label: 'Faded', icon: <TablerIcon name='palette-off' size={18} />, steps: { unfade: true, dust: false } },
-  { value: 'dust', label: 'Dusty', icon: <TablerIcon name='grain' size={18} />, steps: { unfade: false, dust: true } },
-  { value: 'scratches', label: 'Scratched', icon: <TablerIcon name='slash' size={18} />, steps: { unfade: false, dust: true } },
-  { value: 'blurred', label: 'Out of focus', icon: <TablerIcon name='blur' size={18} />, steps: { unfade: false, dust: false, blur: true, blurKind: 'focus' } },
-  {
-    value: 'shaken',
-    label: 'Camera shake',
-    icon: <TablerIcon name='arrows-move-horizontal' size={18} />,
-    steps: { unfade: false, dust: false, blur: true, blurKind: 'motion' },
-  },
+  { value: 'faded', label: 'Faded', steps: { unfade: true, dust: false } },
+  { value: 'dust', label: 'Dusty', steps: { unfade: false, dust: true } },
+  { value: 'scratches', label: 'Scratched', steps: { unfade: false, dust: true } },
+  { value: 'blurred', label: 'Out of focus', steps: { unfade: false, dust: false, blur: true, blurKind: 'focus' } },
+  { value: 'shaken', label: 'Camera shake', steps: { unfade: false, dust: false, blur: true, blurKind: 'motion' } },
 ] as const;
 
 /**
@@ -103,7 +98,7 @@ export const handle = { fullBleed: true };
  * With nothing in the filter box this is a feed — every file the reader may
  * see, newest first, in dated sections with the time rail — everyone's by
  * default, or with **Show only mine** on the files this user created (by the node's
- * birth uid). The scope is a reader preference, remembered per browser rather
+ * birth uid), the ones still in their staging included. The scope is a reader preference, remembered per browser rather
  * than routed: it is not part of the question the way a person or a year is,
  * so a shared link keeps the viewer's own scope.
  *
@@ -125,18 +120,15 @@ export const handle = { fullBleed: true };
  *
  * The kind control belongs to both modes: "just the videos" is still the feed.
  *
- * The Damage filter lists the scans found faded, dusty, scratched, out of focus or shaken (`find-damage`, a filter like
- * any chip, `search --has damage=<kind>`), and Restore… in the selection bar restores a selection
- * of them in the background (`file-restore --queue`).
+ * A `damage=<kind>` chip lists the scans found faded, dusty, scratched, out of focus or shaken
+ * (`find-damage`, `search --has damage=<kind>`), and Restore… in the selection bar restores a
+ * selection of them in the background (`file-restore --queue`), offering the steps for that damage.
  */
 export default function MediaPage() {
   useSignals();
   const [searchParams, setSearchParams] = useSearchParams();
   // This day in earlier years, as rings above the feed; the feed's own reads do not wait on it.
   const day = useDayInHistory();
-  // Uploads from here go to today's folder of the reader's default staging category, where every new file starts.
-  const username = currentUser.value?.username;
-  const uploadPath = useMemo(() => username ? stagingUploadFolder(username) : undefined, [username]);
 
   // The feed is loaded a window at a time, so the lightbox cannot know a picture's location in it.
   useEffect(() => {
@@ -163,7 +155,7 @@ export default function MediaPage() {
     if (kind === 'person') return people.find((person) => person.id === value)?.name;
     if (kind === 'location') return locations.find((location) => location.id === value)?.name;
     if (kind === 'album') return albumNames.get(value);
-    if (kind === 'has' && value.startsWith(DAMAGE_PREFIX)) return DAMAGE_FILTERS.find((entry) => entry.value && `${DAMAGE_PREFIX}${entry.value}` === value)?.label;
+    if (kind === 'has' && value.startsWith(DAMAGE_PREFIX)) return DAMAGE_FILTERS.find((entry) => `${DAMAGE_PREFIX}${entry.value}` === value)?.label;
     return undefined;
   }, [people, locations, albumNames]);
 
@@ -187,16 +179,12 @@ export default function MediaPage() {
     return match ?? MEDIA_KIND_FILTERS[0];
   }, [filters.kinds]);
 
-  const damage = DAMAGE_FILTERS.find((entry) => entry.value && filters.has?.includes(`${DAMAGE_PREFIX}${entry.value}`)) ?? DAMAGE_FILTERS[0];
-  const chooseDamage = (value: string) => {
-    const others = (filters.has ?? []).filter((entry) => !entry.startsWith(DAMAGE_PREFIX));
-    const has = value ? [...others, `${DAMAGE_PREFIX}${value}`] : others;
-    patch({ has: has.length > 0 ? has : undefined });
-  };
+  const damage = DAMAGE_FILTERS.find((entry) => filters.has?.includes(`${DAMAGE_PREFIX}${entry.value}`));
 
   // ----- Scope -----
   // All by default; a guest has no "my" at all.
   const uid = currentUser.value?.uid;
+  const username = currentUser.value?.username;
   const [storedScope, setStoredScope] = usePersistedState<Scope>('media.scope', 'all');
   const scope: Scope = uid === undefined ? 'all' : storedScope;
   // A reader preference like the scope, remembered per browser rather than routed.
@@ -223,13 +211,16 @@ export default function MediaPage() {
    * and only files carry a capture time anyway.
    */
   const creator = scope === 'my' ? uid : undefined;
+  // What the reader added is theirs before it is sorted too: their staged files, which every
+  // other view of the library leaves out.
+  const staged = useMemo(() => scope === 'my' && username ? [stagingRoots(username).filesPath] : undefined, [scope, username]);
   const effective = useMemo(
-    (): SearchFilters => ({ ...filters, creator, kinds: filters.kinds?.length ? filters.kinds : [...FILE_KINDS] }),
-    [filters, creator],
+    (): SearchFilters => ({ ...filters, creator, includeUnlisted: staged, kinds: filters.kinds?.length ? filters.kinds : [...FILE_KINDS] }),
+    [filters, creator, staged],
   );
   const feedFilters = useMemo(
-    (): SearchFilters => ({ creator, kinds: filters.kinds?.length ? filters.kinds : undefined }),
-    [filters.kinds, creator],
+    (): SearchFilters => ({ creator, includeUnlisted: staged, kinds: filters.kinds?.length ? filters.kinds : undefined }),
+    [filters.kinds, creator, staged],
   );
   // The feed's facets are the ones its rail asks for, so the two share an answer.
   const { facets } = useSubjectFacets(filtered ? effective : feedFilters);
@@ -262,7 +253,6 @@ export default function MediaPage() {
         title='Media'
         pattern='mixed'
         actions={{
-          ...(uploadPath ? { upload: { path: uploadPath, name: 'staging', keepFolders: true } } : {}),
           // The slideshow of what is found, or of the whole feed, on a screen or speaker.
           nearby: slideshowTarget,
           ...(showOn ? { items: [{ label: 'Show on', icon: 'device-tv', onClick: () => showOn(slideshowTarget) }] } : {}),
@@ -316,12 +306,6 @@ export default function MediaPage() {
                     />
                   )
                 }
-                <HeaderChoice
-                  label='Damage'
-                  value={damage.value}
-                  onChange={chooseDamage}
-                  options={DAMAGE_FILTERS.map(({ value, label, icon }) => ({ value, label, icon }))}
-                />
                 <HeaderChoice
                   label='Show'
                   variant='segmented'
@@ -377,7 +361,7 @@ export default function MediaPage() {
                 selectionActions={({ selection, items, reload }) => (
                   <>
                     <SetTimeAction selection={selection} items={items} onApplied={reload} />
-                    <RestoreAction selection={selection} items={items} initial={damage.steps} />
+                    <RestoreAction selection={selection} items={items} initial={damage?.steps} />
                   </>
                 )}
               />

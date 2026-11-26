@@ -51,6 +51,7 @@ import {
 } from '../lib/lightbox-zoom.ts';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { useUnknownPerson } from '../../people/hooks/useUnknownPeople.ts';
+import { type BeforeBirth, noticeBeforeBirth } from '../../people/lib/before-birth.ts';
 import { useAccessIds, useShortcutHelp, useShowNearby, useShowOn, useSurface, useWakeLock } from '@ein/ui/hooks';
 import { forgetMediaDetails, type MediaDetails, peekMediaDetails, prefetchMediaDetails, type StackMemberRef, useMediaDetails } from '../hooks/useMediaDetails.ts';
 import {
@@ -1156,7 +1157,9 @@ export function MediaLightbox() {
   }, [refetch]);
 
   const mergeReviewedPerson = useCallback(async (sourcePath: string, destinationPath: string) => {
-    await execCommand(`person-merge ${shq(sourcePath)} ${shq(destinationPath)}`);
+    const result = await execCommand<{ merged: ({ dstName: string } & BeforeBirth)[] }>(`person-merge ${shq(sourcePath)} ${shq(destinationPath)}`);
+    const report = result.merged[0];
+    if (report) noticeBeforeBirth(execCommand, report, { path: destinationPath, name: report.dstName }, () => void refetch());
     await refetch();
   }, [refetch]);
 

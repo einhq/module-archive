@@ -3,7 +3,8 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { CmdReturn, Command } from '@ein/client';
 import { basename, resolve } from '@std/path';
 import { CHILDREN_DIR, comparableDate, makeCtx, PARENTS_DIR, PARTNERS_DIR, readRelationDir, type RelationAttrs, wouldCreateCycle } from '@archive/people/genealogy';
-import { holdingsByPerson, isUnnamed, type PersonAttrs, type PersonNodeAttrs, UNKNOWN_ROOT } from '@archive/people/person';
+import { holdingsByPerson, isUnnamed, type PersonAttrs, type PersonNodeAttrs, regionsOf, UNKNOWN_ROOT } from '@archive/people/person';
+import { facesBeforeBirth } from '@archive/people/before-birth';
 import { EVENTS_DIR, LIFE_ATTRS } from '@archive/people/events';
 import { HOMES_DIR, MOVED_IN_ATTR, MOVED_OUT_ATTR, readResidences } from '@archive/people/residence';
 
@@ -39,6 +40,14 @@ const personCheck = async (cmd: Command): CmdReturn => {
     const died = self?.attrs.died ?? undefined;
     if (born && died && comparableDate(died) < comparableDate(born)) {
       issues.push({ person, kind: 'dates', detail: `died ${died} before born ${born}` });
+    }
+
+    // A face on a photo taken before the person was born is somebody else (ein/core#1587).
+    if (self && born) {
+      const faces = (await regionsOf(cmd.sys.vfs, cmd.access, self.id)).map((face) => ({ path: face.absPath, attrs: face.node.attrs as { fileId?: unknown } }));
+      for (const face of await facesBeforeBirth(cmd.sys.vfs, cmd.access, self.attrs, faces)) {
+        issues.push({ person, kind: 'face-before-birth', detail: `${face.path} was taken before born ${born}` });
+      }
     }
 
     // The timeline orders births and deaths on `born` / `died` and leaves birth and
@@ -154,7 +163,7 @@ const personCheck = async (cmd: Command): CmdReturn => {
 personCheck.spec = {
   name: 'person-check',
   effect: 'read' as const,
-  description: 'Check family-tree integrity (dangling links, reciprocity, cycles, dates, birth/death events not on born/died)',
+  description: 'Check family-tree integrity (dangling links, reciprocity, cycles, dates, birth/death events not on born/died, faces on photos from before the birth)',
   args: [
     { name: 'root', type: 'path' as const, description: `people root (default ${PEOPLE_ROOT})` },
   ],
@@ -164,7 +173,8 @@ personCheck.spec = {
   examples: [
     'person-check /archive/people',
   ],
-  returns: 'every dangling link, missing reciprocal, cycle, impossible date and birth/death event not mirrored onto born/died it found.',
+  returns:
+    'every dangling link, missing reciprocal, cycle, impossible date, birth/death event not mirrored onto born/died and face on a photo taken before its person was born it found.',
 };
 
 export default personCheck;

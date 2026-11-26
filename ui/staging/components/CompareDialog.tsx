@@ -1,13 +1,15 @@
 import type { DuplicateSet } from '@archive/media/api';
 import { Dialog, DialogActions, TablerIcon } from '@ein/ui/components';
 import { displayUrl, formatBytes, gridUrl } from '@ein/ui/lib';
-import { Badge, Box, Button, Group, Image, Kbd, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Badge, Box, Button, Group, Image, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useEffect, useRef, useState } from 'react';
-import { compareKey, compareMembers, type CompareState, flagLines, keepLine, memberFacts, scoreLine } from '../lib/duplicate-sets.ts';
+import { compareKey, compareMembers, type CompareState, flagLines, keepLine, memberFacts, memberWhere, scoreLine } from '../lib/duplicate-sets.ts';
 
 type Props = {
   /** The set compared; null keeps the dialog closed. */
   set: DuplicateSet | null;
+  /** The file in focus when it opens, by id; the kept one when absent. */
+  focus?: string;
   onClose: () => void;
   /** Resolve the set keeping `keep`: drop the files alike to it (`staging dedupe <key> --keep`). */
   onResolve: (set: DuplicateSet, keep: string) => void;
@@ -19,15 +21,17 @@ type Props = {
 const COLUMNS = 4;
 
 /**
- * A duplicate set's files side by side, large enough to tell them apart: each with its size in
- * pixels and bytes, when it was taken, its camera and how alike it is, and which one is kept and
- * which go. ← and → move between them, K keeps the one in focus, Enter resolves the set keeping
- * the one marked, and X — for look-alikes — records that they are not duplicates.
+ * A duplicate set's files side by side, large enough to tell them apart: each with its name, the
+ * album or staged folder holding it and its full path, its size in pixels and bytes, when it was taken, its camera and how alike it is, and which one is kept and
+ * which go. A click on one keeps it, Remove the others resolves the set keeping the one marked,
+ * and Not duplicates — for look-alikes — records that they are not. The keys, which no hint
+ * shows: ← and → move between them, K keeps the one in focus, Enter resolves, X separates.
  */
-export function CompareDialog({ set, onClose, onResolve, onSeparate }: Props) {
+export function CompareDialog({ set, focus, onClose, onResolve, onSeparate }: Props) {
   const members = set ? compareMembers(set) : [];
-  const [state, setState] = useState<CompareState>({ focus: 0, keep: set?.keep ?? '' });
-  useEffect(() => setState({ focus: 0, keep: set?.keep ?? '' }), [set?.key]);
+  const focused = Math.max(0, members.findIndex((member) => member.id === focus));
+  const [state, setState] = useState<CompareState>({ focus: focused, keep: set?.keep ?? '' });
+  useEffect(() => setState({ focus: focused, keep: set?.keep ?? '' }), [set?.key, focus]);
 
   // A window capture listener, and every key it takes stops there: under the dialog the page or
   // the lightbox binds the same keys (arrows, Enter, Escape), and one press would act on both.
@@ -75,7 +79,13 @@ export function CompareDialog({ set, onClose, onResolve, onSeparate }: Props) {
             return (
               <Box
                 key={member.id}
-                onClick={() => setState((current) => ({ ...current, focus: index }))}
+                onClick={() =>
+                  setState((current) => {
+                    // A click keeps the picture, as K does on the one in focus; a library copy is only focused.
+                    const focused = { ...current, focus: index };
+                    const kept = compareKey('k', focused, members);
+                    return kept && 'state' in kept ? kept.state : focused;
+                  })}
                 style={{
                   borderRadius: 'var(--mantine-radius-md)',
                   outline: index === state.focus ? '2px solid var(--mrx-accent)' : undefined,
@@ -110,7 +120,9 @@ export function CompareDialog({ set, onClose, onResolve, onSeparate }: Props) {
                     {kept ? (member.place === 'library' ? 'Keep · library' : 'Keep') : gone ? 'Drop' : member.place === 'library' ? 'Library' : 'Stays'}
                   </Badge>
                 </Box>
-                <Text size='sm' mt={6} truncate title={member.path}>{member.place === 'library' && member.album ? member.album.name : member.name}</Text>
+                <Text size='sm' mt={6} truncate title={member.name}>{member.name}</Text>
+                <Text size='xs'>{memberWhere(member)}</Text>
+                <Text size='xs' c='dimmed' style={{ wordBreak: 'break-all' }}>{member.path}</Text>
                 {memberFacts(member, formatBytes).map((line) => <Text key={line} size='xs' c='dimmed'>{line}</Text>)}
                 {member.copies.length > 0 && <Text size='xs' c='dimmed'>and {member.copies.length} byte {member.copies.length === 1 ? 'copy' : 'copies'}</Text>}
               </Box>
@@ -123,17 +135,7 @@ export function CompareDialog({ set, onClose, onResolve, onSeparate }: Props) {
             <Text size='xs' c='yellow'>{line}</Text>
           </Group>
         ))}
-        <Text size='xs' c='dimmed'>
-          <Kbd size='xs'>←</Kbd> <Kbd size='xs'>→</Kbd> move · <Kbd size='xs'>K</Kbd> keep this one · <Kbd size='xs'>Enter</Kbd> remove the others
-          {set.kind === 'near' && onSeparate
-            ? (
-              <>
-                {' · '}
-                <Kbd size='xs'>X</Kbd> not duplicates
-              </>
-            )
-            : null}
-        </Text>
+        <Text size='xs' c='dimmed'>Click the one to keep.</Text>
       </Stack>
       <DialogActions>
         {set.kind === 'near' && onSeparate && <Button variant='default' onClick={() => onSeparate(set)}>Not duplicates</Button>}

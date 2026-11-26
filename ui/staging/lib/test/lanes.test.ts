@@ -1,5 +1,5 @@
 import { assertEquals } from '@std/assert';
-import { inLane, isLane, isLaneGroup, laneCounts, laneOf } from '../lanes.ts';
+import { inLane, isLane, isLaneGroup, laneCounts, laneOf, shownLane } from '../lanes.ts';
 
 Deno.test('a kind decides the lane, and no kind is an event to sort', () => {
   assertEquals(laneOf({}), 'sort');
@@ -49,4 +49,19 @@ Deno.test('lane counts follow the kinds, a period lane under Needs a date', () =
     staging: { kind: 'seed' },
   }]);
   assertEquals([counts.undated, counts.sort, counts.everyday], [{ groups: 2, files: 32 }, { groups: 1, files: 9 }, { groups: 0, files: 0 }]);
+});
+
+Deno.test('the stream opens on To sort, or on the first lane with groups when To sort has none', () => {
+  const none = { groups: 0, files: 0 };
+  const some = { groups: 1, files: 2 };
+  const onlyEveryday = { sort: none, everyday: some, undated: none, clutter: some };
+  assertEquals(shownLane(null, onlyEveryday, true), 'everyday');
+  assertEquals(shownLane('clutter', onlyEveryday, true), 'clutter');
+  // A lane with no groups left gives way.
+  assertEquals(shownLane('undated', onlyEveryday, true), 'everyday');
+  assertEquals(shownLane('undated', onlyEveryday, false), 'undated');
+  // While the index is read, To sort may still get groups.
+  assertEquals(shownLane(null, onlyEveryday, false), 'sort');
+  assertEquals(shownLane(null, { ...onlyEveryday, sort: some }, true), 'sort');
+  assertEquals(shownLane(null, { sort: none, everyday: none, undated: none, clutter: none }, true), 'sort');
 });

@@ -391,15 +391,17 @@ category on its page. One `useStagingStatus` reads that status for the
 page and its dialogs: again when a dialog changed the area (`refreshStagingStatus`), when an upload
 into it is done, and every 30 s while files are uploading into it or being prepared and the page is
 visible, or ten times as long as the last read took when that is longer; between reads it measures how fast they are prepared, for the "about 2 h" a card
-says. The category's dialogs are routes: `/staging/import` (files or a folder into an existing
-category, queued with `keepFolders` into its upload folder of today, and a pointer to the
-category's Info tab for SFTP and phone backup), `/staging/categories/new` (a `CommandForm` over
+says. The category's dialogs are routes: `/staging/categories/new` (a `CommandForm` over
 `staging category --create --label`, its label from `?label=`, moving the folder `?move=` names
-into it once made) and `/staging/categories/:slug` (its name, remove). A category's page shows no
+into it once made) and `/staging/categories/:slug` (Edit: its name, and Remove at the left of the
+dialog's buttons, which only an empty category other than the default allows). Files another app
+shared to EiN land on `/staging/receive` (the `share.receive` panel), which queues them into the
+default category's upload folder of today and opens its page. A category's page shows no
 progress of its own: its title is the category's name, under a back link (`BackLink`, `← Staging`,
 the eyebrow of the routes and family-tree pages too) to Staging, and on Files inside a folder the
 folder's name, the back link leading to the folder above it, or the category at the first level.
-Its ⋮ has Import media, Category settings and Keyboard shortcuts, and
+Its header has Upload, files into its upload folder of today (a drop anywhere on the page keeps the
+folders dropped, `keepFolders`), and Edit; its ⋮ has Keyboard shortcuts, and
 inside a folder Move to folder, Move to category and Discard for the folder on screen. Its tabs,
 in order: Files, the one it opens on; Sort (`?tab=sort`);
 Duplicates (`DuplicatesTab`), the category's exact copies read from their stored findings a page of
@@ -413,17 +415,19 @@ best for tens of thousands of files, and the WebDAV address and folder a phone's
 into (`PhoneBackup`). Files is one folder of the category at a
 time (`?dir=`): its subfolders as `DirectoryCard`s
 (`find -mindepth 1 -maxdepth 1 -type d`), then `MediaTimeline within` the folder with Set time for a
-selection — its tiles badged as the Sort stream's, a file kept over copies the list leaves out too (`useFileDuplicates`: the tiles a grid draws, read
-together a moment later with `staging duplicates <file>…`, at most 200 a call; the badge opens
+selection — its tiles badged as the Sort stream's (`useFileDuplicates`: the tiles a grid draws, read
+together a moment later with `staging duplicates <file>…`, at most 200 a call; a file of an exact
+set, kept or a copy, gets how many files the set holds, look-alikes nothing; the badge opens
 `CompareDialog`) — or, with Nodes chosen in the header's controls (`?view=nodes`), the kit's `NodeBrowser` over the folder, every entry
 whatever its type, held to the category (`root`) with its place in `?dir=` (`onNavigate`), the page
 filling the window below its header; its side panel's actions, and its Delete (`onDelete`), are the
 page's own. A folder, or a selection of entries, moves to a folder of this or another category (`MoveDialog`,
 `mv -n`, which relinks) or goes to the trash as one batch (`DiscardDialog`, `trash put --batch
 --label`). A staged file of the reader's own opened in the lightbox, from any of these, has the
-sets it belongs to in its sidebar (`StagedDuplicates`, `staging duplicates <file>`): whether it is
-kept or what it copies or looks like, the others as thumbnails, Compare (the same `CompareDialog`,
-resolving with `staging dedupe <its category> <key> --keep`) and Not duplicates; the files dropped
+exact copies in its sidebar's Duplicates section (`StagedDuplicates`, `staging duplicates <file>`,
+its exact sets only): the other files with its bytes as a grid like Similar's, each opening the
+same `CompareDialog` focused on it, which resolves with `staging dedupe <its category> <key>
+--keep`; the files dropped
 leave the lists through `mediaMoved`, and the lightbox closes when its own file is one. Sort is a stream of the category's suggested albums drawn from a complete
 index the page holds (`useGroupIndex`): `album list <albums dir> --limit 1000`, page after page in the
 background and each shown as it lands, then kept current by one non-recursive `useNodeEvents`
@@ -439,8 +443,9 @@ album, an Everyday lane's matched days (`staging accept`), clutter's
 discard, or none. The cursor's group and the next two have their parts and candidates read with one
 `album info` (`hooks/useGroupDetails.ts`, again when a row's member key or match time changes). The
 destination column (`DestinationColumn`) offers, from the top, the proposal as its filled button
-when it is not a new album, Create album (filled when nothing else is proposed: a dialog starting
-from the proposed name, else the group's), Add to album… (the album picker) and the albums filed
+when it is not a new album, Create new (filled when nothing else is proposed: a dialog starting
+from the proposed name, else the group's, less the dates it ends with, `lib/group-title.ts`), Add to
+album (the album picker) and the albums filed
 into lately; then the candidates, each with how likely and why (1–3 file into one, R or the
 selected row's × is `staging reject <group> <album>`). A click on an album, recent or candidate,
 selects it rather than filing (`,`/`.` select among the candidates; none picked is the first,
@@ -452,16 +457,21 @@ column to half the page; then the grouping rows and Discard. It has no heading a
 confidence; a dimmed line over its buttons names what it acts on when that is not the whole group
 (a part, pictures selected, a selection across groups). It shows no keys: the keyboard shortcuts
 list them. A lane's day with a match shows it over its grid, with File. Each section is a `GroupSection`: closed, a two-line header and
-a `MediaStrip` of two 104 px rows, 300 px in all (76 px rows and 260 px on a phone, with the main action
-as a button); open — only the cursor's group — the header kept in sight under the page's headers and a
+every picture in one `MediaGrid` of 104 px rows (76 px on a phone, with the main action as a
+button), a click on one opening the lightbox — a set too large to lay out offers the expanded
+group's paging instead; its height is the stream's guess from its count and the grid's width
+(`estimate`, `closedSectionEstimate`) until it is mounted and measured — the cursor's group too, its frame in the accent, so moving the cursor moves nothing;
+expanded (`openKeys`) — only the cursor's group, and only by its header's button, Space, or an arrow,
+`[`, `]` or O, which need its pictures laid out; moving the cursor closes it — the header kept in
+sight under the page's headers and a
 `MediaGrid` per part (`lib/part-sections.ts`): a day, or past 40 days a month whose header carries
 its days as chips, the undated last; each part after the first has Split here (in a lane, every
 part has New group). A decision hides its group at once and moves the cursor to the next group neither
 being decided nor failed, which slides up into its place in 120 ms (at once under reduced motion),
 while its command runs: Enter names the group in a dialog and runs
 `staging rename` when the name was edited, then `staging promote <group> --name <name>` (the toast offers
-Open album); E renames in place; the ⋯ menu's Merge into the group above and Merge the group below
-in are `staging merge` of the two, kept under the name `lib/merge-name.ts` picks (a person's, then
+Open album); E renames in place; Merge into the group above and Merge the group below
+in (the column's, or the ⋯ menu's without it) are `staging merge` of the two, kept under the name `lib/merge-name.ts` picks (a person's, then
 one with a place over bare dates, then the larger group's), and its Not a group is `staging
 delete`; T opens the media area's
 `SetTimeAction` over the group's pictures, one `file-set-time` call per 200 (written in one
@@ -472,21 +482,29 @@ lane `staging regroup --new`), `<`/`>` (`staging regroup <neighbour> <files…>`
 the grids act on. Each is journaled, goes through the same queue and is undone by its toast, Z or
 the Done tab, whose Regrouping filter is `staging journal --action edit`. A lane's group
 (Everyday, clutter, undated) is not merged, split or deleted. A selection that reaches past the open
-group's pictures (a header's box, Shift-click or Shift+J/K across groups, the lasso, the Select menu's
-whole lane or sure proposals) is a `groups` scope of the key table, turned into commands by
+group's pictures (a header's box, Shift-click or Shift+J/K across groups, the lasso) is a `groups` scope of the key table, turned into commands by
 `lib/selection-command.ts`, pure: groups whole as one `staging promote`, `discard` or `accept` per 20,
 a group but for some pictures as one call with `--except`, pictures one by
 one as `album add` or `staging discard` per 500; Enter first reads the plan with `staging accept
 --dry-run` per 50 (`BulkConfirmDialog`, summed by destination at the confidence chosen), and a new
 album is made by the first call and filed into by the rest. Two to 20 groups selected whole, none
-of them a lane's, merge from the column's Merge N groups: one `staging merge` into the first of
+of them a lane's, merge from the column's or the selection bar's Merge N groups: one `staging merge` into the first of
 them in the stream, which keeps its name. `hooks/useBulkRun.ts` runs such a run
 through the same queue under one `notifyProgress` toast with Cancel, keeps the journal entries every
-answer names, and its Undo all (Z too) runs `staging undo` over them newest first, 20 a call.
+answer names, and its Undo all (Z too) runs `staging undo` over them newest first, 20 a call. The selection bar (`GroupSelectionBar`, Mantine's `ActionBar` as the album page's) floats over
+the stream while groups are selected whole: Merge, Create suggested album(s) — each group a
+`staging promote --name` of its own under its suggested name less its dates
+(`ownAlbumChunks`) — and, for one group, Set the time. A picture with exact copies, which join no
+group, carries the Files tab's badge with how many identical files there are (`useFileDuplicates`
+over every grid the stream draws), which opens `CompareDialog`; look-alikes are marked nowhere in
+the stream, since both are tiles of their own.
 Selected pictures drag
 (`startMediaDrag`), carrying the selection, onto the destination column's buttons and rows and onto other groups' headers (merge, or
-`staging regroup`), each as the same command. A group's ⋯ menu has no Create album while the
-column, which has it, stands beside the stream. Events for a group being decided are let pass, so what
+`staging regroup`), each as the same command. While the column stands beside the stream it holds
+every action on the open group (Rename, Set the time, the merges with its neighbours, Open as an
+album page, Not a group), and the groups' headers have neither the ⋯ menu nor the open one's
+proposal button; every section is in a frame of one width, the cursor's in the accent. The cursor moving
+scrolls the stream only when its group is not wholly in view, and then just far enough. Events for a group being decided are let pass, so what
 the page did stands until the command answers; a failure brings the group back with its reason and
 Retry. A cursor whose group leaves without a decision on this page (the organizer removed it, another
 session decided it) goes where a decision would have sent it. The cursor is `?g=<slug>` in the URL, written once it has rested 400 ms, and kept per viewer
@@ -505,11 +523,13 @@ tile, selection, groups — a sign such as `<` or `[` matched as typed whatever 
 Option it took, and the `?` overlay its list, a section per scope (`TRIAGE_HELP`), which the
 page's ⋮ Keyboard shortcuts opens too (`openShortcutHelp`). Past a phone the tab is two panes side
 by side that fill the window below the page's header, which then stays whole (the page is the
-window's height, as for the Nodes view): the stream's, its lane, Select and order controls over a
-`ScrollBox` the stream scrolls in (`SectionStream`'s and `useLasso`'s `scroller`; the reading line
+window's height, as for the Nodes view), the lane and order chosen at the right of the header's
+tabs (`GroupStream` reports the lanes in use and its counts to the page, `onBar`): the stream's,
+a `ScrollBox` the stream scrolls in (`SectionStream`'s and `useLasso`'s `scroller`; the reading line
 is the box's top, an open group's header sticks at it, and the time rail is `inline` over its right
-edge, the box's own scrollbar hidden beside it), and the column's, a bordered pane as tall as the
-stream's with its own `ScrollArea`, like the chat page's recent chats. A phone's stream scrolls
+edge, the box's own scrollbar hidden beside it; the room over the first group is inside the box,
+so the groups scroll up to the header's edge), and the column's, from the header to the window's
+foot with a line at its left only, against which the rail's handle runs, and its own `ScrollArea`. A phone's stream scrolls
 with the page, under its headers, and has no column. The listener stands aside while the lightbox, the shell's dialog or one
 of the page's own dialogs is open, for a field, a menu or a list box, and for Enter on a focused
 button or link and an arrow on a focused tab, which are the control's own; it listens on the window in

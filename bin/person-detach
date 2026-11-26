@@ -25,6 +25,9 @@
  * made "not a person" unexpressible: clearing personId alone just invites the
  * next assign-faces run to put it straight back.
  *
+ * `--to` leaves a face on a photo taken before that person was born where it is and says so,
+ * unless `--before-birth` says it is them all the same (ein/core#1587).
+ *
  * The two targeted modes write `personSource: 'manual'`, the same marker
  * `person-merge` and `person-name` use, so `face-reset --source auto|cluster`
  * cannot undo a human's decision.
@@ -37,6 +40,7 @@ import { collectUnknownFlags, parseArgs, reportUnknownFlags, shq } from '@ein/cl
 import { dirname, resolve } from '@std/path';
 import { createUnnamedPerson, type FaceNodeAttrs, NOT_A_PERSON, type PersonNodeAttrs, personPathOf, releasePerson, type UnnamedPerson } from '@archive/people/person';
 import { REGION_TYPE } from '@archive/media/regions';
+import { facesBeforeBirth } from '@archive/people/before-birth';
 
 /** Where one rematched face ended up; `person` is null when recognition left it unassigned. */
 type Rematched = { facePath: string; person: { id: string; path: string; name: string; unnamed: boolean } | null };
@@ -53,7 +57,7 @@ const personDetach = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, {
     string: ['to'],
-    boolean: ['to-new-person', 'rematch', 'dry-run', 'verbose'],
+    boolean: ['to-new-person', 'rematch', 'before-birth', 'dry-run', 'verbose'],
     alias: { n: 'dry-run', v: 'verbose' },
     unknown: collectUnknownFlags(unknown),
   });
@@ -81,11 +85,14 @@ const personDetach = async (cmd: Command): CmdReturn => {
   /** The ids of the faces each person lost, by that person's id. */
   const left = new Map<string, Set<string>>();
   const removedPeople: string[] = [];
+  /** Faces `--to` left where they were: their photos are older than the person. */
+  let beforeBirth: string[] = [];
+  let born: string | null = null;
 
   try {
     // Read every face first. Minting a person for a batch that turns out to hold
     // a bad path would leave an empty person behind.
-    const faces: { path: string; attrs: FaceNodeAttrs; id: string }[] = [];
+    let faces: { path: string; attrs: FaceNodeAttrs; id: string }[] = [];
     for (const facePath of facePaths) {
       try {
         const node = await vfs.get<FaceNodeAttrs>(access, facePath, { follow: false });
@@ -108,6 +115,12 @@ const personDetach = async (cmd: Command): CmdReturn => {
       const node = await vfs.get<PersonNodeAttrs>(access, targetPath, { follow: false });
       if (node.type !== 'person') throw new Error(`${targetPath}: not a person node (is ${node.type})`);
       target = { id: node.id, path: targetPath, name: (node.attrs as PersonNodeAttrs).name ?? targetPath.split('/').pop() ?? '' };
+      born = typeof node.attrs.born === 'string' ? node.attrs.born : null;
+      if (!flags['before-birth']) {
+        const early = new Set(await facesBeforeBirth(vfs, access, node.attrs, faces.filter((face) => face.attrs.embeddingType !== 'voice')));
+        beforeBirth = [...early].map((face) => face.path);
+        faces = faces.filter((face) => !early.has(face));
+      }
     } else if (flags['to-new-person'] && faces.length > 0 && !dryRun) {
       // This command works on any embedding node carrying the person contract, which is now
       // voices as well as faces. A split-off voice has no crop to represent it, so it must
@@ -204,6 +217,8 @@ const personDetach = async (cmd: Command): CmdReturn => {
         locked: target || flags['to-new-person'] || rematch ? 0 : detached.length,
         person: target ?? null,
         ...(rematch ? { rematched } : {}),
+        beforeBirth,
+        born,
         removedPeople,
         failed,
         dryRun,
@@ -217,6 +232,12 @@ const personDetach = async (cmd: Command): CmdReturn => {
     );
     for (const entry of rematched) {
       await cmd.writeLn(`  ${entry.facePath} -> ${entry.person ? entry.person.path : 'unassigned'}`);
+    }
+    if (beforeBirth.length > 0) {
+      await cmd.writeLn(
+        `${beforeBirth.length} face${beforeBirth.length === 1 ? '' : 's'} stayed: taken before ${target?.path} was born (${born}); --before-birth moves them too`,
+      );
+      for (const path of beforeBirth) await cmd.writeLn(`  ${path}`);
     }
     for (const path of removedPeople) await cmd.writeLn(`removed empty unnamed person ${path}`);
     for (const failure of failed) {
@@ -240,6 +261,7 @@ personDetach.spec = {
     { name: 'to', type: 'string' as const, description: 'move the faces to this person (path or bare unknown id)' },
     { name: 'to-new-person', type: 'bool' as const, description: 'mint one unnamed person and move the faces there' },
     { name: 'rematch', type: 'bool' as const, description: 'not this person: let recognition place each face again, never back on the person it left' },
+    { name: 'before-birth', type: 'bool' as const, description: 'with --to: move faces from photos taken before that person was born too; without it they stay' },
     { name: 'dry-run', dryRun: true, type: 'bool' as const, description: 'report what would move without changing anything' },
     { name: 'verbose', type: 'bool' as const, description: 'print each face' },
   ],

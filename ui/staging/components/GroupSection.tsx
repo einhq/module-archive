@@ -1,36 +1,63 @@
-import { MediaGrid, MediaStrip, TablerIcon } from '@ein/ui/components';
+import { GRID_GAP, MediaGrid, TablerIcon } from '@ein/ui/components';
 import { useSettledInViewport } from '@ein/ui/hooks';
 import type { MediaDragPayload, TileBox } from '@ein/ui/lib';
 import type { MediaSelection } from '@ein/ui/hooks';
 import type { MediaItem } from '@ein/ui/signals';
 import { Alert, Box, Button, Group, Paper, Stack, Text, UnstyledButton } from '@mantine/core';
 import { useMergedRef } from '@mantine/hooks';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MediaTimeline } from '../../components/MediaTimeline.tsx';
 import type { GroupRow } from '../hooks/useGroupIndex.ts';
 import { useGroupMedia } from '../hooks/useGroupMedia.ts';
 import { type PartSection, partSections } from '../lib/part-sections.ts';
-import type { TileBadge } from '../lib/duplicate-sets.ts';
-import { duplicateBadge } from './DuplicateBadge.tsx';
-import { type GroupActions, type GroupDrop, type GroupDuplicates, type GroupFailure, GroupHeader, type GroupSelect, type GroupSelected } from './GroupHeader.tsx';
+import { type GroupActions, type GroupDrop, type GroupFailure, GroupHeader, type GroupSelect, type GroupSelected } from './GroupHeader.tsx';
 
 /**
- * A closed section's parts, in px: its header's two lines, its two strip rows, and what is under
- * them. They add up to one height for every closed section, which is what lets the stream place
- * them by arithmetic. A phone's rows are lower, and it has the main action as a button under them.
+ * A closed section's parts, in px: its header's two lines, the height its grid's rows aim for, and
+ * what is under the grid — the foot of its frame and the gap to the next. A phone's rows are lower,
+ * and it has the main action as a button under them.
  */
 export const SECTION_METRICS = {
-  desktop: { header: 64, row: 104, foot: 25 },
-  phone: { header: 56, row: 76, foot: 49 },
+  desktop: { header: 64, row: 104, foot: 24 },
+  phone: { header: 56, row: 76, foot: 58 },
 } as const;
 
-/** Between a section's strip rows, as in a media grid. */
-const STRIP_GAP = 3;
+/** Between one section's frame and the next. */
+const SECTION_GAP = 12;
 
-/** A closed section's height on a phone or wider. */
+/** What a picture's width is to its height, on average, for guessing how many rows a group's grid takes. */
+const MEAN_ASPECT = 1.2;
+
+/** How tall a grid of `count` pictures `width` px wide is likely to be, before their shapes are known. */
+export const gridEstimate = (count: number, width: number, phone: boolean): number => {
+  const row = phone ? SECTION_METRICS.phone.row : SECTION_METRICS.desktop.row;
+  const rows = Math.max(1, Math.ceil((count * MEAN_ASPECT * row) / Math.max(1, width)));
+  return rows * row + (rows - 1) * GRID_GAP;
+};
+
+/** How tall a closed section of `count` pictures, its grid `width` px wide, is likely to be: the stream's guess until it is measured. */
+export const closedSectionEstimate = (count: number, width: number, phone: boolean): number => {
+  const metrics = phone ? SECTION_METRICS.phone : SECTION_METRICS.desktop;
+  return metrics.header + gridEstimate(count, width, phone) + metrics.foot;
+};
+
+/**
+ * A section's frame, the same for every section so that moving the cursor moves nothing: the
+ * cursor's group's is drawn in the accent, and one selected whole is tinted.
+ */
+export const frameStyle = (open: boolean, selected: boolean) => ({
+  border: `1px solid ${open ? 'var(--mrx-accent)' : selected ? 'color-mix(in srgb, var(--mrx-accent) 50%, transparent)' : 'var(--mantine-color-default-border)'}`,
+  borderRadius: 'var(--mantine-radius-md)',
+  background: selected ? 'color-mix(in srgb, var(--mrx-accent) 10%, var(--mrx-surface-raised))' : 'var(--mrx-surface-raised)',
+});
+
+/** A closed section's grid, from the stream's edge: the section's margin, its frame's line and its padding (Mantine's `md` and `sm`). */
+export const SECTION_INSET = 16 + 1 + 10;
+
+/** A closed section's height on a phone or wider when its grid is two rows: what the stream starts from. */
 export const closedSectionHeight = (phone: boolean): number => {
   const metrics = phone ? SECTION_METRICS.phone : SECTION_METRICS.desktop;
-  return metrics.header + 2 * metrics.row + STRIP_GAP + metrics.foot;
+  return metrics.header + 2 * metrics.row + GRID_GAP + metrics.foot;
 };
 
 /** How long a closed section must stay in view before its pictures are asked for. */
@@ -41,15 +68,20 @@ const ARRIVE_MS = 120;
 
 type Props = {
   row: GroupRow;
+  /** Its pictures are shown in a grid per part, which the keys step through, rather than in one grid; only the cursor's group can be. */
   open: boolean;
+  /** It is the cursor's group, which the keys act on. */
+  current: boolean;
+  /** Show its pictures by part, or in one grid again. */
+  onExpand: () => void;
   phone: boolean;
   renaming: boolean;
   onRenamingChange: (renaming: boolean) => void;
-  previous?: string;
+  /** The next group's name, said under an expanded one. */
   next?: string;
   failure?: GroupFailure;
   onDismissFailure: () => void;
-  /** Make this the cursor's group, which opens it. */
+  /** Make this the cursor's group. */
   onActivate: () => void;
   actions: GroupActions;
   /** The keyboard's picture in the open group, by path. */
@@ -72,8 +104,8 @@ type Props = {
   /** Pictures of the open group the keys act on, which can become a new group of their own. */
   newGroup?: { count: number; run: () => void };
   /**
-   * The group opens in the place of one just decided: it slides up into it from this many px
-   * below, at once under reduced motion.
+   * The cursor comes to the group in the place of one just decided: it slides up into it from this
+   * many px below, at once under reduced motion.
    */
   arriveFrom?: number;
   /** How much of the group is selected, and how its header selects it (desktop). */
@@ -83,39 +115,41 @@ type Props = {
   drop?: GroupDrop;
   /** What dragging a selected picture of the open group carries. */
   dragPayload?: (item: MediaItem) => MediaDragPayload | undefined;
-  /**
-   * The open group's copies and look-alikes: a badge per picture (of a library photo, or of
-   * another staged one), which opens its set side by side, and keeping the library's copies.
-   */
-  duplicates?: { badges: ReadonlyMap<string, TileBadge>; compare: (id: string) => void; keepLibrary?: () => void };
   /** The stream's own pane, when it scrolls in one rather than the window. */
   scrollRoot?: HTMLElement;
-  /** The destination column stands beside the stream. */
-  column?: boolean;
+  /** How tall the closed grid is likely to be: the room kept for it while its pictures are read. */
+  gridHeight: number;
+  /** A mark drawn on a picture's tile: how many identical files it has. */
+  renderOverlay?: (item: MediaItem) => ReactNode;
 };
 
 /** The album a part (by its key) is matched to: how likely, whether the reader may file into it, and filing the part there. */
 export type PartMatch = (key: string) => { title: string; p: number; writable: boolean; run: (part: PartSection<MediaItem>) => void } | undefined;
 
 /**
- * One suggested album in the Sort stream. Closed, it is its header and a two-row strip of its
- * pictures, always the same height. Open — it is the cursor's — it is the header, kept in sight
+ * One suggested album in the Sort stream, in a frame, drawn in the accent while it is the cursor's
+ * group. Closed, it is its header and every picture in one grid of low rows, a click on one opening
+ * the lightbox and nothing else; the cursor's group too, so stepping from group to group moves nothing. While its
+ * pictures are read it keeps the room the stream guessed for it (`gridHeight`); a group too large
+ * to lay out at once offers to page through them, expanded. Expanded (`open`, by its header's
+ * button, Space, or a key that needs its pictures laid out) it is the header, kept in sight
  * under the page's headers (at the top of the stream's pane, in one), and every picture in a grid per part (a day, or a month in a long
  * group), with a zone that makes the pictures the keys act on a new group. Its pictures are asked for once
  * it has settled in view (or is open), and no picture without renditions yet is fetched: such a
- * tile is drawn as a placeholder. An open group's copies and look-alikes carry a badge each, and its
- * header says how many. When they cannot be read, it says why, with Retry. Selected
- * whole, a closed one is tinted; a click on its strip with Shift, Ctrl or Cmd selects it as its
+ * tile is drawn as a placeholder. A picture with identical files, which join no group, carries a
+ * badge saying how many (`renderOverlay`). When they cannot be read, it says why, with Retry. Selected whole, a closed
+ * one is tinted; a click on its grid with Shift, Ctrl or Cmd selects it as its
  * header's box does, and the open one's selected pictures can be dragged.
  */
 export function GroupSection(
   {
     row,
     open,
+    current,
+    onExpand,
     phone,
     renaming,
     onRenamingChange,
-    previous,
     next,
     failure,
     onDismissFailure,
@@ -134,9 +168,9 @@ export function GroupSection(
     onSelect,
     drop,
     dragPayload,
-    duplicates,
     scrollRoot,
-    column,
+    gridHeight,
+    renderOverlay,
   }: Props,
 ) {
   const metrics = phone ? SECTION_METRICS.phone : SECTION_METRICS.desktop;
@@ -147,9 +181,9 @@ export function GroupSection(
   const box = useRef<HTMLDivElement | null>(null);
   const ref = useMergedRef(settleRef, box);
   useLayoutEffect(() => {
-    if (!open || !arriveFrom || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (!current || !arriveFrom || globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     box.current?.animate([{ transform: `translateY(${arriveFrom}px)` }, { transform: 'none' }], { duration: ARRIVE_MS, easing: 'ease-out' });
-  }, [open, arriveFrom]);
+  }, [current, arriveFrom]);
 
   const mediaError = media.error && (
     <Alert color='red' variant='light' py={open ? undefined : 6} icon={<TablerIcon name='alert-circle' size={16} />}>
@@ -160,30 +194,16 @@ export function GroupSection(
     </Alert>
   );
 
-  const items = media.set?.items;
-  const chip: GroupDuplicates | undefined = duplicates && open
-    ? {
-      library: [...duplicates.badges.values()].filter((badge) => badge === 'library').length,
-      inbox: [...duplicates.badges.values()].filter((badge) => badge === 'inbox').length,
-      compare: () => {
-        const first = items?.find((item) => duplicates.badges.has(item.id));
-        if (first) duplicates.compare(first.id);
-      },
-      ...(duplicates.keepLibrary ? { keepLibrary: duplicates.keepLibrary } : {}),
-      ...(selection && items ? { select: () => selection.setKeys(items.filter((item) => duplicates.badges.has(item.id)).map((item) => item.path), true) } : {}),
-    }
-    : undefined;
-
   const header = (
     <GroupHeader
       row={row}
-      open={open}
+      current={current}
+      expanded={open}
+      onExpand={onExpand}
       phone={phone}
       height={metrics.header}
       renaming={renaming}
       onRenamingChange={onRenamingChange}
-      previous={previous}
-      next={next}
       failure={failure}
       onDismissFailure={onDismissFailure}
       onActivate={onActivate}
@@ -191,97 +211,100 @@ export function GroupSection(
       selected={selected}
       onSelect={onSelect}
       drop={drop}
-      duplicates={chip}
-      column={column}
     />
   );
 
   if (!open) {
     return (
-      <Box
-        ref={ref}
-        px='md'
-        h={closedSectionHeight(phone)}
-        data-group={row.name}
-        data-selected={selected === 'all' || undefined}
-        style={selected === 'all' ? { background: 'color-mix(in srgb, var(--mrx-accent) 10%, transparent)', boxShadow: 'inset 3px 0 0 var(--mrx-accent)' } : undefined}
-      >
-        {header}
-        {mediaError || (
-          <Box
-            onClick={(event) => {
-              if (onSelect && (event.shiftKey || event.metaKey || event.ctrlKey)) onSelect({ range: event.shiftKey });
-              else onActivate();
-            }}
-            style={{ cursor: 'pointer' }}
-          >
-            <MediaStrip items={media.set?.items ?? null} total={row.memberCount} rowHeight={metrics.row} gap={STRIP_GAP} originals={false} onOpen={onActivate} />
-          </Box>
-        )}
-        {phone && (
-          <Group mt={8} gap='xs' wrap='nowrap'>
-            <Button size='compact-sm' variant='light' onClick={actions.proposal?.run ?? actions.newAlbum} style={{ maxWidth: '100%' }}>
-              <Text span inherit truncate>{actions.proposal?.label ?? 'Create album…'}</Text>
-            </Button>
-          </Group>
-        )}
+      <Box ref={ref} px='md' pb={SECTION_GAP} data-group={row.name} data-selected={selected === 'all' || undefined}>
+        <Box px='sm' pb={10} style={frameStyle(current, selected === 'all')}>
+          {header}
+          {mediaError || (
+            // A click on a picture opens the lightbox and leaves the cursor where it is; anywhere else
+            // it makes this the cursor's group. With Shift, Ctrl or Cmd it selects the group instead.
+            <Box
+              onClickCapture={(event) => {
+                if (!onSelect || !(event.shiftKey || event.metaKey || event.ctrlKey)) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onSelect({ range: event.shiftKey });
+              }}
+              onClick={current ? undefined : (event) => {
+                if (!(event.target as Element).closest('.mrx-tile')) onActivate();
+              }}
+              style={{ cursor: current ? undefined : 'pointer' }}
+            >
+              {!media.set ? <Box h={gridHeight} style={{ borderRadius: 'var(--mantine-radius-sm)', background: 'var(--mrx-surface-sunken)' }} /> : media.set.truncated
+                ? (
+                  // Too many to lay out at once: the expanded group pages through them.
+                  <Group gap='xs' py='xs'>
+                    <Text size='sm' c='dimmed'>Too many pictures to show at once.</Text>
+                    <Button size='compact-sm' variant='light' onClick={onExpand}>Page through them</Button>
+                  </Group>
+                )
+                : <MediaGrid items={media.set.items} targetRowHeight={metrics.row} tileKeys={false} originals={false} renderOverlay={renderOverlay} />}
+            </Box>
+          )}
+          {phone && (
+            <Group mt={8} gap='xs' wrap='nowrap'>
+              <Button size='compact-sm' variant='light' onClick={actions.proposal?.run ?? actions.newAlbum} style={{ maxWidth: '100%' }}>
+                <Text span inherit truncate>{actions.proposal?.label ?? 'Create album…'}</Text>
+              </Button>
+            </Group>
+          )}
+        </Box>
       </Box>
     );
   }
 
   return (
-    <Box
-      ref={ref}
-      data-group={row.name}
-      data-open
-      px='md'
-      pb='lg'
-      style={{ borderLeft: '3px solid var(--mrx-accent)', background: 'var(--mrx-surface-raised)' }}
-    >
-      <Box
-        style={{
-          position: 'sticky',
-          top: scrollRoot ? 0 : 'calc(var(--app-shell-header-height) + var(--mrx-stuck-header-height, 0px))',
-          zIndex: 3,
-          background: 'var(--mrx-surface-raised)',
-        }}
-      >
-        {header}
-      </Box>
-      {mediaError ? mediaError : !media.set ? <MediaGrid items={[]} loading /> : media.set.truncated
-        ? (
-          // Too many to lay out at once: the album's own timeline, which pages.
-          <MediaTimeline album={row.path} granularity='day' ascending scrollRoot={scrollRoot} />
-        )
-        : (
-          <OpenGrids
-            items={media.set.items}
-            tileCursor={tileCursor}
-            onTiles={onTiles}
-            selection={selection}
-            partCursor={partCursor}
-            onParts={onParts}
-            partCut={partCut}
-            partMatch={partMatch}
-            dragPayload={dragPayload}
-            duplicates={duplicates}
-          />
+    <Box ref={ref} data-group={row.name} data-open px='md' pb={SECTION_GAP}>
+      <Box px='sm' pb='lg' style={frameStyle(true, false)}>
+        <Box
+          style={{
+            position: 'sticky',
+            top: scrollRoot ? 0 : 'calc(var(--app-shell-header-height) + var(--mrx-stuck-header-height, 0px))',
+            zIndex: 3,
+            background: 'var(--mrx-surface-raised)',
+          }}
+        >
+          {header}
+        </Box>
+        {mediaError ? mediaError : !media.set ? <MediaGrid items={[]} loading /> : media.set.truncated
+          ? (
+            // Too many to lay out at once: the album's own timeline, which pages.
+            <MediaTimeline album={row.path} granularity='day' ascending scrollRoot={scrollRoot} />
+          )
+          : (
+            <OpenGrids
+              items={media.set.items}
+              tileCursor={tileCursor}
+              onTiles={onTiles}
+              selection={selection}
+              partCursor={partCursor}
+              onParts={onParts}
+              partCut={partCut}
+              partMatch={partMatch}
+              dragPayload={dragPayload}
+              renderOverlay={renderOverlay}
+            />
+          )}
+        {newGroup && newGroup.count > 0 && (
+          <UnstyledButton onClick={newGroup.run} mt='sm' w='100%' data-new-group>
+            <Paper p='sm' radius='md' style={{ border: '1px dashed var(--mrx-text-tertiary)', background: 'transparent' }}>
+              <Group gap='xs' justify='center'>
+                <TablerIcon name='square-plus' size={16} />
+                <Text size='sm'>New group of {newGroup.count.toLocaleString()} {newGroup.count === 1 ? 'picture' : 'pictures'}</Text>
+              </Group>
+            </Paper>
+          </UnstyledButton>
         )}
-      {newGroup && newGroup.count > 0 && (
-        <UnstyledButton onClick={newGroup.run} mt='sm' w='100%' data-new-group>
-          <Paper p='sm' radius='md' style={{ border: '1px dashed var(--mrx-text-tertiary)', background: 'transparent' }}>
-            <Group gap='xs' justify='center'>
-              <TablerIcon name='square-plus' size={16} />
-              <Text size='sm'>New group of {newGroup.count.toLocaleString()} {newGroup.count === 1 ? 'picture' : 'pictures'}</Text>
-            </Group>
-          </Paper>
-        </UnstyledButton>
-      )}
-      {next && (
-        <Text size='xs' c='dimmed' mt='md'>
-          Next: {next}
-        </Text>
-      )}
+        {next && (
+          <Text size='xs' c='dimmed' mt='md'>
+            Next: {next}
+          </Text>
+        )}
+      </Box>
     </Box>
   );
 }
@@ -293,7 +316,7 @@ export function GroupSection(
  * can be cut off with its header's button; the part the keys are on is marked.
  */
 function OpenGrids(
-  { items, tileCursor, onTiles, selection, partCursor, onParts, partCut, partMatch, dragPayload, duplicates }: {
+  { items, tileCursor, onTiles, selection, partCursor, onParts, partCut, partMatch, dragPayload, renderOverlay }: {
     items: MediaItem[];
     tileCursor: string | null;
     onTiles?: (items: MediaItem[], boxes: TileBox[]) => void;
@@ -303,7 +326,7 @@ function OpenGrids(
     partCut?: { label: string; fromFirst: boolean; run: (part: PartSection<MediaItem>) => void };
     partMatch?: PartMatch;
     dragPayload?: (item: MediaItem) => MediaDragPayload | undefined;
-    duplicates?: Props['duplicates'];
+    renderOverlay?: (item: MediaItem) => ReactNode;
   },
 ) {
   const layout = useMemo(() => partSections(items, (item) => item.takenAt), [items]);
@@ -360,12 +383,7 @@ function OpenGrids(
               selection={selection}
               onLayout={(tiles) => report(index, tiles)}
               dragPayload={dragPayload}
-              renderOverlay={duplicates
-                ? (item) => {
-                  const badge = duplicates.badges.get(item.id);
-                  return badge ? duplicateBadge(badge, () => duplicates.compare(item.id)) : null;
-                }
-                : undefined}
+              renderOverlay={renderOverlay}
             />
           </Box>
         </Box>

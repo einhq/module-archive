@@ -7,6 +7,7 @@ import { PEOPLE_ROOT } from '@archive/paths';
 import type { MediaFace, MediaFaceDoubt } from '@archive/media/api';
 import { usePeople } from '../../people/hooks/usePeople.ts';
 import { detachFromPerson } from '../../people/lib/person-detach.ts';
+import { noticeBeforeBirth } from '../../people/lib/before-birth.ts';
 import { EntityPicker, personOptions } from '../../components/EntityPicker.tsx';
 
 /** Why the face is in question, in a sentence. */
@@ -153,7 +154,8 @@ export function FaceDoubtForm({ face, name, canEdit, onDone, onChanged }: {
     run('move', async () => {
       if (!target) return;
       if (!target.startsWith(NEW_PERSON)) {
-        await detachFromPerson(execCommand, [face.facePath], { kind: 'person', path: target });
+        const landed = await detachFromPerson(execCommand, [face.facePath], { kind: 'person', path: target });
+        if (landed) noticeBeforeBirth(execCommand, landed, landed, () => void onChanged());
         return;
       }
       const created = await detachFromPerson(execCommand, [face.facePath], { kind: 'new-person' });

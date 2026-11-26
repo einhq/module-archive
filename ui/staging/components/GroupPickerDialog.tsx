@@ -1,5 +1,5 @@
 import { Dialog, formatRange, TablerIcon } from '@ein/ui/components';
-import { Box, Group, Kbd, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { Box, Group, Stack, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
 import type { GroupRow } from '../hooks/useGroupIndex.ts';
 
@@ -94,7 +94,6 @@ export function GroupPickerDialog({ moving, neighbours, all, onClose, onPick }: 
                         : 'A group of their own, named by their dates'}
                     </Text>
                   </Box>
-                  {index === at && <Kbd size='xs'>Enter</Kbd>}
                 </Group>
               </UnstyledButton>
             );

@@ -1,14 +1,4 @@
 /* The memory rings: one round cover a year, ringed in the mark's blue, violet and pink. */
-.mrx-memory-rings {
-  display: flex;
-  gap: var(--mantine-spacing-md);
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-  padding: 2px 2px var(--mantine-spacing-xs);
-}
-
 .mrx-memory-ring {
   flex: none;
   width: 84px;

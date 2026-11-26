@@ -1,4 +1,5 @@
 import { shq } from '@ein/ui/lib';
+import type { BeforeBirth } from './before-birth.ts';
 
 /**
  * Paths per `person-detach`: a nine-hundred-path command line is a lot to put
@@ -15,8 +16,12 @@ export type DetachDestination =
   /** Not a person at all — unassign and lock, so no later pass puts it back. */
   | { kind: 'unassign' };
 
-/** Person a detach landed on. New people also report identity fields for an incremental card. */
-type DetachTarget = { path: string; id?: string; name?: string };
+/**
+ * Person a detach landed on. New people also report identity fields for an incremental card. A
+ * named one says which faces stayed where they were, their photos taken before that person was
+ * born (`person-detach --to`, ein/core#1587).
+ */
+type DetachTarget = { path: string; id?: string; name?: string } & BeforeBirth;
 
 /** `execCommand`, taken as a parameter so this module stays importable without the socket. */
 type Exec = <T>(command: string) => Promise<T>;
@@ -45,7 +50,9 @@ export async function detachFromPerson(exec: Exec, paths: string[], destination:
       continue;
     }
     if (target) {
-      await exec(`person-detach --to ${shq(target.path)} ${chunk}`);
+      const result = await exec<{ person: DetachTarget | null } & BeforeBirth>(`person-detach --to ${shq(target.path)} ${chunk}`);
+      const stayed = [...(target.beforeBirth ?? []), ...(result.beforeBirth ?? [])];
+      target = { ...target, name: target.name ?? result.person?.name, ...(stayed.length > 0 ? { beforeBirth: stayed, born: result.born ?? target.born } : {}) };
       continue;
     }
 

@@ -10,5 +10,8 @@ const localMonthDay = (): string => {
   return `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 };
 
-/** This day in the years before, one picture a year in front and a few behind it (`dayinhistory`). */
-export const useDayInHistory = () => useCommand<DayInHistory>(`dayinhistory ${localMonthDay()}`);
+/**
+ * This day in every year before that has pictures, each year's first as its cover (`dayinhistory`):
+ * the same years the story it opens shows.
+ */
+export const useDayInHistory = () => useCommand<DayInHistory>(`dayinhistory ${localMonthDay()} --years all --per-year 1`);

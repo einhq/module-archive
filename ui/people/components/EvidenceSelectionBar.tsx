@@ -6,6 +6,7 @@ import type { PersonEntry } from '../hooks/usePeople.ts';
 import type { PersonFace } from '../hooks/usePersonFaces.ts';
 import type { PersonVoice } from '../hooks/usePersonVoices.ts';
 import { type DetachDestination, detachFromPerson } from '../lib/person-detach.ts';
+import { noticeBeforeBirth } from '../lib/before-birth.ts';
 import type { AppliedFaceChange } from '../lib/face-change.ts';
 import { regionCount } from '../lib/face-crop.ts';
 import { PersonOption } from './PersonOption.tsx';
@@ -106,6 +107,13 @@ export function EvidenceSelectionBar({ faces, voices, total, named, onClear, onD
     try {
       const paths = [...faces.map((face) => face.facePath), ...voices.map((voice) => voice.voicePath)];
       const landed = await detachFromPerson(execCommand, paths, destination);
+      if (landed?.beforeBirth?.length) {
+        // Faces from before that person was born stayed: what moved is read back.
+        noticeBeforeBirth(execCommand, landed, landed, () => onDetached(null));
+        onClear();
+        onDetached(null);
+        return;
+      }
       const created = destination.kind === 'new-person' ? landed?.id && landed.name ? [{ person: { id: landed.id, path: landed.path, name: landed.name }, faces }] : null : [];
       if (created === null) throw new Error('person-detach did not report the new person details');
       onClear();
